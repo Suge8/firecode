@@ -89,6 +89,8 @@ interface Controller {
 	advanceScheduled?: boolean;
 	/** 本运行时已启动的阶段；reload 后新 controller 会重新启动被中断的子进程。 */
 	runningAction?: string;
+	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
+	actionPromise?: Promise<void>;
 	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
 	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
@@ -120,8 +122,7 @@ export function registerReview(pi: ExtensionAPI, enabled = true): void {
 	pi.on("agent_start", () => handleAgentStart(pi));
 	// agent_end 只记录修复回合是否真的产出成功结果，不在此推进审查。
 	pi.on("agent_end", (event) => handleRepairAgentEnd(pi, event));
-	// 处理器返回后同一 agent_settled 上的后续处理器仍可能触发 follow-up；
-	// 这里只排到下一事件循环，待所有处理器跑完后再检查真正 idle。
+	// settled 后尝试恢复；后续异步 handler 若再触发模型，agent_start 互锁会先停审查。
 	pi.on("agent_settled", (_event, ctx) => scheduleAfterAgentSettled(pi, ctx));
 	pi.on("session_shutdown", (event, ctx) => handleShutdown(pi, event.reason, ctx));
 }
@@ -308,16 +309,26 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<vo
 	return dispatch(pi, { type: "RECOVER" });
 }
 
-function handleAgentStart(pi: ExtensionAPI): Promise<void> | void {
+async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 	const active = controller;
+	if (!active || active.pi !== pi) return;
 	if (
-		!active ||
-		active.pi !== pi ||
-		active.state.phase !== "awaiting_fix" ||
-		active.state.repair?.status !== "awaiting_start"
-	) return;
-	clearFeedbackStartTimer(active);
-	return dispatch(pi, { type: "REPAIR_STARTED" });
+		active.state.phase === "awaiting_fix" &&
+		active.state.repair?.status === "awaiting_start"
+	) {
+		clearFeedbackStartTimer(active);
+		await dispatch(pi, { type: "REPAIR_STARTED" });
+		return;
+	}
+	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
+	// 宿主会 await 本 handler，因此先 abort 并等所有审查子进程真正退出，再允许模型 turn_start。
+	if (!active.actionPromise) return;
+	active.signal.abort();
+	await active.actionPromise;
+	if (controller !== active || !isActive(active.state)) return;
+	active.signal = new AbortController();
+	active.runningAction = undefined;
+	active.actionPromise = undefined;
 }
 
 function handleRepairAgentEnd(
@@ -366,7 +377,7 @@ async function advanceWhenIdle(
 	generation: string,
 ): Promise<void> {
 	const active = controller;
-	// 所有启动入口共享这一道 barrier：等当前事件的全部处理器结束，再查真实 idle。
+	// 所有启动入口共享 idle 门；正确性另由 agent_start 的同步停审互锁保证。
 	if (
 		!active ||
 		active.pi !== pi ||
@@ -383,17 +394,11 @@ async function advanceWhenIdle(
 		return;
 	}
 	if (state.phase === "reviewing") {
-		const key = `review:${state.round}`;
-		if (active.runningAction === key) return;
-		active.runningAction = key;
-		startReviewers(pi);
+		startAction(active, `review:${state.round}`, () => startReviewers(pi));
 		return;
 	}
 	if (state.phase === "needs_fix") {
-		const key = `advisor:${state.round}`;
-		if (active.runningAction === key) return;
-		active.runningAction = key;
-		consultAdvisor(pi);
+		startAction(active, `advisor:${state.round}`, () => consultAdvisor(pi));
 		return;
 	}
 	if (state.phase !== "awaiting_fix" || !state.repair) return;
@@ -405,6 +410,17 @@ async function advanceWhenIdle(
 		return;
 	}
 	if (state.repair.status === "completed") await dispatch(pi, { type: "ADVANCE" });
+}
+
+function startAction(active: Controller, key: string, run: () => Promise<void>): void {
+	if (active.runningAction === key) return;
+	active.runningAction = key;
+	const action = run().finally(() => {
+		if (active.actionPromise !== action) return;
+		active.actionPromise = undefined;
+		active.runningAction = undefined;
+	});
+	active.actionPromise = action;
 }
 
 function handleShutdown(
@@ -644,7 +660,7 @@ function reviewerModelConfig(model: { model: string; thinking: string }, config:
 }
 
 /** 开审那一刻取会话分支快照构造 prompt，所有审查者共用同一 prompt。 */
-function startReviewers(pi: ExtensionAPI) {
+async function startReviewers(pi: ExtensionAPI): Promise<void> {
 	const active = controller;
 	if (!active) return;
 	const { state, config } = active;
@@ -671,26 +687,27 @@ function startReviewers(pi: ExtensionAPI) {
 		history: state.history,
 		round: state.round,
 	});
-	for (const reviewer of currentActive.reviewers) {
-		if (reviewer.status !== "running") continue;
-		runReviewer({
-			index: reviewer.index,
-			config: reviewerModelConfig(reviewer, config),
-			prompt,
-			cwd: active.ctx.cwd,
-			language: config.language,
-			signal: active.signal.signal,
-			onEvent: (event) => {
-				if (controller !== active) return;
-				active.progress = applyProcessEvent(
-					active.progress,
-					reviewer.index,
-					event,
-					config.language,
-				);
-			},
-		})
-			.then((result) => {
+	const tasks = currentActive.reviewers
+		.filter((reviewer) => reviewer.status === "running")
+		.map(async (reviewer) => {
+			try {
+				const result = await runReviewer({
+					index: reviewer.index,
+					config: reviewerModelConfig(reviewer, config),
+					prompt,
+					cwd: active.ctx.cwd,
+					language: config.language,
+					signal: active.signal.signal,
+					onEvent: (event) => {
+						if (controller !== active) return;
+						active.progress = applyProcessEvent(
+							active.progress,
+							reviewer.index,
+							event,
+							config.language,
+						);
+					},
+				});
 				if (controller === active)
 					active.progress = settleProgress(
 						active.progress,
@@ -699,27 +716,27 @@ function startReviewers(pi: ExtensionAPI) {
 						config.language,
 					);
 				if (!active.signal.signal.aborted)
-					dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
-			})
-			.catch((error) => {
-				if (!active.signal.signal.aborted)
-					dispatch(pi, {
-						type: "REVIEWER_SETTLED",
+					await dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
+			} catch (error) {
+				if (active.signal.signal.aborted) return;
+				await dispatch(pi, {
+					type: "REVIEWER_SETTLED",
+					index: reviewer.index,
+					result: {
 						index: reviewer.index,
-						result: {
-							index: reviewer.index,
-							model: reviewer.model,
-							thinking: reviewer.thinking,
-							status: "error",
-							summary: "",
-							details: processErrorText("reviewer", active.config.language, error),
-						},
-					});
-			});
-	}
+						model: reviewer.model,
+						thinking: reviewer.thinking,
+						status: "error",
+						summary: "",
+						details: processErrorText("reviewer", active.config.language, error),
+					},
+				});
+			}
+		});
+	await Promise.all(tasks);
 }
 
-function consultAdvisor(pi: ExtensionAPI) {
+async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	const active = controller;
 	if (!active) return;
 	const { state, config } = active;
@@ -732,27 +749,26 @@ function consultAdvisor(pi: ExtensionAPI) {
 		history: state.history,
 		round: pending.round,
 	});
-	runAdvisor({
-		config: reviewerModelConfig(config.advisor, config),
-		prompt,
-		cwd: active.ctx.cwd,
-		language: config.language,
-		signal: active.signal.signal,
-	})
-		.then((result) => {
-			if (!active.signal.signal.aborted)
-				dispatch(pi, { type: "ADVISOR_SETTLED", result });
-		})
-		.catch((error) => {
-			if (!active.signal.signal.aborted)
-				dispatch(pi, {
-					type: "ADVISOR_SETTLED",
-					result: {
-						verdict: "continue",
-						advice: processErrorText("advisor", active.config.language, error),
-					},
-				});
+	try {
+		const result = await runAdvisor({
+			config: reviewerModelConfig(config.advisor, config),
+			prompt,
+			cwd: active.ctx.cwd,
+			language: config.language,
+			signal: active.signal.signal,
 		});
+		if (!active.signal.signal.aborted)
+			await dispatch(pi, { type: "ADVISOR_SETTLED", result });
+	} catch (error) {
+		if (active.signal.signal.aborted) return;
+		await dispatch(pi, {
+			type: "ADVISOR_SETTLED",
+			result: {
+				verdict: "continue",
+				advice: processErrorText("advisor", active.config.language, error),
+			},
+		});
+	}
 }
 
 function processErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
