@@ -28,11 +28,13 @@ const REGISTRARS: Record<Exclude<Feature, "review">, (pi: ExtensionAPI) => void>
 export default function firecode(pi: ExtensionAPI): void {
 	const { config, problems } = loadConfig();
 
-	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
-	registerReview(pi, config.features.review !== false);
+	// 会触发执行模型续跑的模块必须先注册；runner 按注册顺序 await 同类事件 handler。
+	// review 最后注册，agent_settled 时先让续跑方决策，再判断能否开审。
 	for (const [feature, register] of Object.entries(REGISTRARS)) {
 		if (config.features[feature as Exclude<Feature, "review">] !== false) register(pi);
 	}
+	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
+	registerReview(pi, config.features.review !== false);
 
 	if (problems.length === 0) return;
 	pi.on("session_start", (_event, ctx) => {

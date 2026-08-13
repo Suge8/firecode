@@ -191,7 +191,7 @@ describe("fire-review reducer", () => {
 		const recovered = reduce(state, { type: "RECOVER" }, LIMITS, 21_000);
 		expect(recovered.state.round).toBe(1);
 		expect(recovered.state.repair?.status).toBe("pending");
-		expect(recovered.effects).toEqual([{ kind: "advance" }]);
+		expect(recovered.effects).toEqual([]);
 	});
 
 	test("ADVANCE from awaiting_fix advances to the next round", async () => {

@@ -246,7 +246,9 @@ function onRecover(state: ReviewState): ReduceResult {
 		state.phase === "awaiting_fix" && state.repair && state.repair.status !== "completed"
 			? { ...state.repair, status: "pending" as const }
 			: state.repair;
-	return { state: { ...state, repair }, effects: [{ kind: "advance" }] };
+	// session_start 只恢复持久状态；宿主在所有 session_start handler 完成后
+	// 另发 resources_discover，执行器到那个正式边界才请求推进。
+	return { state: { ...state, repair }, effects: [] };
 }
 
 function updateRepairStatus(

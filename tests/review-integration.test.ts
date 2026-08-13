@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerResult } from "../review/state.js";
@@ -168,6 +168,7 @@ describe("registerReview wiring", () => {
 		registerReview(pi as never);
 		expect(registered.commands.has("fire-review")).toBe(true);
 		expect(registered.events.has("session_start")).toBe(true);
+		expect(registered.events.has("resources_discover")).toBe(true);
 		expect(registered.events.has("agent_settled")).toBe(true);
 		expect(registered.events.has("agent_end")).toBe(true);
 		expect(registered.events.has("session_shutdown")).toBe(true);
@@ -189,21 +190,11 @@ describe("registerReview wiring", () => {
 		expect(registered.sent).toHaveLength(0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
 
+		// FireCode 入口把 review 注册在所有自动续跑模块之后；收到 settled 时，
+		// 先前 handler 已完成且没有发起续跑，才会到这里。
 		ctx.setIdle(true);
 		for (const handler of registered.events.get("agent_settled") ?? [])
 			await handler({}, ctx);
-		// 模拟同一 agent_settled 上后注册的 master handler 立即触发 follow-up。
-		ctx.setIdle(false);
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		await flush();
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
-		expect(registered.sent).toHaveLength(0);
-
-		// follow-up 真正 settled 后才允许审查启动。
-		ctx.setIdle(true);
-		for (const handler of registered.events.get("agent_settled") ?? [])
-			await handler({}, ctx);
-		await new Promise<void>((resolve) => setImmediate(resolve));
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 		expect(registered.sent.length).toBeGreaterThan(0);
@@ -484,12 +475,13 @@ describe("review config is rejected at every entry point", () => {
 });
 
 describe("reload recovery actually resumes the loop", () => {
-	// session_start 只提出推进请求；必须等同一事件的其他 handler 跑完并再次确认 idle。
-	test("agent_start waits for reviewers to exit when a later async handler resumes execution", async () => {
+	// resources_discover 是宿主提供的 post-session 边界：只有全部异步 session_start
+	// handler 返回后才发，不能用 tick 或毫秒猜测。
+	test("restored reviewers wait for the post-session event after later async handlers", async () => {
 		await loadAll();
-		const pidFile = join(tmpdir(), `fire-review-pid-${Date.now()}`);
+		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
 		const script = join(tmpdir(), `fire-review-resume-${Date.now()}.sh`);
-		await writeFile(script, `#!/bin/sh\necho $$ > '${pidFile}'\nsleep 30\n`, { mode: 0o755 });
+		await writeFile(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: JSON.stringify({
 				review: {
@@ -500,6 +492,12 @@ describe("reload recovery actually resumes the loop", () => {
 		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
+		const reviewSettled = new Promise<void>((resolve) => {
+			pi.events.emit = (name: string, data: unknown) => {
+				registered.emitted.push({ name, data });
+				if (name === "firecode:review-settled") resolve();
+			};
+		});
 		beginCheckpoint(pi as never, { sessionManager } as never, {
 			...initialState("restore-review"),
 			phase: "reviewing",
@@ -518,35 +516,21 @@ describe("reload recovery actually resumes the loop", () => {
 		ctx.cwd = tmpdir();
 		const sessionStart = (registered.events.get("session_start") ?? [])[0] as (event: unknown, ctx: unknown) => Promise<void>;
 		await sessionStart({}, ctx);
-		// 后续 master handler 先 await：期间 review 确实可能启动，不能靠延迟时间猜它何时结束。
-		for (let attempt = 0; attempt < 100 && !existsSync(pidFile); attempt += 1)
-			await new Promise((resolve) => setTimeout(resolve, 5));
-		expect(existsSync(pidFile)).toBe(true);
-		const reviewerPid = Number(await readFile(pidFile, "utf8"));
+		await module.__reviewFlushForTests();
+		expect(existsSync(marker)).toBe(false);
 
-		// master 随后 triggerTurn；宿主会 await agent_start handlers，执行模型尚未 turn_start。
+		// 模拟后续 master handler 异步等待后触发续跑；post-session 事件此时才到。
 		ctx.setIdle(false);
-		for (const handler of registered.events.get("agent_start") ?? []) await handler({}, ctx);
-		let reviewerAlive = true;
-		try {
-			process.kill(reviewerPid, 0);
-		} catch {
-			reviewerAlive = false;
-		}
-		expect(reviewerAlive).toBe(false);
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("reviewing");
+		for (const handler of registered.events.get("resources_discover") ?? []) await handler({}, ctx);
+		await module.__reviewFlushForTests();
+		expect(existsSync(marker)).toBe(false);
 
-		// 执行模型完全结束后，审查从原 checkpoint 重新启动。
-		await rm(pidFile, { force: true });
 		ctx.setIdle(true);
 		for (const handler of registered.events.get("agent_settled") ?? []) await handler({}, ctx);
-		for (let attempt = 0; attempt < 100 && !existsSync(pidFile); attempt += 1)
-			await new Promise((resolve) => setTimeout(resolve, 5));
-		expect(existsSync(pidFile)).toBe(true);
-		for (const handler of registered.events.get("session_shutdown") ?? [])
-			await handler({ reason: "quit" }, ctx);
+		await reviewSettled;
+		expect(existsSync(marker)).toBe(true);
 		await rm(script, { force: true });
-		await rm(pidFile, { force: true });
+		await rm(marker, { force: true });
 	});
 
 	test("reload before repair agent_start re-delivers feedback without advancing the round", async () => {
@@ -572,7 +556,7 @@ describe("reload recovery actually resumes the loop", () => {
 		expect(registered.sent).toHaveLength(0);
 
 		ctx.setIdle(true);
-		for (const handler of registered.events.get("agent_settled") ?? []) await handler({}, ctx);
+		for (const handler of registered.events.get("resources_discover") ?? []) await handler({}, ctx);
 		await flush();
 		const restored = readCheckpoint({ sessionManager });
 		expect(restored?.phase).toBe("awaiting_fix");
@@ -615,9 +599,11 @@ describe("reload recovery actually resumes the loop", () => {
 			event: unknown,
 			ctx: unknown,
 		) => unknown;
-		// reload 后不会再有旧运行的 settled 事件，恢复入口必须自行提出推进请求。
-		await sessionStart({ type: "session_start", reason: "reload" }, makeCtx(sessionManager, false));
+		const restoredCtx = makeCtx(sessionManager, false);
+		await sessionStart({ type: "session_start", reason: "reload" }, restoredCtx);
 		await flush();
+		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).toBe("queued");
+		for (const handler of registered2.events.get("resources_discover") ?? []) await handler({}, restoredCtx);
 		await flush();
 
 		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).not.toBe("queued");

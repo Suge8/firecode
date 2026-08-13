@@ -85,8 +85,6 @@ interface Controller {
 	persistedStamp: CheckpointStamp | null | undefined;
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
 	pendingCards: CardData[];
-	/** 同一轮事件中的多次推进请求合并成一次 event-loop barrier。 */
-	advanceScheduled?: boolean;
 	/** 本运行时已启动的阶段；reload 后新 controller 会重新启动被中断的子进程。 */
 	runningAction?: string;
 	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
@@ -119,6 +117,8 @@ export function registerReview(pi: ExtensionAPI, enabled = true): void {
 		handler: (args, ctx) => handleCommand(pi, args, ctx),
 	});
 	pi.on("session_start", (_event, ctx) => handleSessionStart(pi, ctx));
+	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
+	pi.on("resources_discover", (_event, ctx) => requestAdvance(pi, ctx));
 	pi.on("agent_start", () => handleAgentStart(pi));
 	// agent_end 只记录修复回合是否真的产出成功结果，不在此推进审查。
 	pi.on("agent_end", (event) => handleRepairAgentEnd(pi, event));
@@ -357,17 +357,13 @@ function scheduleAfterAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): voi
 
 function requestAdvance(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const active = controller;
-	if (!active || active.pi !== pi || active.advanceScheduled) return;
-	active.advanceScheduled = true;
+	if (!active || active.pi !== pi) return;
 	const generation = active.state.generation;
-	setImmediate(() => {
-		active.advanceScheduled = false;
-		void advanceWhenIdle(pi, ctx, generation).catch((error) => {
-			notifyEffectFailure(error);
-			if (controller !== active) return;
-			active.signal.abort();
-			void dispatch(pi, { type: "CANCEL", reason: "user" });
-		});
+	void advanceWhenIdle(pi, ctx, generation).catch((error) => {
+		notifyEffectFailure(error);
+		if (controller !== active) return;
+		active.signal.abort();
+		void dispatch(pi, { type: "CANCEL", reason: "user" });
 	});
 }
 
@@ -423,29 +419,27 @@ function startAction(active: Controller, key: string, run: () => Promise<void>):
 	active.actionPromise = action;
 }
 
-function handleShutdown(
+async function handleShutdown(
 	pi: ExtensionAPI,
 	reason: "quit" | "reload" | "new" | "resume" | "fork",
 	ctx: ExtensionContext,
-): Promise<void> | void {
+): Promise<void> {
 	const active = controller;
 	if (!active) return;
-	// 无论何种终止都先杀子进程、停看门狗；quit 之外保留可恢复状态。
+	// 无论何种终止都先杀子进程并等 close；旧进程不得泄漏到新运行时。
 	active.signal.abort();
 	clearWatchdog();
 	clearFeedbackStartTimer(active);
+	await active.actionPromise;
 	if (active.ctx !== ctx) active.ctx = ctx;
 	if (reason === "quit") {
-		// 真终止：落成终态 checkpoint（await 由 pi 事件处理器保证落盘完成）。
-		return dispatch(pi, { type: "CANCEL", reason: "shutdown" });
+		await dispatch(pi, { type: "CANCEL", reason: "shutdown" });
+		return;
 	}
-	// reload / new / resume / fork：运行时替换，checkpoint 停在当前相，
-	// 由随后 session_start 的恢复分支接手（重新拉起本轮未完成的子进程）。
-	// UI 绑在旧 ctx 上，必须在此释放，否则旧的输入钩子会泄漏到新运行时。
+	// reload / new / resume / fork 保留 checkpoint，由新运行时在 post-session 边界恢复。
 	hideActivity(active.ctx);
 	releaseEditor(active);
-	// 等未完成的迁移落盘：reload 随后会作废旧运行时，此时未写完的 checkpoint 就丢了。
-	return dispatchQueue;
+	await dispatchQueue;
 }
 
 function armWatchdog() {
