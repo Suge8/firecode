@@ -83,14 +83,14 @@ interface Controller {
 	watchdog: ReturnType<typeof setTimeout> | undefined;
 	/** 本 controller 上一次写入的凭证；null=本审查还没写过，undefined=冲突/失败后停写。 */
 	persistedStamp: CheckpointStamp | null | undefined;
-	/** 等 agent 完全 settled 后补投的修复反馈。 */
-	pendingFeedback?: { details: string; advisor: AdvisorResult | null };
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
 	pendingCards: CardData[];
-	/** 反馈 sendMessage 已调用，等待 agent_start 确认真实修复回合已启动。 */
+	/** 同一轮事件中的多次推进请求合并成一次 event-loop barrier。 */
+	advanceScheduled?: boolean;
+	/** 本运行时已启动的阶段；reload 后新 controller 会重新启动被中断的子进程。 */
+	runningAction?: string;
+	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
-	feedbackTurnStarted?: boolean;
-	feedbackTurnSucceeded?: boolean;
 	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
 	progress: readonly ReviewerProgress[];
 	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
@@ -135,6 +135,7 @@ function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void
 			phase: "settled",
 			active: null,
 			pending: null,
+			repair: null,
 			updatedAt: Date.now(),
 		});
 	} catch (error) {
@@ -268,23 +269,21 @@ async function handleCommand(
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
-	void dispatch(pi, { type: "START", focus: args.trim(), busy: !ctx.isIdle(), generation: controller.state.generation });
+	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier。
+	void dispatch(pi, { type: "START", focus: args.trim(), busy: true, generation: controller.state.generation });
 }
 
 /** 重启 / 会话恢复：从 checkpoint 重建 controller 并续跑未完成的环节。
  * reload / new / resume / fork 是运行时替换（新 pi），先清掉旧 controller，
  * 再按新会话的 checkpoint 恢复；quit 之外不 settle，审查能在重启后继续。 */
-function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext) {
+function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> | void {
 	if (controller && controller.pi !== pi) controller = undefined;
 	const checkpoint = readCheckpoint(ctx);
 	if (!checkpoint || !isActive(checkpoint)) {
-		// 无待恢复的审查：终态 controller 在此清掉，避免挡住新会话的恢复。
 		if (controller && !isActive(controller.state)) controller = undefined;
 		return;
 	}
-	// 同一会话内已有活动审查时不重复恢复。
 	if (controller && isActive(controller.state)) return;
-	// 恢复入口与命令入口同标准：配置有问题就不能拿默认模型继续发起真实调用。
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
 		if (ctx.hasUI) ctx.ui.notify(loaded.error, "error");
@@ -305,49 +304,69 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext) {
 	};
 	armWatchdog();
 	syncUi();
-	if (checkpoint.phase === "reviewing") startReviewers(pi);
-	else if (checkpoint.phase === "needs_fix") consultAdvisor(pi);
-	else if (ctx.isIdle())
-		// queued / awaiting_fix 等的是「当前运行完全结束」，而 reload 不会产生 agent_settled：
-		// session_start 已证明会话空闲，此时可按 settled 推进恢复态。
-		void dispatch(pi, { type: "AGENT_END" });
+	// 恢复只更新持久状态并提出推进请求；绝不在 session_start handler 内起任何工作。
+	return dispatch(pi, { type: "RECOVER" });
 }
 
-function handleAgentStart(pi: ExtensionAPI): void {
+function handleAgentStart(pi: ExtensionAPI): Promise<void> | void {
 	const active = controller;
-	if (!active || active.pi !== pi || !active.feedbackStartTimer) return;
+	if (
+		!active ||
+		active.pi !== pi ||
+		active.state.phase !== "awaiting_fix" ||
+		active.state.repair?.status !== "awaiting_start"
+	) return;
 	clearFeedbackStartTimer(active);
-	active.feedbackTurnStarted = true;
-	active.feedbackTurnSucceeded = undefined;
+	return dispatch(pi, { type: "REPAIR_STARTED" });
 }
 
 function handleRepairAgentEnd(
 	pi: ExtensionAPI,
 	event: { messages: readonly unknown[] },
-): void {
+): Promise<void> | void {
 	const active = controller;
-	if (!active || active.pi !== pi || !active.feedbackTurnStarted) return;
+	if (
+		!active ||
+		active.pi !== pi ||
+		active.state.phase !== "awaiting_fix" ||
+		active.state.repair?.status !== "running"
+	) return;
 	const assistant = [...event.messages]
 		.reverse()
 		.find((message) => isRecord(message) && message.role === "assistant");
-	active.feedbackTurnSucceeded =
-		isRecord(assistant) && assistant.stopReason !== "error" && assistant.stopReason !== "aborted";
+	if (isRecord(assistant) && assistant.stopReason !== "error" && assistant.stopReason !== "aborted")
+		return dispatch(pi, { type: "REPAIR_COMPLETED" });
+	active.signal.abort();
+	return dispatch(pi, { type: "CANCEL", reason: "user" });
 }
 
 function scheduleAfterAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): void {
-	const generation = controller?.state.generation;
+	requestAdvance(pi, ctx);
+}
+
+function requestAdvance(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	const active = controller;
+	if (!active || active.pi !== pi || active.advanceScheduled) return;
+	active.advanceScheduled = true;
+	const generation = active.state.generation;
 	setImmediate(() => {
-		void continueAfterAgentSettled(pi, ctx, generation);
+		active.advanceScheduled = false;
+		void advanceWhenIdle(pi, ctx, generation).catch((error) => {
+			notifyEffectFailure(error);
+			if (controller !== active) return;
+			active.signal.abort();
+			void dispatch(pi, { type: "CANCEL", reason: "user" });
+		});
 	});
 }
 
-async function continueAfterAgentSettled(
+async function advanceWhenIdle(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	generation: string | undefined,
+	generation: string,
 ): Promise<void> {
 	const active = controller;
-	// reload / esc / 新审查都可能让排队回调过期；旧运行时绝不能推进新 controller。
+	// 所有启动入口共享这一道 barrier：等当前事件的全部处理器结束，再查真实 idle。
 	if (
 		!active ||
 		active.pi !== pi ||
@@ -358,25 +377,34 @@ async function continueAfterAgentSettled(
 	) return;
 	active.ctx = ctx;
 	flushPendingCards(pi);
-	// 用户在审查期间触发了别的运行：先补投反馈，本次 settled 不推进轮次。
-	const pending = active.pendingFeedback;
-	if (pending) {
-		active.pendingFeedback = undefined;
-		deliverFeedbackNow(pi, pending.details, pending.advisor);
+	const { state } = active;
+	if (state.phase === "queued") {
+		await dispatch(pi, { type: "ADVANCE" });
 		return;
 	}
-	// awaiting_fix 只有收到 agent_start 回执后，随后的 settled 才能证明修复回合完成。
-	if (active.state.phase === "awaiting_fix") {
-		if (!active.feedbackTurnStarted) return;
-		active.feedbackTurnStarted = false;
-		if (active.feedbackTurnSucceeded !== true) {
-			active.signal.abort();
-			void dispatch(pi, { type: "CANCEL", reason: "user" });
-			return;
-		}
-		active.feedbackTurnSucceeded = undefined;
+	if (state.phase === "reviewing") {
+		const key = `review:${state.round}`;
+		if (active.runningAction === key) return;
+		active.runningAction = key;
+		startReviewers(pi);
+		return;
 	}
-	await dispatch(pi, { type: "AGENT_END" });
+	if (state.phase === "needs_fix") {
+		const key = `advisor:${state.round}`;
+		if (active.runningAction === key) return;
+		active.runningAction = key;
+		consultAdvisor(pi);
+		return;
+	}
+	if (state.phase !== "awaiting_fix" || !state.repair) return;
+	if (state.repair.status === "pending") {
+		await dispatch(pi, { type: "FEEDBACK_DISPATCHED" });
+		const repair = controller?.state.repair;
+		if (controller === active && repair?.status === "awaiting_start")
+			deliverFeedbackNow(pi, repair.details, repair.advisor);
+		return;
+	}
+	if (state.repair.status === "completed") await dispatch(pi, { type: "ADVANCE" });
 }
 
 function handleShutdown(
@@ -398,7 +426,6 @@ function handleShutdown(
 	// reload / new / resume / fork：运行时替换，checkpoint 停在当前相，
 	// 由随后 session_start 的恢复分支接手（重新拉起本轮未完成的子进程）。
 	// UI 绑在旧 ctx 上，必须在此释放，否则旧的输入钩子会泄漏到新运行时。
-	active.pendingFeedback = undefined;
 	hideActivity(active.ctx);
 	releaseEditor(active);
 	// 等未完成的迁移落盘：reload 随后会作废旧运行时，此时未写完的 checkpoint 就丢了。
@@ -474,6 +501,7 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 				phase: "settled",
 				active: null,
 				pending: null,
+				repair: null,
 			});
 		} catch {
 			sealed = false;
@@ -588,41 +616,19 @@ function renderStatus(
 
 // ---- 副作用执行器 ----
 
-/**
- * 逐 effect 隔离异常，但两类失败后果不同：
- * - 发卡是展示，失败只降级为通知，不能连带吞掉后面的推进动作；
- * - 起子进程 / 请顾问 / 投反馈是循环的唯一推力，它们失败后不会再有任何事件到来，
- *   只通知会把审查永久停在活动态（awaiting_fix 既等不到 agent_end，esc 也不覆盖该相），
- *   因此必须就地取消收口。
- */
+/** reducer 只发卡或请求推进；所有会启动工作的动作统一经过 idle barrier。 */
 async function runEffects(effects: ReviewEffect[]) {
 	for (const effect of effects) {
-		if (!controller) return;
+		const active = controller;
+		if (!active) return;
+		if (effect.kind === "advance") {
+			requestAdvance(active.pi, active.ctx);
+			continue;
+		}
 		try {
-			switch (effect.kind) {
-				case "start_reviewers":
-					startReviewers(controller.pi);
-					break;
-				case "consult_advisor":
-					consultAdvisor(controller.pi);
-					break;
-				case "deliver_feedback":
-					deliverFeedback(controller.pi, effect.details, effect.advisor);
-					break;
-				case "send_card":
-					sendCard(controller.pi, effect.card);
-					break;
-			}
+			sendCard(active.pi, effect.card);
 		} catch (error) {
 			notifyEffectFailure(error);
-			if (effect.kind !== "send_card") {
-				const active = controller;
-				if (!active) return;
-				active.signal.abort();
-				// 当前 runEffects 本身就在 dispatchQueue 中；await 新 dispatch 会自等待死锁。
-				void dispatch(active.pi, { type: "CANCEL", reason: "user" });
-				return;
-			}
 		}
 	}
 }
@@ -756,20 +762,6 @@ function processErrorText(kind: "reviewer" | "advisor", language: Language, erro
 	return language === "en" ? `advisor subprocess error: ${message}` : `顾问子进程异常：${message}`;
 }
 
-function deliverFeedback(
-	pi: ExtensionAPI,
-	details: string,
-	advisor: AdvisorResult | null,
-) {
-	if (!controller) return;
-	if (controller.ctx.isIdle()) {
-		deliverFeedbackNow(pi, details, advisor);
-		return;
-	}
-	// agent 仍在运行：把反馈挂起，等 agent_settled 再投，不能打断当前回复。
-	controller.pendingFeedback = { details, advisor };
-}
-
 function deliverFeedbackNow(
 	pi: ExtensionAPI,
 	details: string,
@@ -783,12 +775,13 @@ function deliverFeedbackNow(
 		advisor,
 	});
 	clearFeedbackStartTimer(active);
-	active.feedbackTurnStarted = false;
-	active.feedbackTurnSucceeded = undefined;
-	// API 返回 void，真实异步失败不会进 try/catch；agent_start 是启动回执，
-	// 最终 agent_end 还要证明修复回合没有以 error/aborted 结束。
+	// API 返回 void，真实异步失败不会进 try/catch；持久化状态等待 agent_start 回执。
 	active.feedbackStartTimer = setTimeout(() => {
-		if (controller !== active || active.feedbackTurnStarted) return;
+		if (
+			controller !== active ||
+			active.state.phase !== "awaiting_fix" ||
+			active.state.repair?.status !== "awaiting_start"
+		) return;
 		active.feedbackStartTimer = undefined;
 		if (active.ctx.hasUI)
 			active.ctx.ui.notify(
@@ -895,7 +888,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // 导出供测试用（纯函数 / 类型）
 export { CHECKPOINT_TYPE };
 
-/** 测试专用：等待 dispatch 队列排空，避免断言依赖异步时序。 */
+/** 测试专用：等待 event-loop barrier 与其产生的状态迁移排空。 */
 export async function __reviewFlushForTests(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await dispatchQueue;
+	await new Promise<void>((resolve) => setImmediate(resolve));
 	await dispatchQueue;
 }

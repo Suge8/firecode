@@ -15,13 +15,14 @@ import type {
 	ActiveReviewer,
 	AdvisorResult,
 	PendingRound,
+	RepairState,
 	ReviewRound,
 	ReviewState,
 	ReviewerResult,
 } from "./state.js";
 
 export const CHECKPOINT_TYPE = "firecode-review-checkpoint";
-const VERSION = 1;
+const VERSION = 2;
 
 /** 写入凭证：同一场审查内 generation 不变，靠单调递增的 seq 识别陈旧写者。 */
 export interface CheckpointStamp {
@@ -69,6 +70,7 @@ const STOP_REASONS = new Set([
 	"shutdown",
 	"timeout",
 ]);
+const REPAIR_STATUSES = new Set(["pending", "awaiting_start", "running", "completed"]);
 
 /**
  * 键白名单由领域类型派生：satisfies 要求逐字段列全，
@@ -122,6 +124,12 @@ const PENDING_ROUND_KEYS = keysOf({
 	details: true,
 } satisfies Record<keyof PendingRound, true>);
 
+const REPAIR_KEYS = keysOf({
+	details: true,
+	advisor: true,
+	status: true,
+} satisfies Record<keyof RepairState, true>);
+
 const CHECKPOINT_KEYS = keysOf({
 	version: true,
 	seq: true,
@@ -132,6 +140,7 @@ const CHECKPOINT_KEYS = keysOf({
 	history: true,
 	active: true,
 	pending: true,
+	repair: true,
 	consecutiveFailures: true,
 	startedAt: true,
 	roundStartedAt: true,
@@ -231,6 +240,16 @@ function isValidPendingRound(value: unknown): boolean {
 	);
 }
 
+function isValidRepair(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		hasOnlyKeys(value, REPAIR_KEYS) &&
+		isString(value.details) &&
+		(value.advisor === null || isValidAdvisor(value.advisor)) &&
+		oneOf(value.status, REPAIR_STATUSES)
+	);
+}
+
 /** 一次性整体校验 checkpoint；结构或版本不符返回 false（调用方直接丢弃）。 */
 export function isValidCheckpoint(value: unknown): boolean {
 	if (!isRecord(value)) return false;
@@ -246,6 +265,7 @@ export function isValidCheckpoint(value: unknown): boolean {
 		value.history.every(isValidRound) &&
 		(value.active === null || isValidActiveCheck(value.active)) &&
 		(value.pending === null || isValidPendingRound(value.pending)) &&
+		(value.repair === null || isValidRepair(value.repair)) &&
 		isNonNegativeInt(value.consecutiveFailures) &&
 		isNonNegativeInt(value.startedAt) &&
 		isNonNegativeInt(value.roundStartedAt) &&
@@ -263,6 +283,7 @@ function toCheckpoint(state: ReviewState) {
 		history: state.history,
 		active: state.active,
 		pending: state.pending,
+		repair: state.repair,
 		consecutiveFailures: state.consecutiveFailures,
 		startedAt: state.startedAt,
 		roundStartedAt: state.roundStartedAt,

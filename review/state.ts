@@ -73,6 +73,15 @@ export interface PendingRound {
 	details: string;
 }
 
+export type RepairStatus = "pending" | "awaiting_start" | "running" | "completed";
+
+/** FAIL 后的修复回合。必须持久化，reload 才不会跳过尚未启动的反馈。 */
+export interface RepairState {
+	details: string;
+	advisor: AdvisorResult | null;
+	status: RepairStatus;
+}
+
 export interface ReviewState {
 	generation: string;
 	phase: Phase;
@@ -83,8 +92,10 @@ export interface ReviewState {
 	history: ReviewRound[];
 	/** reviewing 轮的活动检查；其余相为 null。 */
 	active: ActiveCheck | null;
-	/** FAIL 轮等待收口（needs_fix）。 */
+	/** FAIL 轮等待顾问收口（needs_fix）。 */
 	pending: PendingRound | null;
+	/** awaiting_fix 的反馈与修复回合生命周期。 */
+	repair: RepairState | null;
 	/** 连续未通过轮数（顾问仲裁阈值）。 */
 	consecutiveFailures: number;
 	startedAt: number;
@@ -103,9 +114,13 @@ export interface ReviewLimits {
 
 export type ReviewEvent =
 	| { type: "START"; focus: string; busy: boolean; generation: string }
+	| { type: "RECOVER" }
 	| { type: "REVIEWER_SETTLED"; index: number; result: ReviewerResult }
 	| { type: "ADVISOR_SETTLED"; result: AdvisorResult }
-	| { type: "AGENT_END" }
+	| { type: "ADVANCE" }
+	| { type: "FEEDBACK_DISPATCHED" }
+	| { type: "REPAIR_STARTED" }
+	| { type: "REPAIR_COMPLETED" }
 	| { type: "CANCEL"; reason: "user" | "shutdown" }
 	| { type: "TIMEOUT" };
 
@@ -128,9 +143,7 @@ export type CardData =
 	| { kind: "error"; message: string };
 
 export type ReviewEffect =
-	| { kind: "start_reviewers" }
-	| { kind: "consult_advisor" }
-	| { kind: "deliver_feedback"; round: number; details: string; advisor: AdvisorResult | null }
+	| { kind: "advance" }
 	| { kind: "send_card"; card: CardData };
 
 export interface ReduceResult {
@@ -147,6 +160,7 @@ export function initialState(generation: string): ReviewState {
 		history: [],
 		active: null,
 		pending: null,
+		repair: null,
 		consecutiveFailures: 0,
 		startedAt: 0,
 		roundStartedAt: 0,
@@ -163,12 +177,20 @@ export function reduce(
 	switch (event.type) {
 		case "START":
 			return onStart(state, event, limits, now);
+		case "RECOVER":
+			return onRecover(state);
 		case "REVIEWER_SETTLED":
 			return onReviewerSettled(state, event, limits, now);
 		case "ADVISOR_SETTLED":
 			return onAdvisorSettled(state, event, now);
-		case "AGENT_END":
-			return onAgentEnd(state, limits, now);
+		case "ADVANCE":
+			return onAdvance(state, limits, now);
+		case "FEEDBACK_DISPATCHED":
+			return updateRepairStatus(state, "pending", "awaiting_start", now);
+		case "REPAIR_STARTED":
+			return updateRepairStatus(state, "awaiting_start", "running", now);
+		case "REPAIR_COMPLETED":
+			return updateRepairStatus(state, "running", "completed", now);
 		case "CANCEL":
 			return onCancel(state, event.reason, now);
 		case "TIMEOUT":
@@ -194,7 +216,10 @@ function onStart(
 				startedAt: now,
 				updatedAt: now,
 			},
-			effects: [{ kind: "send_card", card: { kind: "queued", focus } }],
+			effects: [
+				{ kind: "send_card", card: { kind: "queued", focus } },
+				{ kind: "advance" },
+			],
 		};
 	return {
 		state: beginRound(initialState(event.generation), focus, 1, limits, now),
@@ -208,12 +233,37 @@ function onStart(
 					models: limits.reviewers.map((item) => item.model),
 				},
 			},
-			{ kind: "start_reviewers" },
+			{ kind: "advance" },
 		],
 	};
 }
 
-function onAgentEnd(
+function onRecover(state: ReviewState): ReduceResult {
+	if (state.phase === "idle" || state.phase === "settled")
+		return { state, effects: [] };
+	// reload 会中断尚未确认完成的修复回合；重新投递同一份持久化反馈，不能跳到下一轮。
+	const repair =
+		state.phase === "awaiting_fix" && state.repair && state.repair.status !== "completed"
+			? { ...state.repair, status: "pending" as const }
+			: state.repair;
+	return { state: { ...state, repair }, effects: [{ kind: "advance" }] };
+}
+
+function updateRepairStatus(
+	state: ReviewState,
+	expected: RepairStatus,
+	status: RepairStatus,
+	now: number,
+): ReduceResult {
+	if (state.phase !== "awaiting_fix" || state.repair?.status !== expected)
+		return { state, effects: [] };
+	return {
+		state: { ...state, repair: { ...state.repair, status }, updatedAt: now },
+		effects: [],
+	};
+}
+
+function onAdvance(
 	state: ReviewState,
 	limits: ReviewLimits,
 	now: number,
@@ -231,13 +281,14 @@ function onAgentEnd(
 						models: limits.reviewers.map((item) => item.model),
 					},
 				},
-				{ kind: "start_reviewers" },
+				{ kind: "advance" },
 			],
 		};
-	if (state.phase !== "awaiting_fix") return { state, effects: [] };
+	if (state.phase !== "awaiting_fix" || state.repair?.status !== "completed")
+		return { state, effects: [] };
 	if (state.round >= limits.maxRounds)
 		return {
-			state: { ...state, phase: "settled", updatedAt: now },
+			state: { ...state, phase: "settled", repair: null, updatedAt: now },
 			effects: [
 				{
 					kind: "send_card",
@@ -257,7 +308,7 @@ function onAgentEnd(
 					models: limits.reviewers.map((item) => item.model),
 				},
 			},
-			{ kind: "start_reviewers" },
+			{ kind: "advance" },
 		],
 	};
 }
@@ -359,7 +410,7 @@ function settleRound(
 						awaitingAdvisor: true,
 					},
 				},
-				{ kind: "consult_advisor" },
+				{ kind: "advance" },
 			],
 		};
 	return {
@@ -367,21 +418,14 @@ function settleRound(
 			...base,
 			phase: "awaiting_fix",
 			pending: null,
+			repair: { details, advisor: null, status: "pending" },
 			consecutiveFailures,
 			history: [
 				...state.history,
 				roundRecord(active.round, "failed", details, settled, undefined, state.roundStartedAt, now),
 			],
 		},
-		effects: [
-			failCard,
-			{
-				kind: "deliver_feedback",
-				round: active.round,
-				details,
-				advisor: null,
-			},
-		],
+		effects: [failCard, { kind: "advance" }],
 	};
 }
 
@@ -407,20 +451,21 @@ function onAdvisorSettled(
 	}
 	const round = roundRecord(pending.round, "failed", pending.details, pending.reviewers, advisor, state.roundStartedAt, now);
 	return {
-		state: { ...state, phase: "awaiting_fix", pending: null, history: [...state.history, round], updatedAt: now },
-		// 仲裁完成后要补一张卡：否则界面会停在「仲裁中、尚未交回修复」，
-		// 而实际反馈已投递、修复已开始。
+		state: {
+			...state,
+			phase: "awaiting_fix",
+			pending: null,
+			repair: { details: pending.details, advisor, status: "pending" },
+			history: [...state.history, round],
+			updatedAt: now,
+		},
+		// 仲裁完成后补卡并经统一 barrier 投反馈。
 		effects: [
 			{
 				kind: "send_card",
 				card: { kind: "fail", round: pending.round, details: pending.details, advisor },
 			},
-			{
-				kind: "deliver_feedback",
-				round: pending.round,
-				details: pending.details,
-				advisor,
-			},
+			{ kind: "advance" },
 		],
 	};
 }
@@ -444,6 +489,7 @@ function onCancel(
 			phase: "settled",
 			active: null,
 			pending: null,
+			repair: null,
 			history: round ? [...state.history, round] : state.history,
 			updatedAt: now,
 		},
@@ -466,6 +512,7 @@ function onTimeout(state: ReviewState, now: number): ReduceResult {
 			phase: "settled",
 			active: null,
 			pending: null,
+			repair: null,
 			history: round ? [...state.history, round] : state.history,
 			updatedAt: now,
 		},
@@ -496,6 +543,7 @@ function beginRound(
 		focus,
 		active: { round, reviewers, settledCount: 0 },
 		pending: null,
+		repair: null,
 		roundStartedAt: now,
 		updatedAt: now,
 	};

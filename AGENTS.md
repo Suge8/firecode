@@ -42,10 +42,11 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 未知字段、嵌套未知字段与类型错误都报配置问题；不读 pi-flow 的 config.json。
 config.jsonc 解析失败或 review 节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动——
 静默回退默认模型会拿用户没配的模型真实发起调用。
-循环只在 `agent_settled` 后推进，并延迟到下一事件循环重新检查 idle/pending：同一事件的后续 handler
-仍可能触发 follow-up，不能在 handler 内立即开审。reload 不产生 settled 事件，因此 session_start 恢复到
-`queued`/`awaiting_fix` 且会话空闲时主动推进，否则会永久停在活动态。反馈投递以 `agent_start` 确认启动、最终 `agent_end` 确认未以 error/aborted 结束；
-宿主 `sendMessage` 返回 void，不能用同步 try/catch 伪装成异步失败处理。
+命令、`session_start` 恢复和 `agent_settled` 都只提出推进请求；起审查者、起顾问、投反馈统一经过
+下一事件循环的 idle/pending barrier，同一事件的后续 handler 触发 follow-up 时不会并发开审。
+`awaiting_fix` 把修复生命周期 `pending → awaiting_start → running → completed` 写进 checkpoint；reload
+会重投未确认完成的反馈，只有 completed 才进入下一审查轮。宿主 `sendMessage` 返回 void，因此反馈用
+`agent_start` 确认启动、最终 `agent_end` 确认未以 error/aborted 结束，不靠同步 try/catch 猜异步结果。
 审查者的只读是契约而非能力边界：排除 write/edit 只挡住这两个工具，保留的 `bash` 仍能在项目目录
 执行任意命令。保留 bash 是有意的——审查者要跑测试取证；真需要物理隔离得上容器或只读挂载。
 FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每条发现必须六要素齐全

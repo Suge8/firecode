@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -302,7 +303,7 @@ describe("checkpoint persistence", () => {
 
 		// 2. 模拟并发写者塞入不同 generation 的 checkpoint
 		sessionManager.appendCustomEntry("firecode-review-checkpoint", {
-			version: 1,
+			version: 2,
 			seq: 1,
 			generation: "foreign-writer",
 			phase: "queued",
@@ -311,6 +312,7 @@ describe("checkpoint persistence", () => {
 			history: [],
 			active: null,
 			pending: null,
+			repair: null,
 			consecutiveFailures: 0,
 			startedAt: 1,
 			roundStartedAt: 1,
@@ -445,7 +447,7 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 1,
+				version: 2,
 				seq: 1,
 				generation: "g",
 				phase: "reviewing",
@@ -458,6 +460,7 @@ describe("review config is rejected at every entry point", () => {
 					settledCount: 0,
 				},
 				pending: null,
+				repair: null,
 				consecutiveFailures: 0,
 				startedAt: 1,
 				roundStartedAt: 1,
@@ -481,8 +484,94 @@ describe("review config is rejected at every entry point", () => {
 });
 
 describe("reload recovery actually resumes the loop", () => {
-	// reload 不产生 agent_end，而 queued / awaiting_fix 正是在等这个事件。
-	// 不在 session_start 推进的话，会话一空闲审查就永远停在活动态，还会挡住新的 /fire-review。
+	// session_start 只提出推进请求；必须等同一事件的其他 handler 跑完并再次确认 idle。
+	test("a later session_start handler can start a turn before restored reviewers run", async () => {
+		await loadAll();
+		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
+		const script = join(tmpdir(), `fire-review-resume-${Date.now()}.sh`);
+		await writeFile(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+		const module = (await loadFirecodeModule("review/index.js", {
+			configJsonc: JSON.stringify({
+				review: {
+					reviewers: [{ model: "p/one", thinking: "low" }],
+					background: { command: script },
+				},
+			}),
+		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		const reviewSettled = new Promise<void>((resolve) => {
+			pi.events.emit = (name: string, data: unknown) => {
+				registered.emitted.push({ name, data });
+				if (name === "firecode:review-settled") resolve();
+			};
+		});
+		beginCheckpoint(pi as never, { sessionManager } as never, {
+			...initialState("restore-review"),
+			phase: "reviewing",
+			round: 1,
+			active: {
+				round: 1,
+				reviewers: [{ index: 0, model: "p/one", thinking: "low", status: "running", result: null }],
+				settledCount: 0,
+			},
+			startedAt: 1,
+			roundStartedAt: 1,
+			updatedAt: 1,
+		});
+		module.registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const sessionStart = (registered.events.get("session_start") ?? [])[0] as (event: unknown, ctx: unknown) => Promise<void>;
+		await sessionStart({}, ctx);
+		// 模拟同一 session_start 上后注册的 master handler 触发自动续跑。
+		ctx.setIdle(false);
+		await module.__reviewFlushForTests();
+		expect(existsSync(marker)).toBe(false);
+
+		ctx.setIdle(true);
+		for (const handler of registered.events.get("agent_settled") ?? []) await handler({}, ctx);
+		await module.__reviewFlushForTests();
+		await reviewSettled;
+		expect(existsSync(marker)).toBe(true);
+		await rm(script, { force: true });
+		await rm(marker, { force: true });
+	});
+
+	test("reload before repair agent_start re-delivers feedback without advancing the round", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		beginCheckpoint(pi as never, { sessionManager } as never, {
+			...initialState("restore-repair"),
+			phase: "awaiting_fix",
+			round: 1,
+			repair: { details: "FAIL", advisor: null, status: "awaiting_start" },
+			startedAt: 1,
+			roundStartedAt: 1,
+			updatedAt: 1,
+		});
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		const sessionStart = (registered.events.get("session_start") ?? [])[0] as (event: unknown, ctx: unknown) => Promise<void>;
+		await sessionStart({}, ctx);
+		ctx.setIdle(false);
+		await flush();
+		expect(readCheckpoint({ sessionManager })?.repair?.status).toBe("pending");
+		expect(registered.sent).toHaveLength(0);
+
+		ctx.setIdle(true);
+		for (const handler of registered.events.get("agent_settled") ?? []) await handler({}, ctx);
+		await flush();
+		const restored = readCheckpoint({ sessionManager });
+		expect(restored?.phase).toBe("awaiting_fix");
+		expect(restored?.round).toBe(1);
+		expect(restored?.repair?.status).toBe("awaiting_start");
+		expect(
+			registered.sent.some((message) => (message as { customType?: string }).customType === "firecode-review-feedback"),
+		).toBe(true);
+	});
+
 	test("a queued review resumes on session_start when the session is idle", async () => {
 		const { registerReview } = (await loadFirecodeModule("review/index.js", {
 			// 子进程立即退出：只验证循环是否真的被推进，不依赖模型
@@ -515,7 +604,7 @@ describe("reload recovery actually resumes the loop", () => {
 			event: unknown,
 			ctx: unknown,
 		) => unknown;
-		// 关键：reload 后会话空闲，没有任何 agent_end 会到来
+		// reload 后不会再有旧运行的 settled 事件，恢复入口必须自行提出推进请求。
 		await sessionStart({ type: "session_start", reason: "reload" }, makeCtx(sessionManager, false));
 		await flush();
 		await flush();
@@ -547,7 +636,7 @@ test("a terminal review infrastructure error is reported to the owning control p
 	};
 	await command.handler("", makeCtx(sessionManager, false));
 	expect(await settled).toMatchObject({ passed: false });
-	expect(cards).toBe(2);
+	expect(cards).toBe(3);
 });
 
 describe("the loop survives failing side effects", () => {
@@ -583,8 +672,7 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
 
-	// 一个 effect 抛错不能吞掉同一迁移里后续的推进动作：
-	// 发卡失败若连带跳过 start_reviewers，就会停在「审查中但没有模型在跑」的假活动态。
+	// 发卡只是展示，失败不能吞掉同一迁移里的推进请求。
 	test("a failing card does not swallow the effects after it", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
@@ -599,8 +687,8 @@ describe("the loop survives failing side effects", () => {
 		};
 		await command.handler("", ctx);
 		await flush();
-		// 启动卡发送失败，但本轮仍进入 reviewing（后续 effect 没被跳过）
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("reviewing");
+		// 启动卡发送失败，但仍离开 queued 并实际跑完审查者。
+		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 	});
 
 	// 宿主 sendMessage 返回 void，异步失败不会 throw；必须靠 agent_start 回执超时收口，

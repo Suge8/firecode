@@ -25,6 +25,12 @@ function settle(state: ReviewState, index: number, status: ReviewerResult["statu
 	return reduce(state, { type: "REVIEWER_SETTLED", index, result: reviewer(index, status, details) }, LIMITS, 10_000 + index);
 }
 
+function completeRepair(state: ReviewState, limits = LIMITS, now = 20_000): ReviewState {
+	state = reduce(state, { type: "FEEDBACK_DISPATCHED" }, limits, now - 3).state;
+	state = reduce(state, { type: "REPAIR_STARTED" }, limits, now - 2).state;
+	return reduce(state, { type: "REPAIR_COMPLETED" }, limits, now - 1).state;
+}
+
 async function loadState() {
 	const module = (await loadFirecodeModule("review/state.ts")) as {
 		reduce: Reduce;
@@ -44,16 +50,19 @@ describe("fire-review reducer", () => {
 		expect(result.state.round).toBe(1);
 		expect(result.state.active?.reviewers).toHaveLength(2);
 		expect(result.state.focus).toBe("审 auth");
-		expect(result.effects.map((e) => e.kind)).toEqual(["send_card", "start_reviewers"]);
+		expect(result.effects.map((e) => e.kind)).toEqual(["send_card", "advance"]);
 		expect(result.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "start", models: ["p/sol", "p/terra"] } });
 	});
 
-	test("START while busy queues and waits for agent end", async () => {
+	test("START while busy queues and waits for runtime completion", async () => {
 		await loadState();
 		const result = reduce(initialState("g"), { type: "START", focus: "x", busy: true, generation: "g" }, LIMITS, 1000);
 		expect(result.state.phase).toBe("queued");
 		expect(result.state.round).toBe(0);
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "queued" } }]);
+		expect(result.effects).toMatchObject([
+			{ kind: "send_card", card: { kind: "queued" } },
+			{ kind: "advance" },
+		]);
 	});
 
 	test("START while a review is active is ignored", async () => {
@@ -76,29 +85,29 @@ describe("fire-review reducer", () => {
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "pass" } }]);
 	});
 
-	test("any FAIL drives the round failed; before advisor threshold it delivers feedback directly", async () => {
+	test("any FAIL records pending repair and requests guarded advancement", async () => {
 		await loadState();
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		const result = settle(state, 1, "passed", "PASS\n证据：文件=a.ts；命令=ls");
 		expect(result.state.phase).toBe("awaiting_fix");
 		expect(result.state.history[0].result).toBe("failed");
-		// 失败轮先发一张可见卡，再投隐藏反馈，否则用户看不到本轮结论。
+		// 失败轮先发可见卡，再由统一 barrier 投隐藏反馈。
 		expect(result.effects).toMatchObject([
 			{ kind: "send_card", card: { kind: "fail", round: 1 } },
-			{ kind: "deliver_feedback", advisor: null },
+			{ kind: "advance" },
 		]);
 	});
 
-	test("consecutive failures reaching the threshold consult the advisor instead of direct feedback", async () => {
+	test("consecutive failures reaching the threshold requests advisor advancement", async () => {
 		await loadState();
-		// round 1 fails (direct feedback)
+		// round 1 fails and completes its repair
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
 		expect(state.phase).toBe("awaiting_fix");
 		// agent fixes, round 2 begins
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		expect(state.round).toBe(2);
 		// round 2 fails -> consecutiveFailures = 2 >= advisorAfterFailures
 		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
@@ -107,7 +116,7 @@ describe("fire-review reducer", () => {
 		expect(result.state.consecutiveFailures).toBe(2);
 		expect(result.effects).toMatchObject([
 			{ kind: "send_card", card: { kind: "fail", round: 2 } },
-			{ kind: "consult_advisor" },
+			{ kind: "advance" },
 		]);
 	});
 
@@ -116,7 +125,7 @@ describe("fire-review reducer", () => {
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 4").state;
 		const result = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "continue", advice: "继续修" } }, LIMITS, 30_000);
@@ -125,7 +134,7 @@ describe("fire-review reducer", () => {
 		// 先补一张带顾问结论的失败卡，再投反馈：否则界面永远停在「仲裁中」
 		expect(result.effects).toMatchObject([
 			{ kind: "send_card", card: { kind: "fail", advisor: { verdict: "continue" } } },
-			{ kind: "deliver_feedback", advisor: { verdict: "continue" } },
+			{ kind: "advance" },
 		]);
 	});
 
@@ -136,14 +145,14 @@ describe("fire-review reducer", () => {
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 4").state;
 		const result = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "narrow", advice: "收窄" } }, LIMITS, 30_000);
 		expect(result.state.phase).toBe("awaiting_fix");
 		expect(result.effects).toMatchObject([
 			{ kind: "send_card", card: { kind: "fail", advisor: { verdict: "narrow" } } },
-			{ kind: "deliver_feedback" },
+			{ kind: "advance" },
 		]);
 	});
 
@@ -152,7 +161,7 @@ describe("fire-review reducer", () => {
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 4").state;
 		const result = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "别修了" } }, LIMITS, 30_000);
@@ -162,35 +171,48 @@ describe("fire-review reducer", () => {
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "advisor" } }]);
 	});
 
-	test("AGENT_END from queued begins round 1", async () => {
+	test("ADVANCE from queued begins round 1", async () => {
 		await loadState();
 		let state = reduce(initialState("g"), { type: "START", focus: "f", busy: true, generation: "g" }, LIMITS, 1000).state;
-		const result = reduce(state, { type: "AGENT_END" }, LIMITS, 2000);
+		const result = reduce(state, { type: "ADVANCE" }, LIMITS, 2000);
 		expect(result.state.phase).toBe("reviewing");
 		expect(result.state.round).toBe(1);
 		expect(result.state.focus).toBe("f");
-		expect(result.effects.map((e) => e.kind)).toEqual(["send_card", "start_reviewers"]);
+		expect(result.effects.map((e) => e.kind)).toEqual(["send_card", "advance"]);
 	});
 
-	test("AGENT_END from awaiting_fix advances to the next round", async () => {
+	test("RECOVER resets an unconfirmed repair instead of advancing the round", async () => {
 		await loadState();
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
-		const result = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000);
+		state = reduce(state, { type: "FEEDBACK_DISPATCHED" }, LIMITS, 20_000).state;
+		expect(state.repair?.status).toBe("awaiting_start");
+		const recovered = reduce(state, { type: "RECOVER" }, LIMITS, 21_000);
+		expect(recovered.state.round).toBe(1);
+		expect(recovered.state.repair?.status).toBe("pending");
+		expect(recovered.effects).toEqual([{ kind: "advance" }]);
+	});
+
+	test("ADVANCE from awaiting_fix advances to the next round", async () => {
+		await loadState();
+		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
+		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
+		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
+		const result = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000);
 		expect(result.state.round).toBe(2);
 		expect(result.state.phase).toBe("reviewing");
 		expect(result.state.history).toHaveLength(1);
 	});
 
-	test("AGENT_END at maxRounds stops instead of opening another round", async () => {
+	test("ADVANCE at maxRounds stops instead of opening another round", async () => {
 		await loadState();
 		const local = { ...LIMITS, maxRounds: 1 };
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, local, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
 		expect(state.phase).toBe("awaiting_fix");
-		const result = reduce(state, { type: "AGENT_END" }, local, 20_000);
+		const result = reduce(completeRepair(state, local), { type: "ADVANCE" }, local, 20_000);
 		expect(result.state.phase).toBe("settled");
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "max_rounds" } }]);
 	});
@@ -206,13 +228,13 @@ describe("fire-review reducer", () => {
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "max_rounds" } }]);
 	});
 
-	test("AGENT_END is ignored while idle or reviewing", async () => {
+	test("ADVANCE is ignored while idle or reviewing", async () => {
 		await loadState();
-		const idle = reduce(initialState("g"), { type: "AGENT_END" }, LIMITS, 1000);
+		const idle = reduce(initialState("g"), { type: "ADVANCE" }, LIMITS, 1000);
 		expect(idle.state.phase).toBe("idle");
 		expect(idle.effects).toEqual([]);
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false, generation: "g" }, LIMITS, 1000).state;
-		const reviewing = reduce(state, { type: "AGENT_END" }, LIMITS, 2000);
+		const reviewing = reduce(state, { type: "ADVANCE" }, LIMITS, 2000);
 		expect(reviewing.state.phase).toBe("reviewing");
 		expect(reviewing.state.round).toBe(1);
 	});
@@ -262,7 +284,7 @@ describe("fire-review reducer", () => {
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
 		const first = state.history[0];
 		const before = JSON.stringify(state.history[0]);
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		state = settle(state, 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state;
 		const result = settle(state, 1, "passed", "PASS\n证据：文件=b.ts；命令=cat b.ts");
 		expect(result.state.history).toHaveLength(2);
@@ -276,13 +298,13 @@ describe("fire-review reducer", () => {
 		const rounds = [state.round];
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 20_000).state;
+		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
 		rounds.push(state.round);
 		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 4").state;
-		// 第二轮触发顾问仲裁，仲裁 continue 后进修复，agent_end 再开第三轮
+		// 第二轮触发顾问仲裁，仲裁 continue 后进修复，repair completion 再开第三轮
 		state = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "continue", advice: "继续" } }, LIMITS, 30_000).state;
-		state = reduce(state, { type: "AGENT_END" }, LIMITS, 40_000).state;
+		state = reduce(completeRepair(state, LIMITS, 40_000), { type: "ADVANCE" }, LIMITS, 40_000).state;
 		rounds.push(state.round);
 		expect(rounds).toEqual([1, 2, 3]);
 	});

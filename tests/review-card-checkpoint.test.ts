@@ -77,7 +77,7 @@ describe("checkpoint schema", () => {
 	test("rejects version mismatch, unknown keys, and invalid phases (discard, no field-level compat)", async () => {
 		await loadAll();
 		const valid = {
-			version: 1,
+			version: 2,
 			seq: 1,
 			generation: "g",
 			phase: "reviewing",
@@ -90,13 +90,14 @@ describe("checkpoint schema", () => {
 				settledCount: 0,
 			},
 			pending: null,
+			repair: null,
 			consecutiveFailures: 0,
 			startedAt: 1,
 			roundStartedAt: 1,
 			updatedAt: 1,
 		};
 		expect(isValidCheckpoint(valid)).toBe(true);
-		expect(isValidCheckpoint({ ...valid, version: 2 })).toBe(false);
+		expect(isValidCheckpoint({ ...valid, version: 1 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, extra: 1 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, phase: "bogus" })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, active: null })).toBe(true);
@@ -130,7 +131,11 @@ describe("checkpoint schema", () => {
 		).state;
 		const settle = (from: typeof start) =>
 			state.reduce(from, { type: "REVIEWER_SETTLED", index: 0, result: failed }, limits, 2).state;
-		const advisorPhase = settle(state.reduce(settle(start), { type: "AGENT_END" }, limits, 3).state);
+		let repaired = settle(start);
+		repaired = state.reduce(repaired, { type: "FEEDBACK_DISPATCHED" }, limits, 3).state;
+		repaired = state.reduce(repaired, { type: "REPAIR_STARTED" }, limits, 4).state;
+		repaired = state.reduce(repaired, { type: "REPAIR_COMPLETED" }, limits, 5).state;
+		const advisorPhase = settle(state.reduce(repaired, { type: "ADVANCE" }, limits, 6).state);
 		expect(advisorPhase.phase).toBe("needs_fix");
 
 		const terminals = {
@@ -158,7 +163,7 @@ describe("checkpoint schema", () => {
 		};
 		for (const [label, terminal] of Object.entries(terminals)) {
 			expect(`${label}:${terminal.phase}`).toBe(`${label}:settled`);
-			expect(`${label}:${isValidCheckpoint({ version: 1, seq: 1, ...terminal })}`).toBe(`${label}:true`);
+			expect(`${label}:${isValidCheckpoint({ version: 2, seq: 1, ...terminal })}`).toBe(`${label}:true`);
 		}
 	});
 });
