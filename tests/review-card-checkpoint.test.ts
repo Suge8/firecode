@@ -73,6 +73,24 @@ describe("result card payload", () => {
 		expect(lines).not.toContain("审查到目前为止做完的事");
 	});
 
+	test("non-pass cards do not repeat their title state in the body", async () => {
+		await loadAll();
+		const cases = [
+			buildCard({ kind: "queued", focus: "" }, "zh"),
+			buildCard({ kind: "fail", round: 1, details: "FAIL", advisor: null }, "zh"),
+			buildCard({ kind: "stop", reason: "max_rounds", round: 1, details: "" }, "zh"),
+			buildCard({ kind: "timeout", round: 1 }, "zh"),
+			buildCard({ kind: "error", message: "network" }, "zh"),
+		];
+		expect(cases[0].details.lines).toEqual([]);
+		expect(cases[1].details.lines[0]).toBe("发现已交回修复。");
+		expect(cases[2].details.lines[0]).toBe("已达到最大轮数。");
+		expect(cases[3].details.lines[0]).toBe("已超过总体时限。");
+		expect(cases[4].details.lines[0]).toBe("未产生有效发现。");
+		for (const built of cases)
+			expect(built.details.lines[0] ?? "").not.toContain(built.details.title.split(" · ")[0]);
+	});
+
 	test("renderer removes markdown furniture from reviewer findings", async () => {
 		const card = (await loadFirecodeModule("review/card.js")) as {
 			buildCard: BuildCard;
@@ -100,6 +118,26 @@ describe("result card payload", () => {
 		expect(output).toContain("• 问题: state.ts 有误");
 		expect(output).not.toContain("##");
 		expect(output).not.toContain("`");
+	});
+
+	test("narrow cards never render beyond the terminal width", async () => {
+		const card = (await loadFirecodeModule("review/card.js")) as {
+			buildCard: BuildCard;
+			registerCardRenderer: (pi: unknown) => void;
+		};
+		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
+		card.registerCardRenderer({
+			registerMessageRenderer: (_type: string, next: typeof renderer) => {
+				renderer = next;
+			},
+		});
+		const built = card.buildCard({ kind: "timeout", round: 12 }, "zh");
+		const lines = renderer?.(
+			{ details: built.details, content: built.content },
+			{},
+			{ fg: (_tone: string, text: string) => text },
+		)?.render(8) ?? [];
+		expect(lines.every((line) => Bun.stringWidth(line) <= 8)).toBe(true);
 	});
 });
 

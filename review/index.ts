@@ -603,23 +603,23 @@ function renderStatus(
 	if (!ctx.hasUI) return;
 	let text: string | undefined;
 	if (state.phase === "queued")
-		text = language === "en" ? "⏳ Review queued" : "⏳ 审查排队中";
+		text = language === "en" ? "· Review queued" : "· 审查排队中";
 	else if (state.phase === "reviewing") {
 		const marks = state.active?.reviewers
 			.map((item) => {
 				if (item.status === "passed") return "✓";
 				if (item.status === "failed") return "✗";
-				if (item.status === "error") return "⚠";
+				if (item.status === "error") return "!";
 				return "…";
 			})
 			.join(" ");
 		text = language === "en"
-			? `🔍 Review R${state.round} [${marks}]`
-			: `🔍 审查 R${state.round} [${marks}]`;
+			? `◆ Review R${state.round} [${marks}]`
+			: `◆ 审查 R${state.round} [${marks}]`;
 	} else if (state.phase === "needs_fix")
-		text = language === "en" ? `💭 Advisor R${state.round}` : `💭 顾问仲裁 R${state.round}`;
+		text = language === "en" ? `◇ Advisor R${state.round}` : `◇ 顾问仲裁 R${state.round}`;
 	else if (state.phase === "awaiting_fix")
-		text = language === "en" ? `🔧 Fixing R${state.round}` : `🔧 修复中 R${state.round}`;
+		text = language === "en" ? `· Fixing R${state.round}` : `· 修复中 R${state.round}`;
 	else text = undefined;
 	ctx.ui.setStatus(STATUS_KEY, text);
 }

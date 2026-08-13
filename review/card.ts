@@ -11,6 +11,7 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
+import { clip } from "../format.js";
 import type { CardData, StopReason } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
@@ -142,7 +143,7 @@ function centeredTitle(
 	color: (text: string) => string,
 ): string {
 	const visible = visibleWidth(title);
-	if (visible >= width) return color(title);
+	if (visible >= width) return color(clip(title, width));
 	const fill = width - visible;
 	const left = Math.floor(fill / 2);
 	const right = fill - left;
@@ -214,12 +215,7 @@ function queued(card: Extract<CardData, { kind: "queued" }>, language: Language)
 	const focusLine = card.focus
 		? [language === "en" ? `Focus: ${card.focus}` : `关注点：${card.focus}`]
 		: [];
-	const lines = [
-		language === "en"
-			? "Queued — review starts after this turn finishes."
-			: "排队中，本轮完成后开审。",
-		...focusLine,
-	];
+	const lines = focusLine;
 	return spec(language, "queued", title, lines, "neutral", "·");
 }
 
@@ -260,11 +256,11 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 	// 顾问可能裁定 stop，反馈就永远不会投递：卡片不能提前宣布尚未发生的动作。
 	const headline = card.awaitingAdvisor
 		? language === "en"
-			? "Review failed; the advisor is arbitrating before anything is sent back."
-			: "审查未通过，顾问仲裁中，尚未交回修复。"
+			? "Advisor arbitration in progress; findings have not been sent back."
+			: "顾问仲裁中，尚未交回修复。"
 		: language === "en"
-			? "Review failed; findings were sent back for fixes."
-			: "审查未通过，发现已交回修复。";
+			? "Findings sent back for fixes."
+			: "发现已交回修复。";
 	const lines = [
 		headline,
 		"",
@@ -281,15 +277,13 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 	const reason =
 		card.reason === "advisor"
 			? language === "en"
-				? "Stopped by advisor arbitration."
-				: "顾问仲裁建议停止。"
+				? "Advisor recommends ending the loop."
+				: "顾问建议结束循环。"
 			: card.reason === "max_rounds"
 				? language === "en"
-					? "Reached the max rounds limit."
-					: "达到最大轮数上限。"
-				: language === "en"
-					? "Stopped."
-					: "已停止。";
+					? "Maximum round limit reached."
+					: "已达到最大轮数。"
+				: "";
 	const lines = [reason, ...(card.details ? [card.details] : [])];
 	return spec(language, "stop", title, lines, "warning", "—");
 }
@@ -304,8 +298,8 @@ function timedOut(card: Extract<CardData, { kind: "timeout" }>, language: Langua
 	const title = language === "en" ? "Review timed out" : "审查超时";
 	const lines = [
 		language === "en"
-			? "Review exceeded the overall time limit; stopped."
-			: "审查超过总体时限，已停止。",
+			? "Overall time limit exceeded."
+			: "已超过总体时限。",
 	];
 	return spec(language, "timeout", title, lines, "error", "◷");
 }
@@ -324,9 +318,7 @@ function reasonText(reason: StopReason, language: Language) {
 function errored(card: Extract<CardData, { kind: "error" }>, language: Language): BuiltCard {
 	const title = language === "en" ? "Review error" : "审查出错";
 	const lines = [
-		language === "en"
-			? "Review infrastructure error; no findings were produced."
-			: "审查基础设施错误，未产生有效发现。",
+		language === "en" ? "No valid findings were produced." : "未产生有效发现。",
 		"",
 		card.message,
 	];

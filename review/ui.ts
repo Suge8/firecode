@@ -15,6 +15,7 @@ import {
 	type EditorTheme,
 	matchesKey,
 	type TUI,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { clip, formatDuration } from "../format.js";
 import type { Language } from "../config.js";
@@ -345,7 +346,7 @@ function reviewerSummary(reviewer: ReviewerProgress, language: Language) {
 function statusMark(status: ReviewerProgress["status"]) {
 	if (status === "passed") return "✓";
 	if (status === "failed") return "✗";
-	if (status === "error") return "⚠";
+	if (status === "error") return "!";
 	return "·";
 }
 
@@ -362,8 +363,8 @@ function padLabel(text: string, width: number) {
 		: text.padEnd(width);
 }
 
-/** 按可见宽度补齐（忽略 ANSI 转义），保证边框右侧对齐。 */
+/** 按终端可见宽度补齐，CJK、emoji 与 ANSI 都由 TUI 的事实源处理。 */
 function padVisible(text: string, width: number) {
-	const visible = text.replace(/\x1b\[[0-9;]*m/gu, "").length;
+	const visible = visibleWidth(text);
 	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
 }

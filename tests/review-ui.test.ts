@@ -91,6 +91,50 @@ describe("review activity layout", () => {
 	});
 });
 
+describe("review details overlay", () => {
+	test("keeps every Chinese row aligned to the requested terminal width", async () => {
+		const ui = (await loadFirecodeModule("review/ui.js")) as {
+			openDetails: (ctx: unknown, view: unknown) => Promise<void>;
+		};
+		let lines: string[] = [];
+		const ctx = {
+			ui: {
+				custom: async (factory: (tui: unknown, theme: unknown, keys: unknown, done: () => void) => {
+					render: (width: number) => string[];
+					dispose: () => void;
+				}) => {
+					const component = factory(
+						{ requestRender: () => {} },
+						{ fg: (_tone: string, text: string) => text },
+						{ matches: () => false },
+						() => {},
+					);
+					lines = component.render(40);
+					component.dispose();
+				},
+			},
+		};
+		await ui.openDetails(ctx, () => ({
+			phase: "reviewing",
+			round: 1,
+			focus: "中文宽度",
+			roundStartedAt: 0,
+			advisorRunning: false,
+			language: "zh",
+			reviewers: [{
+				index: 0,
+				label: "gpt-5.6-sol",
+				status: "running",
+				action: "读取审查状态",
+				toolCalls: 3,
+				trail: ["读取配置文件", "运行中文测试"],
+			}],
+		}));
+		expect(lines.length).toBeGreaterThan(2);
+		expect(lines.every((line) => Bun.stringWidth(line) === 40)).toBe(true);
+	});
+});
+
 describe("review editor locks input and routes control keys", () => {
 	// 用户实际踩到的回归：审查中还能打字、esc 拦不住。
 	// 编辑器是输入第一落点，这里直接实例化真实组件驱动按键。
