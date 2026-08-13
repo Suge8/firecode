@@ -85,7 +85,7 @@ describe("result card payload", () => {
 		expect(cases[0].details.lines).toEqual([]);
 		expect(cases[1].details.lines[0]).toBe("发现已交回修复。");
 		expect(cases[2].details.lines[0]).toBe("已达到最大轮数。");
-		expect(cases[3].details.lines[0]).toBe("已超过总体时限。");
+		expect(cases[3].details.lines).toEqual([]);
 		expect(cases[4].details.lines[0]).toBe("未产生有效发现。");
 		for (const built of cases)
 			expect(built.details.lines[0] ?? "").not.toContain(built.details.title.split(" · ")[0]);

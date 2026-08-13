@@ -296,12 +296,7 @@ function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Langua
 
 function timedOut(card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
 	const title = language === "en" ? "Review timed out" : "审查超时";
-	const lines = [
-		language === "en"
-			? "Overall time limit exceeded."
-			: "已超过总体时限。",
-	];
-	return spec(language, "timeout", title, lines, "error", "◷");
+	return spec(language, "timeout", title, [], "error", "◷");
 }
 
 /** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
