@@ -59,6 +59,38 @@ describe("reviewer progress derived from subprocess events", () => {
 	});
 });
 
+describe("review activity layout", () => {
+	test("keeps full model labels and leaves controls to the locked editor", async () => {
+		const ui = (await loadFirecodeModule("review/ui.js")) as {
+			showActivity: (ctx: unknown, view: unknown) => void;
+		};
+		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
+		ui.showActivity(
+			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
+			() => ({
+				phase: "reviewing",
+				round: 1,
+				focus: "",
+				roundStartedAt: 0,
+				advisorRunning: false,
+				language: "zh",
+				reviewers: [
+					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "思考中", toolCalls: 0, trail: [] },
+					{ index: 1, label: "gpt-5.6-terra", status: "passed", action: "通过", toolCalls: 3, trail: [] },
+				],
+			}),
+		);
+		const component = factory?.(
+			{ requestRender: () => {} },
+			{ fg: (_tone: string, text: string) => text },
+		);
+		const lines = component?.render(64) ?? [];
+		expect(lines.join("\n")).toContain("gpt-5.6-terra");
+		expect(lines).toHaveLength(3);
+		component?.dispose();
+	});
+});
+
 describe("review editor locks input and routes control keys", () => {
 	// 用户实际踩到的回归：审查中还能打字、esc 拦不住。
 	// 编辑器是输入第一落点，这里直接实例化真实组件驱动按键。
@@ -105,7 +137,7 @@ describe("review editor locks input and routes control keys", () => {
 
 	test("renders a paused-input hint in the configured language", async () => {
 		const { editor } = await makeEditor("en");
-		expect(editor.render(80)[0]).toContain("input paused");
+		expect(editor.render(80)[0]).toContain("Input paused");
 	});
 
 	test("unlock restores the default editor", async () => {

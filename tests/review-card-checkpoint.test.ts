@@ -60,16 +60,46 @@ describe("result card payload", () => {
 		const built = buildCard({ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 60000 }, "zh");
 		expect(built.content).not.toMatch(/\x1b\[/);
 		expect(built.details.title).toContain("审查通过");
-		expect(built.details.icon).toBe("✅");
+		expect(built.details.icon).toBe("✓");
 		expect(built.details.lines.join("\n")).toContain("ok");
 	});
 
-	test("start card surfaces the focus hint and reviewer models", async () => {
+	test("start card surfaces the focus and models without a redundant description", async () => {
 		await loadAll();
 		const built = buildCard({ kind: "start", round: 1, focus: "审 auth", models: ["p/sol"] }, "zh");
 		const lines = built.details.lines.join("\n");
 		expect(lines).toContain("审 auth");
 		expect(lines).toContain("sol");
+		expect(lines).not.toContain("审查到目前为止做完的事");
+	});
+
+	test("renderer removes markdown furniture from reviewer findings", async () => {
+		const card = (await loadFirecodeModule("review/card.js")) as {
+			buildCard: BuildCard;
+			registerCardRenderer: (pi: unknown) => void;
+		};
+		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
+		card.registerCardRenderer({
+			registerMessageRenderer: (_type: string, next: typeof renderer) => {
+				renderer = next;
+			},
+		});
+		const built = card.buildCard({
+			kind: "fail",
+			round: 1,
+			details: "## 发现 1\n- 问题: `state.ts` 有误",
+			advisor: null,
+		}, "zh");
+		const component = renderer?.(
+			{ details: built.details, content: built.content },
+			{},
+			{ fg: (_tone: string, text: string) => text },
+		);
+		const output = component?.render(48).join("\n") ?? "";
+		expect(output).toContain("发现 1");
+		expect(output).toContain("• 问题: state.ts 有误");
+		expect(output).not.toContain("##");
+		expect(output).not.toContain("`");
 	});
 });
 

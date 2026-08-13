@@ -9,7 +9,7 @@
  * payload 校验零外部依赖：纯函数一次性整体校验，不做字段级兼容。
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
 import type { CardData, StopReason } from "./state.js";
 
@@ -122,10 +122,18 @@ function plainPart(part: unknown): string {
 
 function cardBodyLines(line: string, width: number, _theme: Theme): string[] {
 	return line
-		.split(/\r?\n/)
-		.map((part) => wrapLine(part, width))
-		.flat()
+		.split(/\r?\n/u)
+		.flatMap((part) => wrapLine(plainCardLine(part), width))
 		.map((part) => padLine(part, width));
+}
+
+/** 卡片展示纯文本，不把审查者输出里的 Markdown 语法当视觉内容。 */
+function plainCardLine(line: string) {
+	return line
+		.replace(/^#{1,6}\s+/u, "")
+		.replace(/^[-*+]\s+/u, "• ")
+		.replace(/^```[\w-]*$/u, "")
+		.replace(/`([^`]+)`/gu, "$1");
 }
 
 function centeredTitle(
@@ -141,40 +149,33 @@ function centeredTitle(
 	return `${color("─".repeat(left))}${title}${color("─".repeat(right))}`;
 }
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, {
+	granularity: "grapheme",
+});
+
 function wrapLine(line: string, width: number): string[] {
-	if (width <= 1) return [line];
+	if (!line) return [""];
 	const lines: string[] = [];
 	let current = "";
 	let currentWidth = 0;
-	for (const char of line) {
-		const charWidth = charWidthOf(char);
-		if (currentWidth + charWidth > width && current) {
+	for (const { segment } of graphemeSegmenter.segment(line)) {
+		const segmentWidth = visibleWidth(segment);
+		if (currentWidth + segmentWidth > width && current) {
 			lines.push(current);
 			current = "";
 			currentWidth = 0;
-			if (char === " ") continue;
+			if (segment === " ") continue;
 		}
-		current += char;
-		currentWidth += charWidth;
+		current += segment;
+		currentWidth += segmentWidth;
 	}
-	if (current) lines.push(current);
+	lines.push(current);
 	return lines;
 }
 
 function padLine(line: string, width: number): string {
 	const visible = visibleWidth(line);
 	return visible >= width ? line : `${line}${" ".repeat(width - visible)}`;
-}
-
-function visibleWidth(text: string): number {
-	let width = 0;
-	for (const char of text) width += charWidthOf(char);
-	return width;
-}
-
-function charWidthOf(char: string) {
-	const code = char.codePointAt(0) ?? 0;
-	return code > 0xff ? 2 : 1;
 }
 
 function borderFor(tone: CardDetails["tone"]) {
@@ -209,7 +210,7 @@ export function buildCard(card: CardData, language: Language): BuiltCard {
 }
 
 function queued(card: Extract<CardData, { kind: "queued" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Review queued" : "已排队";
+	const title = language === "en" ? "Review queued" : "审查已排队";
 	const focusLine = card.focus
 		? [language === "en" ? `Focus: ${card.focus}` : `关注点：${card.focus}`]
 		: [];
@@ -219,20 +220,19 @@ function queued(card: Extract<CardData, { kind: "queued" }>, language: Language)
 			: "排队中，本轮完成后开审。",
 		...focusLine,
 	];
-	return spec(language, "queued", title, lines, "neutral", "⏳");
+	return spec(language, "queued", title, lines, "neutral", "·");
 }
 
 function started(card: Extract<CardData, { kind: "start" }>, language: Language): BuiltCard {
 	const title =
 		language === "en" ? `Review · Round ${card.round}` : `审查 · 第 ${card.round} 轮`;
 	const lines = [
-		language === "en" ? "Reviewing what has been done so far." : "审查到目前为止做完的事。",
+		language === "en" ? `Models: ${card.models.map(shortModel).join(", ")}` : `模型：${card.models.map(shortModel).join("、")}`,
 		...(card.focus
 			? [language === "en" ? `Focus: ${card.focus}` : `关注点：${card.focus}`]
 			: []),
-		language === "en" ? `Reviewers: ${card.models.map(shortModel).join(", ")}` : `审查者：${card.models.map(shortModel).join("、")}`,
 	];
-	return spec(language, "start", title, lines, "accent", "💯");
+	return spec(language, "start", title, lines, "accent", "◆");
 }
 
 function shortModel(model: string) {
@@ -245,13 +245,13 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 			? `Quality check passed · Round ${card.round}`
 			: `审查通过 · 第 ${card.round} 轮`;
 	const lines = [
-		language === "en" ? "Quality check passed." : "审查通过。",
-		"",
 		card.summary,
 		"",
-		`⏱ ${elapsedLabel(card.elapsedMs, language)}`,
+		language === "en"
+			? `Elapsed: ${elapsedLabel(card.elapsedMs, language)}`
+			: `用时：${elapsedLabel(card.elapsedMs, language)}`,
 	];
-	return spec(language, "pass", title, lines, "success", "✅");
+	return spec(language, "pass", title, lines, "success", "✓");
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
@@ -273,7 +273,7 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 			? ["", language === "en" ? "Advisor note" : "顾问建议", card.advisor.advice]
 			: []),
 	];
-	return spec(language, "fail", title, lines, "warning", "❌");
+	return spec(language, "fail", title, lines, "warning", "×");
 }
 
 function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language): BuiltCard {
@@ -291,13 +291,13 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 					? "Stopped."
 					: "已停止。";
 	const lines = [reason, ...(card.details ? [card.details] : [])];
-	return spec(language, "stop", title, lines, "warning", "⏸");
+	return spec(language, "stop", title, lines, "warning", "—");
 }
 
 function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Language): BuiltCard {
 	const title = language === "en" ? "Review cancelled" : "审查已取消";
 	const lines = [reasonText(card.reason, language)];
-	return spec(language, "cancel", title, lines, "neutral", "⏹");
+	return spec(language, "cancel", title, lines, "neutral", "—");
 }
 
 function timedOut(card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
@@ -307,7 +307,7 @@ function timedOut(card: Extract<CardData, { kind: "timeout" }>, language: Langua
 			? "Review exceeded the overall time limit; stopped."
 			: "审查超过总体时限，已停止。",
 	];
-	return spec(language, "timeout", title, lines, "error", "🕐");
+	return spec(language, "timeout", title, lines, "error", "◷");
 }
 
 /** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
@@ -330,7 +330,7 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 		"",
 		card.message,
 	];
-	return spec(language, "error", title, lines, "error", "🛑");
+	return spec(language, "error", title, lines, "error", "!");
 }
 
 function spec(

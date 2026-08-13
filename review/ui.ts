@@ -25,7 +25,7 @@ export const DETAILS_SHORTCUT = "alt+s";
 const WIDGET_KEY = "fire-review";
 const FRAME_MS = 120;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const LABEL_WIDTH = 20;
+const MAX_LABEL_WIDTH = 18;
 /** 详情窗打开期间屏蔽全局 esc：否则一次 esc 会同时关窗并取消审查。 */
 let detailsOpen = false;
 
@@ -131,7 +131,7 @@ export async function openDetails(
 		await ctx.ui.custom<void>(
 			(tui, theme, keybindings, done) =>
 				new DetailsOverlay(view, tui, theme, keybindings, done),
-			{ overlay: true, overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" } },
+			{ overlay: true, overlayOptions: { width: "72%", maxHeight: "60%", anchor: "center" } },
 		);
 	} finally {
 		detailsOpen = false;
@@ -178,11 +178,14 @@ class ActivityBar extends Animated {
 		const view = this.view();
 		if (!view) return [];
 		const safeWidth = Math.max(8, width);
+		const labelWidth = Math.min(
+			MAX_LABEL_WIDTH,
+			Math.max(...view.reviewers.map((reviewer) => reviewer.label.length), 6),
+		);
 		return [
 			this.heading(view, safeWidth),
-			...view.reviewers.map((reviewer) => this.row(reviewer, view, safeWidth)),
-			...this.advisorRow(view, safeWidth),
-			this.theme.fg("dim", clip(hintText(view.language), safeWidth)),
+			...view.reviewers.map((reviewer) => this.row(reviewer, safeWidth, labelWidth)),
+			...this.advisorRow(view, safeWidth, labelWidth),
 		];
 	}
 
@@ -195,23 +198,27 @@ class ActivityBar extends Animated {
 		return this.theme.fg("accent", clip(`${title}${focus}`, width));
 	}
 
-	private row(reviewer: ReviewerProgress, view: ActivityView, width: number) {
+	private row(
+		reviewer: ReviewerProgress,
+		width: number,
+		labelWidth: number,
+	) {
 		const mark =
 			reviewer.status === "running"
 				? this.theme.fg("accent", this.spinner())
 				: this.theme.fg(statusColor(reviewer.status), statusMark(reviewer.status));
-		const label = pad(reviewer.label, LABEL_WIDTH);
+		const label = padLabel(reviewer.label, labelWidth);
 		const calls =
 			reviewer.status === "running" && reviewer.toolCalls > 0
 				? ` · ${reviewer.toolCalls}`
 				: "";
-		const detail = clip(`${reviewer.action}${calls}`, Math.max(4, width - LABEL_WIDTH - 4));
-		return `  ${mark} ${this.theme.fg("muted", label)}${this.theme.fg("dim", detail)}`;
+		const detail = clip(`${reviewer.action}${calls}`, Math.max(4, width - labelWidth - 6));
+		return `  ${mark} ${this.theme.fg("muted", label)}  ${this.theme.fg("dim", detail)}`;
 	}
 
-	private advisorRow(view: ActivityView, width: number) {
+	private advisorRow(view: ActivityView, width: number, labelWidth: number) {
 		if (!view.advisorRunning) return [];
-		const label = pad(advisorText(view.language), LABEL_WIDTH);
+		const label = padLabel(advisorText(view.language), labelWidth);
 		return [
 			`  ${this.theme.fg("warning", this.spinner())} ${this.theme.fg("muted", clip(label, width - 4))}`,
 		];
@@ -245,7 +252,7 @@ class DetailsOverlay extends Animated {
 				body.push(
 					`${this.theme.fg(statusColor(reviewer.status), statusMark(reviewer.status))} ${this.theme.fg(
 						"muted",
-						clip(`${reviewer.label} · ${reviewer.action} · ${reviewer.toolCalls}`, inner - 2),
+						clip(reviewerSummary(reviewer, language), inner - 2),
 					)}`,
 				);
 				const trail = reviewer.trail.slice(-8);
@@ -310,16 +317,10 @@ function headingText(view: ActivityView, language: Language) {
 		: `审查 · 第 ${view.round} 轮`;
 }
 
-function hintText(language: Language) {
-	return language === "en"
-		? `  esc cancel · ${DETAILS_SHORTCUT} details`
-		: `  esc 取消 · ${DETAILS_SHORTCUT} 详情`;
-}
-
 function lockedText(language: Language) {
 	return language === "en"
-		? `Review running · input paused · esc cancel · ${DETAILS_SHORTCUT} details`
-		: `审查进行中 · 输入已暂停 · esc 取消 · ${DETAILS_SHORTCUT} 详情`;
+		? `Input paused during review · esc cancel · ${DETAILS_SHORTCUT} details`
+		: `审查期间暂停输入 · esc 取消 · ${DETAILS_SHORTCUT} 详情`;
 }
 
 function detailsHintText(language: Language) {
@@ -332,6 +333,13 @@ function detailsEmptyText(language: Language) {
 
 function advisorText(language: Language) {
 	return language === "en" ? "advisor" : "顾问";
+}
+
+function reviewerSummary(reviewer: ReviewerProgress, language: Language) {
+	const calls = language === "en"
+		? `${reviewer.toolCalls} calls`
+		: `${reviewer.toolCalls} 次调用`;
+	return `${reviewer.label} · ${reviewer.action} · ${calls}`;
 }
 
 function statusMark(status: ReviewerProgress["status"]) {
@@ -348,8 +356,10 @@ function statusColor(status: ReviewerProgress["status"]) {
 	return "muted" as const;
 }
 
-function pad(text: string, width: number) {
-	return text.length >= width ? `${text.slice(0, width - 1)} ` : text.padEnd(width);
+function padLabel(text: string, width: number) {
+	return text.length > width
+		? `${text.slice(0, Math.max(1, width - 1))}…`
+		: text.padEnd(width);
 }
 
 /** 按可见宽度补齐（忽略 ANSI 转义），保证边框右侧对齐。 */
