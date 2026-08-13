@@ -54,7 +54,6 @@ export const FEATURES = [
 	"claudeSub",
 	"openaiNative",
 	"review",
-	"master",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
@@ -194,7 +193,13 @@ export function loadConfig(): LoadedConfig {
 
 	const problems: string[] = [];
 	const raw = readFile(problems);
-	const features = asRecord(raw.features);
+	// features 省略表示沿用默认全开；只要显式写了，就必须是对象。
+	// 非对象不能回退成 {}，因为 {} 在入口语义里正是「全部启用」。
+	const invalidFeatures = raw.features !== undefined && !isPlainObject(raw.features);
+	if (invalidFeatures) problems.push("features 必须是对象");
+	const features: Partial<Record<Feature, boolean>> = invalidFeatures
+		? Object.fromEntries(FEATURES.map((feature) => [feature, false]))
+		: asRecord(raw.features);
 	const rawKeys = asRecord(raw.keys);
 	const presets = asRecord(raw.presets) as Record<string, Preset>;
 	const keys: FireCodeKeys = {

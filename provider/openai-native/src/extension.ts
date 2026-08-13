@@ -24,7 +24,11 @@ function notifyUnsupportedFastMode(ctx: ExtensionContext): void {
 	ctx.ui.notify("Fast mode is not supported for this model", "warning");
 }
 
-export default function openAINativeExtension(pi: ExtensionAPI, configPath: string): void {
+export default function openAINativeExtension(
+	pi: ExtensionAPI,
+	configPath: string,
+	fastShortcut = "ctrl+f",
+): void {
 	let loadedSettings = loadOpenAINativeSettings(configPath);
 	let settings = loadedSettings.settings;
 
@@ -58,7 +62,7 @@ export default function openAINativeExtension(pi: ExtensionAPI, configPath: stri
 			toggleFastMode(ctx);
 		},
 	});
-	pi.registerShortcut("ctrl+f", {
+	pi.registerShortcut(fastShortcut as never, {
 		description: "Toggle Fast mode",
 		handler: toggleFastMode,
 	});

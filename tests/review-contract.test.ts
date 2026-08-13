@@ -322,6 +322,15 @@ describe("review section top-level type", () => {
 describe("feature switch types", () => {
 	// features.review 写成字符串 "false" 时因 `!== false` 仍会启用，
 	// 而启用 review 意味着真实模型调用，必须报出来而不是静默放行。
+	test("a non-object features section is reported and disables every feature", async () => {
+		const module = (await loadFirecodeModule("config.js", {
+			configJsonc: `{ "features": "false" }`,
+		})) as { loadConfig: () => { config: { features: Record<string, boolean> }; problems: string[] } };
+		const loaded = module.loadConfig();
+		expect(loaded.problems.join()).toContain("features 必须是对象");
+		expect(Object.values(loaded.config.features).every((enabled) => enabled === false)).toBe(true);
+	});
+
 	test("a non-boolean feature switch is reported", async () => {
 		const module = (await loadFirecodeModule("config.js", {
 			configJsonc: `{ "features": { "review": "false" } }`,

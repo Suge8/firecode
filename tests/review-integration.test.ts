@@ -65,6 +65,7 @@ function makeCtx(sessionManager: MockSessionManager, busy = false) {
 		cwd: "/tmp/firecode-test",
 		sessionManager,
 		isIdle: () => idle,
+		hasPendingMessages: () => false,
 		setIdle: (value: boolean) => {
 			idle = value;
 		},
@@ -121,6 +122,36 @@ function reviewer(index: number, status: ReviewerResult["status"], details: stri
 	return { index, model: `m${index}`, thinking: "high", status, summary: "s", details };
 }
 
+async function loadSingleFailReview() {
+	const script = join(tmpdir(), `fake-pi-${Date.now()}-${Math.random()}.sh`);
+	const verdict = [
+		"FAIL",
+		"## 发现 1",
+		"- 严重程度: 中",
+		"- 问题: x",
+		"- 证据: a.ts",
+		"- 违反的契约或期望行为: y",
+		"- 需要运行的验证命令: bun test",
+	].join("\\n");
+	await writeFile(
+		script,
+		`#!/bin/bash\nprintf '%s\\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"${verdict}"}]}}'\n`,
+		{ mode: 0o755 },
+	);
+	const review = (await loadFirecodeModule("review/index.js", {
+		configJsonc: JSON.stringify({
+			review: {
+				reviewers: [{ model: "p/one", thinking: "low" }],
+				background: { command: script },
+			},
+		}),
+	})) as { registerReview: (pi: unknown) => void };
+	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
+		readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
+	};
+	return { ...review, ...checkpoint, script };
+}
+
 describe("registerReview wiring", () => {
 	test("registers the card renderer eagerly (top level, not in session_start)", async () => {
 		await loadAll();
@@ -137,7 +168,7 @@ describe("registerReview wiring", () => {
 		expect(registered.commands.has("fire-review")).toBe(true);
 		expect(registered.events.has("session_start")).toBe(true);
 		expect(registered.events.has("agent_settled")).toBe(true);
-		expect(registered.events.has("agent_end")).toBe(false);
+		expect(registered.events.has("agent_end")).toBe(true);
 		expect(registered.events.has("session_shutdown")).toBe(true);
 	});
 
@@ -160,9 +191,63 @@ describe("registerReview wiring", () => {
 		ctx.setIdle(true);
 		for (const handler of registered.events.get("agent_settled") ?? [])
 			await handler({}, ctx);
+		// 模拟同一 agent_settled 上后注册的 master handler 立即触发 follow-up。
+		ctx.setIdle(false);
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		await flush();
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("reviewing");
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
+		expect(registered.sent).toHaveLength(0);
+
+		// follow-up 真正 settled 后才允许审查启动。
+		ctx.setIdle(true);
+		for (const handler of registered.events.get("agent_settled") ?? [])
+			await handler({}, ctx);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		await flush();
+		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 		expect(registered.sent.length).toBeGreaterThan(0);
+	});
+
+	test("the FireCode entry keeps the renderer when every feature is disabled", async () => {
+		const entry = (await loadFirecodeModule("index.js", {
+			configJsonc: JSON.stringify({
+				features: {
+					header: false,
+					statusbar: false,
+					tools: false,
+					presets: false,
+					rename: false,
+					stats: false,
+					claudeSub: false,
+					openaiNative: false,
+					review: false,
+					master: false,
+				},
+			}),
+		})) as { default: (pi: unknown) => void };
+		const { pi, registered } = makePi(makeSessionManager());
+		entry.default(pi);
+		expect(registered.renderers.has("firecode-review-card")).toBe(true);
+		expect(registered.commands.size).toBe(0);
+	});
+
+	test("disabled review still renders history and settles an active checkpoint", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		const state = {
+			...initialState("disabled"),
+			phase: "queued" as const,
+			startedAt: 1,
+			updatedAt: 1,
+		};
+		beginCheckpoint(pi as never, { sessionManager } as never, state);
+		registerReview(pi as never, false);
+		expect(registered.renderers.has("firecode-review-card")).toBe(true);
+		expect(registered.commands.has("fire-review")).toBe(false);
+		for (const handler of registered.events.get("session_start") ?? [])
+			await handler({}, makeCtx(sessionManager));
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
 });
 
@@ -321,6 +406,19 @@ describe("review config is rejected at every entry point", () => {
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
 		// 没有写入任何 checkpoint，等于没有启动审查
+		expect(sessionManager.entries).toHaveLength(0);
+	});
+
+	test("an unknown review field also blocks the command", async () => {
+		const { registerReview } = await loadWithConfig(`{ "review": { "reviewerz": [] } }`);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
 		expect(sessionManager.entries).toHaveLength(0);
 	});
 
@@ -505,53 +603,54 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("reviewing");
 	});
 
-	// 推进类 effect 失败必须就地收口：反馈投不出去时既等不到 agent_end，
-	// esc 也不覆盖 awaiting_fix，只通知会把审查永久停在活动态。
-	test("a failing feedback delivery cancels instead of stranding awaiting_fix", async () => {
-		const script = join(tmpdir(), `fake-pi-${Date.now()}.sh`);
-		const verdict = [
-			"FAIL",
-			"## 发现 1",
-			"- 严重程度: 中",
-			"- 问题: x",
-			"- 证据: a.ts",
-			"- 违反的契约或期望行为: y",
-			"- 需要运行的验证命令: bun test",
-		].join("\\n");
-		await writeFile(
-			script,
-			`#!/bin/bash\nprintf '%s\\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"${verdict}"}]}}'\n`,
-			{ mode: 0o755 },
-		);
-		const { registerReview } = (await loadFirecodeModule("review/index.js", {
-			configJsonc: JSON.stringify({
-				review: {
-					reviewers: [{ model: "p/one", thinking: "low" }],
-					background: { command: script },
-				},
-			}),
-		})) as { registerReview: (pi: unknown) => void };
-		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
-			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
-		};
+	// 宿主 sendMessage 返回 void，异步失败不会 throw；必须靠 agent_start 回执超时收口，
+	// 不能用同步 throw 的假 API 制造假覆盖。
+	test("feedback without an agent_start receipt cancels instead of stranding awaiting_fix", async () => {
+		const { registerReview, readCheckpoint, script } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		pi.sendMessage = (message: { customType?: string }) => {
-			if (message?.customType === "firecode-review-feedback") throw new Error("投递失败");
-		};
+		// 与真实宿主一致：调用立即返回 void，异步失败不会反馈给插件，也没有 agent_start。
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager, false);
+		ctx.cwd = tmpdir();
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
 		for (let wait = 0; wait < 40; wait += 1) {
-			if (checkpoint.readCheckpoint({ sessionManager })?.phase === "settled") break;
+			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
-		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(
+			registered.sent.some(
+				(message) => (message as { customType?: string }).customType === "firecode-review-feedback",
+			),
+		).toBe(true);
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		await rm(script, { force: true });
 	}, 15_000);
+
+	test("a synchronous feedback failure cancels without dispatchQueue self-deadlock", async () => {
+		const { registerReview, readCheckpoint, script } = await loadSingleFailReview();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		pi.sendMessage = (message: { customType?: string }) => {
+			if (message.customType === "firecode-review-feedback") throw new Error("同步拒绝");
+		};
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
+		for (let wait = 0; wait < 20; wait += 1) {
+			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		await rm(script, { force: true });
+	});
 
 	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起子进程、投反馈。
 	test("a checkpoint write failure stops the review instead of pressing on", async () => {

@@ -1,6 +1,6 @@
 /**
  * FireCode：个人 pi 定制层——启动横幅、状态栏、工具行渲染、预设、会话命名，
- * Claude 归因与 OpenAI 请求层。各功能可在 config.json 的 features 里单独关闭。
+ * Claude 归因、OpenAI 请求层与对抗审查。各功能可在 config.jsonc 的 features 里单独关闭。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Feature, loadConfig } from "./config.js";
@@ -14,7 +14,7 @@ import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
 import { registerReview } from "./review/index.js";
 
-const REGISTRARS: Record<Feature, (pi: ExtensionAPI) => void> = {
+const REGISTRARS: Record<Exclude<Feature, "review">, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
 	statusbar: registerStatusBar,
 	tools: registerToolRendering,
@@ -23,14 +23,15 @@ const REGISTRARS: Record<Feature, (pi: ExtensionAPI) => void> = {
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
 	openaiNative: registerOpenAINative,
-	review: registerReview,
 };
 
 export default function firecode(pi: ExtensionAPI): void {
 	const { config, problems } = loadConfig();
 
+	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
+	registerReview(pi, config.features.review !== false);
 	for (const [feature, register] of Object.entries(REGISTRARS)) {
-		if (config.features[feature as Feature] !== false) register(pi);
+		if (config.features[feature as Exclude<Feature, "review">] !== false) register(pi);
 	}
 
 	if (problems.length === 0) return;

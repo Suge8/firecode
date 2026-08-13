@@ -55,6 +55,8 @@ import {
 
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 const STATUS_KEY = "fire-review";
+/** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
+const FEEDBACK_START_TIMEOUT_MS = 2_000;
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
 function overallTimeoutMs(config: ReviewConfig) {
 	return Math.max(
@@ -85,6 +87,10 @@ interface Controller {
 	pendingFeedback?: { details: string; advisor: AdvisorResult | null };
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
 	pendingCards: CardData[];
+	/** 反馈 sendMessage 已调用，等待 agent_start 确认真实修复回合已启动。 */
+	feedbackStartTimer?: ReturnType<typeof setTimeout>;
+	feedbackTurnStarted?: boolean;
+	feedbackTurnSucceeded?: boolean;
 	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
 	progress: readonly ReviewerProgress[];
 	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
@@ -94,9 +100,14 @@ interface Controller {
 let controller: Controller | undefined;
 let dispatchQueue: Promise<void> = Promise.resolve();
 
-export function registerReview(pi: ExtensionAPI): void {
-	// 渲染器顶层注册：任何 reload/冷启动路径下历史卡都走同一渲染器。
+export function registerReview(pi: ExtensionAPI, enabled = true): void {
+	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍必须保持横线卡。
 	registerCardRenderer(pi);
+	if (!enabled) {
+		// 关闭功能时把已有活动 checkpoint 收成终态，避免重新启用后恢复幽灵审查。
+		pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
+		return;
+	}
 	pi.registerShortcut(DETAILS_SHORTCUT, {
 		description: "fire-review 进度详情",
 		handler: (ctx) => openDetails(ctx, activityView),
@@ -106,10 +117,30 @@ export function registerReview(pi: ExtensionAPI): void {
 		handler: (args, ctx) => handleCommand(pi, args, ctx),
 	});
 	pi.on("session_start", (_event, ctx) => handleSessionStart(pi, ctx));
-	// agent_end 后宿主仍可能消费扩展排入的 steer/follow-up；只有 agent_settled
-	// 保证本次运行及所有自动续跑都已结束，审查不能早于这个边界启动。
-	pi.on("agent_settled", (_event, ctx) => handleAgentSettled(pi, ctx));
+	pi.on("agent_start", () => handleAgentStart(pi));
+	// agent_end 只记录修复回合是否真的产出成功结果，不在此推进审查。
+	pi.on("agent_end", (event) => handleRepairAgentEnd(pi, event));
+	// 处理器返回后同一 agent_settled 上的后续处理器仍可能触发 follow-up；
+	// 这里只排到下一事件循环，待所有处理器跑完后再检查真正 idle。
+	pi.on("agent_settled", (_event, ctx) => scheduleAfterAgentSettled(pi, ctx));
 	pi.on("session_shutdown", (event, ctx) => handleShutdown(pi, event.reason, ctx));
+}
+
+function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	const checkpoint = readCheckpoint(ctx);
+	if (!checkpoint || !isActive(checkpoint)) return;
+	try {
+		beginCheckpoint(pi, ctx, {
+			...checkpoint,
+			phase: "settled",
+			active: null,
+			pending: null,
+			updatedAt: Date.now(),
+		});
+	} catch (error) {
+		if (ctx.hasUI)
+			ctx.ui.notify(`fire-review 关闭后无法收口旧 checkpoint：${errorText(error)}`, "error");
+	}
 }
 
 /** 串行化状态迁移：reducer 同步执行，副作用排队；同一时刻只有一个迁移在跑。
@@ -172,8 +203,9 @@ function loadReviewConfig(): { config: ReviewConfig } | { error: string } {
 	const problems = loaded.problems.filter(
 		(problem) =>
 			problem.startsWith("review") ||
+			problem.startsWith("未知字段 review.") ||
 			problem.startsWith("config.jsonc") ||
-			problem.startsWith("features.review"),
+			problem.startsWith("features"),
 	);
 	if (problems.length > 0)
 		return { error: `fire-review 配置有问题，已停止：${problems.join("；")}` };
@@ -281,23 +313,68 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext) {
 		void dispatch(pi, { type: "AGENT_END" });
 }
 
-async function handleAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	if (controller) controller.ctx = ctx;
+function handleAgentStart(pi: ExtensionAPI): void {
+	const active = controller;
+	if (!active || active.pi !== pi || !active.feedbackStartTimer) return;
+	clearFeedbackStartTimer(active);
+	active.feedbackTurnStarted = true;
+	active.feedbackTurnSucceeded = undefined;
+}
+
+function handleRepairAgentEnd(
+	pi: ExtensionAPI,
+	event: { messages: readonly unknown[] },
+): void {
+	const active = controller;
+	if (!active || active.pi !== pi || !active.feedbackTurnStarted) return;
+	const assistant = [...event.messages]
+		.reverse()
+		.find((message) => isRecord(message) && message.role === "assistant");
+	active.feedbackTurnSucceeded =
+		isRecord(assistant) && assistant.stopReason !== "error" && assistant.stopReason !== "aborted";
+}
+
+function scheduleAfterAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	const generation = controller?.state.generation;
+	setImmediate(() => {
+		void continueAfterAgentSettled(pi, ctx, generation);
+	});
+}
+
+async function continueAfterAgentSettled(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	generation: string | undefined,
+): Promise<void> {
+	const active = controller;
+	// reload / esc / 新审查都可能让排队回调过期；旧运行时绝不能推进新 controller。
+	if (
+		!active ||
+		active.pi !== pi ||
+		active.state.generation !== generation ||
+		active.signal.signal.aborted ||
+		!ctx.isIdle() ||
+		ctx.hasPendingMessages()
+	) return;
+	active.ctx = ctx;
 	flushPendingCards(pi);
-	// 用户审查中插话：feedback 未投就绪，先补投。这个 settled 属于插话回合，
-	// 不推进审查轮次；反馈触发的修复回合 settled 后才开下一轮。
-	const pending = controller?.pendingFeedback;
-	if (controller && pending) {
-		const active = controller;
+	// 用户在审查期间触发了别的运行：先补投反馈，本次 settled 不推进轮次。
+	const pending = active.pendingFeedback;
+	if (pending) {
 		active.pendingFeedback = undefined;
-		try {
-			deliverFeedbackNow(pi, pending.details, pending.advisor);
-		} catch (error) {
-			notifyEffectFailure(error);
-			active.signal.abort();
-			await dispatch(pi, { type: "CANCEL", reason: "user" });
-		}
+		deliverFeedbackNow(pi, pending.details, pending.advisor);
 		return;
+	}
+	// awaiting_fix 只有收到 agent_start 回执后，随后的 settled 才能证明修复回合完成。
+	if (active.state.phase === "awaiting_fix") {
+		if (!active.feedbackTurnStarted) return;
+		active.feedbackTurnStarted = false;
+		if (active.feedbackTurnSucceeded !== true) {
+			active.signal.abort();
+			void dispatch(pi, { type: "CANCEL", reason: "user" });
+			return;
+		}
+		active.feedbackTurnSucceeded = undefined;
 	}
 	await dispatch(pi, { type: "AGENT_END" });
 }
@@ -312,6 +389,7 @@ function handleShutdown(
 	// 无论何种终止都先杀子进程、停看门狗；quit 之外保留可恢复状态。
 	active.signal.abort();
 	clearWatchdog();
+	clearFeedbackStartTimer(active);
 	if (active.ctx !== ctx) active.ctx = ctx;
 	if (reason === "quit") {
 		// 真终止：落成终态 checkpoint（await 由 pi 事件处理器保证落盘完成）。
@@ -341,6 +419,11 @@ function armWatchdog() {
 
 function clearWatchdog() {
 	if (controller?.watchdog) clearTimeout(controller.watchdog);
+}
+
+function clearFeedbackStartTimer(active: Controller): void {
+	if (active.feedbackStartTimer) clearTimeout(active.feedbackStartTimer);
+	active.feedbackStartTimer = undefined;
 }
 
 // ---- 持久化与状态栏（状态的投影）----
@@ -398,6 +481,7 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		// 内存态也必须释放：只停子进程但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
 		clearWatchdog();
+		clearFeedbackStartTimer(controller);
 		const uiCtx = controller.ctx;
 		const language = controller.config.language;
 		if (uiCtx.hasUI) uiCtx.ui.setStatus(STATUS_KEY, undefined);
@@ -535,7 +619,8 @@ async function runEffects(effects: ReviewEffect[]) {
 				const active = controller;
 				if (!active) return;
 				active.signal.abort();
-				await dispatch(active.pi, { type: "CANCEL", reason: "user" });
+				// 当前 runEffects 本身就在 dispatchQueue 中；await 新 dispatch 会自等待死锁。
+				void dispatch(active.pi, { type: "CANCEL", reason: "user" });
 				return;
 			}
 		}
@@ -690,17 +775,42 @@ function deliverFeedbackNow(
 	details: string,
 	advisor: AdvisorResult | null,
 ) {
-	if (!controller) return;
+	const active = controller;
+	if (!active || active.pi !== pi) return;
 	const feedback = buildFixFeedback({
-		language: controller.config.language,
+		language: active.config.language,
 		details,
 		advisor,
 	});
+	clearFeedbackStartTimer(active);
+	active.feedbackTurnStarted = false;
+	active.feedbackTurnSucceeded = undefined;
+	// API 返回 void，真实异步失败不会进 try/catch；agent_start 是启动回执，
+	// 最终 agent_end 还要证明修复回合没有以 error/aborted 结束。
+	active.feedbackStartTimer = setTimeout(() => {
+		if (controller !== active || active.feedbackTurnStarted) return;
+		active.feedbackStartTimer = undefined;
+		if (active.ctx.hasUI)
+			active.ctx.ui.notify(
+				active.config.language === "en"
+					? "fire-review feedback did not start a repair turn; review stopped."
+					: "fire-review 修复反馈未能启动回合，审查已停止。",
+				"error",
+			);
+		active.signal.abort();
+		void dispatch(pi, { type: "CANCEL", reason: "user" });
+	}, FEEDBACK_START_TIMEOUT_MS);
+	active.feedbackStartTimer.unref?.();
 	// display:false 的消息进 LLM 上下文但不渲染；triggerTurn 让执行模型开始修复回合。
-	pi.sendMessage(
-		{ customType: FEEDBACK_TYPE, content: feedback, display: false },
-		{ deliverAs: "followUp", triggerTurn: true },
-	);
+	try {
+		pi.sendMessage(
+			{ customType: FEEDBACK_TYPE, content: feedback, display: false },
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	} catch (error) {
+		clearFeedbackStartTimer(active);
+		throw error;
+	}
 }
 
 function sendCard(pi: ExtensionAPI, card: CardData) {
