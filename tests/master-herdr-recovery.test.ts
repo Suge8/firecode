@@ -455,6 +455,8 @@ test("stopping a Worker mid-startup aborts the start and leaves no orphan", asyn
 				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
 			if (args[0] === "pane" && args[1] === "wait-output")
 				return new Promise((_resolve, reject) => {
+					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
 					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
 				});
 			if (args[0] === "agent" && args[1] === "get") return missingAgent();
@@ -488,6 +490,8 @@ test("a queued start can be stopped before it runs", async () => {
 				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
 			if (args[0] === "pane" && args[1] === "wait-output")
 				return new Promise((_resolve, reject) => {
+					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
 					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
 				});
 			if (args[0] === "agent" && args[1] === "get") return missingAgent();
@@ -514,6 +518,40 @@ test("a queued start can be stopped before it runs", async () => {
 	pool.shutdown();
 });
 
+test("a duplicate same-name start is rejected at enqueue instead of queueing uncancellable", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const first = pool.start(ctx, { name: "dup", prompt: "做" });
+	first.catch(() => {});
+	// 同名并发启动：第二个入队即拒，不会成为 stop 杀不掉的漏网之鱼。
+	await expect(pool.start(ctx, { name: "dup", prompt: "再做" })).rejects.toThrow("不能重复启动");
+	await pool.stop("dup", true);
+	await expect(first).rejects.toThrow();
+	expect(calls.filter((args) => args[0] === "tab" && args[1] === "create").length).toBe(1);
+	expect(store.state.workers).toEqual([]);
+	pool.shutdown();
+});
+
 test("a queued dormant resume can be stopped through the dormant branch", async () => {
 	process.env.SHELL = "/bin/zsh";
 	const store = createStore();
@@ -529,6 +567,8 @@ test("a queued dormant resume can be stopped through the dormant branch", async 
 				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
 			if (args[0] === "pane" && args[1] === "wait-output")
 				return new Promise((_resolve, reject) => {
+					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
 					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
 				});
 			if (args[0] === "agent" && args[1] === "get") return missingAgent();

@@ -84,8 +84,11 @@ export class HerdrWorkers {
 
 	async start(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
 		// 入队即登记取消控制器：同批工具调用并行执行，排队中的启动（含休眠恢复）也必须能被 stop 命中。
+		// 同名并发启动直接拒绝：排队等死还留取消盲区，每个名字最多一个在飞任务。
 		const name = this.queuedStartName(options);
-		const pending = name && !this.runs.has(name) ? new AbortController() : undefined;
+		if (name && this.runs.has(name))
+			throw new Error(`${name} 已有进行中的启动或监听任务，不能重复启动`);
+		const pending = name ? new AbortController() : undefined;
 		if (name && pending) this.runs.set(name, pending);
 		const queued = this.startQueue.then(async () => {
 			try {
