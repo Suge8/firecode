@@ -56,6 +56,8 @@ export interface ActivityView {
 	roundStartedAt: number;
 	progressStartedAt?: number;
 	reviewers: readonly ReviewerProgress[];
+	/** 当前 progress 属于谁：修复相据此判断能否把残留摘要当顾问裁决展示。 */
+	progressKind?: "reviewers" | "advisor";
 	advisorRunning: boolean;
 	consecutiveFailures?: number;
 	cwd?: string;
@@ -509,12 +511,19 @@ function activityTitle(view: ActivityView) {
 function activityRows(view: ActivityView, spinner: string): string[] {
 	if (view.phase === "queued")
 		return [view.language === "en" ? "Runs a review automatically when done" : "完成后自动审查"];
-	if (view.phase === "awaiting_fix")
+	if (view.phase === "awaiting_fix") {
+		// 顾问落定与进入修复相在同一微任务链内，needs_fix 相没有渲染机会：
+		// 裁决摘要在迁入相展示，才有可见时机。
+		const advisorLine = view.progressKind === "advisor"
+			? view.reviewers.find((reviewer) => reviewer.summary)?.summary
+			: undefined;
 		return [
 			view.language === "en"
 				? `Repairing Round ${view.round} review feedback`
 				: `正在修复第 ${view.round} 轮审查反馈`,
+			...(advisorLine ? [`🧭 ${clip(advisorLine, 64)}`] : []),
 		];
+	}
 	if (view.phase === "needs_fix")
 		return [
 			view.language === "en"

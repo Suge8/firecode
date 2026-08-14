@@ -97,6 +97,8 @@ interface Controller {
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
 	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
 	progress: readonly ReviewerProgress[];
+	/** 当前 progress 属于审查者还是顾问：修复相据此决定是否展示裁决摘要。 */
+	progressKind?: "reviewers" | "advisor";
 	progressStartedAt?: number;
 	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
 	editorLocked?: boolean;
@@ -674,6 +676,7 @@ function activityView(): ActivityView | undefined {
 		roundStartedAt: active.state.roundStartedAt,
 		progressStartedAt: active.progressStartedAt,
 		reviewers: active.progress,
+		progressKind: active.progressKind,
 		advisorRunning: active.state.phase === "needs_fix",
 		consecutiveFailures: active.state.consecutiveFailures,
 		cwd: active.ctx.cwd,
@@ -788,6 +791,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 	const currentActive = state.active;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
 	active.progressStartedAt = Date.now();
+	active.progressKind = "reviewers";
 	active.progress = initialProgress(
 		currentActive.reviewers.map((item) => ({ model: item.model })),
 		config.language,
@@ -870,6 +874,7 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	const pending = state.pending;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
 	active.progressStartedAt = Date.now();
+	active.progressKind = "advisor";
 	active.progress = initialProgress([{ model: config.advisor.model }], config.language);
 	void openDetails(active.ctx, activityView);
 	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {

@@ -116,6 +116,38 @@ describe("review activity layout", () => {
 		expect(lines.at(-1)?.replace(/\x1b\[[0-9;]*m/gu, "")).toBe("─".repeat(64));
 		component?.dispose();
 	});
+
+	test("advisor verdict summary stays visible in the repair phase activity bar", async () => {
+		const ui = (await loadFirecodeModule("review/ui.js")) as {
+			showActivity: (ctx: unknown, view: unknown) => void;
+		};
+		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
+		const renderWith = (progressKind: string | undefined, summary: string) => {
+			ui.showActivity(
+				{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
+				() => ({
+					phase: "awaiting_fix",
+					round: 2,
+					focus: "",
+					roundStartedAt: 0,
+					advisorRunning: false,
+					language: "zh",
+					progressKind,
+					reviewers: [{ index: 0, label: "claude-fable-5", status: "passed", action: "通过", summary, toolCalls: 1, trail: [] }],
+				}),
+			);
+			const component = factory?.({ requestRender: () => {} }, { fg: (_tone: string, text: string) => text });
+			const output = (component?.render(80) ?? []).join("\n");
+			component?.dispose();
+			return output;
+		};
+		// 顾问落定与进入修复相在同一微任务链：裁决摘要必须在迁入相可见。
+		const withAdvisor = renderWith("advisor", "继续修复：settled 竞态属实");
+		expect(withAdvisor).toContain("正在修复第 2 轮审查反馈");
+		expect(withAdvisor).toContain("🧭 继续修复：settled 竞态属实");
+		// 未经顾问的修复相：残留的审查者摘要不得冒充顾问裁决。
+		expect(renderWith("reviewers", "核心逻辑已核对")).not.toContain("🧭");
+	});
 });
 
 describe("review details overlay", () => {
