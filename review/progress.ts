@@ -24,6 +24,8 @@ export interface ReviewerProgress {
 	status: ReviewerStatus;
 	/** 当前动作的人话描述（读某文件 / 跑某命令 / 思考中）。 */
 	action: string;
+	/** 落定后的一行结果摘要（PASS 收敛摘要 / FAIL 首条发现）；运行中为空。 */
+	summary: string;
 	toolCalls: number;
 	tokens: number;
 	activeTools: ProgressTool[];
@@ -45,6 +47,7 @@ export function initialProgress(
 		label: formatModelName(reviewer.model),
 		status: "running",
 		action: thinkingText(language),
+		summary: "",
 		toolCalls: 0,
 		tokens: 0,
 		activeTools: [],
@@ -123,10 +126,11 @@ export function settleProgress(
 	index: number,
 	status: ReviewerStatus,
 	language: Language,
+	summary = "",
 ): readonly ReviewerProgress[] {
 	return progress.map((item) =>
 		item.index === index
-			? { ...item, status, action: settledText(status, language), activeTools: [] }
+			? { ...item, status, action: settledText(status, language), summary: oneLine(summary), activeTools: [] }
 			: item,
 	);
 }

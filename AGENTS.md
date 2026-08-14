@@ -33,16 +33,17 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 `review/state.ts` 是 `/fire-review` 的唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，
 副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），使用 pi 原生背景卡与完整 Markdown：
-通过为绿底，未通过、终止与异常为红底，其余为紫底。reload 与 live 外观一致，渲染器永不抛异常
+通过为绿底，未通过、终止与异常为红底，其余为紫底；排队相不发卡，开始卡只发第 1 轮，后续轮边界由结果卡轮号承担。reload 与 live 外观一致，渲染器永不抛异常
 （details 校验失败降级 content 纯文本）。
 `review/` 零外部依赖：schema 校验手写纯函数（不引 typebox），reload/new/resume/fork 保留可恢复状态，
 quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生：字段增删不同步会编译失败，
 这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线。
 每轮 findings 只完整显示一次；达到顾问阈值时先显示失败卡，若顾问裁定 stop，终止卡只显示顾问裁决，
 不再复制同一份 findings。
-`review/ui.ts` 一比一沿用 pi-flow `/review` 的活动框与交互：宽屏动态火焰、窄屏居中退化，审查开始自动打开
-80%×70% 子代理监控，`alt+s` 开关；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 取消，顾问阶段 esc
-只跳过咨询，`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
+`review/ui.ts` 沿用 pi-flow `/review` 的活动框与交互：≥ 48 列动态火焰（窄区间收紧边距）、更窄居中退化，
+审查者落定即在活动条与详情窗显示一行结果摘要；审查开始自动打开 80%×70% 子代理监控，详情窗仅
+`alt+s` 开关（esc 不关窗，与取消语义分离）；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 取消，
+顾问阶段 esc 只跳过咨询，`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
 `review/progress.ts` 从子进程事件派生 M1/M2、token、当前工具耗时及历史工具行，是纯 UI 态，不入 checkpoint。
 子进程 stdout 按行增量消费（不得尾部截断，否则长输出会被误判为空）。审查活跃期经进程内
 `herdr:blocked` 频道配对持有“对抗审查进行中”，终态、取消、退出时释放，reload 恢复时重新持有；

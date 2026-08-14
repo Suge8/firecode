@@ -711,14 +711,14 @@ function renderStatus(
 	let prefix: string | undefined;
 	if (state.phase === "queued")
 		prefix = language === "en"
-			? "💯 quality/running · quality check when done"
-			: "💯 quality/执行中 · 完成后自动质检";
+			? "💯 review/running · review when done"
+			: "💯 review/执行中 · 完成后自动审查";
 	else if (state.phase === "reviewing")
-		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality check" : "质检", language)}`;
+		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
 	else if (state.phase === "needs_fix")
-		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality check" : "质检", language)}`;
+		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
 	else if (state.phase === "awaiting_fix")
-		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality fix" : "优化中", language)}`;
+		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "repair" : "修复中", language)}`;
 	if (!prefix) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
@@ -799,6 +799,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 				reviewer.index,
 				reviewer.status,
 				config.language,
+				reviewer.result.summary,
 			);
 	const evidence = buildEvidence(sessionEntries(), config.language);
 	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
@@ -838,6 +839,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						result.index,
 						result.status,
 						config.language,
+						result.summary,
 					);
 				if (!actionSignal.aborted)
 					await dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
@@ -960,8 +962,8 @@ function sendCard(pi: ExtensionAPI, card: CardData) {
 		if (card.reason === "user")
 			controller.ctx.ui.notify(
 				controller.config.language === "en"
-					? "⏸ Quality check cancelled\nStopped by user"
-					: "⏸ 质检已取消\n已按你的操作停止",
+					? "⏸ Review cancelled\nStopped by user"
+					: "⏸ 审查已取消\n已按你的操作停止",
 				"info",
 			);
 		return;

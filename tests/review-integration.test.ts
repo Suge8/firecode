@@ -318,7 +318,7 @@ describe("registerReview wiring", () => {
 		);
 		editor.handleInput("\x1b");
 		await flush();
-		expect(ctx.notices).toContain("⏸ 质检已取消\n已按你的操作停止");
+		expect(ctx.notices).toContain("⏸ 审查已取消\n已按你的操作停止");
 		expect(registered.sent.some((message) =>
 			(message as { details?: { kind?: string } }).details?.kind === "cancel"
 		)).toBe(false);
@@ -339,7 +339,7 @@ describe("registerReview wiring", () => {
 		// streaming 时 sendMessage 会成为 steer；零发送是不能打断当前回复的关键合同。
 		expect(registered.sent).toHaveLength(0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
-		expect(ctx.statuses.at(-1)).toMatch(/^💯 quality\/执行中 · 完成后自动质检 · 0s$/u);
+		expect(ctx.statuses.at(-1)).toMatch(/^💯 review\/执行中 · 完成后自动审查 · 0s$/u);
 
 		// FireCode 入口把 review 注册在所有自动续跑模块之后；收到 settled 时，
 		// 先前 handler 已完成且没有发起续跑，才会到这里。

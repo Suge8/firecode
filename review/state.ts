@@ -130,7 +130,6 @@ export type ReviewEvent =
 
 /** 结果卡：executor 渲染成消息；reducer 只决定发哪张、带什么数据。 */
 export type CardData =
-	| { kind: "queued"; focus: string }
 	| { kind: "start"; round: number; focus: string; models: string[] }
 	| { kind: "pass"; round: number; summary: string; details: string; elapsedMs: number; totalElapsedMs?: number }
 	| {
@@ -219,6 +218,7 @@ function onStart(
 	if (state.phase === "reviewing" || state.phase === "needs_fix" || state.phase === "awaiting_fix")
 		return { state, effects: [] };
 	const focus = event.focus.trim();
+	// 排队相不发卡：状态栏与活动条已各有一份排队提示，记录里只留开始/结果卡。
 	if (event.busy)
 		return {
 			state: {
@@ -228,10 +228,7 @@ function onStart(
 				startedAt: now,
 				updatedAt: now,
 			},
-			effects: [
-				{ kind: "send_card", card: { kind: "queued", focus } },
-				{ kind: "advance" },
-			],
+			effects: [{ kind: "advance" }],
 		};
 	return {
 		state: beginRound(initialState(state.runId), focus, 1, limits, now),
@@ -310,20 +307,10 @@ function onAdvance(
 				},
 			],
 		};
+	// 开始卡只发第 1 轮：后续轮的边界由结果卡的轮号承担，重复开始卡只制造噪声。
 	return {
 		state: beginRound(state, state.focus, state.round + 1, limits, now),
-		effects: [
-			{
-				kind: "send_card",
-				card: {
-					kind: "start",
-					round: state.round + 1,
-					focus: state.focus,
-					models: limits.reviewers.map((item) => item.model),
-				},
-			},
-			{ kind: "advance" },
-		],
+		effects: [{ kind: "advance" }],
 	};
 }
 

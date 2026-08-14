@@ -60,15 +60,33 @@ function advisorProcessError(
 	return `${prefix}: ${result.message}${result.stderr ? `\n${result.stderr}` : ""}`;
 }
 
-/** 首行严格三选一；仅模型已正常返回但格式不可解析时回落 continue。 */
+/** 首行应为裸裁决词；容忍模型前言，在前几个非空行内识别裁决行，
+ * 其余行（含前言）并入 advice；完全识别不出才回落 continue。 */
+const VERDICT_SCAN_LINES = 8;
+
 export function parseAdvisorOutput(
 	text: string,
 	language: Language,
 ): AdvisorResult {
 	const lines = unwrapCodeFence(text.trim().split(/\r?\n/));
-	const [firstLine = "", ...rest] = lines;
-	const verdict = normalizeVerdict(firstLine);
-	const advice = rest.join("\n").trim();
+	const firstLine = lines.find((line) => line.trim()) ?? "";
+	let verdict: AdvisorVerdict | undefined;
+	let verdictIndex = -1;
+	let scanned = 0;
+	for (let index = 0; index < lines.length && scanned < VERDICT_SCAN_LINES; index += 1) {
+		if (!lines[index].trim()) continue;
+		scanned += 1;
+		const parsed = normalizeVerdict(lines[index]);
+		if (parsed) {
+			verdict = parsed;
+			verdictIndex = index;
+			break;
+		}
+	}
+	const advice = lines
+		.filter((_, index) => index !== verdictIndex)
+		.join("\n")
+		.trim();
 	if (!verdict) {
 		// 把首行原文带回去：顾问子进程跑完即退、原始输出不落盘，这是事后诊断解析失败的唯一线索。
 		const sample = firstLine.slice(0, 80);

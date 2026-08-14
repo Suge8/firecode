@@ -116,6 +116,18 @@ describe("advisor verdict parsing", () => {
 		expect(parseAdvisor("**stop**", "zh").verdict).toBe("stop");
 	});
 
+	test("tolerates a model preamble before the verdict line and keeps it as advice", async () => {
+		await loadAll();
+		// fable 实际产出过的形状：前言句 + 裁决行 + 正文。
+		expect(parseAdvisor("我已核实关键文件与 Pi 类型定义，裁决如下。\ncontinue\n核实结论：发现属实", "zh")).toEqual({
+			verdict: "continue",
+			advice: "我已核实关键文件与 Pi 类型定义，裁决如下。\n核实结论：发现属实",
+		});
+		// 正文里出现的裁决词不得被误识别：扫描只覆盖前几个非空行。
+		const body = Array.from({ length: 9 }, (_, i) => `第 ${i + 1} 段分析`).join("\n");
+		expect(parseAdvisor(`${body}\nstop`, "zh").verdict).toBe("continue");
+	});
+
 	test("accepts an unambiguous verdict wrapped by markdown or a verdict label", async () => {
 		await loadAll();
 		expect(parseAdvisor("```text\nstop\n别修了\n```", "zh")).toEqual({

@@ -34,8 +34,13 @@ const WIDGET_KEY = "fire-review";
 const FRAME_MS = 100;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const REVIEW_COLOR: readonly [number, number, number] = [255, 153, 102];
+/** 火焰排版阈值：窄屏（48–59 列）收紧边距也要有火焰，<48 才退化为居中文本。 */
+const FLAME_MIN_WIDTH = 48;
+const FLAME_WIDE_WIDTH = 60;
 const FLAME_MARGIN_MIN = 6;
+const FLAME_MARGIN_NARROW = 2;
 const FLAME_GAP_MIN = 8;
+const FLAME_GAP_NARROW = 4;
 const FLAME_GAP_IDEAL = 16;
 const MONITOR_SHORTCUT_ESCAPES = new Set(["\u001bs", "\u001bS"]);
 const MONITOR_SHORTCUT_COMPOSED = new Set(["ß", "Í"]);
@@ -204,7 +209,7 @@ class ActivityBar extends Animated {
 		const safeWidth = Math.max(1, width);
 		const border = reviewColor("─".repeat(safeWidth));
 		const content = this.contentRows(view);
-		const body = safeWidth >= 60
+		const body = safeWidth >= FLAME_MIN_WIDTH
 			? this.renderFlameBody(content, safeWidth)
 			: content.map((line) => centerLine(line, safeWidth));
 		return [border, ...body, border];
@@ -221,23 +226,26 @@ class ActivityBar extends Animated {
 	}
 
 	private renderFlameBody(contentRows: string[], width: number) {
+		const wide = width >= FLAME_WIDE_WIDTH;
+		const margin = wide ? FLAME_MARGIN_MIN : FLAME_MARGIN_NARROW;
+		const gapMin = wide ? FLAME_GAP_MIN : FLAME_GAP_NARROW;
 		const flameHeight = Math.max(4, contentRows.length);
 		const rawFlame = flameFrameLines(flameHeight, this.frame % FLAME_FRAME_COUNT);
 		const flameWidth = flameFrameWidth(flameHeight);
 		const contentWidth = Math.min(
 			Math.max(1, ...contentRows.map((row) => visibleWidth(row))),
-			Math.max(1, width - FLAME_MARGIN_MIN * 2 - FLAME_GAP_MIN - flameWidth),
+			Math.max(1, width - margin * 2 - gapMin - flameWidth),
 		);
 		const gap = Math.max(
-			FLAME_GAP_MIN,
+			gapMin,
 			Math.min(
 				FLAME_GAP_IDEAL,
-				width - FLAME_MARGIN_MIN * 2 - contentWidth - flameWidth,
+				width - margin * 2 - contentWidth - flameWidth,
 			),
 		);
 		const group = contentWidth + gap + flameWidth;
 		const indent = " ".repeat(
-			Math.max(FLAME_MARGIN_MIN, Math.floor((width - group) / 2)),
+			Math.max(margin, Math.floor((width - group) / 2)),
 		);
 		const paddedRows = [...contentRows];
 		while (paddedRows.length < flameHeight) paddedRows.push("");
@@ -260,7 +268,7 @@ class DetailsOverlay extends Animated {
 		private readonly view: ViewSource,
 		private readonly tui: TUI,
 		private readonly theme: Theme,
-		private readonly keybindings: KeybindingsManager,
+		_keybindings: KeybindingsManager,
 		private readonly done: () => void,
 	) {
 		super(() => tui.requestRender());
@@ -356,9 +364,8 @@ class DetailsOverlay extends Animated {
 	}
 
 	handleInput(data: string): void {
-		// 与 pi-flow monitor 一致：Alt+S 或 Esc 关闭。
-		if (matchesDetailsShortcut(data) || this.keybindings.matches(data, "app.interrupt"))
-			this.close();
+		// Alt+S 纯开关（用户决策背离 pi-flow）：Esc 在窗内不响应，避免与取消审查的语义撕扳。
+		if (matchesDetailsShortcut(data)) this.close();
 	}
 
 	override invalidate(): void {
@@ -377,7 +384,7 @@ class DetailsOverlay extends Animated {
 function monitorTitle(view: ActivityView) {
 	if (view.phase === "needs_fix")
 		return view.language === "en" ? "Advisor consultation" : "顾问咨询";
-	return roundTitle(view.round, view.language === "en" ? "Quality check" : "质检", view.language);
+	return roundTitle(view.round, view.language === "en" ? "Review" : "审查", view.language);
 }
 
 function monitorElapsed(milliseconds: number) {
@@ -396,21 +403,26 @@ function monitorAgentRows(
 	keyPrefix: "M" | "A",
 ) {
 	const current = reviewer.activeTools.at(-1);
+	const settled = reviewer.status !== "running";
 	const status = theme.fg(statusColor(reviewer.status), monitorGlyph(reviewer, spinner));
 	const key = theme.fg("accent", `${keyPrefix}${reviewer.index + 1}`);
 	const identity = `${status} ${key} ${theme.fg("text", reviewer.label)}`;
 	const baseMetrics = `${reviewer.toolCalls} calls · ${(reviewer.tokens / 1000).toFixed(1)}k tok`;
 	if (compact) {
-		const value = current
-			? `${toolLabel(current.tool, language)} ${displayToolArgs(current, cwd)}`.trim()
-			: reviewer.status === "running"
-				? (language === "en" ? "Thinking" : "思考中")
-				: reviewer.label;
+		const value = settled && reviewer.summary
+			? reviewer.summary
+			: current
+				? `${toolLabel(current.tool, language)} ${displayToolArgs(current, cwd)}`.trim()
+				: reviewer.status === "running"
+					? (language === "en" ? "Thinking" : "思考中")
+					: reviewer.label;
 		const duration = current ? toolDuration(Date.now() - current.startedAt) : "";
 		const metrics = `${baseMetrics}${duration ? ` · ${duration}` : ""}`;
 		return [alignMonitorMetrics(`${status} ${key} ${value}`, metrics, width)];
 	}
 	const rows = [alignMonitorMetrics(identity, baseMetrics, width)];
+	// 落定即出结果：摘要行置顶，工具流水退居其后。
+	if (settled && reviewer.summary) rows.push(`▏ ${truncateToWidth(reviewer.summary, Math.max(1, width - 2), "…")}`);
 	if (current) rows.push(monitorToolLine(current, language, true, width, cwd));
 	else if (reviewer.status === "running")
 		rows.push(`▏ ${spinner} ${language === "en" ? "Thinking" : "思考中"}`);
@@ -489,25 +501,25 @@ function activityTitle(view: ActivityView) {
 	if (view.phase === "needs_fix")
 		return language === "en" ? "🧭 Advisor consulting" : "🧭 顾问介入中";
 	const phase = view.phase === "awaiting_fix"
-		? language === "en" ? "Quality fix in progress" : "优化中"
-		: language === "en" ? "Quality check in progress" : "质检中";
+		? language === "en" ? "Repair in progress" : "修复中"
+		: language === "en" ? "Review in progress" : "审查中";
 	return `💯 ${roundTitle(view.round, phase, language)}`;
 }
 
 function activityRows(view: ActivityView, spinner: string): string[] {
 	if (view.phase === "queued")
-		return [view.language === "en" ? "Runs quality checks automatically when done" : "完成后自动质检"];
+		return [view.language === "en" ? "Runs a review automatically when done" : "完成后自动审查"];
 	if (view.phase === "awaiting_fix")
 		return [
 			view.language === "en"
-				? `Repairing Round ${view.round} quality feedback`
-				: `正在修复第 ${view.round} 轮质检反馈`,
+				? `Repairing Round ${view.round} review feedback`
+				: `正在修复第 ${view.round} 轮审查反馈`,
 		];
 	if (view.phase === "needs_fix")
 		return [
 			view.language === "en"
-				? `Quality checks failed ${view.consecutiveFailures ?? 0} rounds in a row`
-				: `质检已连续 ${view.consecutiveFailures ?? 0} 轮未通过`,
+				? `Reviews failed ${view.consecutiveFailures ?? 0} rounds in a row`
+				: `审查已连续 ${view.consecutiveFailures ?? 0} 轮未通过`,
 		];
 	return view.reviewers.map((reviewer) => reviewerActivityLine(reviewer, spinner, view.language));
 }
@@ -517,9 +529,10 @@ function reviewerActivityLine(
 	spinner: string,
 	language: Language,
 ) {
-	if (reviewer.status === "passed") return `✅ ${reviewer.label}`;
-	if (reviewer.status === "failed") return `❌ ${reviewer.label}`;
-	if (reviewer.status === "error") return `⚠️ ${reviewer.label}`;
+	const summary = reviewer.summary ? ` · ${clip(reviewer.summary, 48)}` : "";
+	if (reviewer.status === "passed") return `✅ ${reviewer.label}${summary}`;
+	if (reviewer.status === "failed") return `❌ ${reviewer.label}${summary}`;
+	if (reviewer.status === "error") return `⚠️ ${reviewer.label}${summary}`;
 	if (reviewer.toolCalls === 0) return reviewer.label;
 	return `${spinner} ${reviewer.label} · ${reviewer.action} · ${callsText(reviewer.toolCalls, language)}`;
 }
@@ -528,8 +541,8 @@ function activityHint(view: ActivityView) {
 	if (view.phase === "awaiting_fix") return undefined;
 	if (view.phase === "queued")
 		return view.language === "en"
-			? "Esc/Ctrl+C cancel automatic quality check"
-			: "Esc/Ctrl+C 取消自动质检";
+			? "Esc/Ctrl+C cancel automatic review"
+			: "Esc/Ctrl+C 取消自动审查";
 	if (view.phase === "needs_fix")
 		return view.language === "en"
 			? "Esc/Ctrl+C skip consult · Alt+S details"
@@ -545,7 +558,7 @@ function roundTitle(round: number, title: string, language: Language) {
 }
 
 function detailsHintText(language: Language) {
-	return language === "en" ? "Alt+S close · Esc also works" : "Alt+S 关闭 · Esc 也可";
+	return language === "en" ? "Alt+S close" : "Alt+S 关闭";
 }
 
 function callsText(calls: number, language: Language) {
@@ -605,7 +618,7 @@ function setReviewTitle(ctx: ExtensionContext, view: ActivityView | undefined) {
 	const who = typeof rawName === "string" && rawName
 		? rawName
 		: typeof rawCwd === "string" ? basename(rawCwd) : "";
-	const label = view.language === "en" ? "Reviewing" : "质检中";
+	const label = view.language === "en" ? "Reviewing" : "审查中";
 	reviewTitleActive = true;
 	ctx.ui.setTitle(`${label}${view.round > 0 ? ` R${view.round}` : ""}${who ? ` · ${who}` : ""}`);
 }

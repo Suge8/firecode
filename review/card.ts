@@ -130,8 +130,6 @@ function plainPart(part: unknown): string {
 
 export function buildCard(card: CardData, language: Language): BuiltCard {
 	switch (card.kind) {
-		case "queued":
-			return queued(card, language);
 		case "start":
 			return started(card, language);
 		case "pass":
@@ -151,18 +149,10 @@ export function buildCard(card: CardData, language: Language): BuiltCard {
 	}
 }
 
-function queued(_card: Extract<CardData, { kind: "queued" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Automatic quality check enabled" : "已开启自动质检";
-	const lines = [
-		language === "en"
-			? "Automatically starts the quality-check loop after this request finishes"
-			: "完成本次需求后自动进入质检循环",
-	];
-	return spec(language, "queued", title, lines, "neutral", "💯");
-}
+// "queued" 仍留在 CARD_KINDS：旧会话的排队卡 reload 时要能继续按卡渲染，只是不再新发。
 
 function started(card: Extract<CardData, { kind: "start" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Quality check in progress" : "质检中";
+	const title = language === "en" ? "Review started" : "审查开始";
 	const lines = [
 		language === "en"
 			? `Models: ${card.models.map(shortModel).join(", ")}`
@@ -176,7 +166,7 @@ function shortModel(model: string) {
 }
 
 function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): BuiltCard {
-	const title = qualityTitle(card.round, language === "en" ? "Quality check passed" : "质检通过", language);
+	const title = qualityTitle(card.round, language === "en" ? "Review passed" : "审查通过", language);
 	const lines = withFooter(formatReviewResultLines(card.summary), [
 		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1, language),
 	]);
@@ -184,7 +174,7 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
-	const title = qualityTitle(card.round, language === "en" ? "Quality check failed" : "质检未通过", language);
+	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const footer = [
 		...(card.awaitingAdvisor
 			? [language === "en" ? "Advisor consulting" : "顾问介入中"]
@@ -213,26 +203,26 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 	if (card.reason === "advisor") {
 		const title = qualityTitle(
 			card.round,
-			language === "en" ? "Quality check stopped by advisor" : "质检已由顾问终止",
+			language === "en" ? "Review stopped by advisor" : "审查已由顾问终止",
 			language,
 		);
 		const body = [advisorDecision("stop", card.advisorModel, language), "", card.advisor.advice];
 		return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
 	}
-	const title = qualityTitle(card.round, language === "en" ? "Quality check failed" : "质检未通过", language);
+	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
 	return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
 }
 
 function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Quality check cancelled" : "质检已取消";
+	const title = language === "en" ? "Review cancelled" : "审查已取消";
 	return spec(language, "cancel", title, [reasonText(card.reason, language)], "neutral", "⏸");
 }
 
 function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Quality check incomplete" : "质检未完成";
+	const title = language === "en" ? "Review incomplete" : "审查未完成";
 	const lines = [
-		language === "en" ? "Blocker: quality check timed out" : "卡点：质检超时",
+		language === "en" ? "Blocker: review timed out" : "卡点：审查超时",
 		language === "en" ? "Reason: overall time limit exceeded" : "原因：超过总体时限",
 	];
 	return spec(language, "timeout", title, lines, "warning", "🛑");
@@ -251,14 +241,14 @@ function stopReason(reason: StopReason, language: Language) {
 	if (reason === "advisor")
 		return language === "en" ? "Advisor recommends stopping" : "顾问建议停止";
 	if (reason === "max_rounds")
-		return language === "en" ? "Maximum quality-check rounds reached" : "已达到最大质检轮数";
+		return language === "en" ? "Maximum review rounds reached" : "已达到最大审查轮数";
 	return reasonText(reason, language);
 }
 
 function errored(card: Extract<CardData, { kind: "error" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Quality check incomplete" : "质检未完成";
+	const title = language === "en" ? "Review incomplete" : "审查未完成";
 	const lines = [
-		language === "en" ? "Blocker: quality check did not complete" : "卡点：质检未完成",
+		language === "en" ? "Blocker: review did not complete" : "卡点：审查未完成",
 		language === "en" ? `Reason: ${card.message}` : `原因：${card.message}`,
 		...(card.elapsedMs === undefined
 			? []
@@ -355,10 +345,10 @@ const REDUNDANT_REVIEW_LINES = new Set([
 	"FAIL",
 	"通过",
 	"未通过",
-	"质检通过",
-	"质检未通过",
-	"Quality check passed",
-	"Quality check failed",
+	"审查通过",
+	"审查未通过",
+	"Review passed",
+	"Review failed",
 ]);
 
 function spec(

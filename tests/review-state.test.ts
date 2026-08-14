@@ -55,15 +55,13 @@ describe("fire-review reducer", () => {
 		expect(result.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "start", models: ["p/sol", "p/terra"] } });
 	});
 
-	test("START while busy queues and waits for runtime completion", async () => {
+	test("START while busy queues silently and waits for runtime completion", async () => {
 		await loadState();
 		const result = reduce(initialState("g"), { type: "START", focus: "x", busy: true }, LIMITS, 1000);
 		expect(result.state.phase).toBe("queued");
 		expect(result.state.round).toBe(0);
-		expect(result.effects).toMatchObject([
-			{ kind: "send_card", card: { kind: "queued" } },
-			{ kind: "advance" },
-		]);
+		// 排队不发卡：状态栏与活动条已各有提示，记录只留开始/结果卡。
+		expect(result.effects).toMatchObject([{ kind: "advance" }]);
 	});
 
 	test("START while a review is active is ignored", async () => {
@@ -300,6 +298,8 @@ describe("fire-review reducer", () => {
 		expect(result.state.round).toBe(2);
 		expect(result.state.phase).toBe("reviewing");
 		expect(result.state.history).toHaveLength(1);
+		// 开始卡只发第 1 轮；后续轮的边界由结果卡轮号承担。
+		expect(result.effects).toMatchObject([{ kind: "advance" }]);
 	});
 
 	test("ADVANCE at maxRounds stops instead of opening another round", async () => {

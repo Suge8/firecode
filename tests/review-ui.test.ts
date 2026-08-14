@@ -108,7 +108,7 @@ describe("review activity layout", () => {
 		);
 		const lines = component?.render(64) ?? [];
 		const output = lines.join("\n");
-		expect(output).toContain("💯 质检中");
+		expect(output).toContain("💯 审查中");
 		expect(output).toContain("gpt-5.6-sol");
 		expect(output).toContain("✅ gpt-5.6-terra");
 		expect(output).toContain("Esc/Ctrl+C 取消 · Alt+S 详情");
@@ -311,7 +311,7 @@ describe("review details overlay", () => {
 				trail: [],
 			}],
 		}));
-		expect(output).toContain("第 2 轮质检");
+		expect(output).toContain("第 2 轮审查");
 		expect(output).toContain("M1 gpt-5.6-sol");
 		expect(output).toContain("2 calls · 1.3k tok");
 		expect(output).toMatch(/● 操作 \$ bun test\s+1\.5s/u);

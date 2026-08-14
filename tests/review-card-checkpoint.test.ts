@@ -38,7 +38,6 @@ describe("result card payload", () => {
 	test("every card kind produces schema-valid details and non-empty plain content", async () => {
 		await loadAll();
 		const cards = [
-			{ kind: "queued", focus: "f" },
 			{ kind: "start", round: 1, focus: "f", models: ["p/sol", "p/terra"] },
 			{ kind: "pass", round: 1, summary: "s", details: "s", elapsedMs: 1000 },
 			{ kind: "fail", round: 1, details: "FAIL", advisor: null },
@@ -78,7 +77,7 @@ describe("result card payload", () => {
 			advisor: { verdict: "stop", advice: "不要再修" },
 			advisorModel: "p/advisor",
 		}, "zh");
-		expect(stopped.details.title).toBe("第 2 轮质检已由顾问终止");
+		expect(stopped.details.title).toBe("第 2 轮审查已由顾问终止");
 		expect(stopped.details.lines).toEqual([
 			"裁决：停止修复 · 顾问模型：advisor",
 			"",
@@ -90,22 +89,16 @@ describe("result card payload", () => {
 		await loadAll();
 		const built = buildCard({ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 60000 }, "zh");
 		expect(built.content).not.toMatch(/\x1b\[/);
-		expect(built.details.title).toBe("质检通过");
+		expect(built.details.title).toBe("审查通过");
 		expect(built.details.icon).toBe("✅");
 		expect(built.details.lines.join("\n")).toContain("ok");
 	});
 
-	test("queued and start cards match the pi-flow automatic quality-check copy", async () => {
+	test("start card announces the review with its models", async () => {
 		await loadAll();
-		const queued = buildCard({ kind: "queued", focus: "" }, "zh");
 		const started = buildCard({ kind: "start", round: 1, focus: "", models: ["p/sol"] }, "zh");
-		expect(queued.details).toMatchObject({
-			title: "已开启自动质检",
-			icon: "💯",
-			lines: ["完成本次需求后自动进入质检循环"],
-		});
 		expect(started.details).toMatchObject({
-			title: "质检中",
+			title: "审查开始",
 			icon: "💯",
 			lines: ["模型：sol"],
 		});
@@ -123,7 +116,7 @@ describe("result card payload", () => {
 		}, "zh");
 		const cancelled = buildCard({ kind: "cancel", round: 1, reason: "user" }, "zh");
 		const timeout = buildCard({ kind: "timeout", round: 1, reason: "timeout" }, "zh");
-		expect(failed.details.title).toBe("第 2 轮质检未通过");
+		expect(failed.details.title).toBe("第 2 轮审查未通过");
 		expect(failed.details.icon).toBe("❌");
 		expect(failed.details.lines).toContain("**模型 1 · sol**");
 		expect(failed.details.lines).toContain("## 发现 1");
@@ -131,9 +124,9 @@ describe("result card payload", () => {
 		expect(failed.details.lines).toContain("---");
 		expect(failed.details.lines).toContain("⏱ 用时：2m7s");
 		expect(failed.details.lines.join("\n")).not.toContain("/ 总");
-		expect(cancelled.details).toMatchObject({ title: "质检已取消", icon: "⏸" });
-		expect(timeout.details).toMatchObject({ title: "质检未完成", icon: "🛑" });
-		expect(timeout.details.lines).toContain("卡点：质检超时");
+		expect(cancelled.details).toMatchObject({ title: "审查已取消", icon: "⏸" });
+		expect(timeout.details).toMatchObject({ title: "审查未完成", icon: "🛑" });
+		expect(timeout.details.lines).toContain("卡点：审查超时");
 	});
 
 	test("renderer maps result tones to native card backgrounds", async () => {
