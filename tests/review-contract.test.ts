@@ -202,6 +202,43 @@ describe("evidence assembly", () => {
 		expect(text).toContain("省略");
 	});
 
+	test("assistant toolCall trail is kept as attribution evidence", async () => {
+		await loadAll();
+		const entries = [
+			user("需求"),
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "text", text: "改卡片" },
+						{ type: "toolCall", id: "1", name: "edit", arguments: { path: "review/card.ts", edits: [] } },
+						{ type: "toolCall", id: "2", name: "bash", arguments: { command: "bun  test\n tests" } },
+					],
+				},
+			},
+		];
+		const { text } = buildEvidence(entries, "zh");
+		expect(text).toContain("改卡片");
+		expect(text).toContain("[edit] review/card.ts");
+		expect(text).toContain("[bash] bun test tests");
+	});
+
+	test("tool-call-only assistant turns still leave an edit record", async () => {
+		await loadAll();
+		const entries = [
+			user("需求"),
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "1", name: "write", arguments: { path: "a/b.ts", content: "x" } }],
+				},
+			},
+		];
+		expect(buildEvidence(entries, "zh").text).toContain("[write] a/b.ts");
+	});
+
 	test("toolResult entries are skipped entirely", async () => {
 		await loadAll();
 		const entries = [user("需求"), assistant("改完"), toolResult()];

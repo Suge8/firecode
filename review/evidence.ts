@@ -3,6 +3,8 @@
  *
  * 根因规避：首条用户消息是原始需求锚点，固定保留，不参与预算竞争；
  * 预算只裁剪中间的旧消息，从最新往前保留最近工作，审查者既知道要什么也知道做了什么。
+ * assistant 的工具调用轨迹（工具名 + path/command）随消息渲染：它是范围归因的一手证据，
+ * 审查者靠它判断本会话实际编辑了什么，共享 checkout 上无法归因的 diff 不得立案。
  * 跳过 toolResult（输出体积大且非一手证据——审查者应自行重跑验证命令）。
  */
 import type { Language } from "../config.js";
@@ -75,7 +77,7 @@ function renderEntry(entry: unknown, language: Language): EvidenceBlock[] {
 					},
 				];
 			if (message.role === "assistant")
-				return [{ text: `## ${assistantLabel(language)}\n${clip(messageText(message.content))}` }];
+				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content)}` }];
 			return [];
 		}
 		case "custom_message": {
@@ -113,6 +115,38 @@ function summaryLabel(language: Language) {
 
 function branchSummaryLabel(language: Language) {
 	return language === "en" ? "Branch summary" : "分支摘要";
+}
+
+/** assistant 正文 = 文本段 + 工具调用轨迹；纯工具回合也因此留下编辑记录。 */
+function assistantBody(content: unknown): string {
+	if (typeof content === "string") return clip(content);
+	if (!Array.isArray(content)) return "";
+	const trail = content
+		.map((part) => toolCallLine(asRecord(part)))
+		.filter(Boolean)
+		.join("\n");
+	const body = clip(messageText(content));
+	return [body, trail].filter(Boolean).join("\n");
+}
+
+function toolCallLine(part: Record<string, unknown> | undefined): string {
+	if (part?.type !== "toolCall" || typeof part.name !== "string" || !part.name) return "";
+	const args = asRecord(part.arguments);
+	const target =
+		typeof args?.path === "string"
+			? args.path
+			: typeof args?.command === "string"
+				? args.command
+				: "";
+	return `[${part.name}] ${clipLine(target)}`.trimEnd();
+}
+
+/** 单行轨迹上限：防超长 bash 命令撑大证据块；路径不受影响。 */
+const TOOL_LINE_MAX_CHARS = 200;
+
+function clipLine(text: string) {
+	const single = text.replace(/\s+/gu, " ").trim();
+	return single.length <= TOOL_LINE_MAX_CHARS ? single : `${single.slice(0, TOOL_LINE_MAX_CHARS)}…`;
 }
 
 function messageText(content: unknown): string {
