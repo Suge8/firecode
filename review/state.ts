@@ -108,6 +108,7 @@ export interface ReviewState {
 export interface ReviewLimits {
 	maxRounds: number;
 	advisorAfterFailures: number;
+	advisorModel: string;
 	/** 本轮审查者（model/thinking），beginRound 时填入 active。 */
 	reviewers: { model: string; thinking: string }[];
 	language?: "zh" | "en";
@@ -142,11 +143,12 @@ export type CardData =
 			elapsedMs?: number;
 			totalElapsedMs?: number;
 	  }
-	| { kind: "stop"; reason: StopReason; round: number; details: string; advisor?: AdvisorResult; elapsedMs?: number; totalElapsedMs?: number }
+	| { kind: "stop"; reason: "advisor"; round: number; details: string; advisor: AdvisorResult; advisorModel: string; elapsedMs?: number; totalElapsedMs?: number }
+	| { kind: "stop"; reason: Exclude<StopReason, "advisor">; round: number; details: string; elapsedMs?: number; totalElapsedMs?: number }
 	| { kind: "cancel"; round: number; reason: StopReason }
 	| { kind: "timeout"; round: number; reason: StopReason }
 	| { kind: "error"; message: string; elapsedMs?: number; totalElapsedMs?: number }
-	| { kind: "advisor"; advisor: AdvisorResult };
+	| { kind: "advisor"; advisor: AdvisorResult; advisorModel: string };
 
 export type ReviewEffect =
 	| { kind: "advance" }
@@ -485,8 +487,10 @@ function onAdvisorSettled(
 						kind: "stop",
 						reason: "advisor",
 						round: pending.round,
-						details: displayDetails || advisor.advice,
+						// findings 已在咨询前的失败卡显示；终止卡只承载顾问裁决，避免重复整张报告。
+						details: advisor.advice,
 						advisor,
+						advisorModel: limits.advisorModel,
 						elapsedMs: round.elapsedMs,
 						totalElapsedMs: Math.max(0, now - state.startedAt),
 					},
@@ -506,7 +510,7 @@ function onAdvisorSettled(
 		},
 		// 失败卡已在咨询前发出；咨询完成只补 pi-flow 的中性顾问建议卡。
 		effects: [
-			{ kind: "send_card", card: { kind: "advisor", advisor } },
+			{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel: limits.advisorModel } },
 			{ kind: "advance" },
 		],
 	};

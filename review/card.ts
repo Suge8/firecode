@@ -8,10 +8,9 @@
  *
  * payload 校验零外部依赖：纯函数一次性整体校验，不做字段级兼容。
  */
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { Box, type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
-import { clip } from "../format.js";
 import type { CardData, StopReason } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
@@ -66,125 +65,65 @@ export function registerCardRenderer(pi: ExtensionAPI): void {
 }
 
 class ReviewCard implements Component {
-	constructor(
-		private readonly details: CardDetails | undefined,
-		private readonly content: string | (string | unknown)[],
-		private readonly theme: Theme,
-	) {}
+	private readonly card: Component | undefined;
+	private readonly fallback: Component;
+
+	constructor(details: CardDetails | undefined, content: string | (string | unknown)[], theme: Theme) {
+		this.fallback = new Text(plainContent(content), 0, 0);
+		let card: Component | undefined;
+		try {
+			card = isValidCardDetails(details) ? nativeCard(details, theme) : undefined;
+		} catch {
+			card = undefined;
+		}
+		this.card = card;
+	}
 
 	render(width: number): string[] {
 		try {
-			return this.renderCard(width);
+			return (this.card ?? this.fallback).render(Math.max(1, width));
 		} catch {
-			return this.renderFallback(width);
+			try {
+				return this.fallback.render(Math.max(1, width));
+			} catch {
+				return [];
+			}
 		}
 	}
 
-	private renderCard(width: number): string[] {
-		const safeWidth = Math.max(1, width);
-		if (!isValidCardDetails(this.details))
-			return this.renderFallback(width);
-		const borderColor = borderFor(this.details.tone);
-		const title = ` ${this.details.icon} ${this.details.title} `;
-		const top = centeredTitle(title, safeWidth, (text) =>
-			this.theme.fg(borderColor, text),
-		);
-		const body = this.details.lines.flatMap((line) =>
-			cardBodyLines(line, safeWidth, this.theme),
-		);
-		const border = this.theme.fg(
-			borderColor,
-			"─".repeat(Math.max(1, safeWidth)),
-		);
-		return [top, ...body, border];
+	invalidate(): void {
+		this.card?.invalidate?.();
+		this.fallback.invalidate?.();
 	}
+}
 
-	private renderFallback(width: number): string[] {
-		const safeWidth = Math.max(1, width);
-		const text =
-			typeof this.content === "string"
-				? this.content
-				: Array.isArray(this.content)
-					? this.content.map(plainPart).filter(Boolean).join("\n")
-					: "";
-		return text
-			.split(/\r?\n/)
-			.map((line) => line.trimEnd())
-			.map((line) => padLine(line, safeWidth));
-	}
+function nativeCard(details: CardDetails, theme: Theme): Component {
+	const container = new Container();
+	const box = new Box(1, 1, (text) => theme.bg(backgroundFor(details.tone), text));
+	box.addChild(new Text(`${details.icon} ${details.title}`, 0, 0));
+	box.addChild(new Spacer(1));
+	box.addChild(new Markdown(details.lines.join("\n"), 0, 0, getMarkdownTheme()));
+	container.addChild(new Spacer(1));
+	container.addChild(box);
+	return container;
+}
 
-	invalidate(): void {}
+function backgroundFor(tone: CardDetails["tone"]) {
+	if (tone === "success") return "toolSuccessBg" as const;
+	if (tone === "warning" || tone === "error") return "toolErrorBg" as const;
+	return "customMessageBg" as const;
+}
+
+function plainContent(content: string | (string | unknown)[]): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content.map(plainPart).filter(Boolean).join("\n");
 }
 
 function plainPart(part: unknown): string {
 	return typeof part === "object" && part !== null && "text" in part
 		? String((part as { text: unknown }).text)
 		: "";
-}
-
-function cardBodyLines(line: string, width: number, _theme: Theme): string[] {
-	return line
-		.split(/\r?\n/u)
-		.flatMap((part) => wrapLine(plainCardLine(part), width))
-		.map((part) => padLine(part, width));
-}
-
-/** 卡片展示纯文本，不把审查者输出里的 Markdown 语法当视觉内容。 */
-function plainCardLine(line: string) {
-	return line
-		.replace(/^#{1,6}\s+/u, "")
-		.replace(/^[-*]\s+/u, "• ")
-		.replace(/^```[\w-]*$/u, "");
-}
-
-function centeredTitle(
-	title: string,
-	width: number,
-	color: (text: string) => string,
-): string {
-	const visible = visibleWidth(title);
-	if (visible >= width) return color(clip(title, width));
-	const fill = width - visible;
-	const left = Math.floor(fill / 2);
-	const right = fill - left;
-	return `${color("─".repeat(left))}${title}${color("─".repeat(right))}`;
-}
-
-const graphemeSegmenter = new Intl.Segmenter(undefined, {
-	granularity: "grapheme",
-});
-
-function wrapLine(line: string, width: number): string[] {
-	if (!line) return [""];
-	const lines: string[] = [];
-	let current = "";
-	let currentWidth = 0;
-	for (const { segment } of graphemeSegmenter.segment(line)) {
-		const segmentWidth = visibleWidth(segment);
-		if (currentWidth + segmentWidth > width && current) {
-			lines.push(current);
-			current = "";
-			currentWidth = 0;
-			if (segment === " ") continue;
-		}
-		current += segment;
-		currentWidth += segmentWidth;
-	}
-	lines.push(current);
-	return lines;
-}
-
-function padLine(line: string, width: number): string {
-	const visible = visibleWidth(line);
-	return visible >= width ? line : `${line}${" ".repeat(width - visible)}`;
-}
-
-function borderFor(tone: CardDetails["tone"]) {
-	if (tone === "success") return "success";
-	if (tone === "warning") return "warning";
-	if (tone === "error") return "error";
-	if (tone === "neutral") return "muted";
-	return "accent";
 }
 
 // ---- 卡构建：content 给 LLM（纯文本事实），details 给渲染（本地化成品行）----
@@ -241,7 +180,7 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 	const lines = withFooter(formatReviewResultLines(card.summary), [
 		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1, language),
 	]);
-	return spec(language, "pass", title, lines, "warning", "✅");
+	return spec(language, "pass", title, lines, "success", "✅");
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
@@ -268,11 +207,20 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 }
 
 function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language): BuiltCard {
-	const title = qualityTitle(card.round, language === "en" ? "Quality check failed" : "质检未通过", language);
-	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
 	const footer = card.elapsedMs === undefined
 		? []
 		: [elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)];
+	if (card.reason === "advisor") {
+		const title = qualityTitle(
+			card.round,
+			language === "en" ? "Quality check stopped by advisor" : "质检已由顾问终止",
+			language,
+		);
+		const body = [advisorDecision("stop", card.advisorModel, language), "", card.advisor.advice];
+		return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
+	}
+	const title = qualityTitle(card.round, language === "en" ? "Quality check failed" : "质检未通过", language);
+	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
 	return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
 }
 
@@ -324,10 +272,20 @@ function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Lan
 		language,
 		"advisor",
 		language === "en" ? "Advisor advice" : "顾问建议",
-		[card.advisor.advice],
+		[advisorDecision(card.advisor.verdict, card.advisorModel, language), "", card.advisor.advice],
 		"neutral",
 		"🧭",
 	);
+}
+
+function advisorDecision(verdict: "continue" | "narrow" | "stop", model: string, language: Language) {
+	const decision = language === "en"
+		? { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" }[verdict]
+		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" }[verdict];
+	const name = shortModel(model);
+	return language === "en"
+		? `Decision: ${decision} · Advisor model: ${name}`
+		: `裁决：${decision} · 顾问模型：${name}`;
 }
 
 function qualityTitle(round: number, title: string, language: Language) {
@@ -371,7 +329,7 @@ function formatReviewResultLines(review: string) {
 		...(preface.join("").trim() ? [""] : []),
 		...sections.flatMap((section, index) => [
 			...(index > 0 ? ["", "---", ""] : []),
-			section.title,
+			`**${section.title}**`,
 			"",
 			...normalizedReviewLines(section.body.join("\n")),
 		]),
@@ -381,17 +339,12 @@ function formatReviewResultLines(review: string) {
 function normalizedReviewLines(review: string) {
 	const lines = review
 		.split(/\r?\n/u)
-		.map((line) => plainCardLine(line.trim()))
-		.filter((line) => !REDUNDANT_REVIEW_LINES.has(line));
+		.map((line) => line.trimEnd())
+		.filter((line) => !REDUNDANT_REVIEW_LINES.has(line.trim()));
 	const output: string[] = [];
 	for (const line of lines) {
-		if (
-			/^(?:发现|Finding)\s+\d+/iu.test(line) &&
-			output.length > 0 &&
-			output.at(-1) !== ""
-		) output.push("");
-		if (line === "" && (output.length === 0 || output.at(-1) === "")) continue;
-		output.push(line);
+		if (line.trim() === "" && (output.length === 0 || output.at(-1) === "")) continue;
+		output.push(line.trim() === "" ? "" : line);
 	}
 	while (output.at(-1) === "") output.pop();
 	return output;

@@ -35,8 +35,9 @@ tab 标签是同 tab 全体 pane 共享的持久名，而 herdr 只有覆盖没�
 只有 `quit` 清空副标题（pane 退回 shell，tab 名保留不可逆写入），reload/new/resume/fork 由新会话的 session_start 覆盖。
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 `review/state.ts` 是 `/fire-review` 的唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，
-副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），
-reload 与 live 外观一致，渲染器永不抛异常（details 校验失败降级 content 纯文本）。
+副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），使用 pi 原生背景卡与完整 Markdown：
+通过为绿底，未通过、终止与异常为红底，其余为紫底。reload 与 live 外观一致，渲染器永不抛异常
+（details 校验失败降级 content 纯文本）。
 `review/` 零外部依赖：schema 校验手写纯函数（不引 typebox），reload/new/resume/fork 保留可恢复状态，
 quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生：字段增删不同步会编译失败，
 这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线。
@@ -88,7 +89,8 @@ Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane�
 命名四层统一：pane/tab/Pi 显示名为 `任务名-模型名`（Pi 前缀 `↳`，不截断），Herdr agent 名是其净化版
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。
-只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）；
+只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）。
+Master 只对产出代码变更的重要交付发起 review，发起前须确认没有其它 Worker 正在写共享 checkout；只读调查型 Worker 照常并行，不阻塞审查，也不被审查。
 代码固定投递字面 `/fire-review`（`prompt --wait` 等投递后状态变化，stalled 时以 runId
 是否推进判定是否真的启动），状态转为 `reviewing`，在 `/fire-master status` 和状态栏显示并拒绝 send。审查监听只等
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，

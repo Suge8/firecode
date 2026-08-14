@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
 
 type BuildCard = typeof import("../review/card.js").buildCard;
 type BuildPrompt = typeof import("../review/prompt.js").buildReviewPrompt;
@@ -46,7 +46,7 @@ describe("result card payload", () => {
 			{ kind: "cancel", round: 1 },
 			{ kind: "timeout", round: 1 },
 			{ kind: "error", message: "err" },
-			{ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" } },
+			{ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" }, advisorModel: "p/advisor" },
 		];
 		for (const card of cards) {
 			const built = buildCard(card as never, "zh");
@@ -56,11 +56,34 @@ describe("result card payload", () => {
 		}
 	});
 
-	test("advisor advice uses pi-flow's neutral compass card", async () => {
+	test("advisor cards show the decision once instead of repeating findings", async () => {
 		await loadAll();
-		const built = buildCard({ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" } }, "zh");
-		expect(built.details).toMatchObject({ title: "顾问建议", icon: "🧭", tone: "neutral" });
-		expect(built.details.lines).toEqual(["继续修复"]);
+		const advice = buildCard({
+			kind: "advisor",
+			advisor: { verdict: "continue", advice: "## 核实结论\n- 发现属实" },
+			advisorModel: "kimi-coding/k3-256k",
+		}, "zh");
+		expect(advice.details).toMatchObject({ title: "顾问建议", icon: "🧭", tone: "neutral" });
+		expect(advice.details.lines).toEqual([
+			"裁决：继续修复 · 顾问模型：k3-256k",
+			"",
+			"## 核实结论\n- 发现属实",
+		]);
+
+		const stopped = buildCard({
+			kind: "stop",
+			reason: "advisor",
+			round: 2,
+			details: "不要再修",
+			advisor: { verdict: "stop", advice: "不要再修" },
+			advisorModel: "p/advisor",
+		}, "zh");
+		expect(stopped.details.title).toBe("第 2 轮质检已由顾问终止");
+		expect(stopped.details.lines).toEqual([
+			"裁决：停止修复 · 顾问模型：advisor",
+			"",
+			"不要再修",
+		]);
 	});
 
 	test("content is plain text facts; details carry the localized title and icon", async () => {
@@ -102,7 +125,9 @@ describe("result card payload", () => {
 		const timeout = buildCard({ kind: "timeout", round: 1, reason: "timeout" }, "zh");
 		expect(failed.details.title).toBe("第 2 轮质检未通过");
 		expect(failed.details.icon).toBe("❌");
-		expect(failed.details.lines.join("\n")).toContain("模型 1 · sol");
+		expect(failed.details.lines).toContain("**模型 1 · sol**");
+		expect(failed.details.lines).toContain("## 发现 1");
+		expect(failed.details.lines).toContain("- 问题: x");
 		expect(failed.details.lines).toContain("---");
 		expect(failed.details.lines).toContain("⏱ 用时：2m7s");
 		expect(failed.details.lines.join("\n")).not.toContain("/ 总");
@@ -111,32 +136,49 @@ describe("result card payload", () => {
 		expect(timeout.details.lines).toContain("卡点：质检超时");
 	});
 
-	test("renderer formats headings and bullets like pi-flow result cards", async () => {
+	test("renderer maps result tones to native card backgrounds", async () => {
+		const { initTheme } = await import(PI_CODING_AGENT_URL) as { initTheme: (name: string) => void };
+		initTheme("dark");
 		const card = (await loadFirecodeModule("review/card.js")) as {
 			buildCard: BuildCard;
 			registerCardRenderer: (pi: unknown) => void;
 		};
 		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
 		card.registerCardRenderer({
-			registerMessageRenderer: (_type: string, next: typeof renderer) => {
-				renderer = next;
-			},
+			registerMessageRenderer: (_type: string, next: typeof renderer) => { renderer = next; },
 		});
-		const built = card.buildCard({
-			kind: "fail",
-			round: 1,
-			details: "## 发现 1\n- 问题: `state.ts` 有误",
-			advisor: null,
-		}, "zh");
+		for (const [input, background] of [
+			[{ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 1 }, "toolSuccessBg"],
+			[{ kind: "fail", round: 1, details: "## 发现 1", advisor: null }, "toolErrorBg"],
+			[{ kind: "start", round: 1, focus: "", models: ["p/m"] }, "customMessageBg"],
+		] as const) {
+			const backgrounds: string[] = [];
+			const built = card.buildCard(input as never, "zh");
+			const component = renderer?.(
+				{ details: built.details, content: built.content },
+				{},
+				{ bg: (tone: string, text: string) => { backgrounds.push(tone); return text; } },
+			);
+			expect(() => component?.render(48)).not.toThrow();
+			expect(backgrounds).toContain(background);
+		}
+	});
+
+	test("invalid payload falls back to plain content without throwing", async () => {
+		const card = (await loadFirecodeModule("review/card.js")) as {
+			registerCardRenderer: (pi: unknown) => void;
+		};
+		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
+		card.registerCardRenderer({
+			registerMessageRenderer: (_type: string, next: typeof renderer) => { renderer = next; },
+		});
 		const component = renderer?.(
-			{ details: built.details, content: built.content },
+			{ details: { version: 99 }, content: "## 原始内容\n- 保留为纯文本" },
 			{},
-			{ fg: (_tone: string, text: string) => text },
+			{},
 		);
-		const output = component?.render(48).join("\n") ?? "";
-		expect(output).toContain("发现 1");
-		expect(output).toContain("• 问题: `state.ts` 有误");
-		expect(output).not.toContain("##");
+		expect(() => component?.render(48)).not.toThrow();
+		expect(component?.render(48).join("\n")).toContain("## 原始内容");
 	});
 
 	test("narrow cards never render beyond the terminal width", async () => {
@@ -154,7 +196,7 @@ describe("result card payload", () => {
 		const lines = renderer?.(
 			{ details: built.details, content: built.content },
 			{},
-			{ fg: (_tone: string, text: string) => text },
+			{ bg: (_tone: string, text: string) => text },
 		)?.render(8) ?? [];
 		expect(lines.every((line) => Bun.stringWidth(line) <= 8)).toBe(true);
 	});
@@ -199,6 +241,7 @@ describe("checkpoint schema", () => {
 		const limits = {
 			maxRounds: 5,
 			advisorAfterFailures: 2,
+			advisorModel: "p/advisor",
 			reviewers: [{ model: "p/m1", thinking: "high" }],
 		};
 		const singleRound = { ...limits, maxRounds: 1 };

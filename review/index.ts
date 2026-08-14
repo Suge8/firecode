@@ -108,7 +108,7 @@ let controller: Controller | undefined;
 let dispatchQueue: Promise<void> = Promise.resolve();
 
 export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = false): void {
-	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍必须保持横线卡。
+	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
 		// 只有用户明确关闭才封存活动 checkpoint（防重新启用后恢复幽灵审查）；
@@ -235,6 +235,7 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 	return {
 		maxRounds: config.maxRounds,
 		advisorAfterFailures: config.advisorAfterFailures,
+		advisorModel: config.advisor.model,
 		language: config.language,
 		reviewers: config.reviewers.map((item) => ({
 			model: item.model,

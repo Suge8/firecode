@@ -11,6 +11,7 @@ let initialState: InitialState;
 const LIMITS: ReviewLimits = {
 	maxRounds: 3,
 	advisorAfterFailures: 2,
+	advisorModel: "p/advisor",
 	reviewers: [
 		{ model: "p/sol", thinking: "high" },
 		{ model: "p/terra", thinking: "high" },
@@ -193,7 +194,10 @@ describe("fire-review reducer", () => {
 		expect(result.state.history[1].advisor?.verdict).toBe("continue");
 		// 失败卡已在咨询前可见；咨询完成补 pi-flow 的中性顾问建议卡。
 		expect(result.effects).toMatchObject([
-			{ kind: "send_card", card: { kind: "advisor", advisor: { verdict: "continue" } } },
+			{
+				kind: "send_card",
+				card: { kind: "advisor", advisor: { verdict: "continue" }, advisorModel: "p/advisor" },
+			},
 			{ kind: "advance" },
 		]);
 	});
@@ -211,7 +215,10 @@ describe("fire-review reducer", () => {
 		const result = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "narrow", advice: "收窄" } }, LIMITS, 30_000);
 		expect(result.state.phase).toBe("awaiting_fix");
 		expect(result.effects).toMatchObject([
-			{ kind: "send_card", card: { kind: "advisor", advisor: { verdict: "narrow" } } },
+			{
+				kind: "send_card",
+				card: { kind: "advisor", advisor: { verdict: "narrow" }, advisorModel: "p/advisor" },
+			},
 			{ kind: "advance" },
 		]);
 	});
@@ -243,7 +250,22 @@ describe("fire-review reducer", () => {
 		expect(result.state.phase).toBe("settled");
 		expect(result.state.history).toHaveLength(2);
 		expect(result.state.history[1].result).toBe("stopped");
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "advisor" } }]);
+		// 本轮 findings 已在咨询前显示；终止卡只给顾问裁决，不能重复整张失败报告。
+		expect(result.effects).toEqual([
+			{
+				kind: "send_card",
+				card: {
+					kind: "stop",
+					reason: "advisor",
+					round: 2,
+					details: "别修了",
+					advisor: { verdict: "stop", advice: "别修了" },
+					advisorModel: "p/advisor",
+					elapsedMs: 10_000,
+					totalElapsedMs: 30_000,
+				},
+			},
+		]);
 	});
 
 	test("ADVANCE from queued begins round 1", async () => {
