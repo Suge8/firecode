@@ -3,8 +3,6 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const NATIVE_PROVIDERS = new Set(["openai", "openai-codex"]);
 const NATIVE_APIS = new Set(["openai-responses", "openai-codex-responses"]);
-const OPENAI_COMPACT_PATH = "responses/compact";
-const CODEX_COMPACT_PATH = "codex/responses/compact";
 
 type NativeCompactionApi = "openai-responses" | "openai-codex-responses";
 type RuntimeModel = Model<Api>;
@@ -21,7 +19,7 @@ export type NativeCompactionTarget = {
 	api: NativeCompactionApi;
 	model: string;
 	baseUrl: string;
-	compactUrl: string;
+	responsesUrl: string;
 	currentModel: RuntimeModel;
 	payload?: ResponsesRequestPayload;
 };
@@ -56,16 +54,14 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
 	return normalized || undefined;
 }
 
-function buildCompactUrl(baseUrl: string, api: NativeCompactionApi): string {
+function buildResponsesUrl(baseUrl: string, api: NativeCompactionApi): string {
 	if (api === "openai-responses") {
-		return baseUrl.endsWith("/responses") ? `${baseUrl}/compact` : `${baseUrl}/${OPENAI_COMPACT_PATH}`;
+		return baseUrl.endsWith("/responses") ? baseUrl : `${baseUrl}/responses`;
 	}
 	if (baseUrl.endsWith("/codex/responses")) {
-		return `${baseUrl}/compact`;
+		return baseUrl;
 	}
-	return baseUrl.endsWith("/codex")
-		? `${baseUrl}/responses/compact`
-		: `${baseUrl}/${CODEX_COMPACT_PATH}`;
+	return baseUrl.endsWith("/codex") ? `${baseUrl}/responses` : `${baseUrl}/codex/responses`;
 }
 
 function isResponsesRequestPayload(payload: unknown): payload is ResponsesRequestPayload {
@@ -108,7 +104,7 @@ export function resolveNativeCompactionTarget(
 			api: currentModel.api,
 			model: currentModel.id,
 			baseUrl,
-			compactUrl: buildCompactUrl(baseUrl, currentModel.api),
+			responsesUrl: buildResponsesUrl(baseUrl, currentModel.api),
 			currentModel,
 			payload,
 		},
@@ -146,5 +142,3 @@ export async function resolveNativeCompactionRuntime(
 		return { ok: false, reason: "auth-error" };
 	}
 }
-
-export { buildCompactUrl };

@@ -41,8 +41,59 @@ describe("native compaction runtime", () => {
 				api: "openai-responses",
 				model: "gpt-5.4",
 				baseUrl: "https://example.com/v1",
-				compactUrl: "https://example.com/v1/responses/compact",
+				responsesUrl: "https://example.com/v1/responses",
 			}),
+		});
+	});
+
+	test("resolves openai and codex responses URLs from common base shapes", () => {
+		expect(
+			resolveNativeCompactionTarget(createContext({ baseUrl: "https://api.openai.com/v1" })),
+		).toMatchObject({
+			ok: true,
+			target: { responsesUrl: "https://api.openai.com/v1/responses" },
+		});
+		expect(
+			resolveNativeCompactionTarget(createContext({ baseUrl: "https://api.openai.com/v1/responses" })),
+		).toMatchObject({
+			ok: true,
+			target: { responsesUrl: "https://api.openai.com/v1/responses" },
+		});
+		expect(
+			resolveNativeCompactionTarget(
+				createContext({
+					provider: "openai-codex",
+					api: "openai-codex-responses",
+					baseUrl: "https://chatgpt.com/backend-api",
+				}),
+			),
+		).toMatchObject({
+			ok: true,
+			target: { responsesUrl: "https://chatgpt.com/backend-api/codex/responses" },
+		});
+		expect(
+			resolveNativeCompactionTarget(
+				createContext({
+					provider: "openai-codex",
+					api: "openai-codex-responses",
+					baseUrl: "https://chatgpt.com/backend-api/codex",
+				}),
+			),
+		).toMatchObject({
+			ok: true,
+			target: { responsesUrl: "https://chatgpt.com/backend-api/codex/responses" },
+		});
+		expect(
+			resolveNativeCompactionTarget(
+				createContext({
+					provider: "openai-codex",
+					api: "openai-codex-responses",
+					baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+				}),
+			),
+		).toMatchObject({
+			ok: true,
+			target: { responsesUrl: "https://chatgpt.com/backend-api/codex/responses" },
 		});
 	});
 

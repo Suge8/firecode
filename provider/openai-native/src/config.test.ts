@@ -82,3 +82,38 @@ test("toggles priority atomically in the extension config", () => {
 		},
 	});
 });
+
+test("toggles only the openai section of a firecode config", () => {
+	const configPath = createConfig({
+		keys: { rename: "ctrl+r" },
+		presets: { sol: { model: "gpt-5.6-sol" } },
+		openai: {
+			nativeCompaction: false,
+			providers: { "openai-codex": { textVerbosity: "low", priority: true } },
+		},
+	});
+
+	const disabled = togglePriority("openai-codex", configPath);
+	expect(disabled.enabled).toBe(false);
+	expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+		keys: { rename: "ctrl+r" },
+		presets: { sol: { model: "gpt-5.6-sol" } },
+		openai: {
+			nativeCompaction: false,
+			providers: { "openai-codex": { textVerbosity: "low" } },
+		},
+	});
+});
+
+test("keeps comments outside the openai section when toggling fast", () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-openai-native-"));
+	temporaryDirectories.push(directory);
+	const configPath = join(directory, "config.jsonc");
+	writeFileSync(
+		configPath,
+		`{\n\t// keep me\n\t"keys": { "fast": "ctrl+f" },\n\t"openai": {\n\t\t"nativeCompaction": false,\n\t\t"providers": { "openai-codex": { "priority": true } }\n\t}\n}\n`,
+	);
+
+	togglePriority("openai-codex", configPath);
+	expect(readFileSync(configPath, "utf8")).toContain("// keep me");
+});

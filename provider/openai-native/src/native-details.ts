@@ -1,6 +1,6 @@
 import type { CompactionEntry, CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
 
-export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact-v1";
+export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact";
 export const NATIVE_COMPACTION_SUMMARY = "[OpenAI native compaction checkpoint]";
 
 export type NativeCompactionIdentity = {
@@ -10,17 +10,10 @@ export type NativeCompactionIdentity = {
 	baseUrl: string;
 };
 
-export type NativeCompactionRequestMeta = {
-	tokensBefore?: number;
-	previousSummaryPresent?: boolean;
-};
-
 export type NativeCompactionDetails = NativeCompactionIdentity & {
 	strategy: typeof NATIVE_COMPACTION_STRATEGY;
 	compactedWindow: unknown[];
-	compactResponseId?: string;
 	createdAt: string;
-	requestMeta?: NativeCompactionRequestMeta;
 };
 
 export type NativeCompactionEntry = CompactionEntry<NativeCompactionDetails> & {
@@ -46,10 +39,6 @@ function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
 }
 
-function isFiniteNonNegativeNumber(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
 function isStructuredValue(value: unknown): boolean {
 	if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
 		return true;
@@ -62,16 +51,6 @@ function isStructuredValue(value: unknown): boolean {
 
 function isCompactedWindowItem(value: unknown): value is Record<string, unknown> {
 	return isRecord(value) && Object.values(value).every(isStructuredValue);
-}
-
-function isNativeCompactionRequestMeta(value: unknown): value is NativeCompactionRequestMeta {
-	if (!isRecord(value)) {
-		return false;
-	}
-	return (
-		(value.tokensBefore === undefined || isFiniteNonNegativeNumber(value.tokensBefore)) &&
-		(value.previousSummaryPresent === undefined || typeof value.previousSummaryPresent === "boolean")
-	);
 }
 
 function hasNativeCompactionIdentity(value: Record<string, unknown>): boolean {
@@ -104,9 +83,7 @@ export function isNativeCompactionDetails(value: unknown): value is NativeCompac
 	return (
 		Array.isArray(value.compactedWindow) &&
 		value.compactedWindow.every(isCompactedWindowItem) &&
-		isNonEmptyString(value.createdAt) &&
-		(value.compactResponseId === undefined || isNonEmptyString(value.compactResponseId)) &&
-		(value.requestMeta === undefined || isNativeCompactionRequestMeta(value.requestMeta))
+		isNonEmptyString(value.createdAt)
 	);
 }
 

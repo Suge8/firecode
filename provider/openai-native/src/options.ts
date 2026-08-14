@@ -26,6 +26,8 @@ function isOpenAIResponsesModel(model: Model<Api> | undefined): model is Model<A
 }
 
 export function supportsFastMode(model: Model<Api> | undefined): boolean {
+	if (!model) return false;
+	if (model.provider === "xai") return true;
 	return isOpenAIResponsesModel(model) && PRIORITY_MODEL_IDS.has(model.id);
 }
 
@@ -53,23 +55,28 @@ export function applyOpenAIOptions(
 	settings: OpenAINativeSettings,
 	verbosityOverride: unknown,
 ): Record<string, unknown> {
-	if (!isOpenAIResponsesModel(model)) {
-		return payload;
+	const configuredProvider = model ? providerSettings(settings, model.provider) : undefined;
+	let nextPayload = payload;
+
+	// verbosity 只属于 OpenAI Responses；xAI Completions 没有这个字段。
+	if (isOpenAIResponsesModel(model)) {
+		const textVerbosity = resolveTextVerbosity(model, settings, verbosityOverride);
+		if (textVerbosity && (!isRecord(payload.text) || payload.text.verbosity !== textVerbosity)) {
+			nextPayload = {
+				...nextPayload,
+				text: {
+					...(isRecord(nextPayload.text) ? nextPayload.text : {}),
+					verbosity: textVerbosity,
+				},
+			};
+		}
 	}
 
-	const configuredProvider = providerSettings(settings, model.provider);
-	const textVerbosity = resolveTextVerbosity(model, settings, verbosityOverride);
-	let nextPayload = payload;
-	if (textVerbosity && (!isRecord(payload.text) || payload.text.verbosity !== textVerbosity)) {
-		nextPayload = {
-			...nextPayload,
-			text: {
-				...(isRecord(nextPayload.text) ? nextPayload.text : {}),
-				verbosity: textVerbosity,
-			},
-		};
-	}
-	if (configuredProvider?.priority && payload.service_tier !== "priority") {
+	if (
+		(isOpenAIResponsesModel(model) || model?.provider === "xai") &&
+		configuredProvider?.priority &&
+		payload.service_tier !== "priority"
+	) {
 		nextPayload = nextPayload === payload ? { ...nextPayload } : nextPayload;
 		nextPayload.service_tier = "priority";
 	}

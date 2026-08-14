@@ -5,17 +5,15 @@ import {
 	resolveLatestNativeCompaction,
 } from "./native-details";
 
-test("recognizes existing v1 checkpoints with optional legacy metadata", () => {
+test("recognizes a native compaction checkpoint", () => {
 	const details = {
 		strategy: NATIVE_COMPACTION_STRATEGY,
 		provider: "openai-codex",
 		api: "openai-codex-responses",
 		model: "gpt-5.6-sol",
 		baseUrl: "https://chatgpt.com/backend-api",
-		compactedWindow: [{ type: "message", role: "assistant", content: [] }],
-		compactResponseId: "resp_existing",
+		compactedWindow: [{ type: "compaction", encrypted_content: "opaque" }],
 		createdAt: "2026-07-12T00:00:00.000Z",
-		requestMeta: { tokensBefore: 512, previousSummaryPresent: false },
 	};
 	const entry = {
 		type: "compaction",

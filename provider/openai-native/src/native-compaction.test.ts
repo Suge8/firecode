@@ -1023,7 +1023,7 @@ test("an eligible native compaction failure cancels instead of silently falling 
 			ok: false,
 			reason: "non-2xx",
 			status: 400,
-			detail: "Unknown parameter: 'input[1].status'.",
+			detail: "Invalid input type 'compaction_trigger'.",
 		},
 	});
 	const user = createUserEntry("failed_compaction_user", "Keep this context.");
@@ -1052,6 +1052,6 @@ test("an eligible native compaction failure cancels instead of silently falling 
 	expect(result).toEqual({ cancel: true });
 	expect(compactCalls).toHaveLength(1);
 	expect(notifications).toEqual([
-		["pi-openai-native: native compaction failed: non-2xx (HTTP 400): Unknown parameter: 'input[1].status'.", "error"],
+		["pi-openai-native: native compaction failed: non-2xx (HTTP 400): Invalid input type 'compaction_trigger'.", "error"],
 	]);
 });

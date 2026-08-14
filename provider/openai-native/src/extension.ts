@@ -69,7 +69,7 @@ export default function openAINativeExtension(
 
 	pi.on("session_start", (_event, ctx) => {
 		if (loadedSettings.warnings.length > 0 && ctx.hasUI) {
-			ctx.ui.notify(`pi-openai-native: ${loadedSettings.warnings[0]}`, "warning");
+			ctx.ui.notify(`FireCode openai: ${loadedSettings.warnings[0]}`, "warning");
 		}
 		updateFastStatus(ctx, settings);
 	});

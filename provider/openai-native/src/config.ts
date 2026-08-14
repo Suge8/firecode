@@ -1,4 +1,5 @@
 import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { parseJsonc } from "../../../config.js";
 
 const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
 
@@ -35,11 +36,59 @@ function createDefaultSettings(): OpenAINativeSettings {
 }
 
 function readConfig(configPath: string): Record<string, unknown> {
-	const parsed = JSON.parse(readFileSync(configPath, "utf8"));
+	const parsed = parseJsonc(readFileSync(configPath, "utf8"));
 	if (!isRecord(parsed)) {
 		throw new Error("expected a JSON object");
 	}
 	return parsed;
+}
+
+/** 只替换名为 key 的对象，文件其余部分（含注释）原样保留。 */
+function replaceKeyedObject(text: string, key: string, value: unknown): string | undefined {
+	const marker = new RegExp(`"${key}"\\s*:\\s*\\{`);
+	const match = marker.exec(text);
+	if (!match) return undefined;
+	const brace = text.indexOf("{", match.index + match[0].length - 1);
+	if (brace < 0) return undefined;
+
+	let depth = 0;
+	let inString = false;
+	let escape = false;
+	for (let index = brace; index < text.length; index++) {
+		const char = text[index];
+		if (inString) {
+			if (escape) escape = false;
+			else if (char === "\\") escape = true;
+			else if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+			continue;
+		}
+		if (char === "{") depth += 1;
+		else if (char === "}") {
+			depth -= 1;
+			if (depth !== 0) continue;
+			const lineStart = text.lastIndexOf("\n", match.index) + 1;
+			const indent = text.slice(lineStart, match.index);
+			const pretty = JSON.stringify(value, null, "\t")
+				.split("\n")
+				.map((line, lineIndex) => (lineIndex === 0 ? line : indent + line))
+				.join("\n");
+			return text.slice(0, brace) + pretty + text.slice(index + 1);
+		}
+	}
+	return undefined;
+}
+
+/** firecode/config.jsonc 用 `openai` 节；单测仍可用独立的 native 文件。 */
+function openaiRoot(root: Record<string, unknown>): Record<string, unknown> {
+	return isRecord(root.openai) ? root.openai : root;
+}
+
+function isFirecodeConfig(root: Record<string, unknown>): boolean {
+	return "openai" in root || "presets" in root || "keys" in root || "features" in root;
 }
 
 function parseProviderSettings(
@@ -151,10 +200,23 @@ function acquireConfigLock(lockPath: string): number {
 	return openSync(lockPath, "wx", 0o600);
 }
 
-function writeConfig(configPath: string, settings: OpenAINativeSettings): void {
+function writeConfig(
+	configPath: string,
+	settings: OpenAINativeSettings,
+	firecodeRoot?: Record<string, unknown>,
+): void {
+	const serialized = serializeSettings(settings);
+	let text: string;
+	if (firecodeRoot) {
+		const original = readFileSync(configPath, "utf8");
+		text = replaceKeyedObject(original, "openai", serialized)
+			?? `${JSON.stringify({ ...firecodeRoot, openai: serialized }, null, "\t")}\n`;
+	} else {
+		text = `${JSON.stringify(serialized, null, 2)}\n`;
+	}
 	const temporaryPath = `${configPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
-		writeFileSync(temporaryPath, `${JSON.stringify(serializeSettings(settings), null, 2)}\n`, {
+		writeFileSync(temporaryPath, text, {
 			encoding: "utf8",
 			mode: 0o600,
 		});
@@ -178,7 +240,7 @@ function withConfigLock<T>(configPath: string, action: () => T): T {
 
 export function loadOpenAINativeSettings(configPath: string): LoadedOpenAINativeSettings {
 	try {
-		return parseSettings(readConfig(configPath));
+		return parseSettings(openaiRoot(readConfig(configPath)));
 	} catch (error) {
 		return {
 			settings: createDefaultSettings(),
@@ -196,7 +258,8 @@ export function togglePriority(
 	}
 
 	return withConfigLock(configPath, () => {
-		const loaded = parseSettings(readConfig(configPath));
+		const root = readConfig(configPath);
+		const loaded = parseSettings(openaiRoot(root));
 		const providerSettings = loaded.settings.providers[provider] ?? {};
 		const enabled = providerSettings.priority !== true;
 		const providers = {
@@ -218,7 +281,7 @@ export function togglePriority(
 			nativeCompaction: loaded.settings.nativeCompaction,
 			providers,
 		};
-		writeConfig(configPath, settings);
+		writeConfig(configPath, settings, isFirecodeConfig(root) ? root : undefined);
 		return {
 			enabled,
 			loaded: { settings, warnings: loaded.warnings },

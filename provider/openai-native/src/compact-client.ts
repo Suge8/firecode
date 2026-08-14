@@ -2,10 +2,12 @@ import type { NativeCompactionRuntime } from "./native-runtime";
 import type { NativeCompactionRequest } from "./responses-input";
 
 const JSON_CONTENT_TYPE = "application/json";
+const COMPACTION_TRIGGER = { type: "compaction_trigger" } as const;
+const RETAINED_MESSAGE_TOKEN_BUDGET = 64_000;
 
-type CompactResponse = {
-	created_at?: number | string;
+type ParsedOutput = {
 	output: Record<string, unknown>[];
+	createdAt?: unknown;
 };
 
 export type NativeCompactionFailureReason =
@@ -15,7 +17,7 @@ export type NativeCompactionFailureReason =
 	| "empty-body"
 	| "invalid-json"
 	| "malformed-response"
-	| "empty-output";
+	| "missing-compaction";
 
 export type NativeCompactionResult =
 	| {
@@ -53,20 +55,154 @@ function normalizeResponseTimestamp(value: unknown): string | undefined {
 	return Number.isNaN(parsed) ? value.trim() : new Date(parsed).toISOString();
 }
 
-function isCompactResponse(value: unknown): value is CompactResponse {
-	return isRecord(value) && Array.isArray(value.output) && value.output.every(isRecord);
+function errorMessage(value: unknown): string | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	if (typeof value.message === "string" && value.message.trim()) {
+		return value.message.trim();
+	}
+	if (isRecord(value.error)) {
+		return errorMessage(value.error);
+	}
+	if (isRecord(value.response)) {
+		return errorMessage(value.response);
+	}
+	return undefined;
 }
 
 function parseErrorDetail(responseText: string): string | undefined {
 	try {
-		const parsed = JSON.parse(responseText);
-		if (!isRecord(parsed) || !isRecord(parsed.error) || typeof parsed.error.message !== "string") {
-			return undefined;
-		}
-		return parsed.error.message.trim() || undefined;
+		return errorMessage(JSON.parse(responseText));
 	} catch {
 		return undefined;
 	}
+}
+
+function isOutputArray(value: unknown): value is Record<string, unknown>[] {
+	return Array.isArray(value) && value.every(isRecord);
+}
+
+function parseJsonOutput(value: unknown): ParsedOutput | undefined {
+	if (!isRecord(value) || !isOutputArray(value.output)) {
+		return undefined;
+	}
+	return { output: value.output, createdAt: value.created_at };
+}
+
+function parseSseOutput(responseText: string): ParsedOutput | { detail: string } | undefined {
+	let completed: ParsedOutput | undefined;
+	const streamedItems: Record<string, unknown>[] = [];
+	let detail: string | undefined;
+	for (const block of responseText.split(/\r?\n\r?\n/)) {
+		const data = block
+			.split(/\r?\n/)
+			.filter((line) => line.startsWith("data:"))
+			.map((line) => line.slice(5).trimStart())
+			.join("\n");
+		if (!data || data === "[DONE]") {
+			continue;
+		}
+		let event: unknown;
+		try {
+			event = JSON.parse(data);
+		} catch {
+			continue;
+		}
+		if (!isRecord(event)) {
+			continue;
+		}
+		if (event.type === "response.output_item.done" && isRecord(event.item)) {
+			streamedItems.push(event.item);
+			continue;
+		}
+		if (event.type === "response.completed") {
+			completed = parseJsonOutput(event.response) ?? {
+				output: [],
+				createdAt: isRecord(event.response) ? event.response.created_at : undefined,
+			};
+			continue;
+		}
+		if (event.type === "response.failed" || event.type === "error") {
+			detail = errorMessage(event) ?? detail;
+		}
+	}
+	if (completed?.output.length) {
+		return completed;
+	}
+	if (completed && streamedItems.length > 0) {
+		return { output: streamedItems, createdAt: completed.createdAt };
+	}
+	return detail ? { detail } : undefined;
+}
+
+function parseResponseOutput(responseText: string):
+	| { ok: true; parsed: ParsedOutput }
+	| { ok: false; reason: "invalid-json" | "malformed-response"; detail?: string } {
+	const trimmed = responseText.trim();
+	if (trimmed.startsWith("{")) {
+		try {
+			const value = JSON.parse(trimmed);
+			const parsed = parseJsonOutput(value);
+			if (parsed) {
+				return { ok: true, parsed };
+			}
+			const detail = errorMessage(value);
+			return { ok: false, reason: "malformed-response", ...(detail ? { detail } : {}) };
+		} catch {
+			return { ok: false, reason: "invalid-json" };
+		}
+	}
+
+	const sse = parseSseOutput(trimmed);
+	if (sse && "output" in sse) {
+		return { ok: true, parsed: sse };
+	}
+	return {
+		ok: false,
+		reason: "malformed-response",
+		...(sse && "detail" in sse ? { detail: sse.detail } : {}),
+	};
+}
+
+function isRetainedInputItem(value: unknown): value is Record<string, unknown> {
+	return isRecord(value) && (value.role === "user" || value.role === "developer" || value.role === "system");
+}
+
+function itemText(item: Record<string, unknown>): string {
+	if (typeof item.content === "string") {
+		return item.content;
+	}
+	if (!Array.isArray(item.content)) {
+		return "";
+	}
+	return item.content
+		.filter(isRecord)
+		.map((part) => (typeof part.text === "string" ? part.text : ""))
+		.join("");
+}
+
+function estimateTokens(item: Record<string, unknown>): number {
+	return Math.max(1, Math.ceil(itemText(item).length / 4));
+}
+
+function buildCompactedWindow(input: unknown[], compactionItem: Record<string, unknown>): unknown[] {
+	const retained: Record<string, unknown>[] = [];
+	let remaining = RETAINED_MESSAGE_TOKEN_BUDGET;
+	for (let index = input.length - 1; index >= 0 && remaining > 0; index--) {
+		const item = input[index];
+		if (!isRetainedInputItem(item)) {
+			continue;
+		}
+		const tokens = estimateTokens(item);
+		if (tokens > remaining) {
+			continue;
+		}
+		retained.push(structuredClone(item));
+		remaining -= tokens;
+	}
+	retained.reverse();
+	return [...retained, structuredClone(compactionItem)];
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
@@ -90,17 +226,13 @@ function codexAccountId(token: string): string | undefined {
 	return authClaims.chatgpt_account_id.trim() || undefined;
 }
 
-function codexUserAgent(): string {
-	return `pi (${process.platform}; ${process.arch})`;
-}
-
 function buildHeaders(runtime: NativeCompactionRuntime): Record<string, string> {
 	const headers = new Headers(runtime.currentModel.headers ?? {});
 	for (const [key, value] of Object.entries(runtime.headers ?? {})) {
 		if (value === null) headers.delete(key);
 		else headers.set(key, value);
 	}
-	headers.set("accept", JSON_CONTENT_TYPE);
+	headers.set("accept", "text/event-stream, application/json");
 	headers.set("content-type", JSON_CONTENT_TYPE);
 	if (!headers.has("authorization")) {
 		headers.set("authorization", `Bearer ${runtime.apiKey}`);
@@ -111,7 +243,7 @@ function buildHeaders(runtime: NativeCompactionRuntime): Record<string, string> 
 			headers.set("chatgpt-account-id", accountId);
 		}
 		headers.set("originator", "pi");
-		headers.set("user-agent", codexUserAgent());
+		headers.set("user-agent", `pi (${process.platform}; ${process.arch})`);
 		headers.set("openai-beta", "responses=experimental");
 	}
 	return Object.fromEntries(headers.entries());
@@ -128,10 +260,16 @@ export async function executeNativeCompaction(args: {
 	}
 
 	try {
-		const response = await fetch(runtime.compactUrl, {
+		const response = await fetch(runtime.responsesUrl, {
 			method: "POST",
 			headers: buildHeaders(runtime),
-			body: JSON.stringify(request),
+			body: JSON.stringify({
+				model: request.model,
+				instructions: request.instructions,
+				input: [...request.input, COMPACTION_TRIGGER],
+				store: false,
+				stream: true,
+			}),
 			signal,
 		});
 		const responseText = await response.text();
@@ -148,23 +286,20 @@ export async function executeNativeCompaction(args: {
 			return { ok: false, reason: "empty-body", status: response.status };
 		}
 
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(responseText);
-		} catch {
-			return { ok: false, reason: "invalid-json", status: response.status };
+		const parsed = parseResponseOutput(responseText);
+		if (!parsed.ok) {
+			return { ...parsed, status: response.status };
 		}
-		if (!isCompactResponse(parsed)) {
-			return { ok: false, reason: "malformed-response", status: response.status };
-		}
-		if (parsed.output.length === 0) {
-			return { ok: false, reason: "empty-output", status: response.status };
+
+		const compactionItems = parsed.parsed.output.filter((item) => item.type === "compaction");
+		if (compactionItems.length !== 1) {
+			return { ok: false, reason: "missing-compaction", status: response.status };
 		}
 
 		return {
 			ok: true,
-			compactedWindow: parsed.output,
-			createdAt: normalizeResponseTimestamp(parsed.created_at),
+			compactedWindow: buildCompactedWindow(request.input, compactionItems[0]!),
+			createdAt: normalizeResponseTimestamp(parsed.parsed.createdAt),
 		};
 	} catch (error) {
 		return isAbortError(error)

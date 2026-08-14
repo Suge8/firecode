@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyOpenAIOptions } from "./options";
+import { applyOpenAIOptions, supportsFastMode } from "./options";
 
 const settings = {
 	nativeCompaction: true,
@@ -66,5 +66,24 @@ test("supports Responses options for rc without enabling native compaction there
 	expect(applyOpenAIOptions(payload, rcModel, settings, undefined)).toEqual({
 		...payload,
 		text: { verbosity: "high" },
+	});
+});
+
+test("applies xAI priority on Completions without OpenAI verbosity", () => {
+	const grok = {
+		provider: "xai",
+		api: "openai-completions",
+		id: "grok-4.6",
+	} as never;
+	const payload = { model: "grok-4.6", messages: [] };
+	const grokSettings = {
+		nativeCompaction: false,
+		providers: { xai: { priority: true as const } },
+	};
+
+	expect(supportsFastMode(grok)).toBe(true);
+	expect(applyOpenAIOptions(payload, grok, grokSettings, undefined)).toEqual({
+		...payload,
+		service_tier: "priority",
 	});
 });
