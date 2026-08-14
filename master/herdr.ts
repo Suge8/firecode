@@ -71,9 +71,20 @@ export class HerdrWorkers {
 		this.notifyMaster = options.notifyMaster;
 	}
 
+	/** 入队时能解析出的工人名：显式命名，或从 session/休眠引用反查——所有启动入口都要可取消。 */
+	private queuedStartName(options: StartWorkerOptions): string | undefined {
+		const explicit = options.name?.trim();
+		if (explicit) return explicit;
+		const session = options.session?.trim();
+		if (!session) return undefined;
+		return this.store.state.workers.find(
+			(worker) => worker.name === session || worker.sessionPath === session,
+		)?.name;
+	}
+
 	async start(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
-		// 入队即登记取消控制器：同批工具调用并行执行，排队中的启动也必须能被 stop 命中。
-		const name = options.name?.trim();
+		// 入队即登记取消控制器：同批工具调用并行执行，排队中的启动（含休眠恢复）也必须能被 stop 命中。
+		const name = this.queuedStartName(options);
 		const pending = name && !this.runs.has(name) ? new AbortController() : undefined;
 		if (name && pending) this.runs.set(name, pending);
 		const queued = this.startQueue.then(async () => {
@@ -92,6 +103,9 @@ export class HerdrWorkers {
 		options: StartWorkerOptions,
 		pending?: AbortController,
 	): Promise<WorkerRef> {
+		// 排队期间被 stop：在任何解析与副作用之前短路，休眠引用可能已被 forget。
+		if (pending?.signal.aborted || this.lifecycle.signal.aborted)
+			throw new Error("启动在排队阶段已被停止");
 		const prompt = requiredText(options.prompt, "prompt");
 		const referenced = options.session
 			? this.store.state.workers.find(
@@ -124,7 +138,7 @@ export class HerdrWorkers {
 		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听；排队期被 stop 的直接短路。
 		const startController = pending ?? new AbortController();
 		if (startController.signal.aborted || this.lifecycle.signal.aborted)
-			throw new Error(`${name} 在排队阶段已被停止`);
+			throw new Error(`${name} 启动在排队阶段已被停止`);
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: provisional });
 		this.runs.set(name, startController);
 		const signal = AbortSignal.any([this.lifecycle.signal, startController.signal]);
@@ -211,22 +225,18 @@ export class HerdrWorkers {
 	}
 
 	async stop(workerName: string, forget = false): Promise<void> {
+		// 无条件中止该名字的在飞/排队任务：休眠分支也不能跳过，
+		// 否则排队中的休眠恢复会在 stop 之后照常启动。
+		const pending = this.runs.get(workerName);
+		pending?.abort();
+		this.runs.delete(workerName);
 		const existing = this.store.state.workers.find((candidate) => candidate.name === workerName);
 		if (!existing) {
-			// 还在 startQueue 里排队的启动：状态未建但控制器已登记，中止即可。
-			const pending = this.runs.get(workerName);
-			if (pending) {
-				pending.abort();
-				this.runs.delete(workerName);
-				return;
-			}
+			if (pending) return;
+			throw new Error(`Worker 不存在：${workerName}`);
 		}
-		const worker = requireWorker(this.store.state, workerName);
-		if (worker.status !== "dormant") {
-			this.runs.get(worker.name)?.abort();
-			this.runs.delete(worker.name);
-			await this.closeOwnedWorker(worker);
-		}
+		const worker = existing;
+		if (worker.status !== "dormant") await this.closeOwnedWorker(worker);
 		if (forget || !worker.sessionPath) {
 			this.store.dispatch({ type: "REMOVE_WORKER", name: worker.name });
 			return;

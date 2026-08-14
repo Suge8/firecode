@@ -514,6 +514,47 @@ test("a queued start can be stopped before it runs", async () => {
 	pool.shutdown();
 });
 
+test("a queued dormant resume can be stopped through the dormant branch", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	store.dispatch({
+		type: "UPSERT_WORKER",
+		worker: { name: "worker-1", model: "p/m", thinking: "medium" as const, status: "dormant" as const, sessionPath: "/tmp/worker.jsonl" },
+	});
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const first = pool.start(ctx, { name: "hang", prompt: "做" });
+	first.catch(() => {});
+	// 仅凭 session 恢复休眠工人：入队时必须从引用反查出名字并登记取消控制器。
+	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", prompt: "继续" });
+	resume.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// stop 走休眠分支：也必须中止排队中的恢复，不能只处理状态。
+	await pool.stop("worker-1", true);
+	await pool.stop("hang", true);
+	await expect(first).rejects.toThrow();
+	await expect(resume).rejects.toThrow("排队阶段已被停止");
+	expect(calls.filter((args) => args[0] === "tab" && args[1] === "create").length).toBe(1);
+	expect(store.state.workers).toEqual([]);
+	pool.shutdown();
+});
+
 test("a stalled prompt still tracks a review that started without the occupancy signal", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-stall-review-"));
 	const sessionPath = join(directory, "worker.jsonl");
