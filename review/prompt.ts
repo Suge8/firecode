@@ -57,7 +57,11 @@ export function priorRoundsSection(
 		.map((entry) => {
 			const label =
 				language === "en" ? `## Round ${entry.round} · failed` : `## 第 ${entry.round} 轮 · 未通过`;
-			return `${label}\n${entry.details}`;
+			// 顾问裁决必须随轮注入：否则被顾问排除的发现会在后续轮被审查者原样重提，循环无法收敛。
+			const advisor = entry.advisor
+				? `\n\n### ${language === "en" ? "Advisor ruling" : "顾问裁决"}（${entry.advisor.verdict}）\n${entry.advisor.advice}`
+				: "";
+			return `${label}\n${entry.details}${advisor}`;
 		})
 		.join("\n\n");
 	return `${header}\n${body}`;

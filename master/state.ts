@@ -16,6 +16,8 @@ export interface WorkerRef {
 	sessionPath?: string;
 	/** review action 投递前观察到的 runId；null 表示当时没有审查。 */
 	reviewPreviousRunId?: string | null;
+	/** start 时声明的审查意图：完成后由机器自动发起对抗审查，一次性消耗。 */
+	reviewNeeded?: boolean;
 }
 
 export interface MasterState {
@@ -147,6 +149,7 @@ function isWorker(value: unknown): value is WorkerRef {
 		record.reviewPreviousRunId !== null &&
 		typeof record.reviewPreviousRunId !== "string"
 	) return false;
+	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
 	if (record.status === "dormant") return typeof record.sessionPath === "string" && !!record.sessionPath;
 	return typeof record.paneId === "string" && !!record.paneId && typeof record.tabId === "string" && !!record.tabId;
 }

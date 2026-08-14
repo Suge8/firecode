@@ -44,6 +44,7 @@ From round 2 on (prompt carries the prior-findings list), this is the closure ph
 - New findings unrelated to prior fixes: only High files; Medium goes to suggestions and does not drive FAIL — the blocking right was spent in round 1, this is convergence design, not lowering the bar.
 
 Common rules:
+- Advisor rulings attached to prior rounds are settled adjudication: items the advisor excluded, judged as settled design trade-offs, or deferred to user decision must not be re-filed as-is; unless you hold new evidence that overturns the ruling (code changes or new failing output after the ruling), disagreement goes to suggestions at most.
 - A finding repeated verbatim after evidence it was closed belongs in suggestions; still-open, to-re-verify, or symptom-masked prior findings are not duplicates — they block at original severity and are restated in the rolling open list.
 - Same defect pattern: name the pattern and list every visible instance, ask the executor to fix the whole pattern path at once; never report one instance per round.
 - When the hard limit is reached the system pauses and hands back to the user; never lower your bar to end the loop.

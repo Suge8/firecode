@@ -59,8 +59,6 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 与 `master` 节（models 选型表：模型 id + 默认 thinking + 适用场景，注入 herdr_agents 提示词）
 未知字段、嵌套未知字段与类型错误都报配置问题；不读 pi-flow 的 config.json。
 master 节有配置问题时 `/fire-master` 激活与恢复拒绝启动——选型表错误会拿错模型真实发起 Worker。
-review 门禁双入口：review action 与 `/skill:implement` 委派的 start/send 都在投递前拦截 review 不可用；
-宽限耗尽仍未观测到自审启动时，结果显式携带「未观测到自审启动」警示，不静默吞成普通成功。
 config.jsonc 解析失败或 review 节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；
 活动 checkpoint 保持原样，修好配置并重启后继续恢复——静默回退默认模型会拿用户没配的模型真实发起调用。
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`
@@ -95,14 +93,13 @@ Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane�
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。
 只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）。
-审查随 `/skill:implement` 技能内自审发生（先带路径 commit 自己的改动再经 code-review skill 发起，
-`git commit -- <路径>` 走临时索引避免共享 index 串票；审查提示词具备并行改动与测试干扰的归因纪律，
-不等其它 Worker 停笔）；review action 留作补审后手。轻重之分由派 `/skill:implement`（含自审）还是
-`/skill:tdd`（不含）决定。工作监听把带占用标签（`review/outcome.ts` 的 REVIEW_OCCUPANCY_LABEL）的
-blocked 转为 `reviewing`（send 随之拒绝）并换跳过 blocked 的等待直到审查落终态，占用失效的轮间 idle
-退避重挂；实现回合结束到自审写入 checkpoint/占用之间是跨进程异步窗口，/skill:implement 委派的结算
-前有有界宽限复查（无事件可等的短暂轮询，普通委派零延迟）；Worker 落定时 Master 读自审终态（runId 相对监听基线推进才报）随结果回传，含轮数与
-顾问叫停的裁决首行；reload 中断的自审按 reviewing 状态由审查监听恢复。
+审查意图在 `start` 的 `review:true` 参数声明、持久化进 Worker 档案（reload 不丢）、一次性消耗：
+Worker 成功落定即由机器自动发起 review action 补审并回传终态（含轮数与顾问裁决首行），失败落定不审并注明；
+派发时即验 review 可用性，不可用直接拒绝 start。无推断、无服从性赌博——这是自审模型五轮审查后的第一性收口：
+生命周期完整复用 review action 路径，工作监听只把带占用标签（`review/outcome.ts` 的 REVIEW_OCCUPANCY_LABEL）
+的 blocked 归类为外部审查占用（转 reviewing 等终态）而非 Worker 提问。轻重之分 = review 参数；
+`/skill:implement`（内含自审）是用户 solo 技能，Master 委派禁用。
+往轮发现清单随轮注入顾问裁决（`prompt.ts`），审查者不得原样重提已仲裁事项——僵尸发现的收敛闭环。
 代码固定投递字面 `/fire-review`（`prompt --wait` 等投递后状态变化，stalled 时以 runId
 是否推进判定是否真的启动），状态转为 `reviewing`，在 `/fire-master status` 和状态栏显示并拒绝 send。审查监听只等
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，
@@ -113,8 +110,8 @@ quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
-实现类委派（有 spec/工单）以 `/skill:implement ` 开头，技能内流程自带 commit 与 fire-review 自审；
-工人 commit 只暂存自己改动的路径、禁止 push，指挥官在集成点验证后统一 push。
+重要实现票 start 时设 `review:true`；委派文本用 `/skill:tdd ` 或普通自包含说明，Master 不用 `/skill:implement`。
+工人 commit 带路径且只含自己的改动、禁止 push，指挥官在集成点验证后统一 push。
 斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；
 隔离是纪律不是能力边界：系统提示禁令（herdr、git push、装依赖、越界写；commit 限自己路径）+ 自测义务 +

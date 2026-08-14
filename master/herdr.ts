@@ -16,11 +16,6 @@ const RESULT_CONTEXT_LIMIT = 12_000;
 const MAX_RETRY_DELAY_MS = 30_000;
 /** 占用信号失效时审查监听的轮询兑底间隔。 */
 const REVIEW_POLL_DELAY_MS = 2_000;
-/** 自审启动宽限：/fire-review 在实现回合结束后才执行并写 checkpoint/占用，
- * idle 与它们之间是跨进程异步窗口、无事件可等，只能有界复查；
- * 仅对 /skill:implement 委派生效，普通委派零额外延迟。 */
-const SELF_REVIEW_GRACE_PROBES = 5;
-const SELF_REVIEW_GRACE_DELAY_MS = 600;
 const MAX_WORKERS_PER_TAB = 4;
 
 interface HerdrAgent {
@@ -44,6 +39,8 @@ interface StartWorkerOptions {
 	model?: string;
 	thinking?: string;
 	session?: string;
+	/** 重要票：完成后由机器自动发起对抗审查。 */
+	review?: boolean;
 }
 
 /** 分配完成、尚待并行启动的工人：串行临界区的产出，交给 launchWorker 收尾。 */
@@ -174,6 +171,7 @@ export class HerdrWorkers {
 			paneId: "starting",
 			tabId: "starting",
 			...(sessionPath ? { sessionPath } : {}),
+			...(options.review ? { reviewNeeded: true } : {}),
 		};
 		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听；排队期被 stop 的直接短路。
 		const startController = pending ?? new AbortController();
@@ -462,6 +460,7 @@ export class HerdrWorkers {
 			model,
 			thinking,
 			status: "working",
+			...(provisional.reviewNeeded ? { reviewNeeded: true } : {}),
 		};
 		this.store.dispatch({ type: "UPSERT_WORKER", worker });
 		return worker;
@@ -544,16 +543,12 @@ export class HerdrWorkers {
 	}
 
 	private monitorPrompt(worker: WorkerRef, prompt: string): Promise<void> {
-		// /skill:implement 委派自带 fire-review 自审：结算前需要启动宽限窗口。
-		const expectSelfReview = prompt.startsWith("/skill:implement ");
 		return this.monitorSettlement(worker, "agent.prompt", [
 			"agent", "prompt", requiredPane(worker), prompt, "--wait",
-		], "work", undefined, expectSelfReview);
+		], "work");
 	}
 
 	private monitorWait(worker: WorkerRef): Promise<void> {
-		// reload 重挂无委派文本可判：已启动的自审由占用/checkpoint 路径覆盖，
-		// 恰落在启动窗口内的 reload 极罕见，不为它付全员宽限成本。
 		return this.monitorSettlement(worker, "agent.wait", settlementWaitArgs(worker), "work");
 	}
 
@@ -573,15 +568,9 @@ export class HerdrWorkers {
 		args: string[],
 		mode: "work" | "review",
 		previousReviewRunId?: string | null,
-		expectSelfReview = false,
 	): Promise<void> {
 		const controller = new AbortController();
 		this.runs.set(worker.name, controller);
-		// 自审基线：工作监听开始时的审查 runId；结算时 runId 推进才算本次任务内的自审终态。
-		// reload 后重挂若错过已完结的自审，只损失一行判定信息，不会误报旧结果。
-		const selfReviewBaseline = mode === "work" && worker.sessionPath
-			? reviewRunId(readReviewOutcome(worker.sessionPath)) ?? null
-			: null;
 		let failures = 0;
 		try {
 			while (!controller.signal.aborted) {
@@ -603,19 +592,11 @@ export class HerdrWorkers {
 						await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
 						continue;
 					}
-					const verdict = await this.handleSettlement(
-						worker,
-						settlement,
-						controller.signal,
-						selfReviewBaseline,
-						expectSelfReview,
-					);
+					const verdict = await this.handleSettlement(worker, settlement, controller.signal);
 					if (verdict === "done") return;
-					// 技能内自审：占用态（reviewing）或占用失效的轮间 idle（poll）都不是终态，
-					// 换用跳过 blocked 的等待直到审查落终态。
+					// 外部发起的审查占用态不是终态：换用跳过 blocked 的等待直到审查落终态。
 					operation = "agent.wait(review)";
 					args = reviewWaitArgs(worker);
-					if (verdict === "poll") await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
 					continue;
 				} catch (error) {
 					if (controller.signal.aborted) return;
@@ -638,21 +619,19 @@ export class HerdrWorkers {
 		}
 	}
 
-	/** 工作结算裁定：done=已终结；reviewing=自审占用中；poll=自审进行中但占用信号失效。 */
+	/** 工作结算裁定：done=已终结；reviewing=外部发起的审查占用中，继续等终态。 */
 	private async handleSettlement(
 		worker: WorkerRef,
 		response: Record<string, unknown>,
 		signal: AbortSignal,
-		selfReviewBaseline: string | null = null,
-		expectSelfReview = false,
-	): Promise<"done" | "reviewing" | "poll"> {
+	): Promise<"done" | "reviewing"> {
 		const agent = parseAgent(response);
 		const status = settlementStatus(agent);
 		const current = currentWorkerRun(this.store.state.workers, worker);
 		if (!current || current.status === "dormant") return "done";
 		if (status === "blocked") {
 			const label = stateLabel(agent);
-			// 审查占用不是 Worker 提问：转 reviewing（send 守卫随之拒绝追问），继续等终态。
+			// 审查占用（如用户外部手动 /fire-review）不是 Worker 提问：转 reviewing 继续等终态。
 			if (label?.includes(REVIEW_OCCUPANCY_LABEL)) {
 				this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "reviewing" } });
 				return "reviewing";
@@ -665,35 +644,33 @@ export class HerdrWorkers {
 			this.notifyMaster(workerBlockedText(blocked, question));
 			return "done";
 		}
-		let outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
-		let runId = outcome ? reviewRunId(outcome) : undefined;
-		let advanced = runId !== undefined && runId !== selfReviewBaseline;
-		// 实现回合结束到自审写入 checkpoint/占用之间是跨进程异步窗口：
-		// 对 /skill:implement 委派做有界宽限复查（无事件可等，只能短暂轮询），
-		// 确认既无新 runId 也无占用才结算，否则审查尚未启动就会被假完成。
-		for (let probe = 0; expectSelfReview && !advanced && probe < SELF_REVIEW_GRACE_PROBES; probe += 1) {
-			await retryDelay(SELF_REVIEW_GRACE_DELAY_MS, signal);
-			if (signal.aborted) return "done";
-			outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
-			runId = outcome ? reviewRunId(outcome) : undefined;
-			advanced = runId !== undefined && runId !== selfReviewBaseline;
-		}
-		// 自审仍在进行却观测到 idle：占用信号失效或刚启动的窗口，不能就此结算。
-		if (advanced && outcome?.status === "in_progress") return "poll";
 		const latest = await this.latest(worker);
 		if (signal.aborted) return "done";
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return "done";
-		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
-		// 宽限耗尽仍未观测到自审：不得静默吞成普通成功，Master 要拿到补审/查配置的决策依据。
-		const review = advanced && outcome && outcome.status !== "none"
-			? `自审判定：${reviewOutcomeText(outcome)}`
-			: expectSelfReview
-				? "自审判定：未观测到自审启动（宽限窗口内无新审查 runId）——用 review action 补审或检查 fire-review 配置"
-				: undefined;
-		if (!latest || latest.stopReason !== "stop" || latest.errorMessage)
-			this.notifyMaster(workerFailureText(settled, latest, review));
-		else this.notifyMaster(workerResultText(settled, latest, review));
+		// 审查意图一次性消耗：自动补审只针对本次交付，后续追问由指挥官按需手动 review。
+		const { reviewNeeded, ...rest } = settled;
+		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...rest, status: "idle" } });
+		if (!latest || latest.stopReason !== "stop" || latest.errorMessage) {
+			this.notifyMaster(workerFailureText(settled, latest, reviewNeeded
+				? "审查票执行失败：未发起自动审查"
+				: undefined));
+			return "done";
+		}
+		if (reviewNeeded) {
+			// 意图在派发时用参数声明、持久化进 Worker 档案（reload 不丢），机器在此执行：
+			// 无推断、无服从性赌博，审查生命周期完整复用 review action 路径。
+			this.notifyMaster(workerResultText(settled, latest, "审查票：已自动发起对抗审查，终态另行回传"));
+			try {
+				await this.review(settled.name);
+			} catch (error) {
+				this.notifyMaster(
+					`Worker ${settled.name} 自动审查发起失败（可用 review action 补审）：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			return "done";
+		}
+		this.notifyMaster(workerResultText(settled, latest));
 		return "done";
 	}
 

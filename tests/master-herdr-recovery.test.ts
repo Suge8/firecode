@@ -985,7 +985,7 @@ test("a failed Herdr wait reattaches and still returns the result", async () => 
 	await rm(directory, { recursive: true, force: true });
 });
 
-test("in-skill self-review: occupancy blocked keeps waiting and the verdict rides the result", async () => {
+test("external review occupancy is not a question: monitoring keeps waiting for the real settle", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-selfreview-"));
 	const sessionPath = join(directory, "worker.jsonl");
 	await writeFile(sessionPath, JSON.stringify({
@@ -1019,7 +1019,7 @@ test("in-skill self-review: occupancy blocked keeps waiting and the verdict ride
 	});
 	await pool.resume();
 	const text = await result;
-	expect(text).toContain("自审判定：通过（2 轮）");
+	// 外部审查的终态不再由工作结算读取；工作结算只回传交付本身。
 	expect(text).toContain("交付完成");
 	// 占用态之后的等待必须跳过 blocked，直到审查落终态。
 	expect(waits[1]).toContain("--until");
@@ -1028,8 +1028,8 @@ test("in-skill self-review: occupancy blocked keeps waiting and the verdict ride
 	await rm(directory, { recursive: true, force: true });
 });
 
-test("self-review grace: idle before the checkpoint appears still waits for the verdict", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-grace-"));
+test("review-flagged worker settles, auto-review fires and relays the verdict", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-autoreview-"));
 	const sessionPath = join(directory, "worker.jsonl");
 	await writeFile(sessionPath, JSON.stringify({
 		type: "message",
@@ -1038,60 +1038,37 @@ test("self-review grace: idle before the checkpoint appears still waits for the 
 		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
 	}) + "\n");
 	const store = createStore();
-	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
-	let resolveResult!: (value: string) => void;
-	const result = new Promise<string>((resolve) => { resolveResult = resolve; });
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath, reviewNeeded: true } });
+	const notices: string[] = [];
+	let resolveVerdict!: (value: string) => void;
+	const verdict = new Promise<string>((resolve) => { resolveVerdict = resolve; });
 	const pool = new HerdrWorkers({
 		pi: { exec: async (_command: string, args: string[]) => {
 			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
-			if (args[0] === "agent" && args[1] === "prompt") {
-				// 实现回合结束即 idle；/fire-review 的 checkpoint 要到回合完全结束后才写入。
-				setTimeout(() => {
-					void appendFile(sessionPath, JSON.stringify(terminalReviewCheckpoint()) + "\n");
-				}, 800);
-				return liveAgent("idle", sessionPath);
+			if (args[0] === "agent" && args[1] === "prompt" && args.includes("/fire-review")) {
+				// 自动补审投递：审查启动后写入终态 checkpoint。
+				await appendFile(sessionPath, JSON.stringify(terminalReviewCheckpoint()) + "\n");
+				return liveAgent("blocked", sessionPath, { review: "对抗审查进行中" });
 			}
-			return response({});
-		} } as never,
-		store,
-		workspaceId: "w1",
-		notifyMaster: (notice) => { if (notice.includes("已停下")) resolveResult(notice); },
-	});
-	await pool.send("worker-1", "/skill:implement 按 01 工单实现");
-	const text = await result;
-	expect(text).toContain("自审判定：通过（2 轮）");
-	expect(store.state.workers[0]?.status).toBe("idle");
-	await rm(directory, { recursive: true, force: true });
-});
-
-test("self-review never observed: the result carries an explicit warning, not silent success", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-noreview-"));
-	const sessionPath = join(directory, "worker.jsonl");
-	await writeFile(sessionPath, JSON.stringify({
-		type: "message",
-		id: "a1",
-		parentId: null,
-		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
-	}) + "\n");
-	const store = createStore();
-	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
-	let resolveResult!: (value: string) => void;
-	const result = new Promise<string>((resolve) => { resolveResult = resolve; });
-	const pool = new HerdrWorkers({
-		pi: { exec: async (_command: string, args: string[]) => {
-			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
 			if (args[0] === "agent" && args[1] === "prompt") return liveAgent("idle", sessionPath);
+			if (args[0] === "agent" && args[1] === "wait") return liveAgent("idle", sessionPath);
 			return response({});
 		} } as never,
 		store,
 		workspaceId: "w1",
-		notifyMaster: (notice) => { if (notice.includes("已停下")) resolveResult(notice); },
+		notifyMaster: (notice) => {
+			notices.push(notice);
+			if (notice.includes("判定")) resolveVerdict(notice);
+		},
 	});
-	// 自审始终没启动（如 review 被绕过门禁关闭）：宽限耗尽后必须显式警示，不得静默假成功。
-	await pool.send("worker-1", "/skill:implement 按 02 工单实现");
-	const text = await result;
-	expect(text).toContain("自审判定：未观测到自审启动");
-	expect(text).toContain("实现完成");
+	await pool.send("worker-1", "按 01 工单实现");
+	const text = await verdict;
+	// 结果与审查终态两条回传：先「已自动发起」，再「判定：通过（2 轮）」。
+	expect(notices.some((notice) => notice.includes("已自动发起对抗审查"))).toBe(true);
+	expect(text).toContain("判定：通过（2 轮）");
+	// 审查意图一次性消耗：档案里不再带 reviewNeeded。
+	expect(store.state.workers[0]?.reviewNeeded).toBeUndefined();
+	expect(store.state.workers[0]?.status).toBe("idle");
 	await rm(directory, { recursive: true, force: true });
 });
 
