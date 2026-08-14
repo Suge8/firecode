@@ -108,7 +108,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		try {
 			await herdr.resume();
 		} catch (error) {
-			herdr.shutdown();
+			await herdr.shutdown();
 			throw error;
 		}
 		const candidate: MasterRuntime = { role: "master", ctx, store, herdr, events: [], turnActive: false };
@@ -127,7 +127,8 @@ export function registerMaster(pi: ExtensionAPI): void {
 		try {
 			if (active.role !== "master") return [];
 			if (active.flushTimer) clearTimeout(active.flushTimer);
-			active.herdr.shutdown();
+			// 等旧实例的在飞启动退出：reload 时新运行时才不会和它交错写同一状态文件。
+			await active.herdr.shutdown();
 			if (!cleanup) return [];
 			const failures = await active.herdr.cleanup();
 			if (failures.length === 0) active.store.dispatch({ type: "CLEAR" });

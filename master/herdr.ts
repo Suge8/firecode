@@ -71,6 +71,8 @@ export class HerdrWorkers {
 	private readonly runs = new Map<string, AbortController>();
 	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿工人复活。 */
 	private readonly lifecycle = new AbortController();
+	/** 在飞启动集合：shutdown 要等它们真正退出，reload 后新旧运行时才不会同时写状态文件。 */
+	private readonly launches = new Set<Promise<unknown>>();
 	private startQueue = Promise.resolve();
 
 	constructor(options: {
@@ -116,10 +118,13 @@ export class HerdrWorkers {
 		const allocated = this.startQueue.then(() => this.allocateWorker(ctx, options, pending));
 		this.startQueue = allocated.then(() => undefined, () => undefined);
 		const launched = allocated.then((launch) => this.launchWorker(launch));
-		return launched.finally(() => {
+		const tracked: Promise<WorkerRef> = launched.finally(() => {
+			this.launches.delete(tracked);
 			if (!pending) return;
 			for (const key of names) if (this.runs.get(key) === pending) this.runs.delete(key);
 		});
+		this.launches.add(tracked);
+		return tracked;
 	}
 
 	/**
@@ -219,9 +224,12 @@ export class HerdrWorkers {
 		shell: WorkerShell | undefined,
 		controller: AbortController,
 	): Promise<void> {
+		// 池关闭（reload/退出）：零副作用——不关 shell、不写状态。reload 要保留工人现场
+		// 交给下个运行时 reconcile；off/quit 的实体清理由 cleanup() 的 stop 负责。
+		if (this.lifecycle.signal.aborted) return;
 		if (shell) {
 			try {
-				await this.closeWorkerShell(shell);
+				await this.closeWorkerShell(shell, name);
 			} catch (cleanupError) {
 				this.notifyMaster(`Worker ${name} 启动失败后的 pane 清理也失败：${String(cleanupError)}`);
 			}
@@ -330,10 +338,12 @@ export class HerdrWorkers {
 		return failures;
 	}
 
-	shutdown(): void {
+	async shutdown(): Promise<void> {
 		this.lifecycle.abort();
 		for (const controller of this.runs.values()) controller.abort();
 		this.runs.clear();
+		// 等在飞启动真正退出：reload 后新实例才恢复，避免新旧运行时交错写同一状态文件。
+		await Promise.allSettled([this.startQueue, ...this.launches]);
 	}
 
 	private async createWorkerShell(
@@ -354,6 +364,8 @@ export class HerdrWorkers {
 				const pane = nestedRecord(created, ["result", "pane"]);
 				const paneId = requiredField(pane, "pane_id", "pane.split.pane");
 				await this.renamePane(paneId, display);
+				// tab 从“首工人专属”变成分组：标签改组名，不再冒用首工人的名字。
+				await this.renameTab(plan.target.tabId, "workers");
 				return { paneId, tabId: plan.target.tabId, close: "pane" };
 			} catch (error) {
 				// Layout is best-effort: a fresh tab keeps Worker startup independent of split support.
@@ -382,6 +394,15 @@ export class HerdrWorkers {
 			await this.run("pane.rename", ["pane", "rename", paneId, label]);
 		} catch (error) {
 			this.notifyMaster(`pane 命名失败（不影响 Worker）：${String(error)}`);
+		}
+	}
+
+	/** tab 命名同样纯属显示，失败只通知。 */
+	private async renameTab(tabId: string, label: string): Promise<void> {
+		try {
+			await this.run("tab.rename", ["tab", "rename", tabId, label]);
+		} catch (error) {
+			this.notifyMaster(`tab 命名失败（不影响 Worker）：${String(error)}`);
 		}
 	}
 
@@ -653,7 +674,17 @@ export class HerdrWorkers {
 
 	private async closeOwnedWorker(worker: WorkerRef): Promise<void> {
 		const live = await this.findLiveAgent(worker);
-		if (!live) return;
+		if (!live) {
+			// agent 从未启动的 starting 壳（如 reload 遗留）也要收，共享 tab 只收自己的 pane。
+			if (worker.paneId && worker.paneId !== "starting") {
+				const shared = liveWorkers(this.store.state).some((candidate) =>
+					candidate.name !== worker.name && candidate.tabId === worker.tabId
+				);
+				if (shared || !worker.tabId || worker.tabId === "starting") await this.closePane(worker.paneId);
+				else await this.closeTab(worker.tabId);
+			}
+			return;
+		}
 		const sessionPath = optionalSessionPath(live);
 		const owned = worker.sessionPath
 			? sessionPath === worker.sessionPath
@@ -666,9 +697,14 @@ export class HerdrWorkers {
 		else await this.closeTab(live.tab_id);
 	}
 
-	private async closeWorkerShell(shell: WorkerShell): Promise<void> {
-		if (shell.close === "pane") await this.closePane(shell.paneId);
-		else await this.closeTab(shell.tabId);
+	private async closeWorkerShell(shell: WorkerShell, ownerName?: string): Promise<void> {
+		if (shell.close === "pane") return this.closePane(shell.paneId);
+		// 开 tab 的首工人被中止时，同 tab 可能已有并行启动的其他工人：不能连坐关整 tab。
+		const shared = liveWorkers(this.store.state).some((candidate) =>
+			candidate.name !== ownerName && candidate.tabId === shell.tabId
+		);
+		if (shared) return this.closePane(shell.paneId);
+		return this.closeTab(shell.tabId);
 	}
 
 	private async closePane(paneId: string): Promise<void> {

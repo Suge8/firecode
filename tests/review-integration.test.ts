@@ -471,6 +471,25 @@ describe("registerReview wiring", () => {
 			await handler({}, makeCtx(sessionManager));
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
+
+	test("a broken features config preserves the active checkpoint instead of sealing it", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		const state = {
+			...initialState("config-broken"),
+			phase: "queued" as const,
+			startedAt: 1,
+			updatedAt: 1,
+		};
+		beginCheckpoint(pi as never, { sessionManager } as never, state);
+		// features 整节类型错误被安全回退成全关，但那是配置坏而非用户关闭：不得封存。
+		registerReview(pi as never, false, true);
+		expect(registered.commands.has("fire-review")).toBe(false);
+		for (const handler of registered.events.get("session_start") ?? [])
+			await handler({}, makeCtx(sessionManager));
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
+	});
 });
 
 describe("checkpoint persistence", () => {

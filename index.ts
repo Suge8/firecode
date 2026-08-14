@@ -39,7 +39,8 @@ export default function firecode(pi: ExtensionAPI): void {
 	// herdr 显示投影没有开关：herdr 之外自我禁用，只写显示层。
 	registerHerdrDisplay(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
-	registerReview(pi, reviewEnabled);
+	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
+	registerReview(pi, reviewEnabled, problems.includes("features 必须是对象"));
 
 	if (problems.length === 0) return;
 	pi.on("session_start", (_event, ctx) => {

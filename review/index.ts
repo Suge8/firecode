@@ -107,12 +107,13 @@ interface Controller {
 let controller: Controller | undefined;
 let dispatchQueue: Promise<void> = Promise.resolve();
 
-export function registerReview(pi: ExtensionAPI, enabled = true): void {
+export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = false): void {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍必须保持横线卡。
 	registerCardRenderer(pi);
 	if (!enabled) {
-		// 关闭功能时把已有活动 checkpoint 收成终态，避免重新启用后恢复幽灵审查。
-		pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
+		// 只有用户明确关闭才封存活动 checkpoint（防重新启用后恢复幽灵审查）；
+		// features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。
+		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
 		return;
 	}
 	pi.registerShortcut(DETAILS_SHORTCUT, {

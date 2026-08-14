@@ -27,8 +27,12 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 写 `pi·模型/思考等级` 与会话名（`pane.report_metadata` 的 display_agent + title）。workspace 列表的目录名归
 herdr 自管；不写 pane label——单 pane 时根本不显示，而它和 tab label 一样是持久授权名，Master 给 Worker 的
 `任务名-模型名` 占的就是这两个槽。改名不从 `session/rename.ts` 接线，只听宙主的 `session_info_changed`（命令、
-快捷键、自动命名已在宙主收口），另听 model/thinking 选择；相同身份不重发，请求串行避免乱序覆盖，
-失败静默。只有 `quit` 清空（pane 退回 shell），reload/new/resume/fork 由新会话的 session_start 覆盖。
+快捷键、自动命名已在宙主收口），另听 model/thinking 选择。
+tab 标签是同 tab 全体 pane 共享的持久名，而 herdr 只有覆盖没有清除（写空串会留下永久空标签，不能
+恢复默认序号）：只在本 pane 独占 tab 且会话有名字时写，tab 归属每次现查（env 里的 tab id 在 pane 被移动后会过期）。
+同一身份不重发但只有确认送达才记为已发布（herdr 返回 error、超时与共享 tab 跳过都算未完成，下一个事件重试），请求串行避免乱序覆盖，
+失败静默。非 TUI 模式（print/json/rpc）不投影：无头调用不能接管可见会话的显示。
+只有 `quit` 清空副标题（pane 退回 shell，tab 名保留不可逆写入），reload/new/resume/fork 由新会话的 session_start 覆盖。
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 `review/state.ts` 是 `/fire-review` 的唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，
 副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），
@@ -78,7 +82,9 @@ Master，Master 用 send 回答后继续。`idle` 与未查看后台结果 `done
 只有以 `stop` 结束才回传完成；`length`、`toolUse`、`error`、`aborted`、缺失回复均按失败回传。普通工作监听用
 无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复，forget 才删除引用。
 新 Worker 优先在当前 Worker tab 内 split（2×2 象限切，避免嵌套同向切把后来者挤成 1/8 宽），每 tab 最多 4 个，
-满或 split 失败才建 tab；不 rebalance，Dormant 恢复建新 tab。
+满或 split 失败才建 tab；单工人 tab 标签是其显示名，第二个工人加入后改组名 `workers`；不 rebalance，
+Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane，不连坐关 tab；reload 时旧运行时
+静默退场（等在飞启动退出、不关 shell 不写状态），现场由新运行时 reconcile。
 命名四层统一：pane/tab/Pi 显示名为 `任务名-模型名`（Pi 前缀 `↳`，不截断），Herdr agent 名是其净化版
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。

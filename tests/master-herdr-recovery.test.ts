@@ -232,6 +232,8 @@ test("new Workers fill the current tab to four panes before opening another", as
 	// pane/tab/Pi 统一显示名：任务名-模型名；两种 shell 形态的 pane 都要命名。
 	expect(calls).toContainEqual(["pane", "rename", "w1:p1", "worker-1-m"]);
 	expect(calls).toContainEqual(["pane", "rename", "w1:p2", "worker-2-m"]);
+	// 第二个工人加入后 tab 变分组：标签改组名，不再冒用首工人名字。
+	expect(calls).toContainEqual(["tab", "rename", "w1:t1", "workers"]);
 	// agent 名同样携带模型（Herdr 字符集内）；Pi 名为完整显示名加 ↳ 前缀。
 	const start = calls.find((args) => args[0] === "agent" && args[1] === "start" && args[2] === "worker-1-m");
 	expect(start?.slice(start.indexOf("--name"), start.indexOf("--name") + 2)).toEqual(["--name", "↳worker-1-m"]);
@@ -590,9 +592,11 @@ test("workers launch in parallel once layout allocation hands off", async () => 
 	process.env.SHELL = "/bin/zsh";
 	const store = createStore();
 	const paneTabs = new Map<string, string>();
+	const calls: string[][] = [];
 	let paneSerial = 0;
 	const pool = new HerdrWorkers({
 		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
 			if (args[0] === "tab" && args[1] === "create") {
 				const paneId = `w1:p${++paneSerial}`;
 				paneTabs.set(paneId, "w1:t1");
@@ -638,7 +642,48 @@ test("workers launch in parallel once layout allocation hands off", async () => 
 	expect(store.state.workers.find((worker) => worker.name === "slow")?.status).toBe("starting");
 	await pool.stop("slow", true);
 	await expect(slow).rejects.toThrow();
+	// 首工人开的 tab 已被后续工人共享：中止首工人只收它自己的 pane，不能连坐关整 tab。
+	expect(calls.some((args) => args[0] === "tab" && args[1] === "close")).toBe(false);
+	expect(calls).toContainEqual(["pane", "close", "w1:p1"]);
+	expect(store.state.workers.find((worker) => worker.name === "fast")?.status).toBe("working");
 	pool.shutdown();
+});
+
+test("reload shutdown waits out in-flight starts and leaves state and shells untouched", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	store.dispatch({
+		type: "UPSERT_WORKER",
+		worker: { name: "worker-1", model: "p/m", thinking: "medium" as const, status: "dormant" as const, sessionPath: "/tmp/worker.jsonl" },
+	});
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", prompt: "继续" });
+	resume.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// reload 路径：shutdown 必须等在飞启动退出，且不关 shell、不改状态——现场留给下个运行时 reconcile。
+	await pool.shutdown();
+	await expect(resume).rejects.toThrow();
+	expect(calls.some((args) => args[1] === "close")).toBe(false);
+	expect(store.state.workers.map((worker) => worker.name)).toEqual(["worker-1"]);
+	expect(store.state.workers[0]?.status).toBe("starting");
 });
 
 test("a duplicate same-name start is rejected at enqueue instead of queueing uncancellable", async () => {
