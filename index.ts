@@ -8,6 +8,7 @@ import { registerHeader } from "./header.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
+import { registerHerdrDisplay } from "./session/herdr-display.js";
 import { registerSessionName } from "./session/rename.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
@@ -35,6 +36,8 @@ export default function firecode(pi: ExtensionAPI): void {
 		if (enabled) register(pi);
 	}
 	if (config.features.master !== false) registerMaster(pi);
+	// herdr 显示投影没有开关：herdr 之外自我禁用，只写显示层。
+	registerHerdrDisplay(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	registerReview(pi, reviewEnabled);
 

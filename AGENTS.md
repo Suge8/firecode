@@ -13,6 +13,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `tools/` | 接管 read/bash/edit/write 的渲染，含连续行轨道 |
 | `session/presets.ts` | 预设切换：模型、思考等级、工具集、附加指令 |
 | `session/rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
+| `session/herdr-display.ts` | 会话身份投影到 herdr 的 tab 标签与 agent 副标题 |
 | `session/stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 |
@@ -22,6 +23,12 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `config.ts` | 只读本目录 config.jsonc |
 
 `statusbar/render.ts` 与 `statusbar/layout` 相关函数是纯函数，测试覆盖在 `tests/layout.test.ts`。
+`session/herdr-display.ts` 把 pi 单向投影到 herdr 的两个可见位置：tab 标签写会话名，agent 副标题
+写 `pi·模型/思考等级` 与会话名（`pane.report_metadata` 的 display_agent + title）。workspace 列表的目录名归
+herdr 自管；不写 pane label——单 pane 时根本不显示，而它和 tab label 一样是持久授权名，Master 给 Worker 的
+`任务名-模型名` 占的就是这两个槽。改名不从 `session/rename.ts` 接线，只听宙主的 `session_info_changed`（命令、
+快捷键、自动命名已在宙主收口），另听 model/thinking 选择；相同身份不重发，请求串行避免乱序覆盖，
+失败静默。只有 `quit` 清空（pane 退回 shell），reload/new/resume/fork 由新会话的 session_start 覆盖。
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 `review/state.ts` 是 `/fire-review` 的唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，
 副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），
@@ -42,6 +49,7 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 只有 `firecode/config.jsonc`。不要新建 keys.json，也不要读项目级配置。
 用法写在 jsonc 注释里。快捷键启动时绑定，改完需重启；`ctrl+f` 只改 `openai` 节，其它注释保留。
 预设名写入会话记录，重开会话只恢复名字与附加指令，不重放模型和工具切换。
+`herdr-display` 没有 feature 开关：herdr 之外（无 `HERDR_ENV`）与 Master Worker 内自我禁用。
 `review` 节（审查者/顾问模型、maxRounds、advisorAfterFailures、timeoutMinutes、tools、background、language）
 与 `master` 节（models 选型表：模型 id + 默认 thinking + 适用场景，注入 herdr_agents 提示词）
 未知字段、嵌套未知字段与类型错误都报配置问题；不读 pi-flow 的 config.json。
