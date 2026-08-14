@@ -59,6 +59,8 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 与 `master` 节（models 选型表：模型 id + 默认 thinking + 适用场景，注入 herdr_agents 提示词）
 未知字段、嵌套未知字段与类型错误都报配置问题；不读 pi-flow 的 config.json。
 master 节有配置问题时 `/fire-master` 激活与恢复拒绝启动——选型表错误会拿错模型真实发起 Worker。
+review 门禁双入口：review action 与 `/skill:implement` 委派的 start/send 都在投递前拦截 review 不可用；
+宽限耗尽仍未观测到自审启动时，结果显式携带「未观测到自审启动」警示，不静默吞成普通成功。
 config.jsonc 解析失败或 review 节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；
 活动 checkpoint 保持原样，修好配置并重启后继续恢复——静默回退默认模型会拿用户没配的模型真实发起调用。
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`

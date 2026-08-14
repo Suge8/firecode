@@ -685,9 +685,12 @@ export class HerdrWorkers {
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return "done";
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
+		// 宽限耗尽仍未观测到自审：不得静默吞成普通成功，Master 要拿到补审/查配置的决策依据。
 		const review = advanced && outcome && outcome.status !== "none"
 			? `自审判定：${reviewOutcomeText(outcome)}`
-			: undefined;
+			: expectSelfReview
+				? "自审判定：未观测到自审启动（宽限窗口内无新审查 runId）——用 review action 补审或检查 fire-review 配置"
+				: undefined;
 		if (!latest || latest.stopReason !== "stop" || latest.errorMessage)
 			this.notifyMaster(workerFailureText(settled, latest, review));
 		else this.notifyMaster(workerResultText(settled, latest, review));

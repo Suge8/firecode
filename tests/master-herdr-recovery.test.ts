@@ -1064,6 +1064,37 @@ test("self-review grace: idle before the checkpoint appears still waits for the 
 	await rm(directory, { recursive: true, force: true });
 });
 
+test("self-review never observed: the result carries an explicit warning, not silent success", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-noreview-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "message",
+		id: "a1",
+		parentId: null,
+		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
+	}) + "\n");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
+	let resolveResult!: (value: string) => void;
+	const result = new Promise<string>((resolve) => { resolveResult = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[]) => {
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			if (args[0] === "agent" && args[1] === "prompt") return liveAgent("idle", sessionPath);
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: (notice) => { if (notice.includes("已停下")) resolveResult(notice); },
+	});
+	// 自审始终没启动（如 review 被绕过门禁关闭）：宽限耗尽后必须显式警示，不得静默假成功。
+	await pool.send("worker-1", "/skill:implement 按 02 工单实现");
+	const text = await result;
+	expect(text).toContain("自审判定：未观测到自审启动");
+	expect(text).toContain("实现完成");
+	await rm(directory, { recursive: true, force: true });
+});
+
 function terminalReviewCheckpoint() {
 	const reviewers = (status: "passed" | "failed") => [
 		{ index: 0, model: "p/sol", thinking: "high", status, summary: "s", details: "d" },

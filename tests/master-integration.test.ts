@@ -293,6 +293,13 @@ test("review action is refused before delivery when fire-review is unavailable",
 	await expect(
 		tools.get("herdr_agents")?.execute("call", { action: "review", worker: "w" }, undefined, undefined, ctx),
 	).rejects.toThrow("fire-review 已关闭");
+	// 同门禁双入口：/skill:implement 委派自带自审，review 不可用时 start/send 也必须在投递前拒绝。
+	await expect(
+		tools.get("herdr_agents")?.execute("call", { action: "start", worker: "w", prompt: "/skill:implement 按工单实现" }, undefined, undefined, ctx),
+	).rejects.toThrow("fire-review 已关闭");
+	await expect(
+		tools.get("herdr_agents")?.execute("call", { action: "send", worker: "w", prompt: "/skill:implement 继续实现" }, undefined, undefined, ctx),
+	).rejects.toThrow("fire-review 已关闭");
 });
 
 test("worker events wait out a running Master turn and merge into one follow-up", async () => {

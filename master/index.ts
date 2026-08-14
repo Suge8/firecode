@@ -191,8 +191,12 @@ export function registerMaster(pi: ExtensionAPI): void {
 			if (active?.role !== "master") throw new Error("herdr_agents 只在 Master 中可用");
 			if (params.action === "list") return toolResult({ workers: active.store.state.workers.map(compactWorker) });
 			if (params.action === "start") {
+				const prompt = requiredString(params.prompt, "prompt");
+				// 同门禁双入口：/skill:implement 委派自带 fire-review 自审，review 不可用时
+				// 技能脚本投递的字面 /fire-review 会退化成普通模型输入且 Master 无感知。
+				if (prompt.startsWith("/skill:implement ") && reviewGate) throw new Error(reviewGate);
 				const worker = await active.herdr.start(ctx, {
-					prompt: requiredString(params.prompt, "prompt"),
+					prompt,
 					...(optionalString(params.worker) ? { name: optionalString(params.worker) } : {}),
 					...(optionalString(params.model) ? { model: optionalString(params.model) } : {}),
 					...(optionalString(params.thinking) ? { thinking: optionalString(params.thinking) } : {}),
@@ -202,7 +206,9 @@ export function registerMaster(pi: ExtensionAPI): void {
 				return toolResult({ started: true, worker: compactWorker(worker) });
 			}
 			if (params.action === "send") {
-				await active.herdr.send(requiredString(params.worker, "worker"), requiredString(params.prompt, "prompt"));
+				const prompt = requiredString(params.prompt, "prompt");
+				if (prompt.startsWith("/skill:implement ") && reviewGate) throw new Error(reviewGate);
+				await active.herdr.send(requiredString(params.worker, "worker"), prompt);
 				return toolResult({ sent: true });
 			}
 			if (params.action === "review") {
