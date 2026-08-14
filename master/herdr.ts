@@ -72,12 +72,26 @@ export class HerdrWorkers {
 	}
 
 	async start(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
-		const queued = this.startQueue.then(() => this.startWorker(ctx, options));
+		// 入队即登记取消控制器：同批工具调用并行执行，排队中的启动也必须能被 stop 命中。
+		const name = options.name?.trim();
+		const pending = name && !this.runs.has(name) ? new AbortController() : undefined;
+		if (name && pending) this.runs.set(name, pending);
+		const queued = this.startQueue.then(async () => {
+			try {
+				return await this.startWorker(ctx, options, pending);
+			} finally {
+				if (name && pending && this.runs.get(name) === pending) this.runs.delete(name);
+			}
+		});
 		this.startQueue = queued.then(() => undefined, () => undefined);
 		return queued;
 	}
 
-	private async startWorker(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
+	private async startWorker(
+		ctx: ExtensionContext,
+		options: StartWorkerOptions,
+		pending?: AbortController,
+	): Promise<WorkerRef> {
 		const prompt = requiredText(options.prompt, "prompt");
 		const referenced = options.session
 			? this.store.state.workers.find(
@@ -107,9 +121,11 @@ export class HerdrWorkers {
 			tabId: "starting",
 			...(sessionPath ? { sessionPath } : {}),
 		};
+		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听；排队期被 stop 的直接短路。
+		const startController = pending ?? new AbortController();
+		if (startController.signal.aborted || this.lifecycle.signal.aborted)
+			throw new Error(`${name} 在排队阶段已被停止`);
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: provisional });
-		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听。
-		const startController = new AbortController();
 		this.runs.set(name, startController);
 		const signal = AbortSignal.any([this.lifecycle.signal, startController.signal]);
 		let shellReady: Awaited<ReturnType<typeof createShellReadyMarker>> | undefined;
@@ -195,6 +211,16 @@ export class HerdrWorkers {
 	}
 
 	async stop(workerName: string, forget = false): Promise<void> {
+		const existing = this.store.state.workers.find((candidate) => candidate.name === workerName);
+		if (!existing) {
+			// 还在 startQueue 里排队的启动：状态未建但控制器已登记，中止即可。
+			const pending = this.runs.get(workerName);
+			if (pending) {
+				pending.abort();
+				this.runs.delete(workerName);
+				return;
+			}
+		}
 		const worker = requireWorker(this.store.state, workerName);
 		if (worker.status !== "dormant") {
 			this.runs.get(worker.name)?.abort();

@@ -477,6 +477,43 @@ test("stopping a Worker mid-startup aborts the start and leaves no orphan", asyn
 	pool.shutdown();
 });
 
+test("a queued start can be stopped before it runs", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const first = pool.start(ctx, { name: "hang", prompt: "做" });
+	first.catch(() => {});
+	const second = pool.start(ctx, { name: "queued", prompt: "做" });
+	second.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// 同批并行工具调用可达：排队中的启动必须能被 stop 命中，不报“Worker 不存在”。
+	await pool.stop("queued", true);
+	await pool.stop("hang", true);
+	await expect(first).rejects.toThrow();
+	await expect(second).rejects.toThrow("排队阶段已被停止");
+	// 排队启动被取消：只有首个启动建过 shell，状态无残留。
+	expect(calls.filter((args) => args[0] === "tab" && args[1] === "create").length).toBe(1);
+	expect(store.state.workers).toEqual([]);
+	pool.shutdown();
+});
+
 test("a stalled prompt still tracks a review that started without the occupancy signal", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-stall-review-"));
 	const sessionPath = join(directory, "worker.jsonl");
