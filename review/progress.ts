@@ -8,6 +8,15 @@ import { clip, formatModelName } from "../format.js";
 import type { Language } from "../config.js";
 import type { ReviewerStatus } from "./state.js";
 
+export interface ProgressTool {
+	id: string;
+	tool: string;
+	args: string;
+	startedAt: number;
+	endedAt?: number;
+	isError?: boolean;
+}
+
 /** 单个审查者的活动快照。 */
 export interface ReviewerProgress {
 	index: number;
@@ -16,11 +25,15 @@ export interface ReviewerProgress {
 	/** 当前动作的人话描述（读某文件 / 跑某命令 / 思考中）。 */
 	action: string;
 	toolCalls: number;
-	/** 最近动作流水，供详情窗展示；只保留尾部若干条。 */
+	tokens: number;
+	activeTools: ProgressTool[];
+	recentTools: ProgressTool[];
+	/** 最近动作流水，供活动测试和降级展示。 */
 	trail: string[];
 }
 
 const TRAIL_LIMIT = 40;
+const RECENT_TOOL_LIMIT = 5;
 const ACTION_WIDTH = 48;
 
 export function initialProgress(
@@ -33,6 +46,9 @@ export function initialProgress(
 		status: "running",
 		action: thinkingText(language),
 		toolCalls: 0,
+		tokens: 0,
+		activeTools: [],
+		recentTools: [],
 		trail: [],
 	}));
 }
@@ -47,18 +63,59 @@ export function applyProcessEvent(
 	event: Record<string, unknown>,
 	language: Language,
 ): readonly ReviewerProgress[] {
-	const action = actionOf(event, language);
-	if (!action) return progress;
-	return progress.map((item) =>
-		item.index === index
-			? {
-					...item,
-					action,
-					toolCalls: item.toolCalls + 1,
-					trail: [...item.trail, action].slice(-TRAIL_LIMIT),
-				}
-			: item,
-	);
+	const current = progress.find((item) => item.index === index);
+	if (!current) return progress;
+	const next = applyReviewerEvent(current, event, language);
+	if (next === current) return progress;
+	return progress.map((item) => item.index === index ? next : item);
+}
+
+function applyReviewerEvent(
+	item: ReviewerProgress,
+	event: Record<string, unknown>,
+	language: Language,
+): ReviewerProgress {
+	if (event.type === "tool_execution_start") {
+		const tool = typeof event.toolName === "string" ? event.toolName : "tool";
+		const args = summarizeArgs(event.args);
+		const active: ProgressTool = {
+			id: typeof event.toolCallId === "string" ? event.toolCallId : `${tool}:${Date.now()}`,
+			tool,
+			args,
+			startedAt: Date.now(),
+		};
+		const action = actionOf(tool, args, language);
+		return {
+			...item,
+			action,
+			toolCalls: item.toolCalls + 1,
+			activeTools: [...item.activeTools, active],
+			trail: [...item.trail, action].slice(-TRAIL_LIMIT),
+		};
+	}
+	if (event.type === "tool_execution_end") {
+		const id = typeof event.toolCallId === "string" ? event.toolCallId : "";
+		const completed = item.activeTools.find((tool) => tool.id === id);
+		if (!completed) return item;
+		const activeTools = item.activeTools.filter((tool) => tool.id !== id);
+		const current = activeTools.at(-1);
+		return {
+			...item,
+			action: current ? actionOf(current.tool, current.args, language) : thinkingText(language),
+			activeTools,
+			recentTools: [
+				...item.recentTools,
+				{ ...completed, endedAt: Date.now(), isError: event.isError === true },
+			].slice(-RECENT_TOOL_LIMIT),
+		};
+	}
+	if (event.type === "message_end") {
+		const message = isRecord(event.message) ? event.message : {};
+		const usage = isRecord(message.usage) ? message.usage : {};
+		const tokens = Number.isFinite(usage.totalTokens) ? Number(usage.totalTokens) : 0;
+		return tokens ? { ...item, tokens: item.tokens + tokens } : item;
+	}
+	return item;
 }
 
 export function settleProgress(
@@ -69,21 +126,15 @@ export function settleProgress(
 ): readonly ReviewerProgress[] {
 	return progress.map((item) =>
 		item.index === index
-			? { ...item, status, action: settledText(status, language) }
+			? { ...item, status, action: settledText(status, language), activeTools: [] }
 			: item,
 	);
 }
 
 /** 工具调用事件 → 人话动作；非工具事件返回 undefined。 */
-function actionOf(
-	event: Record<string, unknown>,
-	language: Language,
-): string | undefined {
-	if (event.type !== "tool_execution_start") return undefined;
-	const tool = typeof event.toolName === "string" ? event.toolName : "";
-	const args = isRecord(event.args) ? event.args : {};
+function actionOf(tool: string, args: string, language: Language) {
 	const verb = verbOf(tool, language);
-	const target = targetOf(tool, args);
+	const target = tool === "bash" ? args : basename(args);
 	return clip(target ? `${verb} ${target}` : verb, ACTION_WIDTH);
 }
 
@@ -106,12 +157,19 @@ function verbOf(tool: string, language: Language) {
 	return table[tool] ?? tool ?? "?";
 }
 
-function targetOf(tool: string, args: Record<string, unknown>) {
+function summarizeArgs(value: unknown) {
+	const args = isRecord(value) ? value : {};
 	const raw =
-		firstString(args, tool === "bash" ? ["command"] : []) ??
+		firstString(args, ["command"]) ??
 		firstString(args, ["path", "pattern", "query", "file"]);
-	if (!raw) return "";
-	return tool === "bash" ? oneLine(raw) : basename(raw);
+	if (raw) return oneLine(raw);
+	if (value === undefined) return "";
+	try {
+		const serialized = JSON.stringify(value);
+		return serialized === "{}" ? "" : clip(serialized, 100);
+	} catch {
+		return clip(String(value), 100);
+	}
 }
 
 function firstString(args: Record<string, unknown>, keys: readonly string[]) {

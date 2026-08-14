@@ -83,7 +83,7 @@ export interface RepairState {
 }
 
 export interface ReviewState {
-	generation: string;
+	runId: string;
 	phase: Phase;
 	/** 当前轮号（1 起）；queued 时 0。 */
 	round: number;
@@ -110,13 +110,16 @@ export interface ReviewLimits {
 	advisorAfterFailures: number;
 	/** 本轮审查者（model/thinking），beginRound 时填入 active。 */
 	reviewers: { model: string; thinking: string }[];
+	language?: "zh" | "en";
 }
 
 export type ReviewEvent =
-	| { type: "START"; focus: string; busy: boolean; generation: string }
+	| { type: "START"; focus: string; busy: boolean }
 	| { type: "RECOVER" }
 	| { type: "REVIEWER_SETTLED"; index: number; result: ReviewerResult }
 	| { type: "ADVISOR_SETTLED"; result: AdvisorResult }
+	| { type: "ADVISOR_SKIPPED" }
+	| { type: "INFRASTRUCTURE_ERROR"; details: string }
 	| { type: "ADVANCE" }
 	| { type: "FEEDBACK_DISPATCHED" }
 	| { type: "REPAIR_STARTED" }
@@ -128,7 +131,7 @@ export type ReviewEvent =
 export type CardData =
 	| { kind: "queued"; focus: string }
 	| { kind: "start"; round: number; focus: string; models: string[] }
-	| { kind: "pass"; round: number; summary: string; details: string; elapsedMs: number }
+	| { kind: "pass"; round: number; summary: string; details: string; elapsedMs: number; totalElapsedMs?: number }
 	| {
 			kind: "fail";
 			round: number;
@@ -136,11 +139,14 @@ export type CardData =
 			advisor: AdvisorResult | null;
 			/** 本轮还要经顾问仲裁，反馈尚未投递。 */
 			awaitingAdvisor?: boolean;
+			elapsedMs?: number;
+			totalElapsedMs?: number;
 	  }
-	| { kind: "stop"; reason: StopReason; round: number; details: string; advisor?: AdvisorResult }
+	| { kind: "stop"; reason: StopReason; round: number; details: string; advisor?: AdvisorResult; elapsedMs?: number; totalElapsedMs?: number }
 	| { kind: "cancel"; round: number; reason: StopReason }
 	| { kind: "timeout"; round: number; reason: StopReason }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string; elapsedMs?: number; totalElapsedMs?: number }
+	| { kind: "advisor"; advisor: AdvisorResult };
 
 export type ReviewEffect =
 	| { kind: "advance" }
@@ -151,9 +157,9 @@ export interface ReduceResult {
 	effects: ReviewEffect[];
 }
 
-export function initialState(generation: string): ReviewState {
+export function initialState(runId: string): ReviewState {
 	return {
-		generation,
+		runId,
 		phase: "idle",
 		round: 0,
 		focus: "",
@@ -182,7 +188,11 @@ export function reduce(
 		case "REVIEWER_SETTLED":
 			return onReviewerSettled(state, event, limits, now);
 		case "ADVISOR_SETTLED":
-			return onAdvisorSettled(state, event, now);
+			return onAdvisorSettled(state, event, limits, now);
+		case "ADVISOR_SKIPPED":
+			return onAdvisorSkipped(state, now);
+		case "INFRASTRUCTURE_ERROR":
+			return onInfrastructureError(state, event.details, now);
 		case "ADVANCE":
 			return onAdvance(state, limits, now);
 		case "FEEDBACK_DISPATCHED":
@@ -210,7 +220,7 @@ function onStart(
 	if (event.busy)
 		return {
 			state: {
-				...initialState(event.generation),
+				...initialState(state.runId),
 				phase: "queued",
 				focus,
 				startedAt: now,
@@ -222,7 +232,7 @@ function onStart(
 			],
 		};
 	return {
-		state: beginRound(initialState(event.generation), focus, 1, limits, now),
+		state: beginRound(initialState(state.runId), focus, 1, limits, now),
 		effects: [
 			{
 				kind: "send_card",
@@ -349,10 +359,17 @@ function settleRound(
 	limits: ReviewLimits,
 	now: number,
 ): ReduceResult {
-	const { result, details } = aggregate(settled);
+	const { result, displayDetails, feedbackDetails, archiveDetails, summary } = aggregate(
+		settled,
+		limits.language ?? "zh",
+	);
 	const base = { ...state, active: null, updatedAt: now };
+	const totalElapsedMs = Math.max(0, now - state.startedAt);
+	const passSummary = result === "passed"
+		? appendClosedFindings(summary, state.history, active.round, limits.language ?? "zh")
+		: summary;
 	if (result === "passed" || result === "error") {
-		const round = roundRecord(active.round, result, details, settled, undefined, state.roundStartedAt, now);
+		const round = roundRecord(active.round, result, archiveDetails, settled, undefined, state.roundStartedAt, now);
 		return {
 			state: { ...base, phase: "settled", history: [...state.history, round] },
 			effects: [
@@ -363,18 +380,19 @@ function settleRound(
 							? {
 									kind: "pass",
 									round: active.round,
-									summary: details,
-									details,
+									summary: passSummary,
+									details: archiveDetails,
 									elapsedMs: round.elapsedMs,
+									totalElapsedMs,
 								}
-							: { kind: "error", message: details },
+							: { kind: "error", message: displayDetails, elapsedMs: round.elapsedMs, totalElapsedMs },
 				},
 			],
 		};
 	}
 	const consecutiveFailures = state.consecutiveFailures + 1;
 	if (active.round >= limits.maxRounds) {
-		const round = roundRecord(active.round, "failed", details, settled, undefined, state.roundStartedAt, now);
+		const round = roundRecord(active.round, "failed", archiveDetails, settled, undefined, state.roundStartedAt, now);
 		return {
 			state: {
 				...base,
@@ -385,7 +403,13 @@ function settleRound(
 			effects: [
 				{
 					kind: "send_card",
-					card: { kind: "stop", reason: "max_rounds", round: active.round, details },
+					card: {
+						kind: "stop",
+						reason: "max_rounds",
+						round: active.round,
+						details: displayDetails,
+						elapsedMs: round.elapsedMs,
+					},
 				},
 			],
 		};
@@ -394,9 +418,16 @@ function settleRound(
 	// 而不是只收到一条投给执行模型的隐藏反馈。
 	const failCard: ReviewEffect = {
 		kind: "send_card",
-		card: { kind: "fail", round: active.round, details, advisor: null },
+		card: {
+			kind: "fail",
+			round: active.round,
+			details: displayDetails,
+			advisor: null,
+			elapsedMs: Math.max(0, now - state.roundStartedAt),
+			totalElapsedMs,
+		},
 	};
-	const pending: PendingRound = { round: active.round, reviewers: settled, details };
+	const pending: PendingRound = { round: active.round, reviewers: settled, details: feedbackDetails };
 	if (consecutiveFailures >= limits.advisorAfterFailures)
 		return {
 			state: { ...base, phase: "needs_fix", pending, consecutiveFailures },
@@ -407,9 +438,11 @@ function settleRound(
 					card: {
 						kind: "fail",
 						round: active.round,
-						details,
+						details: displayDetails,
 						advisor: null,
 						awaitingAdvisor: true,
+						elapsedMs: Math.max(0, now - state.roundStartedAt),
+						totalElapsedMs,
 					},
 				},
 				{ kind: "advance" },
@@ -420,11 +453,11 @@ function settleRound(
 			...base,
 			phase: "awaiting_fix",
 			pending: null,
-			repair: { details, advisor: null, status: "pending" },
+			repair: { details: feedbackDetails, advisor: null, status: "pending" },
 			consecutiveFailures,
 			history: [
 				...state.history,
-				roundRecord(active.round, "failed", details, settled, undefined, state.roundStartedAt, now),
+				roundRecord(active.round, "failed", archiveDetails, settled, undefined, state.roundStartedAt, now),
 			],
 		},
 		effects: [failCard, { kind: "advance" }],
@@ -434,11 +467,13 @@ function settleRound(
 function onAdvisorSettled(
 	state: ReviewState,
 	event: Extract<ReviewEvent, { type: "ADVISOR_SETTLED" }>,
+	limits: ReviewLimits,
 	now: number,
 ): ReduceResult {
 	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
 	const pending = state.pending;
 	const advisor = event.result;
+	const displayDetails = aggregateDetails(pending.reviewers, limits.language ?? "zh");
 	if (advisor.verdict === "stop") {
 		const round = roundRecord(pending.round, "stopped", advisor.advice, pending.reviewers, advisor, state.roundStartedAt, now);
 		return {
@@ -446,7 +481,15 @@ function onAdvisorSettled(
 			effects: [
 				{
 					kind: "send_card",
-					card: { kind: "stop", reason: "advisor", round: pending.round, details: advisor.advice, advisor },
+					card: {
+						kind: "stop",
+						reason: "advisor",
+						round: pending.round,
+						details: displayDetails || advisor.advice,
+						advisor,
+						elapsedMs: round.elapsedMs,
+						totalElapsedMs: Math.max(0, now - state.startedAt),
+					},
 				},
 			],
 		};
@@ -461,14 +504,36 @@ function onAdvisorSettled(
 			history: [...state.history, round],
 			updatedAt: now,
 		},
-		// 仲裁完成后补卡并经统一 barrier 投反馈。
+		// 失败卡已在咨询前发出；咨询完成只补 pi-flow 的中性顾问建议卡。
 		effects: [
-			{
-				kind: "send_card",
-				card: { kind: "fail", round: pending.round, details: pending.details, advisor },
-			},
+			{ kind: "send_card", card: { kind: "advisor", advisor } },
 			{ kind: "advance" },
 		],
+	};
+}
+
+function onAdvisorSkipped(state: ReviewState, now: number): ReduceResult {
+	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
+	const pending = state.pending;
+	const round = roundRecord(
+		pending.round,
+		"failed",
+		pending.details,
+		pending.reviewers,
+		undefined,
+		state.roundStartedAt,
+		now,
+	);
+	return {
+		state: {
+			...state,
+			phase: "awaiting_fix",
+			pending: null,
+			repair: { details: pending.details, advisor: null, status: "pending" },
+			history: [...state.history, round],
+			updatedAt: now,
+		},
+		effects: [{ kind: "advance" }],
 	};
 }
 
@@ -496,6 +561,33 @@ function onCancel(
 			updatedAt: now,
 		},
 		effects: [{ kind: "send_card", card: { kind: "cancel", round: state.round, reason } }],
+	};
+}
+
+function onInfrastructureError(
+	state: ReviewState,
+	details: string,
+	now: number,
+): ReduceResult {
+	if (state.phase === "idle" || state.phase === "settled") return { state, effects: [] };
+	const message = details.trim() || "review infrastructure unavailable";
+	const reviewers = state.active?.reviewers.flatMap((item) => item.result ? [item.result] : [])
+		?? state.pending?.reviewers
+		?? [];
+	const round = state.round > 0
+		? roundRecord(state.round, "error", message, reviewers, undefined, state.roundStartedAt, now)
+		: undefined;
+	return {
+		state: {
+			...state,
+			phase: "settled",
+			active: null,
+			pending: null,
+			repair: null,
+			history: round ? [...state.history, round] : state.history,
+			updatedAt: now,
+		},
+		effects: [{ kind: "send_card", card: { kind: "error", message } }],
 	};
 }
 
@@ -551,27 +643,154 @@ function beginRound(
 	};
 }
 
-/** 聚合多审查者结论：任一 FAIL 即整轮未通过；全 error 为基础设施错误；其余按 pass 收口。
- * 逐项按自身状态打标签（pass 轮里 error 的项标 ERROR，不标 PASS）。 */
-function aggregate(reviewers: ReviewerResult[]): { result: "passed" | "failed" | "error"; details: string } {
+/** 展示保留每个模型分节；修复反馈只携带 FAIL 票，归档保留全部原文。 */
+function aggregate(
+	reviewers: ReviewerResult[],
+	language: "zh" | "en",
+): {
+	result: "passed" | "failed" | "error";
+	displayDetails: string;
+	feedbackDetails: string;
+	archiveDetails: string;
+	summary: string;
+} {
 	const failed = reviewers.filter((item) => item.status === "failed");
 	const errors = reviewers.filter((item) => item.status === "error");
-	// 多数审查者缺席时无论剩下那票是 PASS 还是 FAIL 都不算数：
-	// 拿单票宣告通过是假成功，拿单票驱动自动修复同样缺乏对抗交叉。
-	const completed = reviewers.length - errors.length;
-	if (completed * 2 <= reviewers.length)
-		return { result: "error", details: aggregateDetails(reviewers) };
-	if (failed.length > 0) return { result: "failed", details: aggregateDetails(reviewers) };
-	return { result: "passed", details: aggregateDetails(reviewers) };
+	const archiveDetails = aggregateDetails(reviewers, language);
+	const fatalErrors = errors.filter((item) => !isFormatError(item.details));
+	// 只忽略明确的格式错误票；任何真实基础设施错误都阻止形成质量结论，
+	// 即使同轮已有 FAIL，也不能把未完整形成的审查误报为 Review Failed。
+	if (fatalErrors.length > 0)
+		return {
+			result: "error",
+			displayDetails: aggregateDetails(fatalErrors, language),
+			feedbackDetails: "",
+			archiveDetails,
+			summary: "",
+		};
+	if (failed.length > 0)
+		return {
+			result: "failed",
+			displayDetails: archiveDetails,
+			feedbackDetails: aggregateDetails(failed, language),
+			archiveDetails,
+			summary: "",
+		};
+	const passed = reviewers.filter((item) => item.status === "passed");
+	if (passed.length === 0)
+		return {
+			result: "error",
+			displayDetails: aggregateDetails(errors, language),
+			feedbackDetails: "",
+			archiveDetails,
+			summary: "",
+		};
+	return {
+		result: "passed",
+		displayDetails: archiveDetails,
+		feedbackDetails: "",
+		archiveDetails,
+		summary: aggregatePassSummary(passed, language),
+	};
 }
 
-function aggregateDetails(reviewers: ReviewerResult[]): string {
+function isFormatError(details: string) {
+	return details.startsWith("审查输出格式无效") || details.startsWith("review output format invalid");
+}
+
+function aggregateDetails(reviewers: ReviewerResult[], language: "zh" | "en"): string {
 	return reviewers
-		.map((item) => {
-			const label = item.status === "failed" ? "FAIL" : item.status === "error" ? "ERROR" : "PASS";
-			return `${label} · ${item.model}\n${item.details.trim()}`;
-		})
+		.map((item) => `${modelLabel(item, language)}\n${item.details.trim()}`)
 		.join("\n\n");
+}
+
+function aggregatePassSummary(reviewers: ReviewerResult[], language: "zh" | "en") {
+	const fallback = language === "en" ? "Quality check passed." : "质检通过。";
+	if (reviewers.length === 1) {
+		const reviewer = reviewers[0];
+		const body = passBody(reviewer?.summary ?? "") || fallback;
+		const suggestions = splitSuggestions(reviewer?.details ?? "").suggestions;
+		if (suggestions.length === 0) return body;
+		return [
+			body,
+			"",
+			language === "en" ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
+			...suggestions.map((item) => `- ${item}`),
+		].join("\n");
+	}
+	const parts = reviewers.map((item) => ({
+		body: item.summary,
+		suggestions: splitSuggestions(item.details).suggestions,
+	}));
+	const lines = parts.map((part, index) =>
+		`• ${shortModel(reviewers[index]?.model ?? "")}${language === "en" ? ": " : "："}${passBody(part.body) || fallback}`,
+	);
+	const suggestions = [...new Set(parts.flatMap((part) => part.suggestions))];
+	if (suggestions.length === 0) return lines.join("\n");
+	return [
+		...lines,
+		"",
+		language === "en" ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
+		...suggestions.map((item) => `- ${item}`),
+	].join("\n");
+}
+
+function splitSuggestions(summary: string) {
+	const lines = summary.split(/\r?\n/u);
+	const index = lines.findIndex((line) => /^##\s*(?:建议（非阻塞）|Suggestions \(non-blocking\))/iu.test(line.trim()));
+	if (index < 0) return { body: summary, suggestions: [] as string[] };
+	return {
+		body: lines.slice(0, index).join("\n"),
+		suggestions: lines.slice(index + 1).map((line) => line.replace(/^[-*]\s*/u, "").trim()).filter(Boolean),
+	};
+}
+
+function passBody(summary: string) {
+	return summary.replace(/^(?:PASS\s*)/iu, "").trim();
+}
+
+function shortModel(model: string) {
+	return model.split("/").at(-1) || model;
+}
+
+function appendClosedFindings(
+	summary: string,
+	history: ReviewRound[],
+	beforeRound: number,
+	language: "zh" | "en",
+) {
+	const seen = new Set<string>();
+	const findings: { round: number; issue: string }[] = [];
+	for (const round of history) {
+		if (round.round >= beforeRound || round.result !== "failed") continue;
+		for (const line of round.details.split(/\r?\n/u)) {
+			const match = /^[-*+]\s*(?:问题|Issue)\s*[:：]\s*(.+)$/iu.exec(line.trim());
+			const issue = match?.[1]?.replace(/`([^`]+)`/gu, "$1").trim();
+			if (!issue) continue;
+			const key = issue.replace(/\s+/gu, "");
+			if (seen.has(key)) continue;
+			seen.add(key);
+			findings.push({ round: round.round, issue });
+		}
+	}
+	if (findings.length === 0) return summary;
+	const shown = findings.slice(0, 6);
+	const recap = [
+		language === "en" ? "Issues closed in this check:" : "本次收口的问题：",
+		...shown.map((finding) =>
+			`• ${finding.issue}${language === "en" ? ` (Round ${finding.round})` : `（第 ${finding.round} 轮）`}`,
+		),
+	];
+	if (findings.length > shown.length)
+		recap.push(language === "en"
+			? `…and ${findings.length - shown.length} more; see the quality report`
+			: `…另有 ${findings.length - shown.length} 项，详见质检报告`);
+	return `${summary}\n\n${recap.join("\n")}`;
+}
+
+function modelLabel(item: ReviewerResult, language: "zh" | "en") {
+	const model = item.model.split("/").at(-1) || item.model;
+	return `${language === "en" ? "Model" : "模型"} ${item.index + 1} · ${model}`;
 }
 
 function resolveRoundRecord(

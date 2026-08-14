@@ -48,8 +48,17 @@ describe("PASS/FAIL output contract", () => {
 		expect(verdictOf("PASS")).toBe("PASS");
 		expect(verdictOf("**FAIL**")).toBe("FAIL");
 		expect(verdictOf("__PASS__")).toBe("PASS");
+		expect(verdictOf("`FAIL`")).toBe("FAIL");
 		expect(verdictOf("  fail  ")).toBe("FAIL");
 		expect(verdictOf("maybe")).toBeUndefined();
+	});
+
+	test("PASS whose only pre-evidence line is the suggestions heading is a contract violation", async () => {
+		await loadAll();
+		// 曾让 summary=undefined 流进多模型汇总对 undefined 调 replace，审查循环悬挂到超时。
+		const result = parseReview("PASS\n## 建议（非阻塞）\n证据：文件=a.ts；命令=bun test", "zh");
+		expect(result.status).toBe("error");
+		expect(result.details).toContain("缺少摘要行");
 	});
 
 	test("PASS requires summary + evidence anchor line with files and commands", async () => {
@@ -107,10 +116,59 @@ describe("advisor verdict parsing", () => {
 		expect(parseAdvisor("**stop**", "zh").verdict).toBe("stop");
 	});
 
-	test("unparseable advisor output falls back to continue (never kills the loop)", async () => {
+	test("accepts an unambiguous verdict wrapped by markdown or a verdict label", async () => {
 		await loadAll();
-		const result = parseAdvisor("我不确定\n随便", "zh");
-		expect(result.verdict).toBe("continue");
+		expect(parseAdvisor("```text\nstop\n别修了\n```", "zh")).toEqual({
+			verdict: "stop",
+			advice: "别修了",
+		});
+		expect(parseAdvisor("裁决：narrow\n只修阻塞项", "zh")).toEqual({
+			verdict: "narrow",
+			advice: "只修阻塞项",
+		});
+		expect(parseAdvisor("Verdict: continue\nkeep fixing", "en")).toEqual({
+			verdict: "continue",
+			advice: "keep fixing",
+		});
+		// 提示词里裁决词带反引号展示，模型照抄是真实发生过的解析失败根因。
+		expect(parseAdvisor("`stop`\n别修了", "zh")).toEqual({
+			verdict: "stop",
+			advice: "别修了",
+		});
+		expect(parseAdvisor("裁决：`narrow`\n只修阻塞项", "zh").verdict).toBe("narrow");
+	});
+
+	test("ambiguous or unparseable output falls back to continue", async () => {
+		await loadAll();
+		for (const output of [
+			"我不确定\n随便",
+			"stop or continue",
+			"stop / narrow",
+			"Verdict: stop or continue",
+			"stop, but continue fixing",
+		]) {
+			const result = parseAdvisor(output, "zh");
+			expect(`${output}:${result.verdict}`).toBe(`${output}:continue`);
+			expect(result.advice).toContain("无法解析");
+		}
+	});
+
+	test("advisor subprocess failure is infrastructure error, not continue", async () => {
+		const { runAdvisor } = (await loadFirecodeModule("review/advisor.js")) as {
+			runAdvisor: (options: Record<string, unknown>) => Promise<unknown>;
+		};
+		await expect(runAdvisor({
+			config: {
+				command: "/definitely/missing/firecode-reviewer",
+				model: "p/m",
+				thinking: "low",
+				tools: [],
+				timeoutMs: 1_000,
+			},
+			prompt: "x",
+			cwd: process.cwd(),
+			language: "zh",
+		})).rejects.toThrow("顾问子进程不可用");
 	});
 });
 
@@ -338,10 +396,10 @@ describe("feature switch types", () => {
 		expect(module.loadConfig().problems.join()).toContain("features.review 必须是 true 或 false");
 	});
 
-	test("boolean switches produce no problem", async () => {
+	test("boolean switches are valid and review does not constrain Master", async () => {
 		const module = (await loadFirecodeModule("config.js", {
 			configJsonc: `{ "features": { "review": false } }`,
 		})) as { loadConfig: () => { problems: string[] } };
-		expect(module.loadConfig().problems.filter((item) => item.startsWith("features"))).toEqual([]);
+		expect(module.loadConfig().problems).toEqual([]);
 	});
 });

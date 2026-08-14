@@ -4,6 +4,7 @@
  * 只读 executor 传入的快照函数，自身不持状态；动画由组件内部计时器驱动，
  * dispose 时清理。审查看不见就等于坏了，这一层是可用性的主体。
  */
+import { basename } from "node:path";
 import {
 	CustomEditor,
 	type ExtensionContext,
@@ -15,20 +16,32 @@ import {
 	type EditorTheme,
 	matchesKey,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { clip, formatDuration } from "../format.js";
+import { clip } from "../format.js";
 import type { Language } from "../config.js";
-import type { ReviewerProgress } from "./progress.js";
+import {
+	FLAME_FRAME_COUNT,
+	flameFrameLines,
+	flameFrameWidth,
+} from "./flame-frames.js";
+import type { ProgressTool, ReviewerProgress } from "./progress.js";
 import type { Phase } from "./state.js";
 
 export const DETAILS_SHORTCUT = "alt+s";
 const WIDGET_KEY = "fire-review";
-const FRAME_MS = 120;
+const FRAME_MS = 100;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const MAX_LABEL_WIDTH = 18;
+const REVIEW_COLOR: readonly [number, number, number] = [255, 153, 102];
+const FLAME_MARGIN_MIN = 6;
+const FLAME_GAP_MIN = 8;
+const FLAME_GAP_IDEAL = 16;
+const MONITOR_SHORTCUT_ESCAPES = new Set(["\u001bs", "\u001bS"]);
+const MONITOR_SHORTCUT_COMPOSED = new Set(["ß", "Í"]);
 /** 详情窗打开期间屏蔽全局 esc：否则一次 esc 会同时关窗并取消审查。 */
 let detailsOpen = false;
+let reviewTitleActive = false;
 
 /** 活动条渲染所需的一切；executor 每次状态变化后重新提供。 */
 export interface ActivityView {
@@ -36,14 +49,19 @@ export interface ActivityView {
 	round: number;
 	focus: string;
 	roundStartedAt: number;
+	progressStartedAt?: number;
 	reviewers: readonly ReviewerProgress[];
 	advisorRunning: boolean;
+	consecutiveFailures?: number;
+	cwd?: string;
 	language: Language;
 }
 
 type ViewSource = () => ActivityView | undefined;
 
 export function showActivity(ctx: ExtensionContext, view: ViewSource): void {
+	if (typeof ctx.ui.setWorkingVisible === "function") ctx.ui.setWorkingVisible(false);
+	setReviewTitle(ctx, view());
 	if (typeof ctx.ui.setWidget !== "function") return;
 	ctx.ui.setWidget(
 		WIDGET_KEY,
@@ -54,6 +72,8 @@ export function showActivity(ctx: ExtensionContext, view: ViewSource): void {
 }
 
 export function hideActivity(ctx: ExtensionContext): void {
+	if (typeof ctx.ui.setWorkingVisible === "function") ctx.ui.setWorkingVisible(true);
+	restoreReviewTitle(ctx);
 	if (typeof ctx.ui.setWidget === "function")
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 }
@@ -105,20 +125,23 @@ class ReviewEditor extends CustomEditor {
 
 	override handleInput(data: string): void {
 		if (detailsOpen) return;
-		if (matchesKey(data, DETAILS_SHORTCUT)) {
+		if (matchesDetailsShortcut(data)) {
 			this.details();
 			return;
 		}
-		if (this.keys.matches(data, "app.interrupt")) {
+		if (
+			this.keys.matches(data, "app.interrupt") ||
+			this.keys.matches(data, "app.clear")
+		) {
 			this.cancel();
 			return;
 		}
 		// 审查期间不接受任何其他输入：插话会污染本轮审查的会话证据。
 	}
 
-	override render(width: number): string[] {
-		const language = this.view()?.language ?? "zh";
-		return [clip(lockedText(language), Math.max(8, width))];
+	override render(_width: number): string[] {
+		// pi-flow 交互：质检期间输入区完全隐藏，不额外插入一行提示。
+		return [];
 	}
 }
 
@@ -132,7 +155,7 @@ export async function openDetails(
 		await ctx.ui.custom<void>(
 			(tui, theme, keybindings, done) =>
 				new DetailsOverlay(view, tui, theme, keybindings, done),
-			{ overlay: true, overlayOptions: { width: "72%", maxHeight: "60%", anchor: "center" } },
+			{ overlay: true, overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" } },
 		);
 	} finally {
 		detailsOpen = false;
@@ -178,56 +201,60 @@ class ActivityBar extends Animated {
 	render(width: number): string[] {
 		const view = this.view();
 		if (!view) return [];
-		const safeWidth = Math.max(8, width);
-		const labelWidth = Math.min(
-			MAX_LABEL_WIDTH,
-			Math.max(...view.reviewers.map((reviewer) => reviewer.label.length), 6),
+		const safeWidth = Math.max(1, width);
+		const border = reviewColor("─".repeat(safeWidth));
+		const content = this.contentRows(view);
+		const body = safeWidth >= 60
+			? this.renderFlameBody(content, safeWidth)
+			: content.map((line) => centerLine(line, safeWidth));
+		return [border, ...body, border];
+	}
+
+	private contentRows(view: ActivityView): string[] {
+		const rows = ["", boldText(this.theme.fg("muted", activityTitle(view)))];
+		const details = activityRows(view, this.spinner());
+		if (details.length > 0) rows.push("", ...details.map((row) => this.theme.fg("muted", row)));
+		const hint = activityHint(view);
+		if (hint) rows.push("", this.theme.fg("dim", hint));
+		rows.push("");
+		return rows;
+	}
+
+	private renderFlameBody(contentRows: string[], width: number) {
+		const flameHeight = Math.max(4, contentRows.length);
+		const rawFlame = flameFrameLines(flameHeight, this.frame % FLAME_FRAME_COUNT);
+		const flameWidth = flameFrameWidth(flameHeight);
+		const contentWidth = Math.min(
+			Math.max(1, ...contentRows.map((row) => visibleWidth(row))),
+			Math.max(1, width - FLAME_MARGIN_MIN * 2 - FLAME_GAP_MIN - flameWidth),
 		);
-		return [
-			this.heading(view, safeWidth),
-			...view.reviewers.map((reviewer) => this.row(reviewer, safeWidth, labelWidth)),
-			...this.advisorRow(view, safeWidth, labelWidth),
-		];
-	}
-
-	private heading(view: ActivityView, width: number) {
-		const elapsed = view.roundStartedAt
-			? ` · ${formatDuration(Date.now() - view.roundStartedAt)}`
-			: "";
-		const title = `${headingText(view, view.language)}${elapsed}`;
-		const focus = view.focus ? ` · ${view.focus}` : "";
-		return this.theme.fg("accent", clip(`${title}${focus}`, width));
-	}
-
-	private row(
-		reviewer: ReviewerProgress,
-		width: number,
-		labelWidth: number,
-	) {
-		const mark =
-			reviewer.status === "running"
-				? this.theme.fg("accent", this.spinner())
-				: this.theme.fg(statusColor(reviewer.status), statusMark(reviewer.status));
-		const label = padLabel(reviewer.label, labelWidth);
-		const calls =
-			reviewer.status === "running" && reviewer.toolCalls > 0
-				? ` · ${reviewer.toolCalls}`
-				: "";
-		const detail = clip(`${reviewer.action}${calls}`, Math.max(4, width - labelWidth - 6));
-		return `  ${mark} ${this.theme.fg("muted", label)}  ${this.theme.fg("dim", detail)}`;
-	}
-
-	private advisorRow(view: ActivityView, width: number, labelWidth: number) {
-		if (!view.advisorRunning) return [];
-		const label = padLabel(advisorText(view.language), labelWidth);
-		return [
-			`  ${this.theme.fg("warning", this.spinner())} ${this.theme.fg("muted", clip(label, width - 4))}`,
-		];
+		const gap = Math.max(
+			FLAME_GAP_MIN,
+			Math.min(
+				FLAME_GAP_IDEAL,
+				width - FLAME_MARGIN_MIN * 2 - contentWidth - flameWidth,
+			),
+		);
+		const group = contentWidth + gap + flameWidth;
+		const indent = " ".repeat(
+			Math.max(FLAME_MARGIN_MIN, Math.floor((width - group) / 2)),
+		);
+		const paddedRows = [...contentRows];
+		while (paddedRows.length < flameHeight) paddedRows.push("");
+		return rawFlame.map((line, index) => {
+			const row = truncateToWidth(paddedRows[index] ?? "", contentWidth, "…");
+			const padding = " ".repeat(
+				Math.max(0, contentWidth - visibleWidth(row) + gap),
+			);
+			const flame = `${truncateToWidth(line, flameWidth, "")}\x1b[0m`;
+			return `${indent}${row}${padding}${flame}`;
+		});
 	}
 }
 
 class DetailsOverlay extends Animated {
 	private closed = false;
+	private readonly scopePhase: Phase | undefined;
 
 	constructor(
 		private readonly view: ViewSource,
@@ -237,53 +264,100 @@ class DetailsOverlay extends Animated {
 		private readonly done: () => void,
 	) {
 		super(() => tui.requestRender());
+		this.scopePhase = view()?.phase;
 	}
 
 	render(width: number): string[] {
 		const view = this.view();
-		const safeWidth = Math.max(12, width);
-		const inner = safeWidth - 4;
+		if (view && view.phase !== this.scopePhase) {
+			queueMicrotask(() => this.close());
+			return [];
+		}
+		const safeWidth = Math.max(4, width);
+		const inner = safeWidth - 2;
 		const language = view?.language ?? "zh";
-		const body: string[] = [];
-		if (!view) body.push(this.theme.fg("dim", detailsEmptyText(language)));
-		else {
-			body.push(this.theme.fg("accent", clip(headingText(view, language), inner)));
-			for (const reviewer of view.reviewers) {
-				body.push("");
-				body.push(
-					`${this.theme.fg(statusColor(reviewer.status), statusMark(reviewer.status))} ${this.theme.fg(
-						"muted",
-						clip(reviewerSummary(reviewer, language), inner - 2),
-					)}`,
+		const lines = [this.border("╭", "╮", inner)];
+		if (!view) {
+			queueMicrotask(() => this.close());
+			return [];
+		} else {
+			lines.push(
+				this.row(
+					alignRight(
+						this.theme.fg("toolTitle", monitorTitle(view)),
+						this.theme.fg("dim", `⏱ ${monitorElapsed((view.progressStartedAt ?? view.roundStartedAt) ? Date.now() - (view.progressStartedAt ?? view.roundStartedAt) : 0)}`),
+						inner,
+					),
+					inner,
+				),
+				this.border("├", "┤", inner),
+			);
+			const terminal = (this.tui as TUI & { terminal?: { columns?: number; rows?: number } }).terminal;
+			const compact = (terminal?.columns ?? safeWidth) < 70;
+			let packed = false;
+			let agentRows = view.reviewers.map((reviewer) =>
+				monitorAgentRows(
+					reviewer,
+					this.spinner(),
+					inner,
+					language,
+					compact,
+					this.theme,
+					view.cwd ?? "",
+					view.phase === "needs_fix" ? "A" : "M",
+				),
+			);
+			const limit = terminal?.rows ? Math.max(1, Math.floor(terminal.rows * 0.7) - 4) : Infinity;
+			const rowCount = () =>
+				agentRows.reduce((sum, rows) => sum + rows.length, 0) +
+				(compact ? 0 : Math.max(0, agentRows.length - 1));
+			while (rowCount() > limit) {
+				const rows = agentRows.find((candidate) => candidate.length > 2);
+				if (!rows) break;
+				rows.pop();
+			}
+			if (rowCount() > limit) {
+				const compactLines = view.reviewers.map((reviewer) =>
+					monitorAgentRows(
+						reviewer,
+						this.spinner(),
+						inner,
+						language,
+						true,
+						this.theme,
+						view.cwd ?? "",
+						view.phase === "needs_fix" ? "A" : "M",
+					)[0] ?? "",
 				);
-				const trail = reviewer.trail.slice(-8);
-				if (trail.length === 0)
-					body.push(this.theme.fg("dim", `  ${detailsEmptyText(language)}`));
-				for (const item of trail)
-					body.push(this.theme.fg("dim", clip(`  ${item}`, inner)));
+				agentRows = compactLines.length > limit
+					? packMonitorLines(compactLines, limit, inner)
+					: compactLines.map((line) => [line]);
+				packed = true;
+			}
+			for (const [index, rows] of agentRows.entries()) {
+				if (index > 0 && !compact && !packed) lines.push(this.row("", inner));
+				for (const line of rows) lines.push(this.row(line, inner));
 			}
 		}
-		body.push("");
-		body.push(this.theme.fg("dim", clip(detailsHintText(language), inner)));
-		// 自带边框与背景填充：overlay 不提供底色，不填就会与底层聊天内容糊在一起。
-		const line = (left: string, fill: string, right: string) =>
-			this.theme.fg("borderMuted", `${left}${fill.repeat(Math.max(0, safeWidth - 2))}${right}`);
-		return [
-			line("╭", "─", "╮"),
-			...body.map((row) => this.framed(row, safeWidth)),
-			line("╰", "─", "╯"),
-		];
+		lines.push(
+			this.row(centerLine(this.theme.fg("dim", detailsHintText(language)), inner), inner),
+			this.border("╰", "╯", inner),
+		);
+		return lines;
 	}
 
-	private framed(row: string, width: number) {
-		const edge = this.theme.fg("borderMuted", "│");
-		const content = padVisible(row, width - 4);
-		return `${edge} ${content} ${edge}`;
+	private border(left: string, right: string, inner: number) {
+		return this.theme.fg("border", `${left}${"─".repeat(inner)}${right}`);
+	}
+
+	private row(content: string, inner: number) {
+		const clipped = truncateToWidth(content, inner, "…");
+		return `${this.theme.fg("border", "│")}${padVisible(clipped, inner)}${this.theme.fg("border", "│")}`;
 	}
 
 	handleInput(data: string): void {
-		// 悬浮窗内不接受文本输入：详情快捷键与中断键都用来关闭。
-		if (data === DETAILS_ESCAPE || this.keybindings.matches(data, "app.interrupt"))
+		// 与 pi-flow monitor 一致：Alt+S 或 Esc 关闭。
+		if (matchesDetailsShortcut(data) || this.keybindings.matches(data, "app.interrupt"))
 			this.close();
 	}
 
@@ -298,69 +372,256 @@ class DetailsOverlay extends Animated {
 	}
 }
 
-const DETAILS_ESCAPE = "\x1b";
-
 // ---- 文案与样式 ----
 
-function headingText(view: ActivityView, language: Language) {
-	if (view.phase === "queued")
-		return language === "en" ? "Review queued" : "审查排队中";
+function monitorTitle(view: ActivityView) {
 	if (view.phase === "needs_fix")
-		return language === "en"
-			? `Advisor · round ${view.round}`
-			: `顾问仲裁 · 第 ${view.round} 轮`;
-	if (view.phase === "awaiting_fix")
-		return language === "en"
-			? `Awaiting fix · round ${view.round}`
-			: `等待修复 · 第 ${view.round} 轮`;
-	return language === "en"
-		? `Review · round ${view.round}`
-		: `审查 · 第 ${view.round} 轮`;
+		return view.language === "en" ? "Advisor consultation" : "顾问咨询";
+	return roundTitle(view.round, view.language === "en" ? "Quality check" : "质检", view.language);
 }
 
-function lockedText(language: Language) {
-	return language === "en"
-		? `Input paused during review · esc cancel · ${DETAILS_SHORTCUT} details`
-		: `审查期间暂停输入 · esc 取消 · ${DETAILS_SHORTCUT} 详情`;
+function monitorElapsed(milliseconds: number) {
+	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function monitorAgentRows(
+	reviewer: ReviewerProgress,
+	spinner: string,
+	width: number,
+	language: Language,
+	compact: boolean,
+	theme: Theme,
+	cwd: string,
+	keyPrefix: "M" | "A",
+) {
+	const current = reviewer.activeTools.at(-1);
+	const status = theme.fg(statusColor(reviewer.status), monitorGlyph(reviewer, spinner));
+	const key = theme.fg("accent", `${keyPrefix}${reviewer.index + 1}`);
+	const identity = `${status} ${key} ${theme.fg("text", reviewer.label)}`;
+	const baseMetrics = `${reviewer.toolCalls} calls · ${(reviewer.tokens / 1000).toFixed(1)}k tok`;
+	if (compact) {
+		const value = current
+			? `${toolLabel(current.tool, language)} ${displayToolArgs(current, cwd)}`.trim()
+			: reviewer.status === "running"
+				? (language === "en" ? "Thinking" : "思考中")
+				: reviewer.label;
+		const duration = current ? toolDuration(Date.now() - current.startedAt) : "";
+		const metrics = `${baseMetrics}${duration ? ` · ${duration}` : ""}`;
+		return [alignMonitorMetrics(`${status} ${key} ${value}`, metrics, width)];
+	}
+	const rows = [alignMonitorMetrics(identity, baseMetrics, width)];
+	if (current) rows.push(monitorToolLine(current, language, true, width, cwd));
+	else if (reviewer.status === "running")
+		rows.push(`▏ ${spinner} ${language === "en" ? "Thinking" : "思考中"}`);
+	for (const tool of [...reviewer.recentTools].reverse())
+		rows.push(monitorToolLine(tool, language, false, width, cwd));
+	return rows;
+}
+
+function packMonitorLines(lines: string[], limit: number, width: number): string[][] {
+	const columns = Math.ceil(lines.length / limit);
+	const separator = " │ ";
+	const columnWidth = Math.max(1, Math.floor((width - (columns - 1) * visibleWidth(separator)) / columns));
+	const rows: string[][] = [];
+	for (let offset = 0; offset < lines.length; offset += columns) {
+		const cells = lines.slice(offset, offset + columns).map((line) => {
+			const clipped = truncateToWidth(line, columnWidth, "…");
+			return padVisible(clipped, columnWidth);
+		});
+		rows.push([cells.join(separator)]);
+	}
+	return rows;
+}
+
+function alignMonitorMetrics(left: string, metrics: string, width: number) {
+	const metricsWidth = visibleWidth(metrics);
+	if (metricsWidth >= width) return truncateToWidth(metrics, width, "…");
+	const clipped = truncateToWidth(left, width - metricsWidth - 1, "…");
+	return `${clipped}${" ".repeat(Math.max(1, width - visibleWidth(clipped) - metricsWidth))}${metrics}`;
+}
+
+function monitorToolLine(
+	tool: ProgressTool,
+	language: Language,
+	current: boolean,
+	width: number,
+	cwd: string,
+) {
+	const duration = toolDuration((tool.endedAt ?? Date.now()) - tool.startedAt);
+	const marker = tool.isError ? "✗" : current ? "●" : " ";
+	const left = `▏ ${marker} ${toolLabel(tool.tool, language)} ${displayToolArgs(tool, cwd)}`.trimEnd();
+	return duration ? alignMonitorMetrics(left, duration, width) : left;
+}
+
+function displayToolArgs(tool: ProgressTool, cwd: string) {
+	const home = process.env.HOME ?? "";
+	if (tool.tool === "bash") {
+		const command = home ? tool.args.replaceAll(home, "~") : tool.args;
+		return `$ ${command || "…"}`;
+	}
+	if (!["read", "edit", "write"].includes(tool.tool)) return tool.args || "…";
+	if (cwd && tool.args.startsWith(`${cwd}/`)) return `./${tool.args.slice(cwd.length + 1)}`;
+	return home && tool.args.startsWith(`${home}/`) ? `~/${tool.args.slice(home.length + 1)}` : tool.args;
+}
+
+function toolLabel(tool: string, language: Language) {
+	if (language === "en") return tool;
+	if (tool === "read") return "读取";
+	if (tool === "bash") return "操作";
+	if (tool === "edit") return "修改";
+	if (tool === "write") return "写入";
+	return tool;
+}
+
+function toolDuration(milliseconds: number) {
+	if (milliseconds < 1000) return "";
+	if (milliseconds < 10_000)
+		return `${(Math.floor(milliseconds / 100) / 10).toFixed(1)}s`;
+	const seconds = Math.floor(milliseconds / 1000);
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function activityTitle(view: ActivityView) {
+	const { language } = view;
+	if (view.phase === "queued")
+		return language === "en" ? "💯 Running" : "💯 执行中";
+	if (view.phase === "needs_fix")
+		return language === "en" ? "🧭 Advisor consulting" : "🧭 顾问介入中";
+	const phase = view.phase === "awaiting_fix"
+		? language === "en" ? "Quality fix in progress" : "优化中"
+		: language === "en" ? "Quality check in progress" : "质检中";
+	return `💯 ${roundTitle(view.round, phase, language)}`;
+}
+
+function activityRows(view: ActivityView, spinner: string): string[] {
+	if (view.phase === "queued")
+		return [view.language === "en" ? "Runs quality checks automatically when done" : "完成后自动质检"];
+	if (view.phase === "awaiting_fix")
+		return [
+			view.language === "en"
+				? `Repairing Round ${view.round} quality feedback`
+				: `正在修复第 ${view.round} 轮质检反馈`,
+		];
+	if (view.phase === "needs_fix")
+		return [
+			view.language === "en"
+				? `Quality checks failed ${view.consecutiveFailures ?? 0} rounds in a row`
+				: `质检已连续 ${view.consecutiveFailures ?? 0} 轮未通过`,
+		];
+	return view.reviewers.map((reviewer) => reviewerActivityLine(reviewer, spinner, view.language));
+}
+
+function reviewerActivityLine(
+	reviewer: ReviewerProgress,
+	spinner: string,
+	language: Language,
+) {
+	if (reviewer.status === "passed") return `✅ ${reviewer.label}`;
+	if (reviewer.status === "failed") return `❌ ${reviewer.label}`;
+	if (reviewer.status === "error") return `⚠️ ${reviewer.label}`;
+	if (reviewer.toolCalls === 0) return reviewer.label;
+	return `${spinner} ${reviewer.label} · ${reviewer.action} · ${callsText(reviewer.toolCalls, language)}`;
+}
+
+function activityHint(view: ActivityView) {
+	if (view.phase === "awaiting_fix") return undefined;
+	if (view.phase === "queued")
+		return view.language === "en"
+			? "Esc/Ctrl+C cancel automatic quality check"
+			: "Esc/Ctrl+C 取消自动质检";
+	if (view.phase === "needs_fix")
+		return view.language === "en"
+			? "Esc/Ctrl+C skip consult · Alt+S details"
+			: "Esc/Ctrl+C 跳过咨询 · Alt+S 详情";
+	return view.language === "en"
+		? "Esc/Ctrl+C cancel · Alt+S details"
+		: "Esc/Ctrl+C 取消 · Alt+S 详情";
+}
+
+function roundTitle(round: number, title: string, language: Language) {
+	if (round <= 1) return title;
+	return language === "en" ? `Round ${round} ${title}` : `第 ${round} 轮${title}`;
 }
 
 function detailsHintText(language: Language) {
-	return language === "en" ? "esc close" : "esc 关闭";
+	return language === "en" ? "Alt+S close · Esc also works" : "Alt+S 关闭 · Esc 也可";
 }
 
-function detailsEmptyText(language: Language) {
-	return language === "en" ? "no tool calls yet" : "尚无工具调用";
+function callsText(calls: number, language: Language) {
+	return language === "en" ? `${calls} calls` : `${calls} 次调用`;
 }
 
-function advisorText(language: Language) {
-	return language === "en" ? "advisor" : "顾问";
-}
-
-function reviewerSummary(reviewer: ReviewerProgress, language: Language) {
-	const calls = language === "en"
-		? `${reviewer.toolCalls} calls`
-		: `${reviewer.toolCalls} 次调用`;
-	return `${reviewer.label} · ${reviewer.action} · ${calls}`;
-}
-
-function statusMark(status: ReviewerProgress["status"]) {
-	if (status === "passed") return "✓";
-	if (status === "failed") return "✗";
-	if (status === "error") return "!";
-	return "·";
+function monitorGlyph(reviewer: ReviewerProgress, spinner: string) {
+	if (reviewer.status === "passed") return "✓";
+	if (reviewer.status === "failed" || reviewer.status === "error") return "✗";
+	return reviewer.toolCalls > 0 ? "●" : spinner;
 }
 
 function statusColor(status: ReviewerProgress["status"]) {
 	if (status === "passed") return "success" as const;
-	if (status === "failed") return "error" as const;
-	if (status === "error") return "warning" as const;
-	return "muted" as const;
+	if (status === "failed" || status === "error") return "error" as const;
+	return "accent" as const;
 }
 
-function padLabel(text: string, width: number) {
-	return text.length > width
-		? `${text.slice(0, Math.max(1, width - 1))}…`
-		: text.padEnd(width);
+function matchesDetailsShortcut(data: string) {
+	return (
+		matchesKey(data, DETAILS_SHORTCUT) ||
+		MONITOR_SHORTCUT_ESCAPES.has(data) ||
+		MONITOR_SHORTCUT_COMPOSED.has(data)
+	);
+}
+
+function centerLine(line: string, width: number) {
+	if (width <= 0) return "";
+	const text = truncateToWidth(line, width, "…");
+	const padding = Math.max(0, width - visibleWidth(text));
+	const left = Math.floor(padding / 2);
+	return `${" ".repeat(left)}${text}${" ".repeat(padding - left)}`;
+}
+
+function alignRight(left: string, right: string, width: number) {
+	const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
+	return truncateToWidth(`${left}${" ".repeat(gap)}${right}`, width, "…");
+}
+
+function boldText(text: string) {
+	return `\x1b[1m${text}\x1b[22m`;
+}
+
+function reviewColor(text: string) {
+	const [red, green, blue] = REVIEW_COLOR;
+	return `\x1b[38;2;${red};${green};${blue}m${text}\x1b[39m`;
+}
+
+function setReviewTitle(ctx: ExtensionContext, view: ActivityView | undefined) {
+	if (!view || !ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
+	const manager = ctx.sessionManager as {
+		getSessionName?: () => unknown;
+		getCwd?: () => unknown;
+	};
+	const rawName = manager.getSessionName?.();
+	const rawCwd = manager.getCwd?.();
+	const who = typeof rawName === "string" && rawName
+		? rawName
+		: typeof rawCwd === "string" ? basename(rawCwd) : "";
+	const label = view.language === "en" ? "Reviewing" : "质检中";
+	reviewTitleActive = true;
+	ctx.ui.setTitle(`${label}${view.round > 0 ? ` R${view.round}` : ""}${who ? ` · ${who}` : ""}`);
+}
+
+function restoreReviewTitle(ctx: ExtensionContext) {
+	if (!reviewTitleActive || !ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
+	reviewTitleActive = false;
+	const manager = ctx.sessionManager as {
+		getSessionName?: () => unknown;
+		getCwd?: () => unknown;
+	};
+	const rawName = manager.getSessionName?.();
+	const rawCwd = manager.getCwd?.();
+	const name = typeof rawName === "string" && rawName ? rawName : undefined;
+	const dir = typeof rawCwd === "string" ? basename(rawCwd) : "";
+	ctx.ui.setTitle(name ? `π - ${name} - ${dir}` : `π - ${dir}`);
 }
 
 /** 按终端可见宽度补齐，CJK、emoji 与 ANSI 都由 TUI 的事实源处理。 */

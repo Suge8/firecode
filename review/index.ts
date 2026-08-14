@@ -55,6 +55,8 @@ import {
 
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 const STATUS_KEY = "fire-review";
+const OCCUPANCY_CHANNEL = "herdr:blocked";
+const OCCUPANCY_LABEL = "对抗审查进行中";
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
 const FEEDBACK_START_TIMEOUT_MS = 2_000;
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
@@ -81,6 +83,7 @@ interface Controller {
 	state: ReviewState;
 	signal: AbortController;
 	watchdog: ReturnType<typeof setTimeout> | undefined;
+	statusTimer?: ReturnType<typeof setInterval>;
 	/** 本 controller 上一次写入的凭证；null=本审查还没写过，undefined=冲突/失败后停写。 */
 	persistedStamp: CheckpointStamp | null | undefined;
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
@@ -89,12 +92,16 @@ interface Controller {
 	runningAction?: string;
 	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
 	actionPromise?: Promise<void>;
+	actionController?: AbortController;
 	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
 	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
 	progress: readonly ReviewerProgress[];
+	progressStartedAt?: number;
 	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
 	editorLocked?: boolean;
+	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
+	occupancyHeld?: boolean;
 }
 
 let controller: Controller | undefined;
@@ -130,6 +137,14 @@ export function registerReview(pi: ExtensionAPI, enabled = true): void {
 function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const checkpoint = readCheckpoint(ctx);
 	if (!checkpoint || !isActive(checkpoint)) return;
+	settleUnavailableCheckpoint(pi, ctx, checkpoint);
+}
+
+function settleUnavailableCheckpoint(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	checkpoint: ReviewState,
+): void {
 	try {
 		beginCheckpoint(pi, ctx, {
 			...checkpoint,
@@ -141,7 +156,7 @@ function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void
 		});
 	} catch (error) {
 		if (ctx.hasUI)
-			ctx.ui.notify(`fire-review 关闭后无法收口旧 checkpoint：${errorText(error)}`, "error");
+			ctx.ui.notify(`fire-review 无法收口旧 checkpoint：${errorText(error)}`, "error");
 	}
 }
 
@@ -161,8 +176,9 @@ function dispatch(pi: ExtensionAPI, event: ReviewEvent): Promise<void> {
 			// 持久化失败不能当成功继续：否则会拿不一致的状态去起子进程、投反馈，
 			// 重启后又从旧 checkpoint 恢复，重现幽灵审查与重复反馈。
 			const persisted = persist(pi, state);
-			syncUi();
 			if (!persisted) return;
+			syncOccupancy(controller);
+			syncUi();
 		}
 		await runEffects(effects);
 	});
@@ -218,6 +234,7 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 	return {
 		maxRounds: config.maxRounds,
 		advisorAfterFailures: config.advisorAfterFailures,
+		language: config.language,
 		reviewers: config.reviewers.map((item) => ({
 			model: item.model,
 			thinking: item.thinking,
@@ -258,6 +275,11 @@ async function handleCommand(
 	// 旧审查的看门狗必须在覆盖 controller 前停掉：它的回调读的是全局 controller，
 	// 否则旧超时到点时会把新一场审查中止。
 	clearWatchdog();
+	const command = parseCommand(args, config.language);
+	if ("error" in command) {
+		ctx.ui.notify(command.error, "error");
+		return;
+	}
 	controller = {
 		pi,
 		ctx,
@@ -270,15 +292,23 @@ async function handleCommand(
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
-	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier。
-	void dispatch(pi, { type: "START", focus: args.trim(), busy: true, generation: controller.state.generation });
+	armStatusTimer();
+	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier.
+	void dispatch(pi, {
+		type: "START",
+		focus: command.focus,
+		busy: true,
+	});
 }
 
 /** 重启 / 会话恢复：从 checkpoint 重建 controller 并续跑未完成的环节。
  * reload / new / resume / fork 是运行时替换（新 pi），先清掉旧 controller，
  * 再按新会话的 checkpoint 恢复；quit 之外不 settle，审查能在重启后继续。 */
 function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> | void {
-	if (controller && controller.pi !== pi) controller = undefined;
+	if (controller && controller.pi !== pi) {
+		setOccupancy(controller, false);
+		controller = undefined;
+	}
 	const checkpoint = readCheckpoint(ctx);
 	if (!checkpoint || !isActive(checkpoint)) {
 		if (controller && !isActive(controller.state)) controller = undefined;
@@ -288,6 +318,7 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<vo
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
 		if (ctx.hasUI) ctx.ui.notify(loaded.error, "error");
+		// 配置问题只阻止本次恢复；保留活动 checkpoint，修好配置并重启后可继续。
 		return;
 	}
 	const config = loaded.config;
@@ -304,6 +335,8 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<vo
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
+	armStatusTimer();
+	syncOccupancy(controller);
 	syncUi();
 	// 恢复只更新持久状态并提出推进请求；绝不在 session_start handler 内起任何工作。
 	return dispatch(pi, { type: "RECOVER" });
@@ -323,10 +356,9 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
 	// 宿主会 await 本 handler，因此先 abort 并等所有审查子进程真正退出，再允许模型 turn_start。
 	if (!active.actionPromise) return;
-	active.signal.abort();
+	active.actionController?.abort();
 	await active.actionPromise;
 	if (controller !== active || !isActive(active.state)) return;
-	active.signal = new AbortController();
 	active.runningAction = undefined;
 	active.actionPromise = undefined;
 }
@@ -358,8 +390,8 @@ function scheduleAfterAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): voi
 function requestAdvance(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const active = controller;
 	if (!active || active.pi !== pi) return;
-	const generation = active.state.generation;
-	void advanceWhenIdle(pi, ctx, generation).catch((error) => {
+	const runId = active.state.runId;
+	void advanceWhenIdle(pi, ctx, runId).catch((error) => {
 		notifyEffectFailure(error);
 		if (controller !== active) return;
 		active.signal.abort();
@@ -370,14 +402,14 @@ function requestAdvance(pi: ExtensionAPI, ctx: ExtensionContext): void {
 async function advanceWhenIdle(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	generation: string,
+	runId: string,
 ): Promise<void> {
 	const active = controller;
 	// 所有启动入口共享 idle 门；正确性另由 agent_start 的同步停审互锁保证。
 	if (
 		!active ||
 		active.pi !== pi ||
-		active.state.generation !== generation ||
+		active.state.runId !== runId ||
 		active.signal.signal.aborted ||
 		!ctx.isIdle() ||
 		ctx.hasPendingMessages()
@@ -411,9 +443,11 @@ async function advanceWhenIdle(
 function startAction(active: Controller, key: string, run: () => Promise<void>): void {
 	if (active.runningAction === key) return;
 	active.runningAction = key;
+	active.actionController = new AbortController();
 	const action = run().finally(() => {
 		if (active.actionPromise !== action) return;
 		active.actionPromise = undefined;
+		active.actionController = undefined;
 		active.runningAction = undefined;
 	});
 	active.actionPromise = action;
@@ -426,9 +460,13 @@ async function handleShutdown(
 ): Promise<void> {
 	const active = controller;
 	if (!active) return;
+	// 会话离开当前运行时就立即释放；reload 恢复会由新 controller 重新配对喊占用。
+	setOccupancy(active, false);
 	// 无论何种终止都先杀子进程并等 close；旧进程不得泄漏到新运行时。
 	active.signal.abort();
+	active.actionController?.abort();
 	clearWatchdog();
+	clearStatusTimer(active);
 	clearFeedbackStartTimer(active);
 	await active.actionPromise;
 	if (active.ctx !== ctx) active.ctx = ctx;
@@ -445,17 +483,43 @@ async function handleShutdown(
 function armWatchdog() {
 	if (!controller) return;
 	clearWatchdog();
+	const elapsed = controller.state.startedAt
+		? Math.max(0, Date.now() - controller.state.startedAt)
+		: 0;
+	const remaining = Math.max(0, overallTimeoutMs(controller.config) - elapsed);
+	if (remaining === 0) {
+		controller.signal.abort();
+		void dispatch(controller.pi, { type: "TIMEOUT" });
+		return;
+	}
 	controller.watchdog = setTimeout(() => {
 		const active = controller;
 		if (!active || !isActive(active.state)) return;
 		active.signal.abort();
+		active.actionController?.abort();
 		dispatch(active.pi, { type: "TIMEOUT" });
-	}, overallTimeoutMs(controller.config));
+	}, remaining);
 	controller.watchdog.unref?.();
 }
 
 function clearWatchdog() {
 	if (controller?.watchdog) clearTimeout(controller.watchdog);
+}
+
+function armStatusTimer() {
+	const active = controller;
+	if (!active || active.statusTimer) return;
+	// 耗时显示本身就是定时业务语义；宿主没有可订阅的“整秒变化”事件。
+	active.statusTimer = setInterval(() => {
+		if (controller !== active || !isActive(active.state)) return;
+		renderStatus(active.ctx, active.state, active.config.language);
+	}, 1_000);
+	active.statusTimer.unref?.();
+}
+
+function clearStatusTimer(active: Controller) {
+	if (active.statusTimer) clearInterval(active.statusTimer);
+	active.statusTimer = undefined;
 }
 
 function clearFeedbackStartTimer(active: Controller): void {
@@ -478,9 +542,11 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		return true;
 	} catch (error) {
 		if (error instanceof CheckpointConflictError) {
-			// 持久化里出现不是本 controller 写的 generation：并发冲突，停止审查。
+			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+			setOccupancy(controller, false);
 			controller.persistedStamp = undefined;
 			controller.signal.abort();
+			controller.actionController?.abort();
 			controller.ctx.ui.notify(
 				controller.config.language === "en"
 					? "fire-review checkpoint conflict; review stopped."
@@ -491,8 +557,10 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 			return false;
 		}
 		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
+		setOccupancy(controller, false);
 		controller.persistedStamp = undefined;
 		controller.signal.abort();
+		controller.actionController?.abort();
 		if (controller.ctx.hasUI)
 			controller.ctx.ui.notify(
 				controller.config.language === "en"
@@ -519,6 +587,7 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		// 内存态也必须释放：只停子进程但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
 		clearWatchdog();
+		clearStatusTimer(controller);
 		clearFeedbackStartTimer(controller);
 		const uiCtx = controller.ctx;
 		const language = controller.config.language;
@@ -537,6 +606,29 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 
 function errorText(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function syncOccupancy(active: Controller): void {
+	setOccupancy(active, isActive(active.state));
+}
+
+function setOccupancy(active: Controller, held: boolean): void {
+	if (Boolean(active.occupancyHeld) === held) return;
+	active.occupancyHeld = held;
+	try {
+		active.pi.events.emit(OCCUPANCY_CHANNEL, {
+			active: held,
+			...(held ? { label: OCCUPANCY_LABEL } : {}),
+		});
+	} catch (error) {
+		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或子进程生命周期。
+		try {
+			if (active.ctx.hasUI)
+				active.ctx.ui.notify(`fire-review 无法同步 Herdr 占用状态：${errorText(error)}`, "warning");
+		} catch {
+			// 通知本身同样只是展示，不能反向打断审查。
+		}
+	}
 }
 
 /**
@@ -558,6 +650,7 @@ function syncUi(): void {
 		} else releaseEditor(active);
 		return;
 	}
+	clearStatusTimer(active);
 	hideActivity(active.ctx);
 	releaseEditor(active);
 }
@@ -577,8 +670,11 @@ function activityView(): ActivityView | undefined {
 		round: active.state.round,
 		focus: active.state.focus,
 		roundStartedAt: active.state.roundStartedAt,
+		progressStartedAt: active.progressStartedAt,
 		reviewers: active.progress,
 		advisorRunning: active.state.phase === "needs_fix",
+		consecutiveFailures: active.state.consecutiveFailures,
+		cwd: active.ctx.cwd,
 		language: active.config.language,
 	};
 }
@@ -591,7 +687,16 @@ function canCancelWithKey() {
 function cancelByUser() {
 	const active = controller;
 	if (!active) return;
+	if (active.state.phase === "needs_fix") {
+		// pi-flow 语义：顾问阶段的 Esc 只跳过本次咨询，不取消整场质检。
+		active.actionController?.abort();
+		void (active.actionPromise ?? Promise.resolve()).then(() =>
+			dispatch(active.pi, { type: "ADVISOR_SKIPPED" }),
+		);
+		return;
+	}
 	active.signal.abort();
+	active.actionController?.abort();
 	void dispatch(active.pi, { type: "CANCEL", reason: "user" });
 }
 
@@ -601,27 +706,46 @@ function renderStatus(
 	language: Language,
 ) {
 	if (!ctx.hasUI) return;
-	let text: string | undefined;
+	let prefix: string | undefined;
 	if (state.phase === "queued")
-		text = language === "en" ? "· Review queued" : "· 审查排队中";
-	else if (state.phase === "reviewing") {
-		const marks = state.active?.reviewers
-			.map((item) => {
-				if (item.status === "passed") return "✓";
-				if (item.status === "failed") return "✗";
-				if (item.status === "error") return "!";
-				return "…";
-			})
-			.join(" ");
-		text = language === "en"
-			? `◆ Review R${state.round} [${marks}]`
-			: `◆ 审查 R${state.round} [${marks}]`;
-	} else if (state.phase === "needs_fix")
-		text = language === "en" ? `◇ Advisor R${state.round}` : `◇ 顾问仲裁 R${state.round}`;
+		prefix = language === "en"
+			? "💯 quality/running · quality check when done"
+			: "💯 quality/执行中 · 完成后自动质检";
+	else if (state.phase === "reviewing")
+		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality check" : "质检", language)}`;
+	else if (state.phase === "needs_fix")
+		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality check" : "质检", language)}`;
 	else if (state.phase === "awaiting_fix")
-		text = language === "en" ? `· Fixing R${state.round}` : `· 修复中 R${state.round}`;
-	else text = undefined;
-	ctx.ui.setStatus(STATUS_KEY, text);
+		prefix = `💯 quality/${roundStatus(state.round, language === "en" ? "quality fix" : "优化中", language)}`;
+	if (!prefix) {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+		return;
+	}
+	const stepStartedAt = state.phase === "awaiting_fix"
+		? state.updatedAt
+		: state.roundStartedAt || state.startedAt;
+	const stepMs = stepStartedAt ? Date.now() - stepStartedAt : 0;
+	const totalMs = state.startedAt ? Date.now() - state.startedAt : 0;
+	const showTotal = state.round > 1 || state.history.some((round) => round.result === "failed");
+	const elapsed = showTotal
+		? `${flowDuration(stepMs)} / ${language === "en" ? "total" : "总"} ${flowDuration(totalMs)}`
+		: flowDuration(stepMs);
+	ctx.ui.setStatus(STATUS_KEY, `${prefix} · ${elapsed}`);
+}
+
+function flowDuration(milliseconds: number) {
+	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainder = seconds % 60;
+	if (minutes < 60) return remainder ? `${minutes}m${remainder}s` : `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	return `${hours}h${minutes % 60}m${remainder ? `${remainder}s` : ""}`;
+}
+
+function roundStatus(round: number, phase: string, language: Language) {
+	if (round <= 1) return phase;
+	return language === "en" ? `Round ${round} ${phase}` : `第 ${round} 轮${phase}`;
 }
 
 // ---- 副作用执行器 ----
@@ -660,6 +784,8 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 	const { state, config } = active;
 	if (!state.active) return;
 	const currentActive = state.active;
+	const actionSignal = active.actionController?.signal ?? active.signal.signal;
+	active.progressStartedAt = Date.now();
 	active.progress = initialProgress(
 		currentActive.reviewers.map((item) => ({ model: item.model })),
 		config.language,
@@ -681,6 +807,8 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 		history: state.history,
 		round: state.round,
 	});
+	// pi-flow 默认在审查启动时打开子代理监控；用户关闭后本轮不再自动重开。
+	void openDetails(active.ctx, activityView);
 	const tasks = currentActive.reviewers
 		.filter((reviewer) => reviewer.status === "running")
 		.map(async (reviewer) => {
@@ -691,7 +819,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 					prompt,
 					cwd: active.ctx.cwd,
 					language: config.language,
-					signal: active.signal.signal,
+					signal: actionSignal,
 					onEvent: (event) => {
 						if (controller !== active) return;
 						active.progress = applyProcessEvent(
@@ -709,10 +837,10 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						result.status,
 						config.language,
 					);
-				if (!active.signal.signal.aborted)
+				if (!actionSignal.aborted)
 					await dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
 			} catch (error) {
-				if (active.signal.signal.aborted) return;
+				if (actionSignal.aborted) return;
 				await dispatch(pi, {
 					type: "REVIEWER_SETTLED",
 					index: reviewer.index,
@@ -736,6 +864,10 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	const { state, config } = active;
 	if (!state.pending) return;
 	const pending = state.pending;
+	const actionSignal = active.actionController?.signal ?? active.signal.signal;
+	active.progressStartedAt = Date.now();
+	active.progress = initialProgress([{ model: config.advisor.model }], config.language);
+	void openDetails(active.ctx, activityView);
 	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {
 		language: config.language,
 		focus: state.focus,
@@ -749,18 +881,21 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 			prompt,
 			cwd: active.ctx.cwd,
 			language: config.language,
-			signal: active.signal.signal,
+			signal: actionSignal,
+			onEvent: (event) => {
+				if (controller !== active) return;
+				active.progress = applyProcessEvent(active.progress, 0, event, config.language);
+			},
 		});
-		if (!active.signal.signal.aborted)
+		if (controller === active)
+			active.progress = settleProgress(active.progress, 0, "passed", config.language);
+		if (!actionSignal.aborted)
 			await dispatch(pi, { type: "ADVISOR_SETTLED", result });
 	} catch (error) {
-		if (active.signal.signal.aborted) return;
+		if (actionSignal.aborted) return;
 		await dispatch(pi, {
-			type: "ADVISOR_SETTLED",
-			result: {
-				verdict: "continue",
-				advice: processErrorText("advisor", active.config.language, error),
-			},
+			type: "INFRASTRUCTURE_ERROR",
+			details: processErrorText("advisor", active.config.language, error),
 		});
 	}
 }
@@ -818,18 +953,24 @@ function deliverFeedbackNow(
 
 function sendCard(pi: ExtensionAPI, card: CardData) {
 	if (!controller) return;
+	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
+	if (card.kind === "cancel") {
+		if (card.reason === "user")
+			controller.ctx.ui.notify(
+				controller.config.language === "en"
+					? "⏸ Quality check cancelled\nStopped by user"
+					: "⏸ 质检已取消\n已按你的操作停止",
+				"info",
+			);
+		return;
+	}
 	// 宿主在 streaming 时会把无 options 的 sendMessage 当 steer 塞进当前模型回合。
 	// 卡片只是 UI 投影，绝不能因此唤醒或打断执行模型。
 	if (!controller.ctx.isIdle()) {
 		controller.pendingCards.push(card);
-		emitReviewSettlement(pi, card);
 		return;
 	}
-	try {
-		sendCardNow(pi, card);
-	} finally {
-		emitReviewSettlement(pi, card);
-	}
+	sendCardNow(pi, card);
 }
 
 function flushPendingCards(pi: ExtensionAPI): void {
@@ -856,19 +997,11 @@ function sendCardNow(pi: ExtensionAPI, card: CardData): void {
 	});
 }
 
-function emitReviewSettlement(pi: ExtensionAPI, card: CardData): void {
-	if (card.kind === "pass")
-		pi.events.emit("firecode:review-settled", {
-			passed: true,
-			details: card.details || card.summary,
-		});
-	else if (card.kind === "error")
-		pi.events.emit("firecode:review-settled", { passed: false, details: card.message });
-	else if (card.kind === "stop" || card.kind === "cancel" || card.kind === "timeout")
-		pi.events.emit("firecode:review-settled", {
-			passed: false,
-			details: "details" in card && card.details ? card.details : `review ${card.kind}: ${card.reason}`,
-		});
+function parseCommand(args: string, language: Language): { focus: string } | { error: string } {
+	const input = args.trim();
+	return input.startsWith("--")
+		? { error: language === "en" ? "Invalid fire-review arguments." : "fire-review 参数无效" }
+		: { focus: input };
 }
 
 /** 会话分支 entries（供证据组装）；本插件的卡与反馈消息不参与证据，避免自指。 */

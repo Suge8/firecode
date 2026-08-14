@@ -90,6 +90,9 @@ export function parseReviewOutput(text: string, language: Language): ParseOutcom
 		const issue = passIssue(body);
 		if (issue) return contractViolation(issue, language);
 		const summary = firstSummary(body);
+		// passIssue 只保证证据行前有行，那行可能是建议区标题；没有真摘要就是契约违规，
+		// 不能让 undefined 流进多模型汇总把循环撞死。
+		if (!summary) return contractViolation("PASS 缺少摘要行（证据行前必须有一行极简摘要）", language);
 		return { status: "passed", summary, details: body };
 	}
 	if (verdict === "FAIL") {
@@ -166,6 +169,8 @@ export function verdictOf(line: string): "PASS" | "FAIL" | undefined {
 		.trim()
 		.replace(/^\*{1,2}(.+?)\*{1,2}$/u, "$1")
 		.replace(/^__([^_]+)__$/u, "$1")
+		// 与 advisor 同模式：模型把判定词写成 `PASS` 时剔掉包裹的反引号，避免整票误判为格式错误。
+		.replace(/^`+(.+?)`+$/u, "$1")
 		.trim()
 		.toUpperCase();
 	return normalized === "PASS" || normalized === "FAIL" ? normalized : undefined;

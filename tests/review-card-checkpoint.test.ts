@@ -46,6 +46,7 @@ describe("result card payload", () => {
 			{ kind: "cancel", round: 1 },
 			{ kind: "timeout", round: 1 },
 			{ kind: "error", message: "err" },
+			{ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" } },
 		];
 		for (const card of cards) {
 			const built = buildCard(card as never, "zh");
@@ -55,43 +56,62 @@ describe("result card payload", () => {
 		}
 	});
 
+	test("advisor advice uses pi-flow's neutral compass card", async () => {
+		await loadAll();
+		const built = buildCard({ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" } }, "zh");
+		expect(built.details).toMatchObject({ title: "顾问建议", icon: "🧭", tone: "neutral" });
+		expect(built.details.lines).toEqual(["继续修复"]);
+	});
+
 	test("content is plain text facts; details carry the localized title and icon", async () => {
 		await loadAll();
 		const built = buildCard({ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 60000 }, "zh");
 		expect(built.content).not.toMatch(/\x1b\[/);
-		expect(built.details.title).toContain("审查通过");
-		expect(built.details.icon).toBe("✓");
+		expect(built.details.title).toBe("质检通过");
+		expect(built.details.icon).toBe("✅");
 		expect(built.details.lines.join("\n")).toContain("ok");
 	});
 
-	test("start card surfaces the focus and models without a redundant description", async () => {
+	test("queued and start cards match the pi-flow automatic quality-check copy", async () => {
 		await loadAll();
-		const built = buildCard({ kind: "start", round: 1, focus: "审 auth", models: ["p/sol"] }, "zh");
-		const lines = built.details.lines.join("\n");
-		expect(lines).toContain("审 auth");
-		expect(lines).toContain("sol");
-		expect(lines).not.toContain("审查到目前为止做完的事");
+		const queued = buildCard({ kind: "queued", focus: "" }, "zh");
+		const started = buildCard({ kind: "start", round: 1, focus: "", models: ["p/sol"] }, "zh");
+		expect(queued.details).toMatchObject({
+			title: "已开启自动质检",
+			icon: "💯",
+			lines: ["完成本次需求后自动进入质检循环"],
+		});
+		expect(started.details).toMatchObject({
+			title: "质检中",
+			icon: "💯",
+			lines: ["模型：sol"],
+		});
 	});
 
-	test("non-pass cards do not repeat their title state in the body", async () => {
+	test("result cards match pi-flow titles, icons, findings, and blocker copy", async () => {
 		await loadAll();
-		const cases = [
-			buildCard({ kind: "queued", focus: "" }, "zh"),
-			buildCard({ kind: "fail", round: 1, details: "FAIL", advisor: null }, "zh"),
-			buildCard({ kind: "stop", reason: "max_rounds", round: 1, details: "" }, "zh"),
-			buildCard({ kind: "timeout", round: 1 }, "zh"),
-			buildCard({ kind: "error", message: "network" }, "zh"),
-		];
-		expect(cases[0].details.lines).toEqual([]);
-		expect(cases[1].details.lines[0]).toBe("发现已交回修复。");
-		expect(cases[2].details.lines[0]).toBe("已达到最大轮数。");
-		expect(cases[3].details.lines).toEqual([]);
-		expect(cases[4].details.lines[0]).toBe("未产生有效发现。");
-		for (const built of cases)
-			expect(built.details.lines[0] ?? "").not.toContain(built.details.title.split(" · ")[0]);
+		const failed = buildCard({
+			kind: "fail",
+			round: 2,
+			details: "模型 1 · sol\n## 发现 1\n- 问题: x\n\n模型 2 · terra\n已核对",
+			advisor: null,
+			elapsedMs: 127_000,
+			totalElapsedMs: 300_000,
+		}, "zh");
+		const cancelled = buildCard({ kind: "cancel", round: 1, reason: "user" }, "zh");
+		const timeout = buildCard({ kind: "timeout", round: 1, reason: "timeout" }, "zh");
+		expect(failed.details.title).toBe("第 2 轮质检未通过");
+		expect(failed.details.icon).toBe("❌");
+		expect(failed.details.lines.join("\n")).toContain("模型 1 · sol");
+		expect(failed.details.lines).toContain("---");
+		expect(failed.details.lines).toContain("⏱ 用时：2m7s");
+		expect(failed.details.lines.join("\n")).not.toContain("/ 总");
+		expect(cancelled.details).toMatchObject({ title: "质检已取消", icon: "⏸" });
+		expect(timeout.details).toMatchObject({ title: "质检未完成", icon: "🛑" });
+		expect(timeout.details.lines).toContain("卡点：质检超时");
 	});
 
-	test("renderer removes markdown furniture from reviewer findings", async () => {
+	test("renderer formats headings and bullets like pi-flow result cards", async () => {
 		const card = (await loadFirecodeModule("review/card.js")) as {
 			buildCard: BuildCard;
 			registerCardRenderer: (pi: unknown) => void;
@@ -115,9 +135,8 @@ describe("result card payload", () => {
 		);
 		const output = component?.render(48).join("\n") ?? "";
 		expect(output).toContain("发现 1");
-		expect(output).toContain("• 问题: state.ts 有误");
+		expect(output).toContain("• 问题: `state.ts` 有误");
 		expect(output).not.toContain("##");
-		expect(output).not.toContain("`");
 	});
 
 	test("narrow cards never render beyond the terminal width", async () => {
@@ -145,9 +164,9 @@ describe("checkpoint schema", () => {
 	test("rejects version mismatch, unknown keys, and invalid phases (discard, no field-level compat)", async () => {
 		await loadAll();
 		const valid = {
-			version: 2,
+			version: 4,
 			seq: 1,
-			generation: "g",
+			runId: "g",
 			phase: "reviewing",
 			round: 1,
 			focus: "",
@@ -165,7 +184,7 @@ describe("checkpoint schema", () => {
 			updatedAt: 1,
 		};
 		expect(isValidCheckpoint(valid)).toBe(true);
-		expect(isValidCheckpoint({ ...valid, version: 1 })).toBe(false);
+		expect(isValidCheckpoint({ ...valid, version: 3 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, extra: 1 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, phase: "bogus" })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, active: null })).toBe(true);
@@ -193,7 +212,7 @@ describe("checkpoint schema", () => {
 		};
 		const start = state.reduce(
 			state.initialState("g"),
-			{ type: "START", focus: "", busy: false, generation: "g" },
+			{ type: "START", focus: "", busy: false },
 			limits,
 			1,
 		).state;
@@ -220,7 +239,7 @@ describe("checkpoint schema", () => {
 			"max_rounds": state.reduce(
 				state.reduce(
 					state.initialState("g2"),
-					{ type: "START", focus: "", busy: false, generation: "g2" },
+					{ type: "START", focus: "", busy: false },
 					singleRound,
 					1,
 				).state,
@@ -231,7 +250,7 @@ describe("checkpoint schema", () => {
 		};
 		for (const [label, terminal] of Object.entries(terminals)) {
 			expect(`${label}:${terminal.phase}`).toBe(`${label}:settled`);
-			expect(`${label}:${isValidCheckpoint({ version: 2, seq: 1, ...terminal })}`).toBe(`${label}:true`);
+			expect(`${label}:${isValidCheckpoint({ version: 4, seq: 1, ...terminal })}`).toBe(`${label}:true`);
 		}
 	});
 });

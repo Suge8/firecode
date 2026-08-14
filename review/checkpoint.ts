@@ -6,8 +6,8 @@
  *
  * 写入分两档：
  * - beginCheckpoint：新审查首次写入，无条件替换旧终态；
- * - writeCheckpoint：后续写入带 generation CAS——期望值由调用方（controller）记住的
- *   上一次写入值提供，出现不是自己写的 generation 才算冲突（CheckpointConflictError）。
+ * - writeCheckpoint：后续写入带 Run ID CAS——期望值由调用方（controller）记住的
+ *   上一次写入值提供，出现不是自己写的 Run ID 才算冲突（CheckpointConflictError）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
@@ -22,17 +22,17 @@ import type {
 } from "./state.js";
 
 export const CHECKPOINT_TYPE = "firecode-review-checkpoint";
-const VERSION = 2;
+const VERSION = 4;
 
-/** 写入凭证：同一场审查内 generation 不变，靠单调递增的 seq 识别陈旧写者。 */
+/** 写入凭证：同一场审查内 Run ID 不变，靠单调递增的 seq 识别陈旧写者。 */
 export interface CheckpointStamp {
-	generation: string;
+	runId: string;
 	seq: number;
 }
 
 export class CheckpointConflictError extends Error {
 	constructor() {
-		super("fire-review checkpoint generation 已失效");
+		super("fire-review checkpoint Run ID 已失效");
 		this.name = "CheckpointConflictError";
 	}
 }
@@ -133,7 +133,7 @@ const REPAIR_KEYS = keysOf({
 const CHECKPOINT_KEYS = keysOf({
 	version: true,
 	seq: true,
-	generation: true,
+	runId: true,
 	phase: true,
 	round: true,
 	focus: true,
@@ -257,7 +257,7 @@ export function isValidCheckpoint(value: unknown): boolean {
 	if (!isNonNegativeInt(value.seq) || value.seq < 1) return false;
 	return (
 		value.version === VERSION &&
-		isString(value.generation) &&
+		isString(value.runId) &&
 		oneOf(value.phase, PHASES) &&
 		isNonNegativeInt(value.round) &&
 		isString(value.focus) &&
@@ -276,7 +276,7 @@ export function isValidCheckpoint(value: unknown): boolean {
 function toCheckpoint(state: ReviewState) {
 	return {
 		version: VERSION,
-		generation: state.generation,
+		runId: state.runId,
 		phase: state.phase,
 		round: state.round,
 		focus: state.focus,
@@ -312,13 +312,12 @@ function latestEntry(ctx: CheckpointReadContext): Record<string, unknown> | unde
 	return undefined;
 }
 
-/** 读最近 checkpoint 的 generation，用于 CAS 期望值；无则为 null。 */
 /** 读最近一条 checkpoint 的写入凭证；无则 null。 */
 export function readStamp(ctx: CheckpointReadContext): CheckpointStamp | null {
 	const entry = latestEntry(ctx);
 	if (!entry) return null;
-	const data = entry as { generation: string; seq: number };
-	return { generation: data.generation, seq: data.seq };
+	const data = entry as { runId: string; seq: number };
+	return { runId: data.runId, seq: data.seq };
 }
 
 function appendCheckpoint(
@@ -329,10 +328,10 @@ function appendCheckpoint(
 	const data = { ...toCheckpoint(state), seq };
 	if (!isValidCheckpoint(data)) throw new Error("fire-review checkpoint 状态非法");
 	pi.appendEntry(CHECKPOINT_TYPE, data);
-	return { generation: state.generation, seq };
+	return { runId: state.runId, seq };
 }
 
-/** 新审查首次写入：无条件替换旧终态（不校验旧 generation）。 */
+/** 新审查首次写入：无条件替换旧终态（不校验旧 Run ID）。 */
 /** 新审查首写：无条件替换旧终态，返回本次写入凭证。 */
 export function beginCheckpoint(
 	pi: ExtensionAPI,
@@ -343,12 +342,8 @@ export function beginCheckpoint(
 }
 
 /**
- * 后续写入：expectedGeneration 必须是本 controller 上一次写入后记住的值。
- * 当前持久化出现别的 generation（非本 controller 所写）即并发冲突，抛 CheckpointConflictError。
- */
-/**
- * CAS 写入：持久化凭证必须与调用方记住的上一次完全一致。
- * 只比 generation 不够——同一场审查被两个运行时同时恢复时 generation 相同，
+ * 后续写入时当前持久化凭证必须与 controller 记住的上一次完全一致。
+ * 只比 Run ID 不够——同一场审查被两个运行时同时恢复时 Run ID 相同，
  * 靠 seq 才能识别出陈旧写者并拒绝静默覆盖。
  */
 export function writeCheckpoint(
@@ -360,7 +355,7 @@ export function writeCheckpoint(
 	const current = readStamp(ctx);
 	if (
 		!current ||
-		current.generation !== expected.generation ||
+		current.runId !== expected.runId ||
 		current.seq !== expected.seq
 	)
 		throw new CheckpointConflictError();
