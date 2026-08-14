@@ -222,9 +222,13 @@ export class HerdrWorkers {
 			}
 		}
 		this.store.dispatch({ type: "REMOVE_WORKER", name });
-		// 池已关闭或本启动被显式 stop 时不回写引用：停掉的东西不能以任何身份复活；
-		// 自然失败（未被中止）才恢复原休眠引用。
-		if (previous && !this.lifecycle.signal.aborted && !controller.signal.aborted)
+		// 回写策略按停止意图分流：自然失败与默认 stop 都恢复原休眠引用（契约：stop 保留
+		// Dormant）；forget 与池关闭不回写，清理完成后的状态必须保持空。
+		const reason = controller.signal.aborted
+			? (controller.signal.reason as { keepDormant?: boolean } | undefined)
+			: undefined;
+		const keep = !controller.signal.aborted || reason?.keepDormant === true;
+		if (previous && !this.lifecycle.signal.aborted && keep)
 			this.store.dispatch({ type: "UPSERT_WORKER", worker: previous });
 	}
 
@@ -283,10 +287,10 @@ export class HerdrWorkers {
 	}
 
 	async stop(workerName: string, forget = false): Promise<void> {
-		// 无条件中止该名字的在飞/排队任务：休眠分支也不能跳过，
-		// 否则排队中的休眠恢复会在 stop 之后照常启动。
+		// 无条件中止该名字的在飞/排队任务：休眠分支也不能跳过。
+		// 停止意图随 abort reason 传给清理路径：默认 stop 保留原休眠引用，forget 才删。
 		const pending = this.runs.get(workerName);
-		pending?.abort();
+		pending?.abort({ keepDormant: !forget });
 		this.runs.delete(workerName);
 		const existing = this.store.state.workers.find((candidate) => candidate.name === workerName);
 		if (!existing) {

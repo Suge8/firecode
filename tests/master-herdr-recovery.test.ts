@@ -554,6 +554,38 @@ test("a renamed dormant resume can be stopped by its old pool identity", async (
 	pool.shutdown();
 });
 
+test("default stop of an in-flight renamed resume keeps the dormant reference", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	const dormantRef = { name: "worker-1", model: "p/m", thinking: "medium" as const, status: "dormant" as const, sessionPath: "/tmp/worker.jsonl" };
+	store.dispatch({ type: "UPSERT_WORKER", worker: dormantRef });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const resume = pool.start(ctx, { name: "renamed", session: "worker-1", prompt: "继续" });
+	resume.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// 默认 stop（非 forget）：中止启动，但必须保留可恢复的休眠引用——只有 forget 才删。
+	await pool.stop("worker-1", false);
+	await expect(resume).rejects.toThrow();
+	expect(store.state.workers).toEqual([dormantRef]);
+	pool.shutdown();
+});
+
 test("workers launch in parallel once layout allocation hands off", async () => {
 	process.env.SHELL = "/bin/zsh";
 	const store = createStore();
