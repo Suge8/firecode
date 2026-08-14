@@ -176,9 +176,6 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const footer = [
-		...(card.awaitingAdvisor
-			? [language === "en" ? "Advisor consulting" : "顾问介入中"]
-			: []),
 		...(card.advisor?.advice
 			? [language === "en" ? "Advisor note" : "顾问建议", card.advisor.advice]
 			: []),
@@ -258,11 +255,13 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 }
 
 function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Language): BuiltCard {
+	const body = [advisorDecision(card.advisor.verdict, card.advisorModel, language), "", card.advisor.advice];
+	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
 	return spec(
 		language,
 		"advisor",
 		language === "en" ? "Advisor advice" : "顾问建议",
-		[advisorDecision(card.advisor.verdict, card.advisorModel, language), "", card.advisor.advice],
+		withFooter(body, footer),
 		"neutral",
 		"🧭",
 	);

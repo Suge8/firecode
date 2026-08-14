@@ -137,8 +137,6 @@ export type CardData =
 			round: number;
 			details: string;
 			advisor: AdvisorResult | null;
-			/** 本轮还要经顾问仲裁，反馈尚未投递。 */
-			awaitingAdvisor?: boolean;
 			elapsedMs?: number;
 			totalElapsedMs?: number;
 	  }
@@ -147,7 +145,8 @@ export type CardData =
 	| { kind: "cancel"; round: number; reason: StopReason }
 	| { kind: "timeout"; round: number; reason: StopReason }
 	| { kind: "error"; message: string; elapsedMs?: number; totalElapsedMs?: number }
-	| { kind: "advisor"; advisor: AdvisorResult; advisorModel: string };
+	// advisor 卡的 elapsedMs 是咨询时长（进入 needs_fix 到裁决落定），不是轮时长。
+	| { kind: "advisor"; advisor: AdvisorResult; advisorModel: string; elapsedMs?: number };
 
 export type ReviewEffect =
 	| { kind: "advance" }
@@ -420,22 +419,9 @@ function settleRound(
 	if (consecutiveFailures >= limits.advisorAfterFailures)
 		return {
 			state: { ...base, phase: "needs_fix", pending, consecutiveFailures },
-			// 顾问可能裁定 stop，反馈永远不会投递：此时不能提前宣布「已交回修复」。
-			effects: [
-				{
-					kind: "send_card",
-					card: {
-						kind: "fail",
-						round: active.round,
-						details: displayDetails,
-						advisor: null,
-						awaitingAdvisor: true,
-						elapsedMs: Math.max(0, now - state.roundStartedAt),
-						totalElapsedMs,
-					},
-				},
-				{ kind: "advance" },
-			],
+			// 顾问可能裁定 stop，反馈永远不会投递：此时不能提前宣布「已交回修复」；
+			// 卡里也不写「顾问介入中」——持久记录会过时，实况由活动条与状态栏承担。
+			effects: [failCard, { kind: "advance" }],
 		};
 	return {
 		state: {
@@ -497,7 +483,16 @@ function onAdvisorSettled(
 		},
 		// 失败卡已在咨询前发出；咨询完成只补 pi-flow 的中性顾问建议卡。
 		effects: [
-			{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel: limits.advisorModel } },
+			{
+			kind: "send_card",
+			// 咨询时长：needs_fix 相内只有顾问事件会迁移，updatedAt 即进入咨询的时刻。
+			card: {
+				kind: "advisor",
+				advisor,
+				advisorModel: limits.advisorModel,
+				elapsedMs: Math.max(0, now - state.updatedAt),
+			},
+		},
 			{ kind: "advance" },
 		],
 	};
