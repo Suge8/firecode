@@ -324,7 +324,7 @@ function stripApplyInstruction(text: string) {
 }
 
 const APPLY_INSTRUCTION_ZH =
-	"将质检反馈视为待核实假设，而非事实；先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决再结束，避免无关重构、抽象、依赖或风格改动；反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。";
+	"将审查反馈视为待核实假设，而非事实；先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决再结束，避免无关重构、抽象、依赖或风格改动；反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。";
 const APPLY_INSTRUCTION_EN =
 	"Treat the review feedback as hypotheses to verify, not facts; verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms, fixing other occurrences of the same root cause too, and verify end-to-end that issues are truly resolved before finishing; avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints).";
 

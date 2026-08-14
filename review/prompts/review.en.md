@@ -61,7 +61,7 @@ Evidence: files=src/auth.ts, src/session.ts; commands=npm test, npm run check
 
 If FAIL: write the finding list from the second line, exhausting all filed findings for the current phase, descending by severity, without omitting evidence; each finding states which contract or expected behavior it violates, without prescribing the fix — how to fix is the executor's call. Downgraded suggestions follow under `## Suggestions (non-blocking)`:
 
-## Finding x
+## Finding x: one-line problem title
 - Severity: High | Medium
 - Issue:
 - Evidence:

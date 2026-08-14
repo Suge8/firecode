@@ -230,7 +230,8 @@ function onStart(
 			effects: [{ kind: "advance" }],
 		};
 	return {
-		state: beginRound(initialState(state.runId), focus, 1, limits, now),
+		// startedAt 在此落地：排队路径在 queued 写，直接开审路径必须同样记录总耗时起点。
+		state: beginRound({ ...initialState(state.runId), startedAt: now }, focus, 1, limits, now),
 		effects: [
 			{
 				kind: "send_card",
@@ -464,7 +465,8 @@ function onAdvisorSettled(
 						details: advisor.advice,
 						advisor,
 						advisorModel: limits.advisorModel,
-						elapsedMs: round.elapsedMs,
+						// 与顾问建议卡同一语义：咨询时长，不是轮时长（轮时长已在咨询前的失败卡显示）。
+						elapsedMs: Math.max(0, now - state.updatedAt),
 						totalElapsedMs: Math.max(0, now - state.startedAt),
 					},
 				},
@@ -691,7 +693,7 @@ function aggregateDetails(reviewers: ReviewerResult[], language: "zh" | "en"): s
 }
 
 function aggregatePassSummary(reviewers: ReviewerResult[], language: "zh" | "en") {
-	const fallback = language === "en" ? "Quality check passed." : "质检通过。";
+	const fallback = language === "en" ? "Review passed." : "审查通过。";
 	if (reviewers.length === 1) {
 		const reviewer = reviewers[0];
 		const body = passBody(reviewer?.summary ?? "") || fallback;
@@ -769,8 +771,8 @@ function appendClosedFindings(
 	];
 	if (findings.length > shown.length)
 		recap.push(language === "en"
-			? `…and ${findings.length - shown.length} more; see the quality report`
-			: `…另有 ${findings.length - shown.length} 项，详见质检报告`);
+			? `…and ${findings.length - shown.length} more; see the review report`
+			: `…另有 ${findings.length - shown.length} 项，详见审查报告`);
 	return `${summary}\n\n${recap.join("\n")}`;
 }
 

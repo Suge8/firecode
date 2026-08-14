@@ -126,6 +126,18 @@ test("retries a failed display report and clears only on quit", async () => {
 	expect(herdr.requests[2].params.seq).toBeGreaterThan(herdr.requests[1].params.seq);
 });
 
+test("concurrent same-identity events publish exactly once", async () => {
+	const herdr = await herdrStub();
+	const handlers = await register(herdr.path);
+	const ctx = context("同一身份");
+	// 不等首次请求返回，密集触发同一身份的三个事件：只允许一次上报。
+	const first = handlers.get("session_start")?.({}, ctx);
+	const second = handlers.get("session_info_changed")?.({}, ctx);
+	const third = handlers.get("model_select")?.({}, ctx);
+	await Promise.all([first, second, third]);
+	expect(herdr.requests).toHaveLength(1);
+});
+
 test("stays silent outside TUI, inside Master Workers and outside herdr", async () => {
 	const herdr = await herdrStub();
 	const handlers = await register(herdr.path);

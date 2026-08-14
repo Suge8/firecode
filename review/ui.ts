@@ -145,7 +145,7 @@ class ReviewEditor extends CustomEditor {
 	}
 
 	override render(_width: number): string[] {
-		// pi-flow 交互：质检期间输入区完全隐藏，不额外插入一行提示。
+		// pi-flow 交互：审查期间输入区完全隐藏，不额外插入一行提示。
 		return [];
 	}
 }

@@ -242,13 +242,14 @@ describe("fire-review reducer", () => {
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		state = settle(state, 1, "failed", "FAIL\n发现 2").state;
 		state = reduce(completeRepair(state), { type: "ADVANCE" }, LIMITS, 20_000).state;
-		state = settle(state, 0, "failed", "FAIL\n发现 3").state;
-		state = settle(state, 1, "failed", "FAIL\n发现 4").state;
+		state = reduce(state, { type: "REVIEWER_SETTLED", index: 0, result: reviewer(0, "failed", "FAIL\n发现 3") }, LIMITS, 21_000).state;
+		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "failed", "FAIL\n发现 4") }, LIMITS, 22_000).state;
 		const result = reduce(state, { type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "别修了" } }, LIMITS, 30_000);
 		expect(result.state.phase).toBe("settled");
 		expect(result.state.history).toHaveLength(2);
 		expect(result.state.history[1].result).toBe("stopped");
 		// 本轮 findings 已在咨询前显示；终止卡只给顾问裁决，不能重复整张失败报告。
+		// elapsedMs 是咨询时长（进入顾问相 22_000 → 裁决 30_000），与顾问建议卡同一语义；轮时长已在失败卡显示。
 		expect(result.effects).toEqual([
 			{
 				kind: "send_card",
@@ -259,8 +260,8 @@ describe("fire-review reducer", () => {
 					details: "别修了",
 					advisor: { verdict: "stop", advice: "别修了" },
 					advisorModel: "p/advisor",
-					elapsedMs: 10_000,
-					totalElapsedMs: 30_000,
+					elapsedMs: 8_000,
+					totalElapsedMs: 29_000,
 				},
 			},
 		]);

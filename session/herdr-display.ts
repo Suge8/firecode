@@ -37,11 +37,17 @@ export function registerHerdrDisplay(pi: ExtensionAPI): void {
 	const request = herdrRequest(socketPath);
 	let chain = Promise.resolve();
 	let published: string | undefined;
+	/** 链尾已入队的身份：同一身份在确认或失败前只入队一次，
+	 * 否则首次请求未返回前的密集事件会把相同 payload 重发 N 次；
+	 * 失败后清空，保持「失败静默并由下一事件重试」的既有语义。 */
+	let enqueued: string | undefined;
 
 	const publish = (identity: Identity): Promise<void> => {
 		const key = `${identity.title}\u0000${identity.agent}`;
-		if (key === published) return chain;
+		if (key === published || key === enqueued) return chain;
+		enqueued = key;
 		chain = chain.then(async () => {
+			if (key === published) return;
 			const delivered = await request({
 				pane_id: paneId,
 				source: SOURCE,
@@ -52,6 +58,7 @@ export function registerHerdrDisplay(pi: ExtensionAPI): void {
 				seq: nextSeq(),
 			});
 			published = delivered ? key : undefined;
+			if (!delivered && enqueued === key) enqueued = undefined;
 		});
 		return chain;
 	};

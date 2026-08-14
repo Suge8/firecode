@@ -690,7 +690,7 @@ function cancelByUser() {
 	const active = controller;
 	if (!active) return;
 	if (active.state.phase === "needs_fix") {
-		// pi-flow 语义：顾问阶段的 Esc 只跳过本次咨询，不取消整场质检。
+		// pi-flow 语义：顾问阶段的 Esc 只跳过本次咨询，不取消整场审查。
 		active.actionController?.abort();
 		void (active.actionPromise ?? Promise.resolve()).then(() =>
 			dispatch(active.pi, { type: "ADVISOR_SKIPPED" }),
@@ -892,7 +892,13 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 			},
 		});
 		if (controller === active)
-			active.progress = settleProgress(active.progress, 0, "passed", config.language);
+			active.progress = settleProgress(
+				active.progress,
+				0,
+				"passed",
+				config.language,
+				advisorSummary(result, config.language),
+			);
 		if (!actionSignal.aborted)
 			await dispatch(pi, { type: "ADVISOR_SETTLED", result });
 	} catch (error) {
@@ -902,6 +908,17 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 			details: processErrorText("advisor", active.config.language, error),
 		});
 	}
+}
+
+/** 顾问落定后的一行摘要：裁决 + 建议首行，与审查者摘要同一展示通道。 */
+function advisorSummary(result: AdvisorResult, language: Language) {
+	const labels = language === "en"
+		? { continue: "continue fixing", narrow: "narrow scope", stop: "stop" }
+		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" };
+	const label = labels[result.verdict];
+	const first = result.advice.split(/\r?\n/u).find((line) => line.trim())?.trim() ?? "";
+	if (!first) return label;
+	return language === "en" ? `${label}: ${first}` : `${label}：${first}`;
 }
 
 function processErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
