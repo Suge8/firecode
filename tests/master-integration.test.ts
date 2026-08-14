@@ -316,7 +316,6 @@ test("worker events wait out a running Master turn and merge into one follow-up"
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
 	const sent: string[] = [];
 	let activeTools = ["read"];
-	let idle = false;
 	const pi = {
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool() {},
@@ -330,18 +329,19 @@ test("worker events wait out a running Master turn and merge into one follow-up"
 		sendUserMessage() {},
 		exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
 	};
-	const ctx = { ...makeCtx([]), isIdle: () => idle };
+	// isIdle 恒为 true：宿主在 emit agent_settled 前就置 idle，合并门槛必须是显式回合位而非 isIdle。
+	const ctx = { ...makeCtx([]), isIdle: () => true };
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
 	const notify = (globalThis as { __fcNotify?: (content: string) => void }).__fcNotify;
-	// Master 回合进行中：两条错峰结果都不投递（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
+	// 回合开始（agent_start）后到达的两条错峰结果都不投递，哪怕 isIdle 已经报 true。
+	for (const handler of handlers.get("agent_start") ?? []) await handler({}, ctx);
 	notify?.("结果 A");
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	notify?.("结果 B");
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	expect(sent).toEqual([]);
-	// 回合结束：agent_settled 后合并成一条 follow-up。
-	idle = true;
+	// agent_settled 才是回合边界：之后合并成一条 follow-up。
 	for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	expect(sent).toEqual(["结果 A\n\n结果 B"]);

@@ -23,6 +23,8 @@ interface MasterRuntime {
 	store: MasterStore;
 	herdr: HerdrWorkers;
 	events: string[];
+	/** 显式回合状态位：宿主在 emit agent_settled 前就置 idle，不能拿 isIdle 当回合边界。 */
+	turnActive: boolean;
 	flushTimer?: NodeJS.Timeout;
 }
 
@@ -62,8 +64,9 @@ export function registerMaster(pi: ExtensionAPI): void {
 		active.flushTimer = undefined;
 		if (runtime !== active || active.events.length === 0) return;
 		// 宿主 followUpMode 默认 one-at-a-time：回合中投递多条会被拆成多个回合。
-		// Master 正在回合中就先扛着，agent_settled 后合并成一条再投。
-		if (!active.ctx.isIdle()) return;
+		// 门槛是显式回合位而非 isIdle：宿主在 emit agent_settled 前就置 idle，
+		// 那个窗口里 flush 会把同一批结果拆投。agent_settled 才是回合边界。
+		if (active.turnActive) return;
 		const content = active.events.splice(0).join("\n\n");
 		pi.sendMessage(
 			{ customType: MASTER_EVENT_TYPE, content, display: true },
@@ -108,7 +111,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			herdr.shutdown();
 			throw error;
 		}
-		const candidate: MasterRuntime = { role: "master", ctx, store, herdr, events: [] };
+		const candidate: MasterRuntime = { role: "master", ctx, store, herdr, events: [], turnActive: false };
 		runtime = candidate;
 		deliverMasterEvent = notifyMaster;
 		setTools("master");
@@ -237,9 +240,14 @@ export function registerMaster(pi: ExtensionAPI): void {
 		}
 	});
 
+	pi.on("agent_start", () => {
+		if (runtime?.role === "master") runtime.turnActive = true;
+	});
+
 	pi.on("agent_settled", (_event, ctx) => {
 		if (runtime?.role !== "master") return;
 		runtime.ctx = ctx;
+		runtime.turnActive = false;
 		if (runtime.events.length === 0 || runtime.flushTimer) return;
 		const active = runtime;
 		active.flushTimer = setTimeout(() => flushMasterEvents(active), 100);
