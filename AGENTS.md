@@ -13,7 +13,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `tools/` | 接管 read/bash/edit/write 的渲染，含连续行轨道 |
 | `session/presets.ts` | 预设切换：模型、思考等级、工具集、附加指令 |
 | `session/rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
-| `session/herdr-display.ts` | 会话身份投影到 herdr 的 tab 标签与 agent 副标题 |
+| `session/herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `session/stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 |
@@ -23,16 +23,13 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `config.ts` | 只读本目录 config.jsonc |
 
 `statusbar/render.ts` 与 `statusbar/layout` 相关函数是纯函数，测试覆盖在 `tests/layout.test.ts`。
-`session/herdr-display.ts` 把 pi 单向投影到 herdr 的两个可见位置：tab 标签写会话名，agent 副标题
-写 `pi·模型/思考等级` 与会话名（`pane.report_metadata` 的 display_agent + title）。workspace 列表的目录名归
-herdr 自管；不写 pane label——单 pane 时根本不显示，而它和 tab label 一样是持久授权名，Master 给 Worker 的
-`任务名-模型名` 占的就是这两个槽。改名不从 `session/rename.ts` 接线，只听宙主的 `session_info_changed`（命令、
-快捷键、自动命名已在宙主收口），另听 model/thinking 选择。
-tab 标签是同 tab 全体 pane 共享的持久名，而 herdr 只有覆盖没有清除（写空串会留下永久空标签，不能
-恢复默认序号）：只在本 pane 独占 tab 且会话有名字时写，tab 归属每次现查（env 里的 tab id 在 pane 被移动后会过期）。
-同一身份不重发但只有确认送达才记为已发布（herdr 返回 error、超时与共享 tab 跳过都算未完成，下一个事件重试），请求串行避免乱序覆盖，
-失败静默。非 TUI 模式（print/json/rpc）不投影：无头调用不能接管可见会话的显示。
-只有 `quit` 清空副标题（pane 退回 shell，tab 名保留不可逆写入），reload/new/resume/fork 由新会话的 session_start 覆盖。
+`session/herdr-display.ts` 把 pi 单向投影到 herdr 的 agent 副标题：`pane.report_metadata` 的
+`display_agent` 写 `pi·模型/思考等级`，`title` 写会话名。workspace、pane label 与 tab label 都归 herdr、
+用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane 共享状态，而 herdr 没有条件 rename/CAS 与清除
+自定义名的接口，先检查再 rename 无法消除 split/move 竞态。改名不从 `session/rename.ts` 接线，只听宙主的
+`session_info_changed`（命令、快捷键、自动命名已在宙主收口），另听 model/thinking 选择。同一身份不重发，
+只有确认送达才记为已发布，请求串行避免乱序覆盖，失败静默并由下一事件重试。非 TUI 模式（print/json/rpc）
+不投影：无头调用不能接管可见会话的显示。只有 `quit` 清空副标题，reload/new/resume/fork 由新会话覆盖。
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 `review/state.ts` 是 `/fire-review` 的唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，
 副作用全在 `review/index.ts` 执行器；结果卡渲染器始终注册（即使 feature 关闭），使用 pi 原生背景卡与完整 Markdown：
@@ -41,6 +38,8 @@ tab 标签是同 tab 全体 pane 共享的持久名，而 herdr 只有覆盖没�
 `review/` 零外部依赖：schema 校验手写纯函数（不引 typebox），reload/new/resume/fork 保留可恢复状态，
 quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生：字段增删不同步会编译失败，
 这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线。
+每轮 findings 只完整显示一次；达到顾问阈值时先显示失败卡，若顾问裁定 stop，终止卡只显示顾问裁决，
+不再复制同一份 findings。
 `review/ui.ts` 一比一沿用 pi-flow `/review` 的活动框与交互：宽屏动态火焰、窄屏居中退化，审查开始自动打开
 80%×70% 子代理监控，`alt+s` 开关；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 取消，顾问阶段 esc
 只跳过咨询，`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。

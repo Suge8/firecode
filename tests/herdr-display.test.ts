@@ -5,11 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.js";
 
-const SOURCE_LABEL = "firecode";
-
 type Handler = (event: any, ctx: any) => unknown;
 type Module = {
-	projectSlots: (name?: string, model?: string, thinking?: string) => unknown;
+	projectIdentity: (name?: string, model?: string, thinking?: string) => unknown;
 	registerHerdrDisplay: (pi: unknown) => void;
 };
 
@@ -28,24 +26,20 @@ afterAll(async () => {
 	await cleanupFirecodeModules();
 });
 
-/** 假 herdr：按 method 回放响应，`paneCount` 控制 tab 是否被本 pane 独占。 */
-async function herdrStub(options: { paneCount?: number; failFirst?: boolean } = {}) {
-	const state = { paneCount: options.paneCount ?? 1 };
+async function herdrStub(failFirst = false) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-herdr-"));
 	const path = join(directory, "herdr.sock");
 	const requests: Array<{ method: string; params: any }> = [];
-	let failuresLeft = options.failFirst ? 1 : 0;
+	let failuresLeft = failFirst ? 1 : 0;
 	const server = net.createServer((socket) => {
 		socket.on("data", (chunk) => {
 			for (const line of chunk.toString().split("\n").filter(Boolean)) {
 				const request = JSON.parse(line);
 				requests.push(request);
-				if (failuresLeft > 0) {
-					failuresLeft -= 1;
-					socket.write(`${JSON.stringify({ error: { code: "busy" } })}\n`);
-					continue;
-				}
-				socket.write(`${JSON.stringify({ result: reply(request.method, state) })}\n`);
+				const reply = failuresLeft-- > 0
+					? { error: { code: "busy" } }
+					: { result: { type: "ok" } };
+				socket.write(`${JSON.stringify(reply)}\n`);
 			}
 		});
 	});
@@ -54,13 +48,7 @@ async function herdrStub(options: { paneCount?: number; failFirst?: boolean } = 
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await rm(directory, { recursive: true, force: true });
 	});
-	return { path, requests, state, methods: () => requests.map((request) => request.method) };
-}
-
-function reply(method: string, state: { paneCount: number }): Record<string, unknown> {
-	if (method === "pane.get") return { pane: { tab_id: "w1:t1" } };
-	if (method === "tab.get") return { tab: { pane_count: state.paneCount } };
-	return { type: "ok" };
+	return { path, requests };
 }
 
 async function register(socketPath: string, env: Record<string, string | undefined> = {}) {
@@ -91,77 +79,51 @@ const context = (name: string | undefined, mode = "tui") => ({
 	model: { id: "anthropic/claude-opus-4-5-20260101", reasoning: true },
 });
 
-test("projects session name to tab and model identity to the agent subtitle", async () => {
-	const { projectSlots } = await load();
-	expect(projectSlots("重命名", "anthropic/claude-opus-4-5", "medium")).toEqual({
-		tab: "重命名",
+test("projects the session and model identity into pane display metadata", async () => {
+	const { projectIdentity } = await load();
+	expect(projectIdentity("重命名", "anthropic/claude-opus-4-5", "medium")).toEqual({
+		title: "重命名",
 		agent: "pi·claude-opus-4-5/medium",
 	});
-	expect(projectSlots(undefined, "openai/gpt-5", undefined)).toEqual({
-		tab: "",
+	expect(projectIdentity(undefined, "openai/gpt-5", undefined)).toEqual({
+		title: "",
 		agent: "pi·gpt-5",
 	});
 });
 
-test("renames the tab only when this pane owns it and the session has a name", async () => {
+test("never mutates persistent pane or tab names", async () => {
 	const herdr = await herdrStub();
 	const handlers = await register(herdr.path);
-
 	await handlers.get("session_start")?.({}, context("重命名"));
 	await handlers.get("session_info_changed")?.({}, context("重命名"));
 
-	expect(herdr.methods()).toEqual(["pane.report_metadata", "pane.get", "tab.get", "tab.rename"]);
-	expect(herdr.requests[0].params).toMatchObject({
-		pane_id: "w1:pA",
-		source: SOURCE_LABEL,
-		display_agent: "pi·claude-opus-4-5/medium",
-		title: "重命名",
-		clear_title: false,
+	expect(herdr.requests).toHaveLength(1);
+	expect(herdr.requests[0]).toMatchObject({
+		method: "pane.report_metadata",
+		params: {
+			pane_id: "w1:pA",
+			source: "firecode",
+			display_agent: "pi·claude-opus-4-5/medium",
+			title: "重命名",
+			clear_title: false,
+		},
 	});
-	expect(herdr.requests[3].params).toEqual({ tab_id: "w1:t1", label: "重命名" });
 });
 
-test("never writes an empty tab label: unnamed sessions and quit only clear the subtitle", async () => {
-	const herdr = await herdrStub();
+test("retries a failed display report and clears only on quit", async () => {
+	const herdr = await herdrStub(true);
 	const handlers = await register(herdr.path);
-
-	await handlers.get("session_start")?.({}, context(undefined));
+	await handlers.get("session_start")?.({}, context("重命名"));
+	await handlers.get("model_select")?.({}, context("重命名"));
 	await handlers.get("session_shutdown")?.({ reason: "new" }, context("重命名"));
 	await handlers.get("session_shutdown")?.({ reason: "quit" }, context("重命名"));
 
-	expect(herdr.methods()).toEqual(["pane.report_metadata", "pane.report_metadata"]);
-	expect(herdr.requests[0].params).toMatchObject({
-		clear_display_agent: false,
-		clear_title: true,
-	});
-	expect(herdr.requests[1].params).toMatchObject({
+	expect(herdr.requests).toHaveLength(3);
+	expect(herdr.requests[2].params).toMatchObject({
 		clear_display_agent: true,
 		clear_title: true,
 	});
-	expect(herdr.requests[1].params.seq).toBeGreaterThan(herdr.requests[0].params.seq);
-});
-
-test("leaves shared tabs alone and retries after a failed delivery", async () => {
-	const shared = await herdrStub({ paneCount: 2 });
-	const sharedHandlers = await register(shared.path);
-	await sharedHandlers.get("session_start")?.({}, context("重命名"));
-	expect(shared.methods()).toEqual(["pane.report_metadata", "pane.get", "tab.get"]);
-	// 共享 tab 未完成投影，退回独占后下一个事件必须补写同一个身份。
-	shared.state.paneCount = 1;
-	await sharedHandlers.get("model_select")?.({}, context("重命名"));
-	expect(shared.methods().at(-1)).toBe("tab.rename");
-
-	const flaky = await herdrStub({ failFirst: true });
-	const handlers = await register(flaky.path);
-	await handlers.get("session_start")?.({}, context("重命名"));
-	await handlers.get("session_info_changed")?.({}, context("重命名"));
-	expect(flaky.methods()).toEqual([
-		"pane.report_metadata",
-		"pane.report_metadata",
-		"pane.get",
-		"tab.get",
-		"tab.rename",
-	]);
+	expect(herdr.requests[2].params.seq).toBeGreaterThan(herdr.requests[1].params.seq);
 });
 
 test("stays silent outside TUI, inside Master Workers and outside herdr", async () => {
