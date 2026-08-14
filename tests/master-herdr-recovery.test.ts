@@ -483,14 +483,12 @@ test("a queued start can be stopped before it runs", async () => {
 	process.env.SHELL = "/bin/zsh";
 	const store = createStore();
 	const calls: string[][] = [];
+	// 首个启动悬在 tab 创建（串行分配临界区内），第二个启动因此真正排队。
 	const pool = new HerdrWorkers({
 		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
 			calls.push(args);
 			if (args[0] === "tab" && args[1] === "create")
-				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
-			if (args[0] === "pane" && args[1] === "wait-output")
 				return new Promise((_resolve, reject) => {
-					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
 					if (options.signal?.aborted) return reject(new Error("start aborted"));
 					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
 				});
@@ -512,9 +510,102 @@ test("a queued start can be stopped before it runs", async () => {
 	await pool.stop("hang", true);
 	await expect(first).rejects.toThrow();
 	await expect(second).rejects.toThrow("排队阶段已被停止");
-	// 排队启动被取消：只有首个启动建过 shell，状态无残留。
+	// 排队启动被取消：只有首个启动尝试过建 shell，状态无残留。
 	expect(calls.filter((args) => args[0] === "tab" && args[1] === "create").length).toBe(1);
 	expect(store.state.workers).toEqual([]);
+	pool.shutdown();
+});
+
+test("a renamed dormant resume can be stopped by its old pool identity", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	store.dispatch({
+		type: "UPSERT_WORKER",
+		worker: { name: "worker-1", model: "p/m", thinking: "medium" as const, status: "dormant" as const, sessionPath: "/tmp/worker.jsonl" },
+	});
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	// 改名恢复：工人池展示的仍是旧名，按旧身份 stop 必须命中同一取消控制器。
+	const resume = pool.start(ctx, { name: "renamed", session: "worker-1", prompt: "继续" });
+	resume.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await pool.stop("worker-1", true);
+	await expect(resume).rejects.toThrow();
+	// 被显式停掉的启动不得以任何身份复活：既无 renamed，也不恢复旧休眠引用。
+	expect(store.state.workers).toEqual([]);
+	expect(calls.some((args) => args[0] === "agent" && args[1] === "start")).toBe(false);
+	pool.shutdown();
+});
+
+test("workers launch in parallel once layout allocation hands off", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	const paneTabs = new Map<string, string>();
+	let paneSerial = 0;
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			if (args[0] === "tab" && args[1] === "create") {
+				const paneId = `w1:p${++paneSerial}`;
+				paneTabs.set(paneId, "w1:t1");
+				return response({ result: { root_pane: { pane_id: paneId }, tab: { tab_id: "w1:t1" } } });
+			}
+			if (args[0] === "pane" && args[1] === "split") {
+				const paneId = `w1:p${++paneSerial}`;
+				paneTabs.set(paneId, "w1:t1");
+				return response({ result: { pane: { pane_id: paneId } } });
+			}
+			if (args[0] === "pane" && args[1] === "wait-output") {
+				// 首个工人的 shell 握手永久悬挂；后续工人立即就绪。
+				if (args[2] === "w1:p1")
+					return new Promise((_resolve, reject) => {
+						if (options.signal?.aborted) return reject(new Error("start aborted"));
+						options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+					});
+				return response({});
+			}
+			if (args[0] === "agent" && args[1] === "start") {
+				const paneId = args[args.indexOf("--pane") + 1] as string;
+				return agentResponse(paneId, paneTabs.get(paneId) as string, `/tmp/${args[2]}.jsonl`);
+			}
+			if (args[0] === "agent" && args[1] === "prompt")
+				return new Promise((resolve) => {
+					if (options.signal?.aborted) return resolve(response({}));
+					options.signal?.addEventListener("abort", () => resolve(response({})), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const slow = pool.start(ctx, { name: "slow", prompt: "做" });
+	slow.catch(() => {});
+	const fast = pool.start(ctx, { name: "fast", prompt: "做" });
+	// 并行启动：首个工人还在 shell 握手，后续工人已完成启动——不被全局串行化堵住。
+	const started = await fast;
+	expect(started.status).toBe("working");
+	expect(store.state.workers.find((worker) => worker.name === "slow")?.status).toBe("starting");
+	await pool.stop("slow", true);
+	await expect(slow).rejects.toThrow();
 	pool.shutdown();
 });
 
@@ -560,14 +651,12 @@ test("a queued dormant resume can be stopped through the dormant branch", async 
 		worker: { name: "worker-1", model: "p/m", thinking: "medium" as const, status: "dormant" as const, sessionPath: "/tmp/worker.jsonl" },
 	});
 	const calls: string[][] = [];
+	// 首个启动悬在 tab 创建（串行分配临界区内），恢复请求因此真正排队。
 	const pool = new HerdrWorkers({
 		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
 			calls.push(args);
 			if (args[0] === "tab" && args[1] === "create")
-				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
-			if (args[0] === "pane" && args[1] === "wait-output")
 				return new Promise((_resolve, reject) => {
-					// 真实 pi.exec 对已中止的 signal 立即拒绝；mock 必须同样处理，否则永远等不到 abort 事件。
 					if (options.signal?.aborted) return reject(new Error("start aborted"));
 					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
 				});

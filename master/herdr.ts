@@ -41,6 +41,20 @@ interface StartWorkerOptions {
 	session?: string;
 }
 
+/** 分配完成、尚待并行启动的工人：串行临界区的产出，交给 launchWorker 收尾。 */
+interface WorkerLaunch {
+	provisional: WorkerRef;
+	prompt: string;
+	model: string;
+	thinking: WorkerThinking;
+	sessionPath?: string;
+	previous?: WorkerRef;
+	shell: WorkerShell;
+	shellReady: Awaited<ReturnType<typeof createShellReadyMarker>>;
+	controller: AbortController;
+	signal: AbortSignal;
+}
+
 interface WorkerShell {
 	paneId: string;
 	tabId: string;
@@ -71,41 +85,49 @@ export class HerdrWorkers {
 		this.notifyMaster = options.notifyMaster;
 	}
 
-	/** 入队时能解析出的工人名：显式命名，或从 session/休眠引用反查——所有启动入口都要可取消。 */
-	private queuedStartName(options: StartWorkerOptions): string | undefined {
+	/**
+	 * 入队时能解析出的全部身份：显式命名，加 session/休眠引用反查出的旧名。
+	 * 改名恢复期间工人池展示的仍是旧名，按两个身份 stop 都必须命中同一个取消控制器。
+	 */
+	private queuedStartNames(options: StartWorkerOptions): string[] {
+		const names = new Set<string>();
 		const explicit = options.name?.trim();
-		if (explicit) return explicit;
+		if (explicit) names.add(explicit);
 		const session = options.session?.trim();
-		if (!session) return undefined;
-		return this.store.state.workers.find(
-			(worker) => worker.name === session || worker.sessionPath === session,
-		)?.name;
+		if (session) {
+			const referenced = this.store.state.workers.find(
+				(worker) => worker.name === session || worker.sessionPath === session,
+			)?.name;
+			if (referenced) names.add(referenced);
+		}
+		return [...names];
 	}
 
 	async start(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
-		// 入队即登记取消控制器：同批工具调用并行执行，排队中的启动（含休眠恢复）也必须能被 stop 命中。
-		// 同名并发启动直接拒绝：排队等死还留取消盲区，每个名字最多一个在飞任务。
-		const name = this.queuedStartName(options);
-		if (name && this.runs.has(name))
-			throw new Error(`${name} 已有进行中的启动或监听任务，不能重复启动`);
-		const pending = name ? new AbortController() : undefined;
-		if (name && pending) this.runs.set(name, pending);
-		const queued = this.startQueue.then(async () => {
-			try {
-				return await this.startWorker(ctx, options, pending);
-			} finally {
-				if (name && pending && this.runs.get(name) === pending) this.runs.delete(name);
-			}
+		// 入队即在全部身份下登记取消控制器；同名并发启动直接拒绝（排队等死还留取消盲区）。
+		const names = this.queuedStartNames(options);
+		for (const key of names)
+			if (this.runs.has(key))
+				throw new Error(`${key} 已有进行中的启动或监听任务，不能重复启动`);
+		const pending = names.length > 0 ? new AbortController() : undefined;
+		for (const key of names) if (pending) this.runs.set(key, pending);
+		// 串行区只包住布局分配（读容量 + 建 shell + 写占位）；shell 握手与 agent 启动并行，
+		// 首批工单才能真正并行启动。
+		const allocated = this.startQueue.then(() => this.allocateWorker(ctx, options, pending));
+		this.startQueue = allocated.then(() => undefined, () => undefined);
+		const launched = allocated.then((launch) => this.launchWorker(launch));
+		return launched.finally(() => {
+			if (!pending) return;
+			for (const key of names) if (this.runs.get(key) === pending) this.runs.delete(key);
 		});
-		this.startQueue = queued.then(() => undefined, () => undefined);
-		return queued;
 	}
 
-	private async startWorker(
+	/** 串行临界区：名字/模型解析、布局容量计算、shell 创建与占位状态写入。不含任何长等待。 */
+	private async allocateWorker(
 		ctx: ExtensionContext,
 		options: StartWorkerOptions,
 		pending?: AbortController,
-	): Promise<WorkerRef> {
+	): Promise<WorkerLaunch> {
 		// 排队期间被 stop：在任何解析与副作用之前短路，休眠引用可能已被 forget。
 		if (pending?.signal.aborted || this.lifecycle.signal.aborted)
 			throw new Error("启动在排队阶段已被停止");
@@ -146,41 +168,74 @@ export class HerdrWorkers {
 		this.runs.set(name, startController);
 		const signal = AbortSignal.any([this.lifecycle.signal, startController.signal]);
 		let shellReady: Awaited<ReturnType<typeof createShellReadyMarker>> | undefined;
-		let shell: WorkerShell | undefined;
 		try {
 			shellReady = await createShellReadyMarker();
-			shell = await this.createWorkerShell(ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
+			const shell = await this.createWorkerShell(ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
 			this.store.dispatch({
 				type: "UPSERT_WORKER",
 				worker: { ...provisional, paneId: shell.paneId, tabId: shell.tabId },
 			});
-			await this.waitForShell(shell.paneId, shellReady.marker, signal);
-			const worker = await this.startAgent(provisional, shell.paneId, model, thinking, sessionPath, signal);
-			if (this.runs.get(name) === startController) this.runs.delete(name);
-			void this.monitorPrompt(worker, prompt);
+			return { provisional, prompt, model, thinking, sessionPath, previous, shell, shellReady, controller: startController, signal };
+		} catch (error) {
+			await this.abandonStart(name, previous, undefined, startController);
+			if (shellReady) await this.removeShellReady(name, shellReady);
+			throw error;
+		}
+	}
+
+	/** 串行区之外的长尾巴：shell 握手、agent 启动与监听，多个启动并行执行。 */
+	private async launchWorker(launch: WorkerLaunch): Promise<WorkerRef> {
+		const name = launch.provisional.name;
+		try {
+			await this.waitForShell(launch.shell.paneId, launch.shellReady.marker, launch.signal);
+			const worker = await this.startAgent(
+				launch.provisional,
+				launch.shell.paneId,
+				launch.model,
+				launch.thinking,
+				launch.sessionPath,
+				launch.signal,
+			);
+			if (this.runs.get(name) === launch.controller) this.runs.delete(name);
+			void this.monitorPrompt(worker, launch.prompt);
 			return worker;
 		} catch (error) {
-			if (shell) {
-				try {
-					await this.closeWorkerShell(shell);
-				} catch (cleanupError) {
-					this.notifyMaster(`Worker ${name} 启动失败后的 pane 清理也失败：${String(cleanupError)}`);
-				}
-			}
-			this.store.dispatch({ type: "REMOVE_WORKER", name });
-			// 池已关闭时不再回写任何引用：清理完成后的状态文件必须保持空。
-			if (previous && !this.lifecycle.signal.aborted)
-				this.store.dispatch({ type: "UPSERT_WORKER", worker: previous });
+			await this.abandonStart(name, launch.previous, launch.shell, launch.controller);
 			throw error;
 		} finally {
-			if (this.runs.get(name) === startController) this.runs.delete(name);
-			if (shellReady) {
-				try {
-					await rm(shellReady.directory, { recursive: true, force: true });
-				} catch (error) {
-					this.notifyMaster(`Worker ${name} 的临时 shell 配置清理失败：${String(error)}`);
-				}
+			if (this.runs.get(name) === launch.controller) this.runs.delete(name);
+			await this.removeShellReady(name, launch.shellReady);
+		}
+	}
+
+	private async abandonStart(
+		name: string,
+		previous: WorkerRef | undefined,
+		shell: WorkerShell | undefined,
+		controller: AbortController,
+	): Promise<void> {
+		if (shell) {
+			try {
+				await this.closeWorkerShell(shell);
+			} catch (cleanupError) {
+				this.notifyMaster(`Worker ${name} 启动失败后的 pane 清理也失败：${String(cleanupError)}`);
 			}
+		}
+		this.store.dispatch({ type: "REMOVE_WORKER", name });
+		// 池已关闭或本启动被显式 stop 时不回写引用：停掉的东西不能以任何身份复活；
+		// 自然失败（未被中止）才恢复原休眠引用。
+		if (previous && !this.lifecycle.signal.aborted && !controller.signal.aborted)
+			this.store.dispatch({ type: "UPSERT_WORKER", worker: previous });
+	}
+
+	private async removeShellReady(
+		name: string,
+		shellReady: Awaited<ReturnType<typeof createShellReadyMarker>>,
+	): Promise<void> {
+		try {
+			await rm(shellReady.directory, { recursive: true, force: true });
+		} catch (error) {
+			this.notifyMaster(`Worker ${name} 的临时 shell 配置清理失败：${String(error)}`);
 		}
 	}
 
