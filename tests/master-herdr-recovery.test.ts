@@ -1028,6 +1028,42 @@ test("in-skill self-review: occupancy blocked keeps waiting and the verdict ride
 	await rm(directory, { recursive: true, force: true });
 });
 
+test("self-review grace: idle before the checkpoint appears still waits for the verdict", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-grace-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "message",
+		id: "a1",
+		parentId: null,
+		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
+	}) + "\n");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
+	let resolveResult!: (value: string) => void;
+	const result = new Promise<string>((resolve) => { resolveResult = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[]) => {
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			if (args[0] === "agent" && args[1] === "prompt") {
+				// 实现回合结束即 idle；/fire-review 的 checkpoint 要到回合完全结束后才写入。
+				setTimeout(() => {
+					void appendFile(sessionPath, JSON.stringify(terminalReviewCheckpoint()) + "\n");
+				}, 800);
+				return liveAgent("idle", sessionPath);
+			}
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: (notice) => { if (notice.includes("已停下")) resolveResult(notice); },
+	});
+	await pool.send("worker-1", "/skill:implement 按 01 工单实现");
+	const text = await result;
+	expect(text).toContain("自审判定：通过（2 轮）");
+	expect(store.state.workers[0]?.status).toBe("idle");
+	await rm(directory, { recursive: true, force: true });
+});
+
 function terminalReviewCheckpoint() {
 	const reviewers = (status: "passed" | "failed") => [
 		{ index: 0, model: "p/sol", thinking: "high", status, summary: "s", details: "d" },

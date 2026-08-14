@@ -98,7 +98,8 @@ pane 命名失败不影响启动只通知。
 不等其它 Worker 停笔）；review action 留作补审后手。轻重之分由派 `/skill:implement`（含自审）还是
 `/skill:tdd`（不含）决定。工作监听把带占用标签（`review/outcome.ts` 的 REVIEW_OCCUPANCY_LABEL）的
 blocked 转为 `reviewing`（send 随之拒绝）并换跳过 blocked 的等待直到审查落终态，占用失效的轮间 idle
-退避重挂；Worker 落定时 Master 读自审终态（runId 相对监听基线推进才报）随结果回传，含轮数与
+退避重挂；实现回合结束到自审写入 checkpoint/占用之间是跨进程异步窗口，/skill:implement 委派的结算
+前有有界宽限复查（无事件可等的短暂轮询，普通委派零延迟）；Worker 落定时 Master 读自审终态（runId 相对监听基线推进才报）随结果回传，含轮数与
 顾问叫停的裁决首行；reload 中断的自审按 reviewing 状态由审查监听恢复。
 代码固定投递字面 `/fire-review`（`prompt --wait` 等投递后状态变化，stalled 时以 runId
 是否推进判定是否真的启动），状态转为 `reviewing`，在 `/fire-master status` 和状态栏显示并拒绝 send。审查监听只等

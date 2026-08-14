@@ -16,6 +16,11 @@ const RESULT_CONTEXT_LIMIT = 12_000;
 const MAX_RETRY_DELAY_MS = 30_000;
 /** 占用信号失效时审查监听的轮询兑底间隔。 */
 const REVIEW_POLL_DELAY_MS = 2_000;
+/** 自审启动宽限：/fire-review 在实现回合结束后才执行并写 checkpoint/占用，
+ * idle 与它们之间是跨进程异步窗口、无事件可等，只能有界复查；
+ * 仅对 /skill:implement 委派生效，普通委派零额外延迟。 */
+const SELF_REVIEW_GRACE_PROBES = 5;
+const SELF_REVIEW_GRACE_DELAY_MS = 600;
 const MAX_WORKERS_PER_TAB = 4;
 
 interface HerdrAgent {
@@ -539,12 +544,16 @@ export class HerdrWorkers {
 	}
 
 	private monitorPrompt(worker: WorkerRef, prompt: string): Promise<void> {
+		// /skill:implement 委派自带 fire-review 自审：结算前需要启动宽限窗口。
+		const expectSelfReview = prompt.startsWith("/skill:implement ");
 		return this.monitorSettlement(worker, "agent.prompt", [
 			"agent", "prompt", requiredPane(worker), prompt, "--wait",
-		], "work");
+		], "work", undefined, expectSelfReview);
 	}
 
 	private monitorWait(worker: WorkerRef): Promise<void> {
+		// reload 重挂无委派文本可判：已启动的自审由占用/checkpoint 路径覆盖，
+		// 恰落在启动窗口内的 reload 极罕见，不为它付全员宽限成本。
 		return this.monitorSettlement(worker, "agent.wait", settlementWaitArgs(worker), "work");
 	}
 
@@ -564,6 +573,7 @@ export class HerdrWorkers {
 		args: string[],
 		mode: "work" | "review",
 		previousReviewRunId?: string | null,
+		expectSelfReview = false,
 	): Promise<void> {
 		const controller = new AbortController();
 		this.runs.set(worker.name, controller);
@@ -593,7 +603,13 @@ export class HerdrWorkers {
 						await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
 						continue;
 					}
-					const verdict = await this.handleSettlement(worker, settlement, controller.signal, selfReviewBaseline);
+					const verdict = await this.handleSettlement(
+						worker,
+						settlement,
+						controller.signal,
+						selfReviewBaseline,
+						expectSelfReview,
+					);
 					if (verdict === "done") return;
 					// 技能内自审：占用态（reviewing）或占用失效的轮间 idle（poll）都不是终态，
 					// 换用跳过 blocked 的等待直到审查落终态。
@@ -628,6 +644,7 @@ export class HerdrWorkers {
 		response: Record<string, unknown>,
 		signal: AbortSignal,
 		selfReviewBaseline: string | null = null,
+		expectSelfReview = false,
 	): Promise<"done" | "reviewing" | "poll"> {
 		const agent = parseAgent(response);
 		const status = settlementStatus(agent);
@@ -648,10 +665,20 @@ export class HerdrWorkers {
 			this.notifyMaster(workerBlockedText(blocked, question));
 			return "done";
 		}
-		const outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
-		const runId = outcome ? reviewRunId(outcome) : undefined;
-		const advanced = runId !== undefined && runId !== selfReviewBaseline;
-		// 自审仍在进行却观测到 idle：占用信号失效时的轮间窗口，不能就此结算。
+		let outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
+		let runId = outcome ? reviewRunId(outcome) : undefined;
+		let advanced = runId !== undefined && runId !== selfReviewBaseline;
+		// 实现回合结束到自审写入 checkpoint/占用之间是跨进程异步窗口：
+		// 对 /skill:implement 委派做有界宽限复查（无事件可等，只能短暂轮询），
+		// 确认既无新 runId 也无占用才结算，否则审查尚未启动就会被假完成。
+		for (let probe = 0; expectSelfReview && !advanced && probe < SELF_REVIEW_GRACE_PROBES; probe += 1) {
+			await retryDelay(SELF_REVIEW_GRACE_DELAY_MS, signal);
+			if (signal.aborted) return "done";
+			outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
+			runId = outcome ? reviewRunId(outcome) : undefined;
+			advanced = runId !== undefined && runId !== selfReviewBaseline;
+		}
+		// 自审仍在进行却观测到 idle：占用信号失效或刚启动的窗口，不能就此结算。
 		if (advanced && outcome?.status === "in_progress") return "poll";
 		const latest = await this.latest(worker);
 		if (signal.aborted) return "done";
