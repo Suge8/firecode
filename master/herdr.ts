@@ -55,6 +55,8 @@ export class HerdrWorkers {
 	private readonly workspaceId: string;
 	private readonly notifyMaster: (content: string) => void;
 	private readonly runs = new Map<string, AbortController>();
+	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿工人复活。 */
+	private readonly lifecycle = new AbortController();
 	private startQueue = Promise.resolve();
 
 	constructor(options: {
@@ -106,17 +108,22 @@ export class HerdrWorkers {
 			...(sessionPath ? { sessionPath } : {}),
 		};
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: provisional });
+		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听。
+		const startController = new AbortController();
+		this.runs.set(name, startController);
+		const signal = AbortSignal.any([this.lifecycle.signal, startController.signal]);
 		let shellReady: Awaited<ReturnType<typeof createShellReadyMarker>> | undefined;
 		let shell: WorkerShell | undefined;
 		try {
 			shellReady = await createShellReadyMarker();
-			shell = await this.createWorkerShell(ctx.cwd, name, displayName(name, model), shellReady, !sessionPath);
+			shell = await this.createWorkerShell(ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
 			this.store.dispatch({
 				type: "UPSERT_WORKER",
 				worker: { ...provisional, paneId: shell.paneId, tabId: shell.tabId },
 			});
-			await this.waitForShell(shell.paneId, shellReady.marker);
-			const worker = await this.startAgent(provisional, shell.paneId, model, thinking, sessionPath);
+			await this.waitForShell(shell.paneId, shellReady.marker, signal);
+			const worker = await this.startAgent(provisional, shell.paneId, model, thinking, sessionPath, signal);
+			if (this.runs.get(name) === startController) this.runs.delete(name);
 			void this.monitorPrompt(worker, prompt);
 			return worker;
 		} catch (error) {
@@ -128,9 +135,12 @@ export class HerdrWorkers {
 				}
 			}
 			this.store.dispatch({ type: "REMOVE_WORKER", name });
-			if (previous) this.store.dispatch({ type: "UPSERT_WORKER", worker: previous });
+			// 池已关闭时不再回写任何引用：清理完成后的状态文件必须保持空。
+			if (previous && !this.lifecycle.signal.aborted)
+				this.store.dispatch({ type: "UPSERT_WORKER", worker: previous });
 			throw error;
 		} finally {
+			if (this.runs.get(name) === startController) this.runs.delete(name);
 			if (shellReady) {
 				try {
 					await rm(shellReady.directory, { recursive: true, force: true });
@@ -218,6 +228,7 @@ export class HerdrWorkers {
 	}
 
 	shutdown(): void {
+		this.lifecycle.abort();
 		for (const controller of this.runs.values()) controller.abort();
 		this.runs.clear();
 	}
@@ -228,6 +239,7 @@ export class HerdrWorkers {
 		display: string,
 		shellReady: Awaited<ReturnType<typeof createShellReadyMarker>>,
 		allowSplit: boolean,
+		signal?: AbortSignal,
 	): Promise<WorkerShell> {
 		const plan = allowSplit ? this.splitPlan() : undefined;
 		if (plan) {
@@ -235,19 +247,21 @@ export class HerdrWorkers {
 				const created = await this.run("pane.split", [
 					"pane", "split", requiredPane(plan.target), "--direction", plan.direction, "--cwd", cwd,
 					...workerShellEnv(name, shellReady), "--no-focus",
-				]);
+				], 60_000, signal);
 				const pane = nestedRecord(created, ["result", "pane"]);
 				const paneId = requiredField(pane, "pane_id", "pane.split.pane");
 				await this.renamePane(paneId, display);
 				return { paneId, tabId: plan.target.tabId, close: "pane" };
-			} catch {
+			} catch (error) {
 				// Layout is best-effort: a fresh tab keeps Worker startup independent of split support.
+				// 但中止不是布局失败，不得退化继续建 tab。
+				if (signal?.aborted) throw error;
 			}
 		}
 		const created = await this.run("tab.create", [
 			"tab", "create", "--workspace", this.workspaceId, "--cwd", cwd, "--label", display,
 			...workerShellEnv(name, shellReady), "--no-focus",
-		]);
+		], 60_000, signal);
 		const rootPane = nestedRecord(created, ["result", "root_pane"]);
 		const tab = nestedRecord(created, ["result", "tab"]);
 		const paneId = requiredField(rootPane, "pane_id", "tab.create.root_pane");
@@ -289,6 +303,7 @@ export class HerdrWorkers {
 		model: string,
 		thinking: WorkerThinking,
 		sessionPath?: string,
+		signal?: AbortSignal,
 	): Promise<WorkerRef> {
 		const args = [
 			"agent",
@@ -309,7 +324,7 @@ export class HerdrWorkers {
 			thinking,
 		];
 		if (sessionPath) args.push("--session", sessionPath);
-		const agent = parseAgent(await this.run("agent.start", args));
+		const agent = parseAgent(await this.run("agent.start", args, 90_000, signal));
 		const worker: WorkerRef = {
 			name: provisional.name,
 			paneId: agent.pane_id,
@@ -323,7 +338,7 @@ export class HerdrWorkers {
 		return worker;
 	}
 
-	private async waitForShell(paneId: string, marker: string): Promise<void> {
+	private async waitForShell(paneId: string, marker: string, signal?: AbortSignal): Promise<void> {
 		await this.run("pane.wait-output(shell ready)", [
 			"pane",
 			"wait-output",
@@ -336,7 +351,7 @@ export class HerdrWorkers {
 			"120",
 			"--timeout",
 			"60000",
-		], 65_000);
+		], 65_000, signal);
 	}
 
 	private async reconcile(worker: WorkerRef): Promise<void> {

@@ -444,6 +444,39 @@ test("a settled checkpoint from an older run cannot pass a review that never sta
 	await rm(directory, { recursive: true, force: true });
 });
 
+test("stopping a Worker mid-startup aborts the start and leaves no orphan", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const starting = pool.start(ctx, { name: "hang", prompt: "做" });
+	starting.catch(() => {});
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	await pool.stop("hang", true);
+	await expect(starting).rejects.toThrow();
+	// 启动被中止：壳已清理、未启动 agent、状态没有孤儿复活。
+	expect(calls).toContainEqual(["tab", "close", "w1:t9"]);
+	expect(calls.some((args) => args[0] === "agent" && args[1] === "start")).toBe(false);
+	expect(store.state.workers).toEqual([]);
+	pool.shutdown();
+});
+
 test("a stalled prompt still tracks a review that started without the occupancy signal", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-stall-review-"));
 	const sessionPath = join(directory, "worker.jsonl");
