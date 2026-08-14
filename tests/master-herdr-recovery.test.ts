@@ -1120,6 +1120,32 @@ test("send is rejected while a review ticket awaits its automatic review", async
 	await expect(pool.send("worker-1", "追问")).rejects.toThrow("待自动审查");
 });
 
+test("stop during review delivery cannot revive the dormant Worker", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-stop-review-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, "");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
+	let pool!: HerdrWorkers;
+	pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[]) => {
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			if (args[0] === "agent" && args[1] === "prompt" && args.includes("/fire-review")) {
+				// 投递等待期间 Worker 被停止；投递随后"成功"返回。
+				await pool.stop("worker-1", false);
+				return liveAgent("blocked", sessionPath, { review: "对抗审查进行中" });
+			}
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: () => {},
+	});
+	await pool.review("worker-1").catch(() => {});
+	// 迟到的投递返回不得把已休眠的 Worker 写回 reviewing。
+	expect(store.state.workers[0]?.status).toBe("dormant");
+});
+
 function terminalReviewCheckpoint() {
 	const reviewers = (status: "passed" | "failed") => [
 		{ index: 0, model: "p/sol", thinking: "high", status, summary: "s", details: "d" },

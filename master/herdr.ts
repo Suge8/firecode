@@ -280,13 +280,18 @@ export class HerdrWorkers {
 		const previousRunId = worker.sessionPath
 			? reviewRunId(readReviewOutcome(worker.sessionPath)) ?? null
 			: null;
+		// 投递窗口纳入 stop 的中止范围：idle Worker 没有监听控制器在 runs 里，
+		// 不注册的话 stop 中止不到在飞投递，迟到返回会复活已休眠的 Worker。
+		const controller = new AbortController();
+		const signal = AbortSignal.any([this.lifecycle.signal, controller.signal]);
+		this.runs.set(worker.name, controller);
 		// --wait 要求投递后观察到状态变化才返回：堵住“投递后 Worker 短暂仍报 idle、
 		// 后续监听立即结算误报审查未启动”的竞态。审查启动后状态为 working（命令回合）或 blocked（占用信号）。
 		try {
 			await this.run("agent.prompt(review)", [
 				"agent", "prompt", requiredPane(worker), "/fire-review",
 				"--wait", "--until", "working", "--until", "blocked", "--timeout", "8000",
-			], 15_000, this.lifecycle.signal);
+			], 15_000, signal);
 		} catch (error) {
 			if (!isPromptStall(error)) throw error;
 			// 占用信号失效时会话可能全程观察不到状态变化：以 runId 是否推进判定审查是否真的启动。
@@ -295,10 +300,16 @@ export class HerdrWorkers {
 				: null;
 			if (observed === previousRunId)
 				throw new Error(`${worker.name} 审查未启动：投递后状态与 fire-review runId 均无变化`);
+		} finally {
+			if (this.runs.get(worker.name) === controller) this.runs.delete(worker.name);
 		}
+		// 迟到返回不得复活已停止 Worker：dispatch 前重读当前身份（与 handleSettlement 同模式），
+		// 已休眠/移除/中止即放弃写入——意图仍在档案里，休眠恢复路径会续上补审。
+		const current = currentWorkerRun(this.store.state.workers, worker);
+		if (signal.aborted || !current || current.status !== "idle") return;
 		// 审查意图在此消耗：只有确认审查真正启动（状态变化或 runId 推进）才算送达，
 		// 投递失败时意图保留在档案里，由 reload/resume 自动重试或手动 review 兜底。
-		const { reviewNeeded: _consumed, ...launched } = worker;
+		const { reviewNeeded: _consumed, ...launched } = current;
 		const reviewing = {
 			...launched,
 			status: "reviewing" as const,
