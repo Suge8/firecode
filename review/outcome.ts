@@ -2,10 +2,14 @@ import { readFileSync } from "node:fs";
 import { CHECKPOINT_TYPE, isValidCheckpoint } from "./checkpoint.js";
 import type { ReviewState } from "./state.js";
 
+/** 审查活跃期在 herdr:blocked 频道发布的占用标签；外部（Master）据此区分
+ * 「审查占用」与「Worker 真在提问」，本模块是跨模块接缝，故常量定在这里。 */
+export const REVIEW_OCCUPANCY_LABEL = "对抗审查进行中";
+
 export type ReviewOutcome =
-	| { status: "passed"; runId: string }
-	| { status: "stopped"; runId: string; advisorAdvice?: string }
-	| { status: "failed"; runId: string; reason: string }
+	| { status: "passed"; runId: string; rounds: number }
+	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string }
+	| { status: "failed"; runId: string; rounds: number; reason: string }
 	| { status: "in_progress"; runId: string }
 	| { status: "none"; runId?: string }
 	| { status: "error"; message: string };
@@ -41,16 +45,17 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 
 	if (latest.phase === "idle") return { status: "none", runId: latest.runId };
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
+	const rounds = latest.history.length;
 	const result = latest.history.at(-1)?.result;
-	if (result === "passed") return { status: "passed", runId: latest.runId };
+	if (result === "passed") return { status: "passed", runId: latest.runId, rounds };
 	// stopped（顾问叫停）与 failed（maxRounds 用尽）都是质量裁决终止；
 	// error / cancelled / timed_out 是基础设施故障或人为中断，不弱化成“停止”。
 	if (result === "stopped" || result === "failed") {
 		// 顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
 		const advice = latest.history.at(-1)?.advisor?.advice;
-		return { status: "stopped", runId: latest.runId, ...(advice ? { advisorAdvice: advice } : {}) };
+		return { status: "stopped", runId: latest.runId, rounds, ...(advice ? { advisorAdvice: advice } : {}) };
 	}
-	return { status: "failed", runId: latest.runId, reason: result ?? "unknown" };
+	return { status: "failed", runId: latest.runId, rounds, reason: result ?? "unknown" };
 }
 
 function isCheckpointEntry(value: unknown): value is { data: unknown } {

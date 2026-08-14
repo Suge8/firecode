@@ -39,6 +39,7 @@ import {
 	showActivity,
 	unlockEditor,
 } from "./ui.js";
+import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
@@ -56,7 +57,6 @@ import {
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 const STATUS_KEY = "fire-review";
 const OCCUPANCY_CHANNEL = "herdr:blocked";
-const OCCUPANCY_LABEL = "对抗审查进行中";
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
 const FEEDBACK_START_TIMEOUT_MS = 2_000;
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */

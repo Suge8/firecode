@@ -328,7 +328,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"审查随 /skill:implement 技能自动发生，审查提示词具备并行改动归因纪律，无需等其它工人停笔；herdr_agents 的 review action 只作补审后手（如轻量票事后需要把关）。工人落定时自审终态会随结果自动回传。",
 	"工人结果会以 custom follow-up message 回来。收到后决定继续 send、stop 为可恢复的休眠工人（Dormant Worker），或 stop forget=true 删除引用。",
 	"生命周期：一波集成过审后就 stop 该波工人（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应工人修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
-	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前 commit 自己改动的路径（禁止 push、禁止暂存他人文件），修复回合同样收尾即 commit；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
+	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
 	];
 }
 
@@ -336,8 +336,9 @@ function workerInstructions(name: string): string {
 	return `<firecode_worker name="${name}">
 你是指挥官（Master）委派的工人（Worker），不是指挥官，只完成收到的工作说明。
 义务：改完必须自己跑受影响的测试/检查，最终回复交付结论、已运行的验证命令与结果证据、未决风险。
-禁令（除非工作说明明确授权）：不碰 herdr 命令、不启动子 Agent、不 git push、不新增或升级依赖（跑现有依赖的测试不受限）、不写 checkout 之外的路径；git commit 只暂存自己改动的路径，不得暂存他人文件。
-工作说明含审查收口时按技能流程自审（先 commit 再经 code-review skill 发起）；指挥官也可能从外部对你的会话发起 /fire-review，审查反馈会自动驱动你修复。
+禁令（除非工作说明明确授权）：不碰 herdr 命令（唯一例外：code-review skill 的审查脚本，它内部用 herdr 触发审查，照常执行）、不启动子 Agent、不 git push、不新增或升级依赖（跑现有依赖的测试不受限）、不写 checkout 之外的路径。
+提交必须带路径：先 git add <你的路径>，再 git commit -m <msg> -- <你的路径>；带路径提交走临时索引，不会带上他人已暂存的内容；遇 index.lock 冲突稍候重试。
+工作说明含审查收口时按技能流程自审（先提交再经 code-review skill 发起）；指挥官也可能从外部对你的会话发起 /fire-review，审查反馈会自动驱动你修复。
 </firecode_worker>`;
 }
 

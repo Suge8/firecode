@@ -21,6 +21,7 @@ describe("review outcome reader", () => {
 		expect(readReviewOutcome(join(fixtures, "passed.jsonl"))).toEqual({
 			status: "passed",
 			runId: "passed-run",
+			rounds: 1,
 		});
 	});
 
@@ -35,6 +36,7 @@ describe("review outcome reader", () => {
 		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
 			status: "failed",
 			runId: "error-run",
+			rounds: 2,
 			reason: "error",
 		});
 	});
@@ -55,6 +57,7 @@ describe("review outcome reader", () => {
 		expect(readReviewOutcome(join(fixtures, "truncated-tail.jsonl"))).toEqual({
 			status: "passed",
 			runId: "truncated-run",
+			rounds: 1,
 		});
 	});
 

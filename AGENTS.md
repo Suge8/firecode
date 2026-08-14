@@ -93,10 +93,13 @@ Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane�
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。
 只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）。
-审查随 `/skill:implement` 技能内自审发生（先 commit 自己改动的路径再经 code-review skill 发起，
-审查提示词具备并行改动与测试干扰的归因纪律，不等其它 Worker 停笔）；review action 留作补审后手。
-轻重之分由派 `/skill:implement`（含自审）还是 `/skill:tdd`（不含）决定。Worker 落定时 Master
-读其自审终态（runId 相对监听基线推进才报，顾问叫停附裁决首行）随结果回传。
+审查随 `/skill:implement` 技能内自审发生（先带路径 commit 自己的改动再经 code-review skill 发起，
+`git commit -- <路径>` 走临时索引避免共享 index 串票；审查提示词具备并行改动与测试干扰的归因纪律，
+不等其它 Worker 停笔）；review action 留作补审后手。轻重之分由派 `/skill:implement`（含自审）还是
+`/skill:tdd`（不含）决定。工作监听把带占用标签（`review/outcome.ts` 的 REVIEW_OCCUPANCY_LABEL）的
+blocked 转为 `reviewing`（send 随之拒绝）并换跳过 blocked 的等待直到审查落终态，占用失效的轮间 idle
+退避重挂；Worker 落定时 Master 读自审终态（runId 相对监听基线推进才报）随结果回传，含轮数与
+顾问叫停的裁决首行；reload 中断的自审按 reviewing 状态由审查监听恢复。
 代码固定投递字面 `/fire-review`（`prompt --wait` 等投递后状态变化，stalled 时以 runId
 是否推进判定是否真的启动），状态转为 `reviewing`，在 `/fire-master status` 和状态栏显示并拒绝 send。审查监听只等
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，

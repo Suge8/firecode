@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
+import { REVIEW_OCCUPANCY_LABEL, readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import {
 	liveWorkers,
 	requireWorker,
@@ -593,8 +593,14 @@ export class HerdrWorkers {
 						await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
 						continue;
 					}
-					await this.handleSettlement(worker, settlement, controller.signal, selfReviewBaseline);
-					return;
+					const verdict = await this.handleSettlement(worker, settlement, controller.signal, selfReviewBaseline);
+					if (verdict === "done") return;
+					// 技能内自审：占用态（reviewing）或占用失效的轮间 idle（poll）都不是终态，
+					// 换用跳过 blocked 的等待直到审查落终态。
+					operation = "agent.wait(review)";
+					args = reviewWaitArgs(worker);
+					if (verdict === "poll") await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
+					continue;
 				} catch (error) {
 					if (controller.signal.aborted) return;
 					const current = currentWorkerRun(this.store.state.workers, worker);
@@ -616,34 +622,49 @@ export class HerdrWorkers {
 		}
 	}
 
+	/** 工作结算裁定：done=已终结；reviewing=自审占用中；poll=自审进行中但占用信号失效。 */
 	private async handleSettlement(
 		worker: WorkerRef,
 		response: Record<string, unknown>,
 		signal: AbortSignal,
 		selfReviewBaseline: string | null = null,
-	): Promise<void> {
+	): Promise<"done" | "reviewing" | "poll"> {
 		const agent = parseAgent(response);
 		const status = settlementStatus(agent);
 		const current = currentWorkerRun(this.store.state.workers, worker);
-		if (!current || current.status === "dormant") return;
+		if (!current || current.status === "dormant") return "done";
 		if (status === "blocked") {
-			const question = stateLabel(agent) ?? (await readLatestAssistant(current.sessionPath))?.text;
-			if (signal.aborted) return;
+			const label = stateLabel(agent);
+			// 审查占用不是 Worker 提问：转 reviewing（send 守卫随之拒绝追问），继续等终态。
+			if (label?.includes(REVIEW_OCCUPANCY_LABEL)) {
+				this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "reviewing" } });
+				return "reviewing";
+			}
+			const question = label ?? (await readLatestAssistant(current.sessionPath))?.text;
+			if (signal.aborted) return "done";
 			const blocked = currentWorkerRun(this.store.state.workers, worker);
-			if (!blocked || blocked.status === "dormant") return;
+			if (!blocked || blocked.status === "dormant") return "done";
 			this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...blocked, status } });
 			this.notifyMaster(workerBlockedText(blocked, question));
-			return;
+			return "done";
 		}
+		const outcome = worker.sessionPath ? readReviewOutcome(worker.sessionPath) : undefined;
+		const runId = outcome ? reviewRunId(outcome) : undefined;
+		const advanced = runId !== undefined && runId !== selfReviewBaseline;
+		// 自审仍在进行却观测到 idle：占用信号失效时的轮间窗口，不能就此结算。
+		if (advanced && outcome?.status === "in_progress") return "poll";
 		const latest = await this.latest(worker);
-		if (signal.aborted) return;
+		if (signal.aborted) return "done";
 		const settled = currentWorkerRun(this.store.state.workers, worker);
-		if (!settled || settled.status === "dormant") return;
+		if (!settled || settled.status === "dormant") return "done";
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
-		const review = selfReviewOutcomeLine(settled, selfReviewBaseline);
+		const review = advanced && outcome && outcome.status !== "none"
+			? `自审判定：${reviewOutcomeText(outcome)}`
+			: undefined;
 		if (!latest || latest.stopReason !== "stop" || latest.errorMessage)
 			this.notifyMaster(workerFailureText(settled, latest, review));
 		else this.notifyMaster(workerResultText(settled, latest, review));
+		return "done";
 	}
 
 	/** 返回审查监听是否已终结；false 表示审查仍在循环，调用方需重挂等待。 */
@@ -1000,12 +1021,12 @@ function reviewRunId(outcome: ReviewOutcome): string | undefined {
 }
 
 function reviewOutcomeText(outcome: ReviewOutcome): string {
-	if (outcome.status === "passed") return "通过";
+	if (outcome.status === "passed") return `通过（${outcome.rounds} 轮）`;
 	if (outcome.status === "stopped") {
 		const first = outcome.advisorAdvice?.split(/\r?\n/u).find((line) => line.trim())?.trim();
-		return first ? `停止（顾问：${first.slice(0, 160)}）` : "停止";
+		return `停止（${outcome.rounds} 轮${first ? `，顾问：${first.slice(0, 160)}` : ""}）`;
 	}
-	if (outcome.status === "failed") return `审查未完成（${outcome.reason}）`;
+	if (outcome.status === "failed") return `审查未完成（${outcome.reason}，第 ${outcome.rounds} 轮）`;
 	if (outcome.status === "in_progress") return "判定异常（审查仍在进行中）";
 	if (outcome.status === "none") return "判定异常（未找到审查）";
 	return `判定读取失败（${outcome.message}）`;
@@ -1036,16 +1057,6 @@ function workerResultText(worker: WorkerRef, latest: LatestAssistant, review?: s
 		...(review ? [review] : []),
 		latest.text ? `回复：\n${bounded(latest.text)}` : "回复为空。",
 	].join("\n");
-}
-
-/** 自审终态行：runId 相对基线推进且已落终态才报告，不拿上个任务的旧结果冒充。 */
-function selfReviewOutcomeLine(worker: WorkerRef, baseline: string | null): string | undefined {
-	if (!worker.sessionPath) return undefined;
-	const outcome = readReviewOutcome(worker.sessionPath);
-	const runId = reviewRunId(outcome);
-	if (!runId || runId === baseline) return undefined;
-	if (outcome.status === "in_progress" || outcome.status === "none") return undefined;
-	return `自审判定：${reviewOutcomeText(outcome)}`;
 }
 
 function workerHeader(worker: WorkerRef): string[] {

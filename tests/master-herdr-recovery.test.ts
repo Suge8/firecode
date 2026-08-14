@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrWorkers } from "../master/herdr.js";
@@ -984,6 +984,78 @@ test("a failed Herdr wait reattaches and still returns the result", async () => 
 	expect(store.state.workers[0]?.status).toBe("idle");
 	await rm(directory, { recursive: true, force: true });
 });
+
+test("in-skill self-review: occupancy blocked keeps waiting and the verdict rides the result", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-selfreview-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "message",
+		id: "a1",
+		parentId: null,
+		message: { role: "assistant", content: [{ type: "text", text: "交付完成" }], stopReason: "stop" },
+	}) + "\n");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker(), sessionPath } });
+	const waits: string[][] = [];
+	let resolveResult!: (value: string) => void;
+	const result = new Promise<string>((resolve) => { resolveResult = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[]) => {
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			if (args[0] === "agent" && args[1] === "wait") {
+				waits.push(args);
+				// 第一次结算：审查占用态——不是 Worker 提问，不得就此停止监听。
+				if (waits.length === 1)
+					return liveAgent("blocked", sessionPath, { review: "对抗审查进行中" });
+				// 审查落终态后才真正 idle：写入 2 轮通过的终态 checkpoint。
+				await appendFile(sessionPath, JSON.stringify(terminalReviewCheckpoint()) + "\n");
+				return liveAgent("idle", sessionPath);
+			}
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: (notice) => { if (notice.includes("已停下")) resolveResult(notice); },
+	});
+	await pool.resume();
+	const text = await result;
+	expect(text).toContain("自审判定：通过（2 轮）");
+	expect(text).toContain("交付完成");
+	// 占用态之后的等待必须跳过 blocked，直到审查落终态。
+	expect(waits[1]).toContain("--until");
+	expect(waits[1]).toContain("idle");
+	expect(store.state.workers[0]?.status).toBe("idle");
+	await rm(directory, { recursive: true, force: true });
+});
+
+function terminalReviewCheckpoint() {
+	const reviewers = (status: "passed" | "failed") => [
+		{ index: 0, model: "p/sol", thinking: "high", status, summary: "s", details: "d" },
+	];
+	return {
+		type: "custom",
+		customType: "firecode-review-checkpoint",
+		data: {
+			version: 4,
+			seq: 9,
+			runId: "run-self-1",
+			phase: "settled",
+			round: 2,
+			focus: "",
+			history: [
+				{ round: 1, result: "failed", details: "d", reviewers: reviewers("failed"), elapsedMs: 1 },
+				{ round: 2, result: "passed", details: "d", reviewers: reviewers("passed"), elapsedMs: 1 },
+			],
+			active: null,
+			pending: null,
+			repair: null,
+			consecutiveFailures: 1,
+			startedAt: 1,
+			roundStartedAt: 2,
+			updatedAt: 3,
+		},
+	};
+}
 
 test("done keeps the Worker live for Master follow-up", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-done-"));
