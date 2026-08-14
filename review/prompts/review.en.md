@@ -59,11 +59,11 @@ Verification commands exited 0, core logic verified.
 Evidence: files=src/auth.ts, src/session.ts; commands=npm test, npm run check
 ```
 
-If FAIL: write the finding list from the second line, exhausting all filed findings for the current phase, descending by severity, without omitting evidence; each finding states which contract or expected behavior it violates, without prescribing the fix — how to fix is the executor's call. Downgraded suggestions follow under `## Suggestions (non-blocking)`:
+If FAIL: write the finding list from the second line, exhausting all filed findings for the current phase, descending by severity, without omitting evidence; each finding states which agreement or expected behavior it violates, without prescribing the fix — how to fix is the executor's call. Bold the field labels exactly as templated, keep the order. Downgraded suggestions follow under `## Suggestions (non-blocking)`:
 
 ## Finding x: one-line problem title
-- Severity: High | Medium
-- Issue:
-- Evidence:
-- Contract or expected behavior violated:
-- Verification command to run:
+- **Severity**: High | Medium
+- **Issue**:
+- **Violated agreement & expected behavior**:
+- **Evidence**:
+- **Verification command**:

@@ -752,7 +752,7 @@ function appendClosedFindings(
 	for (const round of history) {
 		if (round.round >= beforeRound || round.result !== "failed") continue;
 		for (const line of round.details.split(/\r?\n/u)) {
-			const match = /^[-*+]\s*(?:问题|Issue)\s*[:：]\s*(.+)$/iu.exec(line.trim());
+			const match = /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(.+)$/iu.exec(line.trim());
 			const issue = match?.[1]?.replace(/`([^`]+)`/gu, "$1").trim();
 			if (!issue) continue;
 			const key = issue.replace(/\s+/gu, "");

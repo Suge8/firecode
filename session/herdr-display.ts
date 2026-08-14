@@ -37,17 +37,16 @@ export function registerHerdrDisplay(pi: ExtensionAPI): void {
 	const request = herdrRequest(socketPath);
 	let chain = Promise.resolve();
 	let published: string | undefined;
-	/** 链尾已入队的身份：同一身份在确认或失败前只入队一次，
-	 * 否则首次请求未返回前的密集事件会把相同 payload 重发 N 次；
-	 * 失败后清空，保持「失败静默并由下一事件重试」的既有语义。 */
+	/** 链尾意图：最近一次入队的身份。去重必须以它为准——拿已确认身份提前返回
+	 * 会让 A→B→A 快速切回把过时的 B 留在 pane 上；同时它挡住同身份密集事件的重发。
+	 * 失败且仍是链尾时清空，保持「失败静默并由下一事件重试」的既有语义。 */
 	let enqueued: string | undefined;
 
 	const publish = (identity: Identity): Promise<void> => {
 		const key = `${identity.title}\u0000${identity.agent}`;
-		if (key === published || key === enqueued) return chain;
+		if (key === (enqueued ?? published)) return chain;
 		enqueued = key;
 		chain = chain.then(async () => {
-			if (key === published) return;
 			const delivered = await request({
 				pane_id: paneId,
 				source: SOURCE,

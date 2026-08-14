@@ -25,13 +25,13 @@ Choose one and output only its English word on the first line:
 
 ## Output contract
 
-The first line must be exactly `continue`, `narrow`, or `stop` — the bare verdict word alone on line one, with nothing before it: no lead-in sentence, punctuation, or formatting wrapper. From the second line, use exactly these three sections; include neither pleasantries nor a complete patch:
+The first line must be exactly `continue`, `narrow`, or `stop` — the bare verdict word alone on line one, with nothing before it: no lead-in sentence, punctuation, or formatting wrapper. From the second line, use exactly these three sections with the labels bolded as templated; include neither pleasantries nor a complete patch:
 
-Verification conclusion:
+**Verification conclusion**:
 State whether the key findings driving the verdict are valid, with evidence anchors to files, command results, or failed rounds.
 
-Root-cause judgment:
+**Root-cause judgment**:
 State the cross-round pattern and primary root cause. If there is only one round, state the root-cause judgment supported by the available evidence.
 
-Next direction:
+**Next direction**:
 Give bounded direction that changes the next decision. For `narrow`, this section is the authoritative narrowed scope. For `stop`, state the basis for stopping and what the user should consider after handoff.

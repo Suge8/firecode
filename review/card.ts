@@ -203,7 +203,7 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 			language === "en" ? "Review stopped by advisor" : "审查已由顾问终止",
 			language,
 		);
-		const body = [advisorDecision("stop", card.advisorModel, language), "", card.advisor.advice];
+		const body = [advisorModelLine(card.advisorModel, language), "", card.advisor.advice];
 		return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
 	}
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
@@ -254,27 +254,24 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 	return spec(language, "error", title, lines, "warning", "🛑");
 }
 
+/** 顾问卡与审查结果卡同构：裁决进标题，正文用粗体模型分节行开头。 */
 function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Language): BuiltCard {
-	const body = [advisorDecision(card.advisor.verdict, card.advisorModel, language), "", card.advisor.advice];
+	const decision = decisionText(card.advisor.verdict, language);
+	const title = language === "en" ? `Advisor guidance · ${decision}` : `顾问指引 · ${decision}`;
+	const body = [advisorModelLine(card.advisorModel, language), "", card.advisor.advice];
 	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
-	return spec(
-		language,
-		"advisor",
-		language === "en" ? "Advisor advice" : "顾问建议",
-		withFooter(body, footer),
-		"neutral",
-		"🧭",
-	);
+	return spec(language, "advisor", title, withFooter(body, footer), "neutral", "🧭");
 }
 
-function advisorDecision(verdict: "continue" | "narrow" | "stop", model: string, language: Language) {
-	const decision = language === "en"
+function decisionText(verdict: "continue" | "narrow" | "stop", language: Language) {
+	return language === "en"
 		? { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" }[verdict]
 		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" }[verdict];
-	const name = shortModel(model);
-	return language === "en"
-		? `Decision: ${decision} · Advisor model: ${name}`
-		: `裁决：${decision} · 顾问模型：${name}`;
+}
+
+/** 与审查结果卡的「**模型 N · xxx**」分节行同款式。 */
+function advisorModelLine(model: string, language: Language) {
+	return `**${language === "en" ? "Model" : "模型"} · ${shortModel(model)}**`;
 }
 
 function qualityTitle(round: number, title: string, language: Language) {

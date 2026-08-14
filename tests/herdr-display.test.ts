@@ -138,6 +138,17 @@ test("concurrent same-identity events publish exactly once", async () => {
 	expect(herdr.requests).toHaveLength(1);
 });
 
+test("A→B→A rapid switch re-publishes A instead of leaving stale B", async () => {
+	const herdr = await herdrStub();
+	const handlers = await register(herdr.path);
+	// A 确认送达后，B 入队未返回时切回 A：A 必须重新入队，否则 pane 停在过时的 B。
+	await handlers.get("session_start")?.({}, context("身份-A"));
+	const second = handlers.get("session_info_changed")?.({}, context("身份-B"));
+	const third = handlers.get("session_info_changed")?.({}, context("身份-A"));
+	await Promise.all([second, third]);
+	expect(herdr.requests.map((item) => item.params.title)).toEqual(["身份-A", "身份-B", "身份-A"]);
+});
+
 test("stays silent outside TUI, inside Master Workers and outside herdr", async () => {
 	const herdr = await herdrStub();
 	const handlers = await register(herdr.path);

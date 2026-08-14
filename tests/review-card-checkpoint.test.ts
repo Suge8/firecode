@@ -62,9 +62,9 @@ describe("result card payload", () => {
 			advisor: { verdict: "continue", advice: "## 核实结论\n- 发现属实" },
 			advisorModel: "kimi-coding/k3-256k",
 		}, "zh");
-		expect(advice.details).toMatchObject({ title: "顾问建议", icon: "🧭", tone: "neutral" });
+		expect(advice.details).toMatchObject({ title: "顾问指引 · 继续修复", icon: "🧭", tone: "neutral" });
 		expect(advice.details.lines).toEqual([
-			"裁决：继续修复 · 顾问模型：k3-256k",
+			"**模型 · k3-256k**",
 			"",
 			"## 核实结论\n- 发现属实",
 		]);
@@ -79,7 +79,7 @@ describe("result card payload", () => {
 		}, "zh");
 		expect(stopped.details.title).toBe("第 2 轮审查已由顾问终止");
 		expect(stopped.details.lines).toEqual([
-			"裁决：停止修复 · 顾问模型：advisor",
+			"**模型 · advisor**",
 			"",
 			"不要再修",
 		]);

@@ -188,34 +188,35 @@ const FINDING_HEADING = /^#{1,6}\s*(?:发现|Finding)/u;
  * 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约。
  * 只校验字段存在且非空，不校验取值（如严重程度写“高危”不应被判非法）。
  */
+// 字段标签容忍可选粗体包裹与新旧两套措辞：滚动开放清单里可能混有旧格式发现的复述。
 const FINDING_FIELDS = [
 	{
 		key: "severity",
 		zh: "严重程度",
 		en: "Severity",
 		// 提示词规定阻塞发现只有高/中；低严重度必须进建议区，不得驱动修复循环。
-		pattern: /^[-*+]\s*(?:严重程度|Severity)\s*[:：]\s*(?:高|中|High|Medium)\s*$/iu,
+		pattern: /^[-*+]\s*(?:\*\*)?(?:严重程度|Severity)(?:\*\*)?\s*[:：]\s*(?:高|中|High|Medium)\s*$/iu,
 	},
-	{ key: "issue", zh: "问题", en: "Issue", pattern: /^[-*+]\s*(?:问题|Issue)\s*[:：]\s*(\S.*)$/u },
+	{ key: "issue", zh: "问题", en: "Issue", pattern: /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(\S.*)$/u },
 	{
 		key: "evidence",
 		zh: "证据",
 		en: "Evidence",
-		pattern: /^[-*+]\s*(?:证据|Evidence)\s*[:：]\s*(\S.*)$/u,
+		pattern: /^[-*+]\s*(?:\*\*)?(?:证据|Evidence)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
 	},
 	{
 		key: "contract",
-		zh: "违反的契约或期望行为",
-		en: "Contract or expected behavior violated",
+		zh: "违反的约定与期望行为",
+		en: "Violated agreement & expected behavior",
 		pattern:
-			/^[-*+]\s*(?:违反的契约(?:或期望行为)?|Contract(?: or expected behavior)? violated)\s*[:：]\s*(\S.*)$/u,
+			/^[-*+]\s*(?:\*\*)?(?:违反的(?:约定与期望(?:行为)?|契约(?:或期望行为)?)|Violated agreement(?: & expected behavior)?|Contract(?: or expected behavior)? violated)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
 	},
 	{
 		key: "commands",
-		zh: "需要运行的验证命令",
-		en: "Verification command to run",
+		zh: "验证命令",
+		en: "Verification command",
 		pattern:
-			/^[-*+]\s*(?:(?:需要运行的)?验证命令|Verification commands? to run|Verification commands?)\s*[:：]\s*(\S.*)$/u,
+			/^[-*+]\s*(?:\*\*)?(?:(?:需要运行的)?验证命令|Verification commands?(?: to run)?)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
 	},
 ] as const;
 const SUGGESTIONS_HEADING = /^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/iu;
