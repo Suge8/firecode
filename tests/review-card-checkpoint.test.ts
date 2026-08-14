@@ -328,6 +328,25 @@ describe("prompt assembly", () => {
 		});
 		expect(second).toContain("往轮发现清单");
 		expect(second).toContain("auth");
+
+		// 顾问裁决必须随往轮发现注入：这是僵尸发现收敛闭环的数据流边，缺了会退回拉锯循环。
+		const adjudicated = buildReviewPrompt("# 模板", {
+			language: "zh",
+			scope: "s",
+			focus: "",
+			evidence: "e",
+			history: [{
+				round: 1,
+				result: "failed" as const,
+				details: "FAIL\n## 发现 1\n- 问题: reload 宽限",
+				reviewers: [],
+				advisor: { verdict: "narrow" as const, advice: "reload 宽限是已文档化的接受风险，移出循环。" },
+				elapsedMs: 100,
+			}],
+			round: 2,
+		});
+		expect(adjudicated).toContain("顾问裁决（narrow）");
+		expect(adjudicated).toContain("已文档化的接受风险");
 	});
 
 	test("fix feedback frames findings as hypotheses and attaches advisor advice", async () => {

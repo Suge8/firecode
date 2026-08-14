@@ -93,9 +93,10 @@ Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane�
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。
 只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）。
-审查意图在 `start` 的 `review:true` 参数声明、持久化进 Worker 档案（reload 不丢）、一次性消耗：
-Worker 成功落定即由机器自动发起 review action 补审并回传终态（含轮数与顾问裁决首行），失败落定不审并注明；
-派发时即验 review 可用性，不可用直接拒绝 start。无推断、无服从性赌博——这是自审模型五轮审查后的第一性收口：
+审查意图在 `start` 的 `review:true` 参数声明、持久化进 Worker 档案；意图只在 review 确认启动
+（状态变化或 runId 推进）时消耗——投递失败保留意图并通知，reload/reconcile 与休眠恢复都凭档案续上补审；
+投递窗口内的审查票拒绝 send（blocked 提问的回答通道不受影响）。Worker 成功落定即自动发起补审并回传终态
+（含轮数与顾问裁决首行），失败落定不审、意图保留；派发时即验 review 可用性，不可用直接拒绝 start。无推断、无服从性赌博——这是自审模型五轮审查后的第一性收口：
 生命周期完整复用 review action 路径，工作监听只把带占用标签（`review/outcome.ts` 的 REVIEW_OCCUPANCY_LABEL）
 的 blocked 归类为外部审查占用（转 reviewing 等终态）而非 Worker 提问。轻重之分 = review 参数；
 `/skill:implement`（内含自审）是用户 solo 技能，Master 委派禁用。

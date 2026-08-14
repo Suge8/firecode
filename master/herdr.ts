@@ -171,7 +171,7 @@ export class HerdrWorkers {
 			paneId: "starting",
 			tabId: "starting",
 			...(sessionPath ? { sessionPath } : {}),
-			...(options.review ? { reviewNeeded: true } : {}),
+			...(options.review || dormant?.reviewNeeded ? { reviewNeeded: true } : {}),
 		};
 		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听；排队期被 stop 的直接短路。
 		const startController = pending ?? new AbortController();
@@ -265,6 +265,9 @@ export class HerdrWorkers {
 			throw new Error(`${worker.name} 正在对抗审查，期间不能接收追问`);
 		if (worker.status !== "idle" && worker.status !== "blocked")
 			throw new Error(`${worker.name} 当前是 ${worker.status}，不能接收追问`);
+		// blocked（提问）时 send 是回答通道必须放行；idle 且审查意图未消耗 = 自动审查投递窗口，追问会撞审查。
+		if (worker.status === "idle" && worker.reviewNeeded)
+			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
 		const active = { ...worker, status: "working" as const };
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: active });
@@ -283,7 +286,7 @@ export class HerdrWorkers {
 			await this.run("agent.prompt(review)", [
 				"agent", "prompt", requiredPane(worker), "/fire-review",
 				"--wait", "--until", "working", "--until", "blocked", "--timeout", "8000",
-			], 15_000);
+			], 15_000, this.lifecycle.signal);
 		} catch (error) {
 			if (!isPromptStall(error)) throw error;
 			// 占用信号失效时会话可能全程观察不到状态变化：以 runId 是否推进判定审查是否真的启动。
@@ -293,8 +296,11 @@ export class HerdrWorkers {
 			if (observed === previousRunId)
 				throw new Error(`${worker.name} 审查未启动：投递后状态与 fire-review runId 均无变化`);
 		}
+		// 审查意图在此消耗：只有确认审查真正启动（状态变化或 runId 推进）才算送达，
+		// 投递失败时意图保留在档案里，由 reload/resume 自动重试或手动 review 兜底。
+		const { reviewNeeded: _consumed, ...launched } = worker;
 		const reviewing = {
-			...worker,
+			...launched,
 			status: "reviewing" as const,
 			reviewPreviousRunId: previousRunId,
 		};
@@ -504,6 +510,8 @@ export class HerdrWorkers {
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: refreshed });
 		if (refreshed.status === "reviewing") void this.monitorReview(refreshed);
 		else if (refreshed.status === "working") void this.monitorWait(refreshed);
+		// reload 落在自动审查投递窗口内：意图仍在档案里，凭它续上被打断的补审。
+		else if (refreshed.status === "idle" && refreshed.reviewNeeded) void this.autoReview(refreshed.name);
 	}
 
 	private makeDormantOrForget(worker: WorkerRef, reason: string): void {
@@ -648,30 +656,33 @@ export class HerdrWorkers {
 		if (signal.aborted) return "done";
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return "done";
-		// 审查意图一次性消耗：自动补审只针对本次交付，后续追问由指挥官按需手动 review。
-		const { reviewNeeded, ...rest } = settled;
-		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...rest, status: "idle" } });
+		// 意图不在此消耗：只有 review() 确认启动才消耗，失败与 reload 都能凭档案重试。
+		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
 		if (!latest || latest.stopReason !== "stop" || latest.errorMessage) {
-			this.notifyMaster(workerFailureText(settled, latest, reviewNeeded
-				? "审查票执行失败：未发起自动审查"
+			this.notifyMaster(workerFailureText(settled, latest, settled.reviewNeeded
+				? "审查票：执行失败未发起自动审查，意图保留"
 				: undefined));
 			return "done";
 		}
-		if (reviewNeeded) {
-			// 意图在派发时用参数声明、持久化进 Worker 档案（reload 不丢），机器在此执行：
-			// 无推断、无服从性赌博，审查生命周期完整复用 review action 路径。
-			this.notifyMaster(workerResultText(settled, latest, "审查票：已自动发起对抗审查，终态另行回传"));
-			try {
-				await this.review(settled.name);
-			} catch (error) {
-				this.notifyMaster(
-					`Worker ${settled.name} 自动审查发起失败（可用 review action 补审）：${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
+		if (settled.reviewNeeded) {
+			// 先如实回传「将发起」，成功与否由 review()/autoReview 各自落地，不提前宣称已启动。
+			this.notifyMaster(workerResultText(settled, latest, "审查票：将自动发起对抗审查，终态另行回传"));
+			await this.autoReview(settled.name);
 			return "done";
 		}
 		this.notifyMaster(workerResultText(settled, latest));
 		return "done";
+	}
+
+	/** 审查票自动补审：意图只在 review() 成功转入 reviewing 时消耗；失败保留意图待重试。 */
+	private async autoReview(name: string): Promise<void> {
+		try {
+			await this.review(name);
+		} catch (error) {
+			this.notifyMaster(
+				`Worker ${name} 自动审查发起失败（意图保留，reload 后自动重试，也可手动 review）：${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	/** 返回审查监听是否已终结；false 表示审查仍在循环，调用方需重挂等待。 */
@@ -1002,6 +1013,8 @@ function dormantWorker(worker: WorkerRef): WorkerRef {
 		thinking: worker.thinking,
 		status: "dormant",
 		sessionPath: worker.sessionPath,
+		// 未消耗的审查意图随休眠保留：恢复后完成交付仍会自动补审。
+		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
 	};
 }
 

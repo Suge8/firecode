@@ -1038,7 +1038,7 @@ test("review-flagged worker settles, auto-review fires and relays the verdict", 
 		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
 	}) + "\n");
 	const store = createStore();
-	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath, reviewNeeded: true } });
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("working"), sessionPath, reviewNeeded: true } });
 	const notices: string[] = [];
 	let resolveVerdict!: (value: string) => void;
 	const verdict = new Promise<string>((resolve) => { resolveVerdict = resolve; });
@@ -1061,15 +1061,63 @@ test("review-flagged worker settles, auto-review fires and relays the verdict", 
 			if (notice.includes("判定")) resolveVerdict(notice);
 		},
 	});
-	await pool.send("worker-1", "按 01 工单实现");
+	await pool.resume();
 	const text = await verdict;
 	// 结果与审查终态两条回传：先「已自动发起」，再「判定：通过（2 轮）」。
-	expect(notices.some((notice) => notice.includes("已自动发起对抗审查"))).toBe(true);
+	expect(notices.some((notice) => notice.includes("将自动发起对抗审查"))).toBe(true);
 	expect(text).toContain("判定：通过（2 轮）");
 	// 审查意图一次性消耗：档案里不再带 reviewNeeded。
 	expect(store.state.workers[0]?.reviewNeeded).toBeUndefined();
 	expect(store.state.workers[0]?.status).toBe("idle");
 	await rm(directory, { recursive: true, force: true });
+});
+
+test("auto-review delivery failure keeps the intent for retry", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-autoreview-fail-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "message",
+		id: "a1",
+		parentId: null,
+		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
+	}) + "\n");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath, reviewNeeded: true } });
+	let resolveFailure!: (value: string) => void;
+	const failure = new Promise<string>((resolve) => { resolveFailure = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[]) => {
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			if (args[0] === "agent" && args[1] === "prompt" && args.includes("/fire-review"))
+				return { code: 1, stdout: "", stderr: "herdr unavailable", killed: false };
+			if (args[0] === "agent" && (args[1] === "prompt" || args[1] === "wait")) return liveAgent("idle", sessionPath);
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: (notice) => { if (notice.includes("自动审查发起失败")) resolveFailure(notice); },
+	});
+	await pool.send("worker-1", "按 01 工单实现").catch(() => {});
+	// send 守卫会拒绝审查票：直接用工作监听路径触发结算。
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("working"), sessionPath, reviewNeeded: true } });
+	await pool.resume();
+	const text = await failure;
+	expect(text).toContain("意图保留");
+	// 意图未消耗：档案仍带 reviewNeeded，reload/手动 review 可重试。
+	expect(store.state.workers[0]?.reviewNeeded).toBe(true);
+	await rm(directory, { recursive: true, force: true });
+});
+
+test("send is rejected while a review ticket awaits its automatic review", async () => {
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), reviewNeeded: true } });
+	const pool = new HerdrWorkers({
+		pi: { exec: async () => response({}) } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: () => {},
+	});
+	await expect(pool.send("worker-1", "追问")).rejects.toThrow("待自动审查");
 });
 
 function terminalReviewCheckpoint() {
