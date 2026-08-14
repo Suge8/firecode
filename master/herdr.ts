@@ -122,7 +122,12 @@ export class HerdrWorkers {
 		});
 	}
 
-	/** 串行临界区：名字/模型解析、布局容量计算、shell 创建与占位状态写入。不含任何长等待。 */
+	/**
+	 * 串行临界区：名字/模型解析、布局容量计算、shell 创建与占位状态写入。
+	 * shell 创建必须留在串行区：后一个工人的象限切分依赖前一个 pane 的落位，
+	 * 并发创建会互相拿错容量、误切同一 pane；代价是宿主降级时（pane/tab 创建慢）
+	 * 后续分配最长等 60 秒，这是保布局正确性的有意取舍；shell 握手与 agent 启动已在队外并行。
+	 */
 	private async allocateWorker(
 		ctx: ExtensionContext,
 		options: StartWorkerOptions,
