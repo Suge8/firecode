@@ -4,7 +4,7 @@ import type { ReviewState } from "./state.js";
 
 export type ReviewOutcome =
 	| { status: "passed"; runId: string }
-	| { status: "stopped"; runId: string }
+	| { status: "stopped"; runId: string; advisorAdvice?: string }
 	| { status: "failed"; runId: string; reason: string }
 	| { status: "in_progress"; runId: string }
 	| { status: "none"; runId?: string }
@@ -45,7 +45,11 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 	if (result === "passed") return { status: "passed", runId: latest.runId };
 	// stopped（顾问叫停）与 failed（maxRounds 用尽）都是质量裁决终止；
 	// error / cancelled / timed_out 是基础设施故障或人为中断，不弱化成“停止”。
-	if (result === "stopped" || result === "failed") return { status: "stopped", runId: latest.runId };
+	if (result === "stopped" || result === "failed") {
+		// 顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
+		const advice = latest.history.at(-1)?.advisor?.advice;
+		return { status: "stopped", runId: latest.runId, ...(advice ? { advisorAdvice: advice } : {}) };
+	}
 	return { status: "failed", runId: latest.runId, reason: result ?? "unknown" };
 }
 

@@ -93,7 +93,10 @@ Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane�
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
 pane 命名失败不影响启动只通知。
 只有 `idle` Worker 可 review，且 review 关闭或配置有误时 action 在投递前拒绝（否则命令会退化成普通模型输入）。
-Master 只对产出代码变更的重要交付发起 review，发起前须确认没有其它 Worker 正在写共享 checkout；只读调查型 Worker 照常并行，不阻塞审查，也不被审查。
+审查随 `/skill:implement` 技能内自审发生（先 commit 自己改动的路径再经 code-review skill 发起，
+审查提示词具备并行改动与测试干扰的归因纪律，不等其它 Worker 停笔）；review action 留作补审后手。
+轻重之分由派 `/skill:implement`（含自审）还是 `/skill:tdd`（不含）决定。Worker 落定时 Master
+读其自审终态（runId 相对监听基线推进才报，顾问叫停附裁决首行）随结果回传。
 代码固定投递字面 `/fire-review`（`prompt --wait` 等投递后状态变化，stalled 时以 runId
 是否推进判定是否真的启动），状态转为 `reviewing`，在 `/fire-master status` 和状态栏显示并拒绝 send。审查监听只等
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，
@@ -103,10 +106,11 @@ Worker Pool 状态 schema 为 v4、兼容 v3，用 mode 0600 的单个文件原�
 quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning skill；多个 Worker 可并行写共享 checkout，Master 负责最终集成与验证。
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
-实现类委派（有 spec/工单）以 `/skill:implement ` 开头，注明跳过技能内 code-review 与提交步骤；
+实现类委派（有 spec/工单）以 `/skill:implement ` 开头，技能内流程自带 commit 与 fire-review 自审；
+工人 commit 只暂存自己改动的路径、禁止 push，指挥官在集成点验证后统一 push。
 斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；
-隔离是纪律不是能力边界：系统提示禁令（herdr、git commit/push、装依赖、越界写）+ 自测义务 +
+隔离是纪律不是能力边界：系统提示禁令（herdr、git push、装依赖、越界写；commit 限自己路径）+ 自测义务 +
 fire-review + Master diff 检查 + git 回滚。`tool_call` 仍把 edit/write 限在当前 checkout（含真实路径
 解析），定位是防误伤——bash 可绕过，不伪装成隔离；真需物理隔离得上容器或只读挂载。
 新 tab 用 zsh precmd 标记等真实 shell prompt。

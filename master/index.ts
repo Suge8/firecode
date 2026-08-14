@@ -323,12 +323,12 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
 	"复杂工作先用当前已加载的 planning skill 拆分；herdr_agents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
 	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些动作。",
-	"实现类委派若有 spec 或工单，委派文本第一行以 `/skill:implement ` 开头——技能名后必须紧跟空格再接内容；斜杠技能只在文本开头才展开，写错不报错、只会静默失去技能内容。空格后接工单路径与自包含委派文本，并显式注明跳过技能内的 /code-review 与提交步骤：审查由指挥官按纪律外投 fire-review 并检查合并 diff，commit 只由指挥官在集成点执行。调查、分析类委派不用此技能。",
+	"轻重之分靠派哪个技能：重要实现票（有 spec/工单）委派文本第一行以 `/skill:implement ` 开头，技能内流程会 commit 自己的改动并自发 fire-review 自审，无需指挥官外投；轻量修补票以 `/skill:tdd ` 开头；调查、分析票两者都不用。斜杠技能名后必须紧跟空格再接内容，且只在文本开头才展开，写错不报错、只会静默失去技能内容。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
-	"只对产出代码变更的重要交付发起 review；发起前确认没有其它工人正在写共享 checkout。只读调查型工人照常并行，不阻塞审查，也不对其发起 review。",
+	"审查随 /skill:implement 技能自动发生，审查提示词具备并行改动归因纪律，无需等其它工人停笔；herdr_agents 的 review action 只作补审后手（如轻量票事后需要把关）。工人落定时自审终态会随结果自动回传。",
 	"工人结果会以 custom follow-up message 回来。收到后决定继续 send、stop 为可恢复的休眠工人（Dormant Worker），或 stop forget=true 删除引用。",
 	"生命周期：一波集成过审后就 stop 该波工人（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应工人修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
-	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。指挥官必须检查合并后的 diff 并运行集成层验证，再向用户报告完成；commit 只由指挥官在集成点执行，工人不 commit。",
+	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前 commit 自己改动的路径（禁止 push、禁止暂存他人文件），修复回合同样收尾即 commit；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
 	];
 }
 
@@ -336,8 +336,8 @@ function workerInstructions(name: string): string {
 	return `<firecode_worker name="${name}">
 你是指挥官（Master）委派的工人（Worker），不是指挥官，只完成收到的工作说明。
 义务：改完必须自己跑受影响的测试/检查，最终回复交付结论、已运行的验证命令与结果证据、未决风险。
-禁令（除非工作说明明确授权）：不碰 herdr 命令、不启动子 Agent、不 git commit/push、不新增或升级依赖（跑现有依赖的测试不受限）、不写 checkout 之外的路径。
-全部完成停下后，指挥官可能从外部对你的会话发起 /fire-review 对抗审查，审查反馈会自动驱动你修复；你自己无法也无需触发它。
+禁令（除非工作说明明确授权）：不碰 herdr 命令、不启动子 Agent、不 git push、不新增或升级依赖（跑现有依赖的测试不受限）、不写 checkout 之外的路径；git commit 只暂存自己改动的路径，不得暂存他人文件。
+工作说明含审查收口时按技能流程自审（先 commit 再经 code-review skill 发起）；指挥官也可能从外部对你的会话发起 /fire-review，审查反馈会自动驱动你修复。
 </firecode_worker>`;
 }
 

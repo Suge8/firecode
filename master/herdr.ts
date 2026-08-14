@@ -567,6 +567,11 @@ export class HerdrWorkers {
 	): Promise<void> {
 		const controller = new AbortController();
 		this.runs.set(worker.name, controller);
+		// 自审基线：工作监听开始时的审查 runId；结算时 runId 推进才算本次任务内的自审终态。
+		// reload 后重挂若错过已完结的自审，只损失一行判定信息，不会误报旧结果。
+		const selfReviewBaseline = mode === "work" && worker.sessionPath
+			? reviewRunId(readReviewOutcome(worker.sessionPath)) ?? null
+			: null;
 		let failures = 0;
 		try {
 			while (!controller.signal.aborted) {
@@ -588,7 +593,7 @@ export class HerdrWorkers {
 						await retryDelay(REVIEW_POLL_DELAY_MS, controller.signal);
 						continue;
 					}
-					await this.handleSettlement(worker, settlement, controller.signal);
+					await this.handleSettlement(worker, settlement, controller.signal, selfReviewBaseline);
 					return;
 				} catch (error) {
 					if (controller.signal.aborted) return;
@@ -615,6 +620,7 @@ export class HerdrWorkers {
 		worker: WorkerRef,
 		response: Record<string, unknown>,
 		signal: AbortSignal,
+		selfReviewBaseline: string | null = null,
 	): Promise<void> {
 		const agent = parseAgent(response);
 		const status = settlementStatus(agent);
@@ -634,9 +640,10 @@ export class HerdrWorkers {
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return;
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
+		const review = selfReviewOutcomeLine(settled, selfReviewBaseline);
 		if (!latest || latest.stopReason !== "stop" || latest.errorMessage)
-			this.notifyMaster(workerFailureText(settled, latest));
-		else this.notifyMaster(workerResultText(settled, latest));
+			this.notifyMaster(workerFailureText(settled, latest, review));
+		else this.notifyMaster(workerResultText(settled, latest, review));
 	}
 
 	/** 返回审查监听是否已终结；false 表示审查仍在循环，调用方需重挂等待。 */
@@ -994,14 +1001,21 @@ function reviewRunId(outcome: ReviewOutcome): string | undefined {
 
 function reviewOutcomeText(outcome: ReviewOutcome): string {
 	if (outcome.status === "passed") return "通过";
-	if (outcome.status === "stopped") return "停止";
+	if (outcome.status === "stopped") {
+		const first = outcome.advisorAdvice?.split(/\r?\n/u).find((line) => line.trim())?.trim();
+		return first ? `停止（顾问：${first.slice(0, 160)}）` : "停止";
+	}
 	if (outcome.status === "failed") return `审查未完成（${outcome.reason}）`;
 	if (outcome.status === "in_progress") return "判定异常（审查仍在进行中）";
 	if (outcome.status === "none") return "判定异常（未找到审查）";
 	return `判定读取失败（${outcome.message}）`;
 }
 
-function workerFailureText(worker: WorkerRef, latest: LatestAssistant | undefined): string {
+function workerFailureText(
+	worker: WorkerRef,
+	latest: LatestAssistant | undefined,
+	review?: string,
+): string {
 	const details = latest ? [
 		latest.stopReason ? `停止原因：${latest.stopReason}` : undefined,
 		latest.errorMessage,
@@ -1010,16 +1024,28 @@ function workerFailureText(worker: WorkerRef, latest: LatestAssistant | undefine
 	return [
 		`Worker ${worker.name} 执行失败`,
 		...workerHeader(worker),
+		...(review ? [review] : []),
 		`错误：\n${bounded(details)}`,
 	].join("\n");
 }
 
-function workerResultText(worker: WorkerRef, latest: LatestAssistant): string {
+function workerResultText(worker: WorkerRef, latest: LatestAssistant, review?: string): string {
 	return [
 		`Worker ${worker.name} 已停下`,
 		...workerHeader(worker),
+		...(review ? [review] : []),
 		latest.text ? `回复：\n${bounded(latest.text)}` : "回复为空。",
 	].join("\n");
+}
+
+/** 自审终态行：runId 相对基线推进且已落终态才报告，不拿上个任务的旧结果冒充。 */
+function selfReviewOutcomeLine(worker: WorkerRef, baseline: string | null): string | undefined {
+	if (!worker.sessionPath) return undefined;
+	const outcome = readReviewOutcome(worker.sessionPath);
+	const runId = reviewRunId(outcome);
+	if (!runId || runId === baseline) return undefined;
+	if (outcome.status === "in_progress" || outcome.status === "none") return undefined;
+	return `自审判定：${reviewOutcomeText(outcome)}`;
 }
 
 function workerHeader(worker: WorkerRef): string[] {
