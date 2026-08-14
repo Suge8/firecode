@@ -764,7 +764,7 @@ function appendClosedFindings(
 	if (findings.length === 0) return summary;
 	const shown = findings.slice(0, 6);
 	const recap = [
-		language === "en" ? "Issues closed in this check:" : "本次收口的问题：",
+		language === "en" ? "**Issues closed in this check**:" : "**本次收口的问题**：",
 		...shown.map((finding) =>
 			`• ${finding.issue}${language === "en" ? ` (Round ${finding.round})` : `（第 ${finding.round} 轮）`}`,
 		),

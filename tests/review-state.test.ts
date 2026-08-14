@@ -135,7 +135,7 @@ describe("fire-review reducer", () => {
 		const result = settle(state, 1, "passed", "PASS\nok");
 		const effect = result.effects[0];
 		const summary = effect?.kind === "send_card" && effect.card.kind === "pass" ? effect.card.summary : "";
-		expect(summary).toContain("本次收口的问题：");
+		expect(summary).toContain("**本次收口的问题**：");
 		expect(summary).toContain("• stale lock（第 1 轮）");
 	});
 

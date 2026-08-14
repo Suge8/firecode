@@ -25,7 +25,7 @@ Choose one and output only its English word on the first line:
 
 ## Output contract
 
-The first line must be exactly `continue`, `narrow`, or `stop` — the bare verdict word alone on line one, with nothing before it: no lead-in sentence, punctuation, or formatting wrapper. From the second line, use exactly these three sections with the labels bolded as templated; include neither pleasantries nor a complete patch:
+The first line must be exactly `continue`, `narrow`, or `stop` — the bare verdict word alone on line one, with nothing before it: no lead-in sentence, punctuation, or formatting wrapper. From the second line, use exactly these three sections with the labels bolded as templated, the first sentence starting right after the colon on the same line, and multiple points split into `- ` bullets instead of dense paragraphs; include neither pleasantries nor a complete patch:
 
 **Verification conclusion**:
 State whether the key findings driving the verdict are valid, with evidence anchors to files, command results, or failed rounds.

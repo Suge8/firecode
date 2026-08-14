@@ -330,6 +330,12 @@ function normalizedReviewLines(review: string) {
 	const output: string[] = [];
 	for (const line of lines) {
 		if (line.trim() === "" && (output.length === 0 || output.at(-1) === "")) continue;
+		// 证据/验证命令是取证区：与上面的结论区空一行分隔，密集长行不再糊成一片。
+		if (
+			/^[-*+]?\s*(?:\*\*)?(?:证据|Evidence)(?:\*\*)?\s*[:：]/u.test(line.trim()) &&
+			output.length > 0 &&
+			output.at(-1) !== ""
+		) output.push("");
 		output.push(line.trim() === "" ? "" : line);
 	}
 	while (output.at(-1) === "") output.pop();
