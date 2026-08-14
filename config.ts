@@ -44,6 +44,26 @@ export interface ReviewConfig {
 	language: Language;
 }
 
+/** Master 选型表条目：注入 herdr_agents 提示词，供派发时选型。 */
+export interface MasterModel {
+	/** 真实模型 id：provider/model。 */
+	model: string;
+	thinking: ThinkingLevelValue;
+	/** 适用场景。 */
+	use: string;
+}
+
+export interface MasterConfig {
+	models: MasterModel[];
+}
+
+export const DEFAULT_MASTER_MODELS: MasterModel[] = [
+	{ model: "openai-codex/gpt-5.6-sol", thinking: "medium", use: "调研与实现/调试，调研完就在原 Worker 会话继续实现" },
+	{ model: "openai-codex/gpt-5.6-luna", thinking: "medium", use: "大规模并行快任务：整库扫冗余、批量审查、跨语言迁移，成批开多个" },
+	{ model: "anthropic/claude-fable-5", thinking: "medium", use: "架构" },
+	{ model: "kimi-coding/k3-256k", thinking: "medium", use: "设计师" },
+];
+
 export const FEATURES = [
 	"header",
 	"statusbar",
@@ -54,6 +74,7 @@ export const FEATURES = [
 	"claudeSub",
 	"openaiNative",
 	"review",
+	"master",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
@@ -75,6 +96,7 @@ export interface FireCodeConfig {
 	keys: FireCodeKeys;
 	presets: Record<string, Preset>;
 	review: ReviewConfig;
+	master: MasterConfig;
 }
 
 export type LoadedConfig = {
@@ -214,8 +236,12 @@ export function loadConfig(): LoadedConfig {
 	if (raw.review !== undefined && !isPlainObject(raw.review))
 		problems.push("review 必须是对象");
 	const review = parseReviewConfig(asRecord(raw.review), problems);
+	// master 同理：花名册错误会拿错模型真实发起 Worker，不能静默当空对象。
+	if (raw.master !== undefined && !isPlainObject(raw.master))
+		problems.push("master 必须是对象");
+	const master = parseMasterConfig(asRecord(raw.master), problems);
 
-	cached = { config: { features, keys, presets, review }, problems };
+	cached = { config: { features, keys, presets, review, master }, problems };
 	return cached;
 }
 
@@ -350,6 +376,42 @@ function reviewBackground(value: unknown, problems: string[]): string {
 		return "pi";
 	}
 	return typeof command === "string" ? command : "pi";
+}
+
+// ---- master 节 ----
+
+/** 导出供测试：与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
+export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
+	for (const key of Object.keys(raw))
+		if (key !== "models") problems.push(`未知字段 master.${key}`);
+	if (raw.models === undefined) return { models: [...DEFAULT_MASTER_MODELS] };
+	if (!Array.isArray(raw.models) || raw.models.length === 0 || raw.models.length > 8) {
+		problems.push("master.models 必须包含 1–8 个模型");
+		return { models: [...DEFAULT_MASTER_MODELS] };
+	}
+	const models = raw.models.map((item, index) => masterModel(item, `master.models[${index}]`, problems));
+	if (new Set(models.map((entry) => entry.model)).size !== models.length)
+		problems.push("master.models 模型不能重复");
+	return { models };
+}
+
+function masterModel(value: unknown, field: string, problems: string[]): MasterModel {
+	const record = asRecord(value);
+	rejectUnknownKeys(record, ["model", "thinking", "use"], field, problems);
+	const model = typeof record.model === "string" && record.model ? record.model : "";
+	if (!model) problems.push(`${field}.model 必须是非空字符串`);
+	let thinking: ThinkingLevelValue = "medium";
+	if (record.thinking !== undefined) {
+		if (typeof record.thinking === "string" && THINKING_LEVELS.has(record.thinking as ThinkingLevelValue))
+			thinking = record.thinking as ThinkingLevelValue;
+		else problems.push(`${field}.thinking 值无效`);
+	}
+	let use = "通用";
+	if (record.use !== undefined) {
+		if (typeof record.use === "string" && record.use) use = record.use;
+		else problems.push(`${field}.use 必须是非空字符串`);
+	}
+	return { model, thinking, use };
 }
 
 function reviewLanguage(value: unknown, problems: string[]): Language {

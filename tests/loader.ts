@@ -40,7 +40,11 @@ async function rewriteImports(directory: string): Promise<void> {
  */
 export async function loadFirecodeModule(
 	entry: string,
-	options: { configJsonc?: string } = {},
+	options: {
+		configJsonc?: string;
+		replacements?: Record<string, string>;
+		extraFiles?: Record<string, string>;
+	} = {},
 ): Promise<Record<string, unknown>> {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-test-"));
 	created.push(directory);
@@ -48,7 +52,16 @@ export async function loadFirecodeModule(
 	await rm(join(directory, "tests"), { recursive: true, force: true });
 	if (options.configJsonc !== undefined)
 		await writeFile(join(directory, "config.jsonc"), options.configJsonc);
+	for (const [path, content] of Object.entries(options.extraFiles ?? {})) {
+		const destination = join(directory, path);
+		await writeFile(destination, content);
+	}
 	await rewriteImports(directory);
+	for (const [oldText, newText] of Object.entries(options.replacements ?? {})) {
+		const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
+		const path = join(directory, sourceEntry);
+		await writeFile(path, (await readFile(path, "utf8")).replace(oldText, newText));
+	}
 	return import(`${pathToFileURL(join(directory, entry)).href}?test=${Date.now()}`);
 }
 
