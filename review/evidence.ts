@@ -5,7 +5,9 @@
  * 预算只裁剪中间的旧消息，从最新往前保留最近工作，审查者既知道要什么也知道做了什么。
  * assistant 的工具调用轨迹（工具名 + path/command）随消息渲染：它是范围归因的一手证据，
  * 审查者靠它判断本会话实际编辑了什么，共享 checkout 上无法归因的 diff 不得立案。
- * 跳过 toolResult（输出体积大且非一手证据——审查者应自行重跑验证命令）。
+ * isError 的调用标注失败：尝试过不等于编辑成功，失败调用不得成为归因依据；
+ * 无结果的调用不标——把压缩/中止场景的真实编辑误标未完成，会反向把归因弱化成假 PASS。
+ * toolResult 正文仍跳过（输出体积大且非一手证据——审查者应自行重跑验证命令）。
  */
 import type { Language } from "../config.js";
 
@@ -24,7 +26,8 @@ export function buildEvidence(
 	language: Language,
 	budgetTokens = DEFAULT_EVIDENCE_TOKENS,
 ): Evidence {
-	const blocks = entries.flatMap((entry) => renderEntry(entry, language));
+	const failedCalls = collectFailedCalls(entries);
+	const blocks = entries.flatMap((entry) => renderEntry(entry, language, failedCalls));
 	if (blocks.length === 0) return { text: "", omitted: 0 };
 	// 锚点必须是首条用户消息（原始需求）：它之前可能排着其他扩展的可显示消息，
 	// 盲取第一块会把真正的需求锚点让进预算竞争、在长会话里被裁掉。
@@ -63,7 +66,23 @@ function gapLabel(omitted: number, language: Language) {
 
 type EvidenceBlock = { text: string; role?: "user" };
 
-function renderEntry(entry: unknown, language: Language): EvidenceBlock[] {
+/** isError 的 toolResult 集合：失败调用不得在轨迹里冒充实际编辑。 */
+function collectFailedCalls(entries: readonly unknown[]): ReadonlySet<string> {
+	const failed = new Set<string>();
+	for (const entry of entries) {
+		if (!isRecord(entry) || entry.type !== "message") continue;
+		const message = asRecord(entry.message);
+		if (message?.role !== "toolResult" || message.isError !== true) continue;
+		if (typeof message.toolCallId === "string") failed.add(message.toolCallId);
+	}
+	return failed;
+}
+
+function renderEntry(
+	entry: unknown,
+	language: Language,
+	failedCalls: ReadonlySet<string>,
+): EvidenceBlock[] {
 	if (!isRecord(entry)) return [];
 	switch (entry.type) {
 		case "message": {
@@ -77,7 +96,7 @@ function renderEntry(entry: unknown, language: Language): EvidenceBlock[] {
 					},
 				];
 			if (message.role === "assistant")
-				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content)}` }];
+				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content, language, failedCalls)}` }];
 			return [];
 		}
 		case "custom_message": {
@@ -118,18 +137,26 @@ function branchSummaryLabel(language: Language) {
 }
 
 /** assistant 正文 = 文本段 + 工具调用轨迹；纯工具回合也因此留下编辑记录。 */
-function assistantBody(content: unknown): string {
+function assistantBody(
+	content: unknown,
+	language: Language,
+	failedCalls: ReadonlySet<string>,
+): string {
 	if (typeof content === "string") return clip(content);
 	if (!Array.isArray(content)) return "";
 	const trail = content
-		.map((part) => toolCallLine(asRecord(part)))
+		.map((part) => toolCallLine(asRecord(part), language, failedCalls))
 		.filter(Boolean)
 		.join("\n");
 	const body = clip(messageText(content));
 	return [body, trail].filter(Boolean).join("\n");
 }
 
-function toolCallLine(part: Record<string, unknown> | undefined): string {
+function toolCallLine(
+	part: Record<string, unknown> | undefined,
+	language: Language,
+	failedCalls: ReadonlySet<string>,
+): string {
 	if (part?.type !== "toolCall" || typeof part.name !== "string" || !part.name) return "";
 	const args = asRecord(part.arguments);
 	const target =
@@ -138,7 +165,13 @@ function toolCallLine(part: Record<string, unknown> | undefined): string {
 			: typeof args?.command === "string"
 				? args.command
 				: "";
-	return `[${part.name}] ${clipLine(target)}`.trimEnd();
+	const failed =
+		typeof part.id === "string" && failedCalls.has(part.id)
+			? language === "en"
+				? " (failed)"
+				: "（失败）"
+			: "";
+	return `${`[${part.name}] ${clipLine(target)}`.trimEnd()}${failed}`;
 }
 
 /** 单行轨迹上限：防超长 bash 命令撑大证据块；路径不受影响。 */

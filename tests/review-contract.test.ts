@@ -224,6 +224,29 @@ describe("evidence assembly", () => {
 		expect(text).toContain("[bash] bun test tests");
 	});
 
+	test("failed tool calls are marked and cannot pose as actual edits", async () => {
+		await loadAll();
+		const entries = [
+			user("需求"),
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "ok", name: "edit", arguments: { path: "a/ok.ts", edits: [] } },
+						{ type: "toolCall", id: "bad", name: "edit", arguments: { path: "a/bad.ts", edits: [] } },
+					],
+				},
+			},
+			{ type: "message", message: { role: "toolResult", toolCallId: "ok", isError: false, content: "done" } },
+			{ type: "message", message: { role: "toolResult", toolCallId: "bad", isError: true, content: "oldText not found" } },
+		];
+		const { text } = buildEvidence(entries, "zh");
+		expect(text).toContain("[edit] a/bad.ts（失败）");
+		expect(text).toContain("[edit] a/ok.ts");
+		expect(text).not.toContain("a/ok.ts（失败）");
+	});
+
 	test("tool-call-only assistant turns still leave an edit record", async () => {
 		await loadAll();
 		const entries = [
