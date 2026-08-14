@@ -99,6 +99,8 @@ Worker Pool 状态 schema 为 v4、兼容 v3，用 mode 0600 的单个文件原�
 quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning skill；多个 Worker 可并行写共享 checkout，Master 负责最终集成与验证。
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
+实现类委派（有 spec/工单）以 `/skill:implement ` 开头，注明跳过技能内 code-review 与提交步骤；
+斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；
 隔离是纪律不是能力边界：系统提示禁令（herdr、git commit/push、装依赖、越界写）+ 自测义务 +
 fire-review + Master diff 检查 + git 回滚。`tool_call` 仍把 edit/write 限在当前 checkout（含真实路径

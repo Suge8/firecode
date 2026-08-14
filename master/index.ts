@@ -323,6 +323,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
 	"复杂工作先用当前已加载的 planning skill 拆分；herdr_agents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
 	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些动作。",
+	"实现类委派若有 spec 或工单，委派文本第一行以 `/skill:implement ` 开头——技能名后必须紧跟空格再接内容；斜杠技能只在文本开头才展开，写错不报错、只会静默失去技能内容。空格后接工单路径与自包含委派文本，并显式注明跳过技能内的 /code-review 与提交步骤：审查由指挥官按纪律外投 fire-review 并检查合并 diff，commit 只由指挥官在集成点执行。调查、分析类委派不用此技能。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
 	"只对产出代码变更的重要交付发起 review；发起前确认没有其它工人正在写共享 checkout。只读调查型工人照常并行，不阻塞审查，也不对其发起 review。",
 	"工人结果会以 custom follow-up message 回来。收到后决定继续 send、stop 为可恢复的休眠工人（Dormant Worker），或 stop forget=true 删除引用。",
