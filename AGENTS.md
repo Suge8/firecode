@@ -109,6 +109,7 @@ reload 按同样规则恢复；终态经 `review/outcome.ts` 读取并连同最�
 Worker Pool 状态 schema 为 v4、兼容 v3，用 mode 0600 的单个文件原子覆盖，不向 Pi session 追加快照；reload 恢复观察，
 quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning skill；多个 Worker 可并行写共享 checkout，Master 负责最终集成与验证。
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
+路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
 实现类委派（有 spec/工单）以 `/skill:implement ` 开头，技能内流程自带 commit 与 fire-review 自审；
 工人 commit 只暂存自己改动的路径、禁止 push，指挥官在集成点验证后统一 push。

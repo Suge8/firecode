@@ -322,7 +322,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
 	"复杂工作先用当前已加载的 planning skill 拆分；herdr_agents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
-	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些动作。",
+	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些票务动作。",
 	"轻重之分靠派哪个技能：重要实现票（有 spec/工单）委派文本第一行以 `/skill:implement ` 开头，技能内流程会 commit 自己的改动并自发 fire-review 自审，无需指挥官外投；轻量修补票以 `/skill:tdd ` 开头；调查、分析票两者都不用。斜杠技能名后必须紧跟空格再接内容，且只在文本开头才展开，写错不报错、只会静默失去技能内容。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
 	"审查随 /skill:implement 技能自动发生，审查提示词具备并行改动归因纪律，无需等其它工人停笔；herdr_agents 的 review action 只作补审后手（如轻量票事后需要把关）。工人落定时自审终态会随结果自动回传。",
