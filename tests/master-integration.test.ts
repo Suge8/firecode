@@ -16,7 +16,7 @@ afterEach(async () => {
 	await cleanupFirecodeModules();
 });
 
-test("master mode is opt-in and only appends herdr_agents", async () => {
+test("master mode is opt-in and only appends subagents", async () => {
 	process.env.HERDR_ENV = "1";
 	process.env.HERDR_WORKSPACE_ID = "w1";
 	delete process.env.FIRECODE_MASTER_WORKER;
@@ -41,12 +41,12 @@ test("master mode is opt-in and only appends herdr_agents", async () => {
 	};
 	const ctx = makeCtx(notices);
 	module.registerMaster(pi);
-	expect([...tools.keys()]).toEqual(["herdr_agents"]);
-	expect(tools.get("herdr_agents")?.promptGuidelines?.join()).toContain("custom follow-up message");
+	expect([...tools.keys()]).toEqual(["subagents"]);
+	expect(tools.get("subagents")?.promptGuidelines?.join()).toContain("custom follow-up message");
 	expect(activeTools).toEqual(["read", "write", "edit", "bash"]);
 
 	await commands.get("fire-master")?.handler("", ctx);
-	expect(activeTools).toEqual(["read", "write", "edit", "bash", "herdr_agents"]);
+	expect(activeTools).toEqual(["read", "write", "edit", "bash", "subagents"]);
 	for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
 	expect(activeTools).toEqual(["read", "write", "edit", "bash"]);
 });
@@ -92,7 +92,7 @@ test("a failed recovery rolls activation back so the next attempt retries", asyn
 	expect(activeTools).toEqual(["read", "bash"]);
 	await commands.get("fire-master")?.handler("", ctx);
 	expect(notices[0]).toContain("temporary Herdr failure");
-	expect(activeTools).toEqual(["read", "bash", "herdr_agents"]);
+	expect(activeTools).toEqual(["read", "bash", "subagents"]);
 });
 
 test("Worker results return as follow-up custom messages", async () => {
@@ -135,7 +135,7 @@ test("Worker results return as follow-up custom messages", async () => {
 	const ctx = makeCtx([]);
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
-	await tools.get("herdr_agents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
+	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	expect(messages).toEqual([{
 		message: { customType: "firecode-master-event", content: "Worker worker-1 已停下\n回复：完成", display: true },
@@ -196,8 +196,8 @@ test("review action exposes reviewing in Master status without accepting prompt 
 	};
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
-	await tools.get("herdr_agents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
-	const result = await tools.get("herdr_agents")?.execute(
+	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
+	const result = await tools.get("subagents")?.execute(
 		"call",
 		{ action: "review", worker: "worker-1", prompt: "malicious override" },
 		undefined,
@@ -217,7 +217,7 @@ test("Worker keeps pi default tools minus the Master tool and cannot edit/write 
 	process.env.FIRECODE_MASTER_WORKER = "worker";
 	const module = (await loadFirecodeModule("master/index.js")) as { registerMaster: (pi: unknown) => void };
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
-	let activeTools = ["read", "bash", "herdr_agents"];
+	let activeTools = ["read", "bash", "subagents"];
 	const pi = {
 		registerCommand() {},
 		registerTool() {},
@@ -291,11 +291,11 @@ test("review action is refused before delivery when fire-review is unavailable",
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
 	await expect(
-		tools.get("herdr_agents")?.execute("call", { action: "review", worker: "w" }, undefined, undefined, ctx),
+		tools.get("subagents")?.execute("call", { action: "review", worker: "w" }, undefined, undefined, ctx),
 	).rejects.toThrow("fire-review 已关闭");
 	// 审查票在派发时即验可用性：review 不可用时 review:true 的 start 必须在投递前拒绝。
 	await expect(
-		tools.get("herdr_agents")?.execute("call", { action: "start", worker: "w", prompt: "按工单实现", review: true }, undefined, undefined, ctx),
+		tools.get("subagents")?.execute("call", { action: "start", worker: "w", prompt: "按工单实现", review: true }, undefined, undefined, ctx),
 	).rejects.toThrow("fire-review 已关闭");
 });
 
@@ -350,6 +350,75 @@ test("worker events wait out a running Master turn and merge into one follow-up"
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	expect(sent).toEqual(["结果 A\n\n结果 B"]);
 	delete (globalThis as { __fcNotify?: unknown }).__fcNotify;
+});
+
+test("crash 后未 ack 的 Worker 结果在恢复时重投并补 ack", async () => {
+	process.env.HERDR_ENV = "1";
+	process.env.HERDR_WORKSPACE_ID = "w1";
+	delete process.env.FIRECODE_MASTER_WORKER;
+	const module = (await loadFirecodeModule("master/index.js", {
+		replacements: { 'from "./herdr.js"': 'from "./herdr-stub.js"' },
+		extraFiles: {
+			"master/herdr-stub.ts": `
+				export class HerdrWorkers {
+					async resume() {}
+					shutdown() {}
+					async cleanup() { return []; }
+				}
+			`,
+		},
+	})) as { registerMaster: (pi: unknown) => void };
+	const { masterStatePath } = (await loadFirecodeModule("master/state.js")) as {
+		masterStatePath: (id: string) => string;
+	};
+	const sessionId = crypto.randomUUID();
+	const statePath = masterStatePath(sessionId);
+	const { writeFileSync, rmSync } = await import("node:fs");
+	writeFileSync(statePath, JSON.stringify({
+		version: 4,
+		workers: [{ name: "worker-1", model: "p/m", thinking: "medium", status: "dormant", sessionPath: "/tmp/w.jsonl" }],
+	}));
+	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+	const sent: string[] = [];
+	const appended: Array<[string, unknown]> = [];
+	let activeTools = ["read"];
+	const pi = {
+		registerCommand() {},
+		registerTool() {},
+		getActiveTools: () => [...activeTools],
+		setActiveTools: (next: string[]) => { activeTools = next; },
+		on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		events: { on() {}, emit() {} },
+		appendEntry: (type: string, data: unknown) => appended.push([type, data]),
+		sendMessage: (message: { content: string }) => sent.push(message.content),
+		sendUserMessage() {},
+		exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
+	};
+	const ctx = {
+		...makeCtx([]),
+		sessionManager: {
+			getSessionId: () => sessionId,
+			getBranch: () => [],
+			// 会话里留着：e1 未 ack（crash 窗口丢失），e2 已 ack（正常投递过）。
+			getEntries: () => [
+				{ type: "custom", customType: "firecode-master-pending-event", data: { id: "e1", content: "Worker worker-1 已停下" } },
+				{ type: "custom", customType: "firecode-master-pending-event", data: { id: "e2", content: "旧结果" } },
+				{ type: "custom", customType: "firecode-master-event-ack", data: { ids: ["e2"] } },
+			],
+		},
+	};
+	module.registerMaster(pi);
+	try {
+		for (const start of handlers.get("session_start") ?? []) await start({}, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(sent).toEqual(["Worker worker-1 已停下"]);
+		// 重投不重写 pending（原 entry 还在），只补 ack。
+		expect(appended).toEqual([["firecode-master-event-ack", { ids: ["e1"] }]]);
+	} finally {
+		rmSync(statePath, { force: true });
+		for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
+	}
 });
 
 function makeCtx(notices: string[], cwd = "/tmp") {

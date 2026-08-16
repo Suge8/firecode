@@ -50,10 +50,9 @@ export function reduceMaster(state: MasterState, event: MasterEvent): MasterStat
 export function restoreMasterState(data: unknown): MasterState | undefined {
 	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
 	const record = data as Record<string, unknown>;
-	if ((record.version !== 3 && record.version !== 4) || !Array.isArray(record.workers) || !record.workers.every(isWorker))
+	if (record.version !== 4 || !Array.isArray(record.workers) || !record.workers.every(isWorker))
 		return undefined;
 	const workers = record.workers as WorkerRef[];
-	if (record.version === 3 && workers.some((worker) => worker.status === "reviewing")) return undefined;
 	if (new Set(workers.map((worker) => worker.name)).size !== workers.length) return undefined;
 	const sessions = workers.flatMap((worker) => worker.sessionPath ? [worker.sessionPath] : []);
 	if (new Set(sessions).size !== sessions.length) return undefined;

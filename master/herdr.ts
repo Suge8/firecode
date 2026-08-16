@@ -14,6 +14,10 @@ import {
 
 const RESULT_CONTEXT_LIMIT = 12_000;
 const MAX_RETRY_DELAY_MS = 30_000;
+/** agent.start 遭遇 agent_pane_busy 的重试窗口：shell 就绪标记已匹配，busy 必为
+ * herdr 进程快照在高负载下的瞬态误判（实测：同机两个重载型 Worker 并行时四连败），
+ * 退避重试到窗口用尽必然成功或暴露真实故障。 */
+const START_BUSY_RETRY_WINDOW_MS = 15_000;
 /** 占用信号失效时审查监听的轮询兑底间隔。 */
 const REVIEW_POLL_DELAY_MS = 2_000;
 const MAX_WORKERS_PER_TAB = 4;
@@ -468,7 +472,7 @@ export class HerdrWorkers {
 			thinking,
 		];
 		if (sessionPath) args.push("--session", sessionPath);
-		const agent = parseAgent(await this.run("agent.start", args, 90_000, signal));
+		const agent = parseAgent(await this.startAgentProcess(args, paneId, signal));
 		const worker: WorkerRef = {
 			name: provisional.name,
 			paneId: agent.pane_id,
@@ -481,6 +485,38 @@ export class HerdrWorkers {
 		};
 		this.store.dispatch({ type: "UPSERT_WORKER", worker });
 		return worker;
+	}
+
+	/** agent.start 对 agent_pane_busy 退避重试；窗口用尽后附 pane 前台快照作诊断证据。 */
+	private async startAgentProcess(
+		args: string[],
+		paneId: string,
+		signal?: AbortSignal,
+	): Promise<Record<string, unknown>> {
+		const deadline = Date.now() + START_BUSY_RETRY_WINDOW_MS;
+		let delay = 500;
+		while (true) {
+			try {
+				return await this.run("agent.start", args, 90_000, signal);
+			} catch (error) {
+				if (!isPaneBusy(error) || signal?.aborted) throw error;
+				if (Date.now() + delay >= deadline) throw await this.withPaneEvidence(error, paneId);
+				await retryDelay(delay, signal ?? this.lifecycle.signal);
+				delay = Math.min(delay * 2, 4_000);
+			}
+		}
+	}
+
+	private async withPaneEvidence(error: unknown, paneId: string): Promise<Error> {
+		let evidence: string;
+		try {
+			const response = await this.run("pane.process-info", ["pane", "process-info", "--pane", paneId], 5_000);
+			evidence = JSON.stringify(nestedRecord(response, ["result"]).process_info ?? null);
+		} catch (probeError) {
+			evidence = `获取失败：${String(probeError)}`;
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		return new Error(`${message}（重试 ${START_BUSY_RETRY_WINDOW_MS / 1000}s 后仍 busy；pane 前台快照：${evidence}）`);
 	}
 
 	private async waitForShell(paneId: string, marker: string, signal?: AbortSignal): Promise<void> {
@@ -920,6 +956,10 @@ function isMissingAgent(error: unknown): boolean {
 	return error instanceof Error && error.message.includes("agent_not_found");
 }
 
+function isPaneBusy(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("agent_pane_busy");
+}
+
 /** prompt --wait 在投递后未观察到状态变化时的两种超时形态。 */
 function isPromptStall(error: unknown): boolean {
 	const text = String(error);
@@ -1034,7 +1074,7 @@ function workerBlockedText(worker: WorkerRef, question?: string): string {
 		`Worker ${worker.name} 等待输入`,
 		...workerHeader(worker),
 		question ? `问题：\n${bounded(question)}` : "Worker 未提供具体问题，请检查对应 pane。",
-		"使用 herdr_agents send 回答后继续。",
+		"使用 subagents send 回答后继续。",
 	].join("\n");
 }
 

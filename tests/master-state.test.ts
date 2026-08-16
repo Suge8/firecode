@@ -52,20 +52,19 @@ const dormant = {
 	sessionPath: "/tmp/worker.jsonl",
 };
 
-test("restore rejects malformed identities and duplicate Pi sessions", () => {
-	expect(restoreMasterState({ version: 2, workers: [] })).toBeUndefined();
-	expect(restoreMasterState({ version: 3, workers: [{ ...dormant, status: "closed" }] })).toBeUndefined();
-	expect(restoreMasterState({ version: 3, workers: [{ ...dormant, thinking: "huge" }] })).toBeUndefined();
-	expect(restoreMasterState({ version: 3, workers: [dormant, dormant] })).toBeUndefined();
+test("restore rejects malformed identities, duplicate Pi sessions and foreign versions", () => {
+	expect(restoreMasterState({ version: 3, workers: [dormant] })).toBeUndefined();
+	expect(restoreMasterState({ version: 4, workers: [{ ...dormant, status: "closed" }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 4, workers: [{ ...dormant, thinking: "huge" }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 4, workers: [dormant, dormant] })).toBeUndefined();
 	expect(restoreMasterState({
-		version: 3,
+		version: 4,
 		workers: [dormant, { ...dormant, name: "worker-2" }],
 	})).toBeUndefined();
-	expect(restoreMasterState({ version: 3, workers: [dormant] })).toEqual({ version: 4, workers: [dormant] });
+	expect(restoreMasterState({ version: 4, workers: [dormant] })).toEqual({ version: 4, workers: [dormant] });
 	const blocked = { ...dormant, status: "blocked", paneId: "w1:p2", tabId: "w1:t2" };
-	expect(restoreMasterState({ version: 3, workers: [blocked] })).toEqual({ version: 4, workers: [blocked] });
+	expect(restoreMasterState({ version: 4, workers: [blocked] })).toEqual({ version: 4, workers: [blocked] });
 	const reviewing = { ...blocked, status: "reviewing" };
-	expect(restoreMasterState({ version: 3, workers: [reviewing] })).toBeUndefined();
 	expect(restoreMasterState({ version: 4, workers: [reviewing] })).toEqual({ version: 4, workers: [reviewing] });
 });
 

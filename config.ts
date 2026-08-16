@@ -44,7 +44,7 @@ export interface ReviewConfig {
 	language: Language;
 }
 
-/** Master 选型表条目：注入 herdr_agents 提示词，供派发时选型。 */
+/** Master 选型表条目：注入 subagents 工具提示词，供派发时选型。 */
 export interface MasterModel {
 	/** 真实模型 id：provider/model。 */
 	model: string;

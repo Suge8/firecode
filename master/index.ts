@@ -14,15 +14,23 @@ import {
 	type WorkerRef,
 } from "./state.js";
 
-const MASTER_TOOL = "herdr_agents";
+const MASTER_TOOL = "subagents";
 const MASTER_EVENT_TYPE = "firecode-master-event";
+/** 收件箱持久化：结果先落 Master 会话（pending），投递后写 ack；reload/crash 后未 ack 的重投。 */
+const PENDING_EVENT_TYPE = "firecode-master-pending-event";
+const EVENT_ACK_TYPE = "firecode-master-event-ack";
+
+interface MasterEvent {
+	id: string;
+	content: string;
+}
 
 interface MasterRuntime {
 	role: "master";
 	ctx: ExtensionContext;
 	store: MasterStore;
 	herdr: HerdrWorkers;
-	events: string[];
+	events: MasterEvent[];
 	/** 显式回合状态位：宿主在 emit agent_settled 前就置 idle，不能拿 isIdle 当回合边界。 */
 	turnActive: boolean;
 	flushTimer?: NodeJS.Timeout;
@@ -67,21 +75,46 @@ export function registerMaster(pi: ExtensionAPI): void {
 		// 门槛是显式回合位而非 isIdle：宿主在 emit agent_settled 前就置 idle，
 		// 那个窗口里 flush 会把同一批结果拆投。agent_settled 才是回合边界。
 		if (active.turnActive) return;
-		const content = active.events.splice(0).join("\n\n");
-		pi.sendMessage(
-			{ customType: MASTER_EVENT_TYPE, content, display: true },
-			{ deliverAs: "followUp", triggerTurn: true },
-		);
+		const batch = active.events.splice(0);
+		const content = batch.map((event) => event.content).join("\n\n");
+		try {
+			pi.sendMessage(
+				{ customType: MASTER_EVENT_TYPE, content, display: true },
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} catch (error) {
+			// 投递失败不丢结果：留在队列等下一个回合边界重试；pending 未 ack，reload 也能续投。
+			active.events.unshift(...batch);
+			active.ctx.ui.notify(`Worker 结果投递失败，将自动重试：${String(error)}`, "warning");
+			return;
+		}
+		// ack 失败只影响去重（reload 后可能重复投递一次），不影响本次已成功的投递。
+		try {
+			pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
+		} catch {
+			// 重复投递无害，静默即可；下一条 ack 会一并覆盖。
+		}
 		renderStatus();
+	};
+
+	const enqueueMasterEvent = (active: MasterRuntime, event: MasterEvent, persist: boolean) => {
+		if (persist) {
+			try {
+				pi.appendEntry(PENDING_EVENT_TYPE, event);
+			} catch (error) {
+				// 持久化失败不阻断投递，只失去 crash 恢复保障；如实告知。
+				active.ctx.ui.notify(`Worker 结果持久化失败（crash 时可能丢失这条）：${String(error)}`, "warning");
+			}
+		}
+		active.events.push(event);
+		if (active.flushTimer) return;
+		active.flushTimer = setTimeout(() => flushMasterEvents(active), 100);
+		active.flushTimer.unref?.();
 	};
 
 	const notifyMaster = (content: string) => {
 		if (runtime?.role !== "master") return;
-		runtime.events.push(content);
-		if (runtime.flushTimer) return;
-		const active = runtime;
-		runtime.flushTimer = setTimeout(() => flushMasterEvents(active), 100);
-		runtime.flushTimer.unref?.();
+		enqueueMasterEvent(runtime, { id: crypto.randomUUID(), content }, true);
 	};
 
 	const activateMaster = async (ctx: ExtensionContext, restored?: MasterState): Promise<MasterRuntime> => {
@@ -174,8 +207,8 @@ export function registerMaster(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: MASTER_TOOL,
-		label: "Herdr Agents",
-		description: "启动、追问、审查、列出、休眠或遗忘 Master 拥有的 Herdr Worker。结果异步回传。",
+		label: "Subagents",
+		description: "启动、追问、审查、列出、休眠或遗忘 Master 拥有的并行 Worker。结果异步回传。",
 		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
 		parameters: Type.Object({
 			action: StringEnum(["list", "start", "send", "review", "stop"] as const),
@@ -189,7 +222,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
-			if (active?.role !== "master") throw new Error("herdr_agents 只在 Master 中可用");
+			if (active?.role !== "master") throw new Error("subagents 只在 Master 中可用");
 			if (params.action === "list") return toolResult({ workers: active.store.state.workers.map(compactWorker) });
 			if (params.action === "start") {
 				// 审查票在派发时即验可用性：review 不可用就拒绝，不让意图落地后才发现审不了。
@@ -222,7 +255,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 				renderStatus();
 				return toolResult({ stopped: true, forgotten: params.forget === true });
 			}
-			throw new Error(`未知 herdr_agents action：${String(params.action)}`);
+			throw new Error(`未知 subagents action：${String(params.action)}`);
 		},
 	});
 
@@ -237,8 +270,13 @@ export function registerMaster(pi: ExtensionAPI): void {
 		}
 		try {
 			const restored = loadMasterState(masterStatePath(ctx.sessionManager.getSessionId()));
-			if (restored?.workers.length) await activateMaster(ctx, restored);
-			else setTools();
+			if (restored?.workers.length) {
+				const active = await activateMaster(ctx, restored);
+				// crash/reload 窗口内未投递的结果凭 pending−ack 差集重投；已在队列的不重复入队。
+				const queued = new Set(active.events.map((event) => event.id));
+				for (const event of unackedEvents(ctx))
+					if (!queued.has(event.id)) enqueueMasterEvent(active, event, false);
+			} else setTools();
 		} catch (error) {
 			setTools();
 			ctx.ui.notify(`Master 恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -321,15 +359,17 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`)
 		.join("；");
 	return [
-	"herdr_agents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开工人。",
-	`指挥官拥有的工人（Worker）只通过 herdr_agents 控制，不读取 herdr skill。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
+	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开工人。",
+	`指挥官拥有的工人（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
+	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
+	"发现脱管工人（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
-	"复杂工作先用当前已加载的 planning skill 拆分；herdr_agents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
+	"复杂工作先用当前已加载的 planning skill 拆分；subagents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
 	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些票务动作。",
 	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。委派文本用 `/skill:tdd ` 开头或普通自包含说明；`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
-	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它工人停笔；herdr_agents 的 review action 可对任意 idle 工人手动补审（如轻量票事后需要把关）。",
+	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它工人停笔；subagents 的 review action 可对任意 idle 工人手动补审（如轻量票事后需要把关）。",
 	"工人结果会以 custom follow-up message 回来。收到后决定继续 send、stop 为可恢复的休眠工人（Dormant Worker），或 stop forget=true 删除引用。",
 	"生命周期：一波集成过审后就 stop 该波工人（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应工人修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
 	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
@@ -344,6 +384,27 @@ function workerInstructions(name: string): string {
 提交必须带路径：先 git add <你的路径>，再 git commit -m <msg> -- <你的路径>；带路径提交走临时索引，不会带上他人已暂存的内容；遇 index.lock 冲突稍候重试。
 全部完成停下后，若本票被指定需要审查，指挥官会自动从外部对你的会话发起 /fire-review 对抗审查，审查反馈会自动驱动你修复；你自己无法也无需触发它。
 </firecode_worker>`;
+}
+
+/** 扫描 Master 会话：pending 减 ack 的差集 = 尚未成功投递给模型的结果。 */
+function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
+	const manager = ctx.sessionManager as { getEntries?: () => unknown[] } | undefined;
+	const entries = manager?.getEntries?.() ?? [];
+	const pending = new Map<string, string>();
+	const acked = new Set<string>();
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
+		if (record.type !== "custom" || !record.data || typeof record.data !== "object") continue;
+		const data = record.data as Record<string, unknown>;
+		if (record.customType === PENDING_EVENT_TYPE) {
+			if (typeof data.id === "string" && typeof data.content === "string") pending.set(data.id, data.content);
+			continue;
+		}
+		if (record.customType === EVENT_ACK_TYPE && Array.isArray(data.ids))
+			for (const id of data.ids) if (typeof id === "string") acked.add(id);
+	}
+	return [...pending].filter(([id]) => !acked.has(id)).map(([id, content]) => ({ id, content }));
 }
 
 function statusText(workers: WorkerRef[]): string {
