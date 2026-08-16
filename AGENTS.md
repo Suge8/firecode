@@ -129,7 +129,9 @@ quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
-重要实现票 start 时设 `review:true`；委派文本用 `/skill:tdd ` 或普通自包含说明，Master 不用 `/skill:implement`。
+重要实现票 start 时设 `review:true`；有可测行为变更的实现票默认 `/skill:tdd ` 开头并把 spec/Ticket
+已定的接缝与验收写进委派文本（接缝在计划层确认，工人不回头询问），调查/文档/收口/纯重构用普通说明；
+Master 不用 `/skill:implement`。
 工人 commit 带路径且只含自己的改动、禁止 push，指挥官在集成点验证后统一 push。
 斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；
