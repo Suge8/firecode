@@ -73,6 +73,7 @@ export const FEATURES = [
 	"stats",
 	"claudeSub",
 	"openaiNative",
+	"workingFlame",
 	"review",
 	"master",
 ] as const;
@@ -260,9 +261,9 @@ const REVIEW_KEYS = new Set([
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls", "bash"];
 const DEFAULT_ADVISOR: ReviewModel = { model: "kimi-coding/k3-256k", thinking: "max" };
 const DEFAULT_REVIEWERS: ReviewModel[] = [
-	{ model: "openai-codex/gpt-5.6-sol", thinking: "high" },
-	{ model: "openai-codex/gpt-5.6-terra", thinking: "high" },
-	{ model: "openai-codex/gpt-5.6-luna", thinking: "high" },
+	{ model: "anthropic/claude-opus-5", thinking: "high" },
+	{ model: "anthropic/claude-sonnet-5", thinking: "high" },
+	{ model: "anthropic/claude-fable-5", thinking: "high" },
 ];
 const THINKING_LEVELS = new Set<ThinkingLevelValue>([
 	"off",

@@ -1,12 +1,26 @@
 /**
- * 连续工具行的视觉合并：pi 原生每行前有一个空行，相邻的装饰行去掉它即可连成一条轨道。
- * 实现依赖 pi 内部的组件树与原型，属于与宿主耦合最紧的一块，单独隔离在此文件。
+ * 连续工具行的视觉合并与第三方工具通用单行兜底：
+ * 1. 原生内置或声明了 self 的工具：保留自渲染，去除相邻空行形成轨道；
+ * 2. 未知第三方或默认宽框工具：自动收口为通用 ToolLine 单行紧凑轨道与全宽背景。
  */
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
+import { ToolLine } from "./line.js";
+import { genericArgsParts } from "./parts.js";
 
 const GROUP_PATCH = Symbol.for("pi.firecode.group-patch");
 const REQUEST_RENDER_PATCH = Symbol.for("pi.firecode.request-render-patch");
 const GLOBAL_STATE = Symbol.for("pi.firecode.tools-state");
+const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+
+function getTheme(): Theme {
+	const globalTheme = (globalThis as any)[THEME_KEY];
+	if (globalTheme && typeof globalTheme.fg === "function") return globalTheme;
+	return {
+		fg: (_color: string, text: string) => text,
+		bg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+}
 
 type RenderFunction = (width: number) => string[];
 type RequestRenderFunction = (force?: boolean) => unknown;
@@ -42,11 +56,42 @@ function isToolRow(value: unknown): value is ToolRow {
 }
 
 function isDecoratedToolRow(value: unknown): value is ToolRow {
-	return (
-		isToolRow(value) &&
-		typeof value.toolName === "string" &&
-		globalState.decorated.has(value.toolName)
-	);
+	return isToolRow(value);
+}
+
+export function renderFallbackToolRow(row: any, width: number, customTheme?: Theme): string[] {
+	const isError = row.result?.isError ?? false;
+	const isPartial = row.isPartial ?? false;
+	const toolName = typeof row.toolName === "string" ? row.toolName : "tool";
+	const activeTheme = customTheme ?? getTheme();
+	const toolLine = new ToolLine({
+		label: toolName,
+		value: genericArgsParts(row.args),
+		clip: "end",
+		theme: activeTheme,
+		ctx: {
+			state: row.rendererState ?? {},
+			cwd: row.cwd ?? process.cwd(),
+			toolCallId: row.toolCallId ?? "",
+			isPartial,
+			isError,
+			expanded: row.expanded ?? false,
+		},
+	});
+	const lines = ["", ...toolLine.render(width)];
+	if (row.expanded && row.result) {
+		const textContent = Array.isArray(row.result.content)
+			? row.result.content
+					.map((c: any) => (c?.type === "text" && typeof c.text === "string" ? c.text : ""))
+					.filter(Boolean)
+					.join("\n")
+			: "";
+		if (textContent) {
+			const outputLines = textContent.split("\n").map((l: string) => activeTheme.fg("toolOutput", l));
+			lines.push("", ...outputLines);
+		}
+	}
+	return lines;
 }
 
 function findChatContainer(value: unknown, seen = new Set<unknown>()): ContainerLike | undefined {
@@ -91,6 +136,8 @@ function followsToolRow(row: ToolRow): boolean {
 	return globalState.joinedRows?.has(row) ?? false;
 }
 
+const FIRECODE_TOOLS = new Set(["read", "bash", "edit", "write", "find", "grep", "ls"]);
+
 function patchToolRows(): void {
 	if (globalState.patchedPrototype) return;
 	const chat = globalState.chat ?? findChatContainer(globalState.tui);
@@ -105,7 +152,12 @@ function patchToolRows(): void {
 	}
 	const original = prototype.render;
 	const patched: RenderFunction = function (this: ToolRow, width: number): string[] {
-		const lines = original.call(this, width);
+		const toolName = typeof this.toolName === "string" ? this.toolName : "";
+		const isFirecodeTool = FIRECODE_TOOLS.has(toolName);
+		const isExpanded = Boolean((this as any).expanded);
+		const lines = isFirecodeTool || isExpanded
+			? original.call(this, width)
+			: renderFallbackToolRow(this, width);
 		return followsToolRow(this) && lines[0] === "" ? lines.slice(1) : lines;
 	};
 	Object.defineProperty(prototype, GROUP_PATCH, {

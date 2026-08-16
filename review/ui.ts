@@ -1,5 +1,5 @@
 /**
- * /fire-review 的活动 UI：编辑器上方的固定活动条、alt+s 详情窗、esc 取消接管。
+ * /fire-review 的活动 UI：编辑器上方的固定活动条与 esc 取消接管。
  *
  * 只读 executor 传入的快照函数，自身不持状态；动画由组件内部计时器驱动，
  * dispose 时清理。审查看不见就等于坏了，这一层是可用性的主体。
@@ -7,6 +7,7 @@
 import { basename } from "node:path";
 import {
 	CustomEditor,
+	DynamicBorder,
 	type ExtensionContext,
 	type KeybindingsManager,
 	type Theme,
@@ -14,22 +15,20 @@ import {
 import {
 	type Component,
 	type EditorTheme,
-	matchesKey,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { clip } from "../format.js";
+import { clip, formatDuration } from "../format.js";
 import type { Language } from "../config.js";
 import {
 	FLAME_FRAME_COUNT,
 	flameFrameLines,
 	flameFrameWidth,
-} from "./flame-frames.js";
+} from "../flame-frames.js";
 import type { ProgressTool, ReviewerProgress } from "./progress.js";
 import type { Phase } from "./state.js";
 
-export const DETAILS_SHORTCUT = "alt+s";
 const WIDGET_KEY = "fire-review";
 const FRAME_MS = 100;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -42,10 +41,6 @@ const FLAME_MARGIN_NARROW = 2;
 const FLAME_GAP_MIN = 8;
 const FLAME_GAP_NARROW = 4;
 const FLAME_GAP_IDEAL = 16;
-const MONITOR_SHORTCUT_ESCAPES = new Set(["\u001bs", "\u001bS"]);
-const MONITOR_SHORTCUT_COMPOSED = new Set(["ß", "Í"]);
-/** 详情窗打开期间屏蔽全局 esc：否则一次 esc 会同时关窗并取消审查。 */
-let detailsOpen = false;
 let reviewTitleActive = false;
 
 /** 活动条渲染所需的一切；executor 每次状态变化后重新提供。 */
@@ -73,7 +68,7 @@ export function showActivity(ctx: ExtensionContext, view: ViewSource): void {
 	ctx.ui.setWidget(
 		WIDGET_KEY,
 		(tui: TUI, theme: Theme) =>
-			new ActivityBar(view, theme, () => tui.requestRender()),
+			new ActivityBar(view, theme, tui, () => tui.requestRender()),
 		{ placement: "aboveEditor" },
 	);
 }
@@ -86,7 +81,7 @@ export function hideActivity(ctx: ExtensionContext): void {
 }
 
 /**
- * 审查等模型结论时（排队/审查中/顾问仲裁）接管编辑器：禁止输入，esc 取消审查。
+ * 审查等模型结论时（排队/审查中/顾问仲裁）接管编辑器：禁止输入，esc/Ctrl+C 随时取消。
  *
  * 不能用全局输入钩子比对裸 \x1b：终端开启增强键盘协议后 esc 是带修饰的序列，
  * 字面量比较会漏。这里统一走 keybindings 匹配。
@@ -94,14 +89,12 @@ export function hideActivity(ctx: ExtensionContext): void {
  */
 export function lockEditor(
 	ctx: ExtensionContext,
-	view: ViewSource,
+	_view: ViewSource,
 	cancel: () => void,
 ): void {
 	if (typeof ctx.ui.setEditorComponent !== "function") return;
 	ctx.ui.setEditorComponent((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => {
-		const editor = new ReviewEditor(tui, theme, keybindings, view, cancel, () =>
-			void openDetails(ctx, view),
-		);
+		const editor = new ReviewEditor(tui, theme, keybindings, cancel);
 		return editor;
 	});
 }
@@ -114,8 +107,6 @@ export function unlockEditor(ctx: ExtensionContext): void {
 /**
  * 审查期间的只读编辑器。
  *
- * 故意不做动画：宿主切换编辑器时只清容器、不调旧组件的 dispose（见
- * interactive-mode 的 setCustomEditorComponent），在这里启定时器就会每轮泄漏一个。
  * 动效由上方活动条负责，这里静态提示即可。
  */
 class ReviewEditor extends CustomEditor {
@@ -123,19 +114,12 @@ class ReviewEditor extends CustomEditor {
 		tui: TUI,
 		theme: EditorTheme,
 		private readonly keys: KeybindingsManager,
-		private readonly view: ViewSource,
 		private readonly cancel: () => void,
-		private readonly details: () => void,
 	) {
 		super(tui, theme, keys);
 	}
 
 	override handleInput(data: string): void {
-		if (detailsOpen) return;
-		if (matchesDetailsShortcut(data)) {
-			this.details();
-			return;
-		}
 		if (
 			this.keys.matches(data, "app.interrupt") ||
 			this.keys.matches(data, "app.clear")
@@ -149,23 +133,6 @@ class ReviewEditor extends CustomEditor {
 	override render(_width: number): string[] {
 		// pi-flow 交互：审查期间输入区完全隐藏，不额外插入一行提示。
 		return [];
-	}
-}
-
-export async function openDetails(
-	ctx: ExtensionContext,
-	view: ViewSource,
-): Promise<void> {
-	if (!view() || typeof ctx.ui.custom !== "function") return;
-	detailsOpen = true;
-	try {
-		await ctx.ui.custom<void>(
-			(tui, theme, keybindings, done) =>
-				new DetailsOverlay(view, tui, theme, keybindings, done),
-			{ overlay: true, overlayOptions: { width: "80%", maxHeight: "70%", anchor: "center" } },
-		);
-	} finally {
-		detailsOpen = false;
 	}
 }
 
@@ -197,9 +164,13 @@ abstract class Animated implements Component {
 }
 
 class ActivityBar extends Animated {
+	/** 官方边框组件；颜色仍用品牌橙，边框字符与宽度处理交给宿主。 */
+	private readonly border = new DynamicBorder(reviewColor);
+
 	constructor(
 		private readonly view: ViewSource,
 		private readonly theme: Theme,
+		private readonly tui: TUI,
 		requestRender: () => void,
 	) {
 		super(requestRender);
@@ -209,29 +180,91 @@ class ActivityBar extends Animated {
 		const view = this.view();
 		if (!view) return [];
 		const safeWidth = Math.max(1, width);
-		const border = reviewColor("─".repeat(safeWidth));
-		const content = this.contentRows(view);
+		const terminalRows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows;
+		const maxTotalLines = terminalRows ? Math.floor(terminalRows * 0.7) : 16;
+		if (maxTotalLines <= 0) return [];
+		if (maxTotalLines === 1) {
+			return [centerLine(boldText(this.theme.fg("muted", activityTitle(view))), safeWidth)];
+		}
+		if (maxTotalLines === 2) {
+			const line1 = boldText(this.theme.fg("muted", activityTitle(view)));
+			let line2 = view.reviewers.map((r) => `${statusIcon(r.status)} ${shortModelName(r.label)}`).join(" ");
+			if (visibleWidth(line2) > safeWidth) {
+				line2 = view.reviewers.map((r) => shortModelName(r.label)).join(" ");
+			}
+			return [
+				centerLine(line1, safeWidth),
+				centerLine(this.theme.fg("muted", truncateToWidth(line2, safeWidth, "…")), safeWidth),
+			];
+		}
+
+		const n = view.reviewers.length;
+		// 极矮预算模式（总行数放不下边框+标题+全员）：去掉边框，将总预算行数全部分配给审查者
+		if (maxTotalLines <= n + 1) {
+			// 每人一行也装不下时按行分组压缩：丢行动作可以，静默丢审查者不行。
+			if (maxTotalLines <= n) {
+				const perLine = Math.ceil(n / maxTotalLines);
+				const lines: string[] = [];
+				for (let i = 0; i < n; i += perLine) {
+					const group = view.reviewers
+						.slice(i, i + perLine)
+						.map((r) => `${statusIcon(r.status)} ${shortModelName(r.label)}`)
+						.join("  ");
+					lines.push(centerLine(group, safeWidth));
+				}
+				return lines;
+			}
+			return view.reviewers.map((r) => {
+				const raw = r.details?.[0] || r.summary || (r.status === "running" ? r.action : "通过");
+				const act = raw.replace(/^[↳\s]+/u, "");
+				return centerLine(`${statusIcon(r.status)} ${shortModelName(r.label)}: ${act}${elapsedSuffix(r)}`, safeWidth);
+			});
+		}
+
+		const border = this.border.render(safeWidth)[0] ?? "";
+		const maxBodyLines = Math.max(1, maxTotalLines - 2);
+		const content = this.contentRows(view, maxBodyLines, safeWidth);
 		const body = safeWidth >= FLAME_MIN_WIDTH
-			? this.renderFlameBody(content, safeWidth)
+			? this.renderFlameBody(content, safeWidth, maxBodyLines)
 			: content.map((line) => centerLine(line, safeWidth));
-		return [border, ...body, border];
+		const finalLines = [border, ...body.slice(0, maxBodyLines), border];
+		return finalLines.slice(0, maxTotalLines);
 	}
 
-	private contentRows(view: ActivityView): string[] {
-		const rows = ["", boldText(this.theme.fg("muted", activityTitle(view)))];
-		const details = activityRows(view, this.spinner());
-		if (details.length > 0) rows.push("", ...details.map((row) => this.theme.fg("muted", row)));
-		const hint = activityHint(view);
-		if (hint) rows.push("", this.theme.fg("dim", hint));
-		rows.push("");
-		return rows;
+	private contentRows(view: ActivityView, maxBodyLines: number, width: number): string[] {
+		const title = boldText(this.theme.fg("muted", activityTitle(view)));
+		const hintText = activityHint(view);
+		const hint = hintText ? this.theme.fg("dim", hintText) : "";
+		const reviewers = view.reviewers;
+		const n = reviewers.length;
+
+		// 紧凑纵向模式（放不下多行展开但每人一行能装下）：单行纵向用满整宽输出
+		if (maxBodyLines < n + 1) {
+			return reviewers.map((r) => {
+				const raw = r.details?.[0] || r.summary || (r.status === "running" ? r.action : "通过");
+				const act = raw.replace(/^[↳\s]+/u, "");
+				return `${statusIcon(r.status)} ${shortModelName(r.label)}: ${act}${elapsedSuffix(r)}`;
+			});
+		}
+
+		// 中等/多行展开模式：只要行数足够容纳审查者多行展开
+		if (maxBodyLines >= n * 2 + 1) {
+			// 预留标题/提示/呼吸空行的开销后再分每人行预算。
+			const budgetPer = Math.max(2, Math.floor((maxBodyLines - (hint ? 6 : 4)) / n));
+			const details = activityRows(view, this.spinner(), maxBodyLines, budgetPer);
+			return breathe(title, details, hint, maxBodyLines);
+		}
+
+		// 紧凑单行模式：标题 + 单行审查者；有余量时同样补呼吸空行。
+		const details = activityRows(view, this.spinner(), maxBodyLines - 1, 1);
+		return breathe(title, details, hint, maxBodyLines);
 	}
 
-	private renderFlameBody(contentRows: string[], width: number) {
+	private renderFlameBody(contentRows: string[], width: number, maxBodyLines: number) {
 		const wide = width >= FLAME_WIDE_WIDTH;
 		const margin = wide ? FLAME_MARGIN_MIN : FLAME_MARGIN_NARROW;
 		const gapMin = wide ? FLAME_GAP_MIN : FLAME_GAP_NARROW;
-		const flameHeight = Math.max(4, contentRows.length);
+		const flameHeight = Math.min(maxBodyLines, Math.max(1, contentRows.length));
 		const rawFlame = flameFrameLines(flameHeight, this.frame % FLAME_FRAME_COUNT);
 		const flameWidth = flameFrameWidth(flameHeight);
 		const contentWidth = Math.min(
@@ -262,253 +295,49 @@ class ActivityBar extends Animated {
 	}
 }
 
-class DetailsOverlay extends Animated {
-	private closed = false;
-	private readonly scopePhase: Phase | undefined;
-
-	constructor(
-		private readonly view: ViewSource,
-		private readonly tui: TUI,
-		private readonly theme: Theme,
-		_keybindings: KeybindingsManager,
-		private readonly done: () => void,
-	) {
-		super(() => tui.requestRender());
-		this.scopePhase = view()?.phase;
-	}
-
-	render(width: number): string[] {
-		const view = this.view();
-		if (view && view.phase !== this.scopePhase) {
-			queueMicrotask(() => this.close());
-			return [];
-		}
-		const safeWidth = Math.max(4, width);
-		const inner = safeWidth - 2;
-		const language = view?.language ?? "zh";
-		const lines = [this.border("╭", "╮", inner)];
-		if (!view) {
-			queueMicrotask(() => this.close());
-			return [];
-		} else {
-			lines.push(
-				this.row(
-					alignRight(
-						this.theme.fg("toolTitle", monitorTitle(view)),
-						this.theme.fg("dim", `⏱ ${monitorElapsed((view.progressStartedAt ?? view.roundStartedAt) ? Date.now() - (view.progressStartedAt ?? view.roundStartedAt) : 0)}`),
-						inner,
-					),
-					inner,
-				),
-				this.border("├", "┤", inner),
-			);
-			const terminal = (this.tui as TUI & { terminal?: { columns?: number; rows?: number } }).terminal;
-			const compact = (terminal?.columns ?? safeWidth) < 70;
-			let packed = false;
-			let agentRows = view.reviewers.map((reviewer) =>
-				monitorAgentRows(
-					reviewer,
-					this.spinner(),
-					inner,
-					language,
-					compact,
-					this.theme,
-					view.cwd ?? "",
-					view.phase === "needs_fix" ? "A" : "M",
-				),
-			);
-			const limit = terminal?.rows ? Math.max(1, Math.floor(terminal.rows * 0.7) - 4) : Infinity;
-			const rowCount = () =>
-				agentRows.reduce((sum, rows) => sum + rows.length, 0) +
-				(compact ? 0 : Math.max(0, agentRows.length - 1));
-			while (rowCount() > limit) {
-				const rows = agentRows.find((candidate) => candidate.length > 2);
-				if (!rows) break;
-				rows.pop();
-			}
-			if (rowCount() > limit) {
-				const compactLines = view.reviewers.map((reviewer) =>
-					monitorAgentRows(
-						reviewer,
-						this.spinner(),
-						inner,
-						language,
-						true,
-						this.theme,
-						view.cwd ?? "",
-						view.phase === "needs_fix" ? "A" : "M",
-					)[0] ?? "",
-				);
-				agentRows = compactLines.length > limit
-					? packMonitorLines(compactLines, limit, inner)
-					: compactLines.map((line) => [line]);
-				packed = true;
-			}
-			for (const [index, rows] of agentRows.entries()) {
-				if (index > 0 && !compact && !packed) lines.push(this.row("", inner));
-				for (const line of rows) lines.push(this.row(line, inner));
-			}
-		}
-		lines.push(
-			this.row(centerLine(this.theme.fg("dim", detailsHintText(language)), inner), inner),
-			this.border("╰", "╯", inner),
-		);
-		return lines;
-	}
-
-	private border(left: string, right: string, inner: number) {
-		return this.theme.fg("border", `${left}${"─".repeat(inner)}${right}`);
-	}
-
-	private row(content: string, inner: number) {
-		const clipped = truncateToWidth(content, inner, "…");
-		return `${this.theme.fg("border", "│")}${padVisible(clipped, inner)}${this.theme.fg("border", "│")}`;
-	}
-
-	handleInput(data: string): void {
-		// Alt+S 纯开关（用户决策背离 pi-flow）：Esc 在窗内不响应，避免与取消审查的语义撕扳。
-		if (matchesDetailsShortcut(data)) this.close();
-	}
-
-	override invalidate(): void {
-		this.tui.requestRender();
-	}
-
-	private close() {
-		if (this.closed) return;
-		this.closed = true;
-		this.done();
-	}
-}
-
 // ---- 文案与样式 ----
 
-function monitorTitle(view: ActivityView) {
-	if (view.phase === "needs_fix")
-		return view.language === "en" ? "Advisor consultation" : "顾问咨询";
-	return roundTitle(view.round, view.language === "en" ? "Review" : "审查", view.language);
-}
-
-function monitorElapsed(milliseconds: number) {
-	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function monitorAgentRows(
-	reviewer: ReviewerProgress,
-	spinner: string,
-	width: number,
-	language: Language,
-	compact: boolean,
-	theme: Theme,
-	cwd: string,
-	keyPrefix: "M" | "A",
-) {
-	const current = reviewer.activeTools.at(-1);
-	const settled = reviewer.status !== "running";
-	const status = theme.fg(statusColor(reviewer.status), monitorGlyph(reviewer, spinner));
-	const key = theme.fg("accent", `${keyPrefix}${reviewer.index + 1}`);
-	const identity = `${status} ${key} ${theme.fg("text", reviewer.label)}`;
-	const baseMetrics = `${reviewer.toolCalls} calls · ${(reviewer.tokens / 1000).toFixed(1)}k tok`;
-	if (compact) {
-		const value = settled && reviewer.summary
-			? reviewer.summary
-			: current
-				? `${toolLabel(current.tool, language)} ${displayToolArgs(current, cwd)}`.trim()
-				: reviewer.status === "running"
-					? (language === "en" ? "Thinking" : "思考中")
-					: reviewer.label;
-		const duration = current ? toolDuration(Date.now() - current.startedAt) : "";
-		const metrics = `${baseMetrics}${duration ? ` · ${duration}` : ""}`;
-		return [alignMonitorMetrics(`${status} ${key} ${value}`, metrics, width)];
-	}
-	const rows = [alignMonitorMetrics(identity, baseMetrics, width)];
-	// 落定即出结果：摘要行置顶，工具流水退居其后。
-	if (settled && reviewer.summary) rows.push(`▏ ${truncateToWidth(reviewer.summary, Math.max(1, width - 2), "…")}`);
-	if (current) rows.push(monitorToolLine(current, language, true, width, cwd));
-	else if (reviewer.status === "running")
-		rows.push(`▏ ${spinner} ${language === "en" ? "Thinking" : "思考中"}`);
-	for (const tool of [...reviewer.recentTools].reverse())
-		rows.push(monitorToolLine(tool, language, false, width, cwd));
-	return rows;
-}
-
-function packMonitorLines(lines: string[], limit: number, width: number): string[][] {
-	const columns = Math.ceil(lines.length / limit);
-	const separator = " │ ";
-	const columnWidth = Math.max(1, Math.floor((width - (columns - 1) * visibleWidth(separator)) / columns));
-	const rows: string[][] = [];
-	for (let offset = 0; offset < lines.length; offset += columns) {
-		const cells = lines.slice(offset, offset + columns).map((line) => {
-			const clipped = truncateToWidth(line, columnWidth, "…");
-			return padVisible(clipped, columnWidth);
-		});
-		rows.push([cells.join(separator)]);
-	}
-	return rows;
-}
-
-function alignMonitorMetrics(left: string, metrics: string, width: number) {
-	const metricsWidth = visibleWidth(metrics);
-	if (metricsWidth >= width) return truncateToWidth(metrics, width, "…");
-	const clipped = truncateToWidth(left, width - metricsWidth - 1, "…");
-	return `${clipped}${" ".repeat(Math.max(1, width - visibleWidth(clipped) - metricsWidth))}${metrics}`;
-}
-
-function monitorToolLine(
-	tool: ProgressTool,
-	language: Language,
-	current: boolean,
-	width: number,
-	cwd: string,
-) {
-	const duration = toolDuration((tool.endedAt ?? Date.now()) - tool.startedAt);
-	const marker = tool.isError ? "✗" : current ? "●" : " ";
-	const left = `▏ ${marker} ${toolLabel(tool.tool, language)} ${displayToolArgs(tool, cwd)}`.trimEnd();
-	return duration ? alignMonitorMetrics(left, duration, width) : left;
-}
-
-function displayToolArgs(tool: ProgressTool, cwd: string) {
-	const home = process.env.HOME ?? "";
-	if (tool.tool === "bash") {
-		const command = home ? tool.args.replaceAll(home, "~") : tool.args;
-		return `$ ${command || "…"}`;
-	}
-	if (!["read", "edit", "write"].includes(tool.tool)) return tool.args || "…";
-	if (cwd && tool.args.startsWith(`${cwd}/`)) return `./${tool.args.slice(cwd.length + 1)}`;
-	return home && tool.args.startsWith(`${home}/`) ? `~/${tool.args.slice(home.length + 1)}` : tool.args;
-}
-
-function toolLabel(tool: string, language: Language) {
-	if (language === "en") return tool;
-	if (tool === "read") return "读取";
-	if (tool === "bash") return "操作";
-	if (tool === "edit") return "修改";
-	if (tool === "write") return "写入";
-	return tool;
-}
-
-function toolDuration(milliseconds: number) {
-	if (milliseconds < 1000) return "";
-	if (milliseconds < 10_000)
-		return `${(Math.floor(milliseconds / 100) / 10).toFixed(1)}s`;
-	const seconds = Math.floor(milliseconds / 1000);
-	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+/**
+ * 呼吸空行：预算内按优先级补回排版留白（标题后 > 提示前 > 顶部 > 底部），
+ * 预算不够时逐个放弃、退回紧凑排列；超出部分由调用方的 slice 兑底。
+ */
+function breathe(title: string, details: string[], hint: string, maxBodyLines: number): string[] {
+	const mandatory = 1 + details.length + (hint ? 1 : 0);
+	let spare = maxBodyLines - mandatory;
+	const afterTitle = spare > 0 && (spare -= 1) >= 0;
+	const beforeHint = hint !== "" && spare > 0 && (spare -= 1) >= 0;
+	const top = spare > 0 && (spare -= 1) >= 0;
+	const bottom = spare > 0 && (spare -= 1) >= 0;
+	return [
+		...(top ? [""] : []),
+		title,
+		...(afterTitle ? [""] : []),
+		...details,
+		...(hint ? [...(beforeHint ? [""] : []), hint] : []),
+		...(bottom ? [""] : []),
+	].slice(0, maxBodyLines);
 }
 
 function activityTitle(view: ActivityView) {
 	const { language } = view;
 	if (view.phase === "queued")
-		return language === "en" ? "💯 Running" : "💯 执行中";
-	if (view.phase === "needs_fix")
-		return language === "en" ? "🧭 Advisor consulting" : "🧭 顾问介入中";
+		return language === "en" ? "🔥 Running" : "🔥 执行中";
+	if (view.phase === "needs_fix") {
+		// 连败轮数并进标题：正文首行留给顾问模型行，与审查相的布局对齐。
+		const failures = view.consecutiveFailures ?? 0;
+		const base = language === "en" ? "🔥 Advisor consulting" : "🔥 顾问介入中";
+		if (failures <= 0) return base;
+		return language === "en"
+			? `${base} · ${failures} straight fails`
+			: `${base} · 连续 ${failures} 轮未过`;
+	}
 	const phase = view.phase === "awaiting_fix"
 		? language === "en" ? "Repair in progress" : "修复中"
 		: language === "en" ? "Review in progress" : "审查中";
-	return `💯 ${roundTitle(view.round, phase, language)}`;
+	return `🔥 ${roundTitle(view.round, phase, language)}`;
 }
 
-function activityRows(view: ActivityView, spinner: string): string[] {
+function activityRows(view: ActivityView, spinner: string, budget = 16, budgetPer = 2): string[] {
 	if (view.phase === "queued")
 		return [view.language === "en" ? "Runs a review automatically when done" : "完成后自动审查"];
 	if (view.phase === "awaiting_fix") {
@@ -521,29 +350,107 @@ function activityRows(view: ActivityView, spinner: string): string[] {
 			view.language === "en"
 				? `Repairing Round ${view.round} review feedback`
 				: `正在修复第 ${view.round} 轮审查反馈`,
-			...(advisorLine ? [`🧭 ${clip(advisorLine, 64)}`] : []),
+			...(advisorLine ? [`💡 ${clip(advisorLine, 64)}`] : []),
 		];
 	}
+	// 连败轮数已并入标题；正文首行即顾问模型行，与审查者行同格式。
 	if (view.phase === "needs_fix")
-		return [
-			view.language === "en"
-				? `Reviews failed ${view.consecutiveFailures ?? 0} rounds in a row`
-				: `审查已连续 ${view.consecutiveFailures ?? 0} 轮未通过`,
-		];
-	return view.reviewers.map((reviewer) => reviewerActivityLine(reviewer, spinner, view.language));
+		return view.reviewers.flatMap((reviewer) =>
+			reviewerActivityRows(reviewer, spinner, view.language, 1, true, budget, budgetPer),
+		);
+	const blocks = view.reviewers.map((reviewer) =>
+		reviewerActivityRows(reviewer, spinner, view.language, view.reviewers.length, false, budget, budgetPer),
+	);
+	// 模型之间空一行：只在预算容得下内容+分隔+标题提示时才加，紧屏不挤掉正文。
+	const total = blocks.reduce((sum, block) => sum + block.length, 0);
+	const spaced = blocks.length > 1 && budget >= total + blocks.length - 1 + 2;
+	return blocks.flatMap((block, index) => (spaced && index > 0 ? ["", ...block] : block));
 }
 
-function reviewerActivityLine(
+function reviewerActivityRows(
 	reviewer: ReviewerProgress,
 	spinner: string,
 	language: Language,
-) {
-	const summary = reviewer.summary ? ` · ${clip(reviewer.summary, 48)}` : "";
-	if (reviewer.status === "passed") return `✅ ${reviewer.label}${summary}`;
-	if (reviewer.status === "failed") return `❌ ${reviewer.label}${summary}`;
-	if (reviewer.status === "error") return `⚠️ ${reviewer.label}${summary}`;
-	if (reviewer.toolCalls === 0) return reviewer.label;
-	return `${spinner} ${reviewer.label} · ${reviewer.action} · ${callsText(reviewer.toolCalls, language)}`;
+	totalReviewers: number,
+	isAdvisor = false,
+	budget = 16,
+	budgetPer = 2,
+): string[] {
+	const settled = reviewer.status !== "running";
+	const multiline = totalReviewers <= 3 && budgetPer >= 2;
+	const label = isAdvisor
+		? `${language === "en" ? "Advisor" : "顾问"} ${reviewer.label}`
+		: reviewer.label;
+
+	const elapsed = elapsedSuffix(reviewer);
+	if (settled) {
+		const icon = statusIcon(reviewer.status);
+		const details = reviewer.details && reviewer.details.length > 0
+			? reviewer.details
+			: [reviewer.summary || (reviewer.status === "passed" ? "审查通过" : "发现问题")];
+
+		if (!multiline) {
+			const text = details[0]?.replace(/^[↳\s]+/u, "") || "";
+			return [`${icon} ${label} · ${clip(text, 48)}${elapsed}`];
+		}
+
+		const statusText = reviewer.status === "passed"
+			? (language === "en" ? "Passed" : "通过")
+			: reviewer.status === "failed"
+				? (language === "en" ? "Failed" : "未通过")
+				: (language === "en" ? "Error" : "异常");
+		const firstDetail = details[0] ? ` · ${details[0]}` : ` · ${statusText}`;
+		const lines = [`${icon} ${label}${firstDetail}${elapsed}`];
+		for (const d of details.slice(1, budgetPer)) {
+			const clean = d.replace(/^[↳\s]+/u, "").trim();
+			if (clean) lines.push(`  ↳ ${clip(clean, 54)}`);
+		}
+		return lines;
+	}
+
+	if (reviewer.toolCalls === 0) {
+		return [`${spinner} ${label} · ${language === "en" ? "Thinking" : "思考中"}${elapsed}`];
+	}
+
+	if (!multiline) {
+		return [`${spinner} ${label} · ${reviewer.action} · ${callsText(reviewer.toolCalls, language)}${elapsed}`];
+	}
+
+	// 动作按时间顺序滚动（旧在上新在下），不标「当前/历史」。
+	const lines = [`${spinner} ${label} · ${callsText(reviewer.toolCalls, language)}${elapsed}`];
+	const prev = reviewer.recentTools?.at(-1);
+	if (prev) lines.push(`  ↳ ${clip(formatTool(prev, language), 50)}`);
+	lines.push(`  ↳ ${clip(reviewer.action, 50)}`);
+	return lines;
+}
+
+function formatTool(tool: ProgressTool, language: Language): string {
+	const verb = language === "en" ? tool.tool : tool.tool === "read" ? "读" : tool.tool === "bash" ? "跑" : tool.tool === "edit" ? "改" : tool.tool === "write" ? "写" : tool.tool;
+	const target = tool.args.split("/").pop() || tool.args;
+	return `${verb} ${target}`;
+}
+
+/** 每模型耗时后缀的唯一出口：运行中走表、落定冻结；所有携带每模型内容的行都拼它。 */
+function elapsedSuffix(reviewer: ReviewerProgress): string {
+	if (!reviewer.startedAt) return "";
+	const elapsedMs = Math.max(0, (reviewer.settledAt ?? Date.now()) - reviewer.startedAt);
+	return elapsedMs > 0 ? ` · ${formatDuration(elapsedMs)}` : "";
+}
+
+/** 审查者状态图标的唯一映射；运行中的动态 spinner 由调用方另行处理。 */
+function statusIcon(status: ReviewerProgress["status"]): string {
+	if (status === "passed") return "✅";
+	if (status === "failed") return "❌";
+	if (status === "error") return "⚠️";
+	return "⠋";
+}
+
+function shortModelName(label: string): string {
+	let s = label.replace(/^gpt-5\.6-/u, "").replace(/-\d+k$/u, "");
+	s = s.replace(/^(?:claude-3-[57]-|claude-)/u, "c37-").replace(/^(?:gemini-2\.[05]-|gemini-)/u, "g25-");
+	if (s.startsWith("c37-sonnet") || s === "c37-3-7-sonnet") return "c37";
+	if (s.startsWith("g25-pro") || s === "g25-2.5-pro") return "g25";
+	return s.length > 7 ? `${s.slice(0, 6)}…` : s;
 }
 
 function activityHint(view: ActivityView) {
@@ -554,11 +461,11 @@ function activityHint(view: ActivityView) {
 			: "Esc/Ctrl+C 取消自动审查";
 	if (view.phase === "needs_fix")
 		return view.language === "en"
-			? "Esc/Ctrl+C skip consult · Alt+S details"
-			: "Esc/Ctrl+C 跳过咨询 · Alt+S 详情";
+			? "Esc/Ctrl+C skip consult"
+			: "Esc/Ctrl+C 跳过咨询";
 	return view.language === "en"
-		? "Esc/Ctrl+C cancel · Alt+S details"
-		: "Esc/Ctrl+C 取消 · Alt+S 详情";
+		? "Esc/Ctrl+C cancel"
+		: "Esc/Ctrl+C 取消";
 }
 
 function roundTitle(round: number, title: string, language: Language) {
@@ -566,32 +473,8 @@ function roundTitle(round: number, title: string, language: Language) {
 	return language === "en" ? `Round ${round} ${title}` : `第 ${round} 轮${title}`;
 }
 
-function detailsHintText(language: Language) {
-	return language === "en" ? "Alt+S close" : "Alt+S 关闭";
-}
-
 function callsText(calls: number, language: Language) {
 	return language === "en" ? `${calls} calls` : `${calls} 次调用`;
-}
-
-function monitorGlyph(reviewer: ReviewerProgress, spinner: string) {
-	if (reviewer.status === "passed") return "✓";
-	if (reviewer.status === "failed" || reviewer.status === "error") return "✗";
-	return reviewer.toolCalls > 0 ? "●" : spinner;
-}
-
-function statusColor(status: ReviewerProgress["status"]) {
-	if (status === "passed") return "success" as const;
-	if (status === "failed" || status === "error") return "error" as const;
-	return "accent" as const;
-}
-
-function matchesDetailsShortcut(data: string) {
-	return (
-		matchesKey(data, DETAILS_SHORTCUT) ||
-		MONITOR_SHORTCUT_ESCAPES.has(data) ||
-		MONITOR_SHORTCUT_COMPOSED.has(data)
-	);
 }
 
 function centerLine(line: string, width: number) {
@@ -600,11 +483,6 @@ function centerLine(line: string, width: number) {
 	const padding = Math.max(0, width - visibleWidth(text));
 	const left = Math.floor(padding / 2);
 	return `${" ".repeat(left)}${text}${" ".repeat(padding - left)}`;
-}
-
-function alignRight(left: string, right: string, width: number) {
-	const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(right));
-	return truncateToWidth(`${left}${" ".repeat(gap)}${right}`, width, "…");
 }
 
 function boldText(text: string) {
@@ -644,10 +522,4 @@ function restoreReviewTitle(ctx: ExtensionContext) {
 	const name = typeof rawName === "string" && rawName ? rawName : undefined;
 	const dir = typeof rawCwd === "string" ? basename(rawCwd) : "";
 	ctx.ui.setTitle(name ? `π - ${name} - ${dir}` : `π - ${dir}`);
-}
-
-/** 按终端可见宽度补齐，CJK、emoji 与 ANSI 都由 TUI 的事实源处理。 */
-function padVisible(text: string, width: number) {
-	const visible = visibleWidth(text);
-	return visible >= width ? text : `${text}${" ".repeat(width - visible)}`;
 }

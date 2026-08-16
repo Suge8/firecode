@@ -317,6 +317,19 @@ describe("FAIL output contract", () => {
 		expect(outcome.summary).toBe("校验漏字段");
 	});
 
+	test("accepts a finding with multiline and newline-separated field values including legacy tag aliases", async () => {
+		await loadAll();
+		const multilineBody = `FAIL\n## 发现 1：结算态丢失完整结果\n- **严重程度**: 高\n- **问题**:\n大屏仍只显示标题，不展示这段核心问题说明。\n- **违反的契约或期望行为**:\n应按预算展示自然语言结果。\n- **证据**:\nreview/ui.ts\n- **需要运行的验证命令**:\nbun test`;
+		const outcome = parseReview(multilineBody, "zh");
+		expect(outcome.status).toBe("failed");
+		expect(outcome.summary).toBe("大屏仍只显示标题，不展示这段核心问题说明。");
+
+		const multilineEn = `FAIL\n## Finding 1\n- Severity: High\n- Issue:\nissue description\n- Contract or expected behavior violated:\ncontract details\n- Evidence:\na.ts\n- Verification command to run:\nbun test`;
+		const outcomeEn = parseReview(multilineEn, "en");
+		expect(outcomeEn.status).toBe("failed");
+		expect(outcomeEn.summary).toBe("issue description");
+	});
+
 	// 契约以 prompts/review.{zh,en}.md 为唯一事实源：每条发现六要素齐全才可驱动修复，
 	// 缺任一字段的半成品票无法核实也无法验收，一律作废为基础设施错误。
 	test("rejects a finding missing any required field", async () => {

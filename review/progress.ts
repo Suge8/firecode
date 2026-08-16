@@ -26,12 +26,18 @@ export interface ReviewerProgress {
 	action: string;
 	/** 落定后的一行结果摘要（PASS 收敛摘要 / FAIL 首条发现）；运行中为空。 */
 	summary: string;
+	/** 落定后的结构化多行人话结论与建议（不含命令参数等机械流水）。 */
+	details?: string[];
 	toolCalls: number;
 	tokens: number;
 	activeTools: ProgressTool[];
 	recentTools: ProgressTool[];
 	/** 最近动作流水，供活动测试和降级展示。 */
 	trail: string[];
+	/** 本模型启动时刻；活动条据此显示每个模型自己的耗时。 */
+	startedAt: number;
+	/** 落定时刻；落定后耗时冻结在 settledAt - startedAt。 */
+	settledAt?: number;
 }
 
 const TRAIL_LIMIT = 40;
@@ -41,6 +47,7 @@ const ACTION_WIDTH = 48;
 export function initialProgress(
 	reviewers: readonly { model: string }[],
 	language: Language,
+	now = Date.now(),
 ): ReviewerProgress[] {
 	return reviewers.map((reviewer, index) => ({
 		index,
@@ -53,6 +60,7 @@ export function initialProgress(
 		activeTools: [],
 		recentTools: [],
 		trail: [],
+		startedAt: now,
 	}));
 }
 
@@ -127,12 +135,110 @@ export function settleProgress(
 	status: ReviewerStatus,
 	language: Language,
 	summary = "",
+	rawDetails = "",
 ): readonly ReviewerProgress[] {
+	const details = extractReviewDetails(status, summary, rawDetails, language);
 	return progress.map((item) =>
 		item.index === index
-			? { ...item, status, action: settledText(status, language), summary: oneLine(summary), activeTools: [] }
+			? {
+					...item,
+					status,
+					action: settledText(status, language),
+					summary: oneLine(summary) || (details[0] ?? settledText(status, language)),
+					details,
+					activeTools: [],
+					settledAt: Date.now(),
+				}
 			: item,
 	);
+}
+
+export function extractReviewDetails(
+	status: ReviewerStatus,
+	summary: string,
+	rawDetails = "",
+	language: Language = "zh",
+): string[] {
+	const lines: string[] = [];
+	const cleanSummary = summary.trim();
+
+	if (status === "passed") {
+		if (cleanSummary) {
+			lines.push(cleanSummary);
+		}
+		if (rawDetails) {
+			const suggestionSections = rawDetails.split(/^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/imu);
+			if (suggestionSections.length > 1) {
+				const suggestionBody = suggestionSections.slice(1).join("\n");
+				for (const line of suggestionBody.split(/\r?\n/)) {
+					const trimmed = line.trim();
+					if (/^[-*+]\s+/u.test(trimmed)) {
+						const text = trimmed.replace(/^[-*+]\s+/u, "").trim();
+						if (text) {
+							lines.push(language === "en" ? `Suggestion: ${text}` : `建议：${text}`);
+						}
+					}
+				}
+			}
+		}
+	} else if (status === "failed") {
+		// 只列发现标题（带严重度标签），首行是数量汇总；问题正文留给结果卡。
+		if (rawDetails) {
+			const rawFindings = rawDetails.split(/^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/imu)[0] ?? "";
+			const rawSections = rawFindings.split(/\n(?=#{1,6}\s*(?:发现|Finding))/imu);
+			const findings: string[] = [];
+			for (const section of rawSections) {
+				const rawLines = section.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+				if (rawLines.length === 0 || !/^#{1,6}\s*(?:发现|Finding)/iu.test(rawLines[0] ?? "")) {
+					continue;
+				}
+				const heading = (rawLines[0] ?? "").replace(/^#{1,6}\s*(?:发现|Finding)\s*(?:\d+|[a-zA-Z0-9]+)?\s*[:：]?\s*/iu, "").trim();
+				let severity = "";
+				const issueLines: string[] = [];
+				let inIssue = false;
+				for (let i = 1; i < rawLines.length; i += 1) {
+					const line = rawLines[i] ?? "";
+					const sevMatch = /^[-*+]\s*(?:\*\*)?(?:严重程度|Severity)(?:\*\*)?\s*[:：]\s*(高|中|低|High|Medium|Low)/iu.exec(line);
+					if (sevMatch) {
+						severity = sevMatch[1] ?? "";
+						inIssue = false;
+						continue;
+					}
+					const issueStart = /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(.*)$/u.exec(line);
+					if (issueStart) {
+						inIssue = true;
+						if (issueStart[1]?.trim()) issueLines.push(issueStart[1].trim());
+						continue;
+					}
+					if (/^[-*+]\s*(?:\*\*)?(?:违反|证据|验证|Violated|Evidence|Verification)/iu.test(line) || /^#{1,6}\s+/u.test(line)) {
+						inIssue = false;
+						continue;
+					}
+					if (inIssue && line) issueLines.push(line.replace(/^[-*+]\s*/u, ""));
+				}
+				const issueText = issueLines.join(" ").replace(/`([^`]+)`/gu, "$1").trim();
+				const title = heading || issueText;
+				if (!title) continue;
+				const sevTag = severity
+					? `[${language === "en" ? severity : `严重·${severity}`}] `
+					: "";
+				findings.push(`${sevTag}${title}`);
+			}
+			if (findings.length > 0) {
+				lines.push(
+					language === "en"
+						? `Found ${findings.length} issue${findings.length === 1 ? "" : "s"}`
+						: `发现 ${findings.length} 个问题`,
+					...findings,
+				);
+			}
+		}
+		if (lines.length === 0 && cleanSummary) {
+			lines.push(cleanSummary);
+		}
+	}
+
+	return lines.length > 0 ? lines : [cleanSummary || settledText(status, language)];
 }
 
 /** 工具调用事件 → 人话动作；非工具事件返回 undefined。 */

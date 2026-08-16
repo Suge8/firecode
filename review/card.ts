@@ -11,6 +11,7 @@
 import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
+import { formatDuration } from "../format.js";
 import type { CardData, StopReason } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
@@ -158,7 +159,7 @@ function started(card: Extract<CardData, { kind: "start" }>, language: Language)
 			? `Models: ${card.models.map(shortModel).join(", ")}`
 			: `模型：${card.models.map(shortModel).join("、")}`,
 	];
-	return spec(language, "start", title, lines, "neutral", "💯");
+	return spec(language, "start", title, lines, "neutral", "🔥");
 }
 
 function shortModel(model: string) {
@@ -177,7 +178,7 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const footer = [
 		...(card.advisor?.advice
-			? [language === "en" ? "Advisor note" : "顾问建议", card.advisor.advice]
+			? [language === "en" ? "Advisor note" : "顾问建议", ...adviceLines(card.advisor.advice)]
 			: []),
 		...(card.elapsedMs === undefined
 			? []
@@ -203,7 +204,7 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 			language === "en" ? "Review stopped by advisor" : "审查已由顾问终止",
 			language,
 		);
-		const body = [advisorModelLine(card.advisorModel, language), "", card.advisor.advice];
+		const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
 		return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
 	}
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
@@ -258,12 +259,13 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Language): BuiltCard {
 	const decision = decisionText(card.advisor.verdict, language);
 	const title = language === "en" ? `Advisor guidance · ${decision}` : `顾问指引 · ${decision}`;
-	const body = [advisorModelLine(card.advisorModel, language), "", card.advisor.advice];
+	const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
 	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
 	return spec(language, "advisor", title, withFooter(body, footer), "neutral", "🧭");
 }
 
-function decisionText(verdict: "continue" | "narrow" | "stop", language: Language) {
+/** 裁决词→人话文案的唯一映射：卡标题与活动条摘要共用，防两处文案漂移。 */
+export function decisionText(verdict: "continue" | "narrow" | "stop", language: Language) {
 	return language === "en"
 		? { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" }[verdict]
 		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" }[verdict];
@@ -272,6 +274,17 @@ function decisionText(verdict: "continue" | "narrow" | "stop", language: Languag
 /** 与审查结果卡的「**模型 N · xxx**」分节行同款式。 */
 function advisorModelLine(model: string, language: Language) {
 	return `**${language === "en" ? "Model" : "模型"} · ${shortModel(model)}**`;
+}
+
+/** 顾问建议排版：粗体段标题前补空行——Markdown 把单换行折进同段，不补行三段会糊成一块。 */
+function adviceLines(advice: string) {
+	const output: string[] = [];
+	for (const line of advice.split(/\r?\n/u)) {
+		if (/^\*\*[^*]+\*\*\s*[:：]/u.test(line.trim()) && output.length > 0 && output.at(-1) !== "")
+			output.push("");
+		output.push(line);
+	}
+	return output;
 }
 
 function qualityTitle(round: number, title: string, language: Language) {
@@ -291,8 +304,8 @@ function elapsedLine(
 	language: Language,
 ) {
 	const elapsed = showTotal && totalMs !== undefined
-		? `${elapsedLabel(ms)} / ${language === "en" ? "total" : "总"} ${elapsedLabel(totalMs)}`
-		: elapsedLabel(ms);
+		? `${formatDuration(ms)} / ${language === "en" ? "total" : "总"} ${formatDuration(totalMs)}`
+		: formatDuration(ms);
 	return language === "en" ? `⏱ Elapsed: ${elapsed}` : `⏱ 用时：${elapsed}`;
 }
 
@@ -371,14 +384,4 @@ function spec(
 /** details 行已本地化成品；content 里除标题外都是事实，不做二次翻译。 */
 function localize(lines: string[], language: Language) {
 	return lines;
-}
-
-function elapsedLabel(ms: number) {
-	const seconds = Math.max(0, Math.floor(ms / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	const remainder = seconds % 60;
-	if (minutes < 60) return remainder ? `${minutes}m${remainder}s` : `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h${minutes % 60}m${remainder ? `${remainder}s` : ""}`;
 }

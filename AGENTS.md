@@ -10,21 +10,25 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | --- | --- |
 | `header.ts` | 会话启动横幅，窄终端退化为一行 |
 | `statusbar/` | 底部两行：位置/会话名 + 模型/额度/上下文/缓存/速度 |
-| `tools/` | 接管 read/bash/edit/write 的渲染，含连续行轨道 |
+| `tools/` | 接管默认 4 工具（read/bash/edit/write）的渲染，含连续行轨道；不包装 grep/find/ls——原版 pi 注册即激活，包装即强制打开 |
 | `session/presets.ts` | 预设切换：模型、思考等级、工具集、附加指令 |
 | `session/rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `session/herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `session/stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `session/working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget（高随终端自适应 3–10 行，宽不够逐级降高；回合内隐藏 Working 文本行，订阅占用频道在审查活跃期退让） |
+| `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 |
+| `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 |
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 |
-| `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条与详情窗 |
+| `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 |
 | `master/` | `/fire-master`：按需注入 `herdr_agents`，启动、追问、审查与停止 Herdr Worker |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 |
 | `config.ts` | 只读本目录 config.jsonc |
 
 `statusbar/render.ts` 与 `statusbar/layout` 相关函数是纯函数，测试覆盖在 `tests/layout.test.ts`。
 `session/herdr-display.ts` 把 pi 单向投影到 herdr 的 agent 副标题：`pane.report_metadata` 的
-`display_agent` 写 `pi·模型/思考等级`，`title` 写会话名。workspace、pane label 与 tab label 都归 herdr、
+`display_agent` 写 `pi·模型/思考等级`，`title` 写会话名，同一请求的 `tokens.session` 再把会话名供给
+侧边栏行布局（herdr 侧边栏只消费自定义 token，用户 herdr 配置的 pi 行布局引用 `$session`）。workspace、pane label 与 tab label 都归 herdr、
 用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane 共享状态，而 herdr 没有条件 rename/CAS 与清除
 自定义名的接口，先检查再 rename 无法消除 split/move 竞态。改名不从 `session/rename.ts` 接线，只听宙主的
 `session_info_changed`（命令、快捷键、自动命名已在宙主收口），另听 model/thinking 选择。同一身份不重发，
@@ -41,13 +45,15 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 每轮 findings 只完整显示一次；达到顾问阈值时先显示失败卡，若顾问裁定 stop，终止卡只显示顾问裁决，
 不再复制同一份 findings。
 `review/ui.ts` 沿用 pi-flow `/review` 的活动框与交互：≥ 48 列动态火焰（窄区间收紧边距）、更窄居中退化，
-审查者落定即在活动条与详情窗显示一行结果摘要，顾问裁决摘要在迁入的修复相活动条显示（落定与相迁移同微任务链，needs_fix 相无渲染机会）；审查开始自动打开 80%×70% 子代理监控，详情窗仅
-`alt+s` 开关（esc 不关窗，与取消语义分离）；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 取消，
-顾问阶段 esc 只跳过咨询，`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
-`review/progress.ts` 从子进程事件派生 M1/M2、token、当前工具耗时及历史工具行，是纯 UI 态，不入 checkpoint。
-子进程 stdout 按行增量消费（不得尾部截断，否则长输出会被误判为空）。审查活跃期经进程内
-`herdr:blocked` 频道配对持有“对抗审查进行中”，终态、取消、退出时释放，reload 恢复时重新持有；
-该显示信号失败不影响审查。`review/outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。
+审查者落定即在活动条显示结果摘要，顾问裁决摘要在迁入的修复相活动条显示（落定与相迁移同微任务链，needs_fix 相无渲染机会）；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
+`review/progress.ts` 从子进程事件派生模型进度、token、当前工具耗时及历史工具行，是纯 UI 态，不入 checkpoint。
+子进程 stdout 按行增量消费（不得尾部截断，否则长输出会被误判为空）。审查活跃期的占用信号双通道：
+进程内 `herdr:blocked` 频道驱动 herdr 集成的 blocked 状态（集成只转发状态，message 会被 herdr 丢弃）；
+标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked` 投递
+（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
+标签是租约：持有期带 TTL 定时续约（herdr 无“进程退出即清 metadata”接口，crash 残留靠 TTL 自愈，
+续约兼作投递失败重试）；终态、取消、退出时清除，清除失败重试一次后由 TTL 兜底，
+reload 恢复时重新持有；该显示信号失败不影响审查。`review/outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。
 
 ## 配置
 
@@ -72,8 +78,10 @@ config.jsonc 解析失败或 review 节有任何配置问题时，`/fire-review`
 FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每条发现必须六要素齐全
 （标题、严重程度、问题、违反的约定与期望、证据、验证命令，标签加粗；校验容忍旧措辞与非粗体），
 同票混入非法发现整票作废为基础设施错误。顾问卡与审查结果卡同构：裁决进标题（顾问指引 · 继续修复），
-正文首行为粗体模型分节，三段正文标题加粗；顾问结果不进详情悬浮窗（用户决策：裁决一出即入下一轮，
-活动条与卡片通道已足够）。
+正文首行为粗体模型分节，三段正文标题加粗且段间补空行（Markdown 把单换行折进同段，不补会糊成一块）；
+修复相活动条的裁决摘要取「下一步方向」首句并剥掉加粗星号；顾问相活动条把连败轮数并入标题、
+正文与审查者行同格式；活动框边框线用宿主 DynamicBorder 组件、品牌橙不变
+（用户决策：裁决一出即入下一轮，活动条与卡片通道已足够）。
 
 ## Master
 

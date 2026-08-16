@@ -106,6 +106,7 @@ test("never mutates persistent pane or tab names", async () => {
 			display_agent: "pi·claude-opus-4-5/medium",
 			title: "重命名",
 			clear_title: false,
+			tokens: { session: "重命名" },
 		},
 	});
 });
@@ -122,6 +123,7 @@ test("retries a failed display report and clears only on quit", async () => {
 	expect(herdr.requests[2].params).toMatchObject({
 		clear_display_agent: true,
 		clear_title: true,
+		tokens: { session: null },
 	});
 	expect(herdr.requests[2].params.seq).toBeGreaterThan(herdr.requests[1].params.seq);
 });

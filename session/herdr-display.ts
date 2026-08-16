@@ -1,14 +1,14 @@
 /**
  * 把 pi 的会话身份投影到 herdr agent 副标题：`pi·模型/思考等级` + 会话名。
+ * 会话名同时以 `session` 自定义 token 上报，供 herdr 侧边栏 `$session` 行布局显示；
  * 只写带 source 的 pane 显示元数据，不碰持久 pane/tab 名；失败静默，不影响会话。
  * herdr 之外、非 TUI 模式或 Master Worker 内自我禁用。
  */
-import net from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatModelName } from "../format.js";
+import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 
 const SOURCE = "firecode";
-const REQUEST_TIMEOUT_MS = 500;
 
 /** herdr 按 seq 丢弃过期上报，同一 pane 的元数据必须单调递增。 */
 let seq = Date.now() * 1000;
@@ -29,12 +29,11 @@ export function projectIdentity(
 }
 
 export function registerHerdrDisplay(pi: ExtensionAPI): void {
-	const paneId = process.env.HERDR_PANE_ID;
-	const socketPath = process.env.HERDR_SOCKET_PATH;
-	if (process.env.HERDR_ENV !== "1" || !paneId || !socketPath) return;
+	const env = herdrPaneEnv();
+	if (!env) return;
 	if (process.env.FIRECODE_MASTER_WORKER) return;
+	const paneId = env.paneId;
 
-	const request = herdrRequest(socketPath);
 	let chain = Promise.resolve();
 	let published: string | undefined;
 	/** 链尾意图：最近一次入队的身份。去重必须以它为准——拿已确认身份提前返回
@@ -47,13 +46,15 @@ export function registerHerdrDisplay(pi: ExtensionAPI): void {
 		if (key === (enqueued ?? published)) return chain;
 		enqueued = key;
 		chain = chain.then(async () => {
-			const delivered = await request({
+			const delivered = await herdrRequest(SOURCE, "pane.report_metadata", {
 				pane_id: paneId,
 				source: SOURCE,
 				display_agent: identity.agent || null,
 				clear_display_agent: !identity.agent,
 				title: identity.title || null,
 				clear_title: !identity.title,
+				// 侧边栏行布局只能消费自定义 token（title 不在 token 集里）；null 即清除。
+				tokens: { session: identity.title || null },
 				seq: nextSeq(),
 			});
 			published = delivered ? key : undefined;
@@ -84,42 +85,4 @@ export function registerHerdrDisplay(pi: ExtensionAPI): void {
 			? publish({ title: "", agent: "" })
 			: undefined,
 	);
-}
-
-/** 短连接单向上报：只有 herdr 返回 result 才算送达。 */
-function herdrRequest(socketPath: string) {
-	const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-	return (params: Record<string, unknown>): Promise<boolean> =>
-		new Promise((resolve) => {
-			const socket = net.createConnection(endpoint);
-			let buffer = "";
-			const finish = (delivered: boolean) => {
-				clearTimeout(timer);
-				socket.destroy();
-				resolve(delivered);
-			};
-			const timer = setTimeout(() => finish(false), REQUEST_TIMEOUT_MS);
-			timer.unref?.();
-			socket.on("error", () => finish(false));
-			socket.on("end", () => finish(false));
-			socket.on("data", (chunk) => {
-				buffer += chunk;
-				const end = buffer.indexOf("\n");
-				if (end >= 0) finish(hasResult(buffer.slice(0, end)));
-			});
-			socket.on("connect", () => {
-				socket.write(
-					`${JSON.stringify({ id: SOURCE, method: "pane.report_metadata", params })}\n`,
-				);
-			});
-		});
-}
-
-function hasResult(line: string): boolean {
-	try {
-		const response = JSON.parse(line) as { result?: unknown; error?: unknown };
-		return !response.error && typeof response.result === "object" && response.result !== null;
-	} catch {
-		return false;
-	}
 }

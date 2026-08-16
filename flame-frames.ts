@@ -444,10 +444,14 @@ function scaleFrame(frame: readonly string[], targetHeight: number): string[] {
 
 	return Array.from({ length: targetHeight }, (_, y) => {
 		const sourceRow = rows[Math.floor(y / scale)];
-		return `${Array.from({ length: targetWidth }, (_, x) => {
+		const cells = Array.from({ length: targetWidth }, (_, x) => {
 			const cell = sourceRow[Math.floor(x / scale)];
 			return cell ? `${cell.style}${cell.char}` : " ";
-		}).join("")}${RESET}`;
+		});
+		// 行尾空白格裁掉：可见宽度必须与 flameFrameWidth（trimEnd 计宽）一致，
+		// 否则窄屏适配按小宽度放行、实际渲染却溢出。
+		while (cells.length > 0 && (cells.at(-1) as string).endsWith(" ")) cells.pop();
+		return `${cells.join("")}${RESET}`;
 	});
 }
 

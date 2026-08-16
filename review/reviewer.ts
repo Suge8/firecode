@@ -27,7 +27,7 @@ export interface RunReviewerOptions {
 	cwd: string;
 	language: Language;
 	signal?: AbortSignal;
-	/** 子进程事件流：驱动活动条与详情窗的实时进度。 */
+	/** 子进程事件流：驱动活动条的实时进度。 */
 	onEvent?: (event: PiProcessEvent) => void;
 }
 
@@ -180,7 +180,7 @@ const EVIDENCE_LINE = /^(?:[-*]\s*)?(?:证据：|Evidence:)/u;
 const FILE_SEGMENT = /(?:文件|files)\s*=\s*([^;；]*)/iu;
 const COMMAND_SEGMENT = /(?:命令|commands)\s*=\s*([^;；]*)/iu;
 const FILE_ANCHOR = /[\w@./-]*\w\.[a-zA-Z]\w{0,5}\b/u;
-const FINDING_ISSUE = /^[-*+]\s*(?:问题|Issue)\s*[:：]\s*(.*)$/u;
+const FINDING_ISSUE = /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(.*)$/u;
 // 不能用 \b 收尾：中文不是\w，「发现 1」里「现」与空格之间不构成词边界。
 const FINDING_HEADING = /^#{1,6}\s*(?:发现|Finding)/u;
 
@@ -259,12 +259,34 @@ export function failIssue(body: string, language: Language): string | undefined 
 		const end = starts[order + 1] ?? blocking.length;
 		const section = blocking.slice(start, end);
 		const missing = FINDING_FIELDS.filter(
-			(field) => !section.some((line) => field.pattern.test(line)),
+			(field) => !sectionHasField(section, field),
 		);
 		if (missing.length > 0)
 			return missingFieldsMessage(order + 1, missing, language);
 	}
 	return undefined;
+}
+
+function sectionHasField(section: readonly string[], field: (typeof FINDING_FIELDS)[number]): boolean {
+	for (let i = 0; i < section.length; i += 1) {
+		const line = section[i] ?? "";
+		if (field.pattern.test(line)) return true;
+		if (field.key === "severity") continue;
+		const tagSource = field.pattern.source.replace(/\s*\(\\S\.\*\)\$/u, "\\s*");
+		const tagPattern = new RegExp(tagSource, "iu");
+		if (tagPattern.test(line)) {
+			const inline = line.replace(tagPattern, "").trim();
+			if (inline) return true;
+			for (let j = i + 1; j < section.length; j += 1) {
+				const nextLine = (section[j] ?? "").trim();
+				if (/^[-*+]\s*(?:\*\*)?(?:严重程度|Severity|问题|Issue|证据|Evidence|违反|Violated|Contract|验证|Verification)/iu.test(nextLine) || /^#{1,6}\s+/u.test(nextLine)) {
+					break;
+				}
+				if (nextLine) return true;
+			}
+		}
+	}
+	return false;
 }
 
 function missingFieldsMessage(
@@ -300,12 +322,20 @@ function firstSummary(body: string) {
 		.filter((line) => line && !EVIDENCE_LINE.test(line) && !SUGGESTIONS_HEADING.test(line))[0];
 }
 
-/** 发现一句话问题（FAIL 卡片回顾用）：取第一条「- 问题:」行。 */
+/** 发现一句话问题（FAIL 卡片回顾用）：取第一条「- 问题:」行（支持同行及换行）。 */
 function firstIssue(body: string, language: Language) {
 	const lines = body.split(/\r?\n/).map((line) => line.trim());
-	for (const line of lines) {
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = lines[i] ?? "";
 		const match = FINDING_ISSUE.exec(line);
-		if (match && match[1]) return clean(match[1]);
+		if (match) {
+			if (match[1]?.trim()) return clean(match[1]);
+			for (let j = i + 1; j < lines.length; j += 1) {
+				const nextLine = lines[j] ?? "";
+				if (/^[-*+]\s+/u.test(nextLine) || /^#{1,6}\s+/u.test(nextLine)) break;
+				if (nextLine.trim()) return clean(nextLine);
+			}
+		}
 	}
 	return language === "en" ? "Review failed with findings." : "审查未通过，存在发现。";
 }

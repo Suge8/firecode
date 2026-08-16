@@ -189,26 +189,112 @@ describe("registerReview wiring", () => {
 
 	test("holds Herdr occupancy exactly once until user cancellation", async () => {
 		await loadAll();
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi as never);
-		const ctx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
-		await command.handler("", ctx);
-		await flush();
-		await command.handler("", ctx);
-		await flush();
-		expect(registered.emitted).toEqual([OCCUPIED]);
+		// 标签必须经 metadata state_labels 送达：herdr 会丢弃 report_agent 的 message（实测），
+		// Master 的占用判定只读 state_labels。这里用桩 socket 验证持有/释放两次投递。
+		const net = await import("node:net");
+		const { mkdtemp, rm } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const directory = await mkdtemp(join(tmpdir(), "firecode-occupancy-"));
+		const socketPath = join(directory, "herdr.sock");
+		const metadataRequests: Array<Record<string, unknown>> = [];
+		const waiters: Array<() => void> = [];
+		// 首次清除注入失败：验证释放路径的重试，而不是只覆盖成功响应。
+		let failNextClear = true;
+		const server = net.createServer((socket) => {
+			socket.on("data", (chunk) => {
+				for (const line of chunk.toString().split("\n").filter(Boolean)) {
+					const request = JSON.parse(line) as { params?: { clear_state_labels?: boolean } };
+					metadataRequests.push(request as Record<string, unknown>);
+					const fail = request.params?.clear_state_labels === true && failNextClear;
+					if (fail) failNextClear = false;
+					socket.write(`${JSON.stringify(fail ? { error: { code: "busy" } } : { result: { type: "ok" } })}\n`);
+					for (const wake of waiters.splice(0)) wake();
+				}
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+		const awaitRequests = (count: number) =>
+			new Promise<void>((resolve, reject) => {
+				const deadline = setTimeout(() => reject(new Error("herdr stub timeout")), 2_000);
+				const check = () => {
+					if (metadataRequests.length < count) return waiters.push(check);
+					clearTimeout(deadline);
+					resolve();
+				};
+				check();
+			});
+		const previousEnv = { ...process.env };
+		Object.assign(process.env, {
+			HERDR_ENV: "1",
+			HERDR_PANE_ID: "w1:pR",
+			HERDR_SOCKET_PATH: socketPath,
+		});
+		try {
+			await holdAndReleaseOccupancy();
+		} finally {
+			process.env = previousEnv;
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(directory, { recursive: true, force: true });
+		}
 
-		const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
-			event: { reason: "quit" },
+		async function holdAndReleaseOccupancy() {
+			await occupancyScenario();
+			// 持有（带 TTL 租约）→ 清除（注入失败）→ 清除重试（成功）。
+			await awaitRequests(3);
+			expect(metadataRequests[0]).toMatchObject({
+				method: "pane.report_metadata",
+				params: {
+					pane_id: "w1:pR",
+					source: "firecode-review",
+					state_labels: { blocked: "对抗审查进行中" },
+					ttl_ms: 60_000,
+				},
+			});
+			expect(metadataRequests[1]).toMatchObject({
+				method: "pane.report_metadata",
+				params: { source: "firecode-review", clear_state_labels: true },
+			});
+			expect(metadataRequests[2]).toMatchObject({
+				method: "pane.report_metadata",
+				params: { source: "firecode-review", clear_state_labels: true },
+			});
+			const seqs = metadataRequests.map((request) =>
+				Number((request.params as Record<string, unknown>)?.seq),
+			);
+			expect(seqs[1]).toBeGreaterThan(seqs[0]);
+			expect(seqs[2]).toBeGreaterThan(seqs[1]);
+		}
+
+		async function occupancyScenario() {
+			const sessionManager = makeSessionManager();
+			const { pi, registered } = makePi(sessionManager);
+			registerReview(pi as never);
+			const ctx = makeCtx(sessionManager, true);
+			await runOccupancy(registered, ctx);
+		}
+
+		async function runOccupancy(
+			registered: ReturnType<typeof makePi>["registered"],
 			ctx: unknown,
-		) => Promise<void>;
-		await shutdown({ reason: "quit" }, ctx);
-		await flush();
-		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		) {
+			const command = registered.commands.get("fire-review") as {
+				handler: (args: string, ctx: unknown) => Promise<void>;
+			};
+			await command.handler("", ctx);
+			await flush();
+			await command.handler("", ctx);
+			await flush();
+			expect(registered.emitted).toEqual([OCCUPIED]);
+
+			const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
+				event: { reason: "quit" },
+				ctx: unknown,
+			) => Promise<void>;
+			await shutdown({ reason: "quit" }, ctx);
+			await flush();
+			expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		}
 	});
 
 	test("releases Herdr occupancy when a review passes", async () => {
@@ -275,22 +361,31 @@ describe("registerReview wiring", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
 
-	test("automatically opens the pi-flow subagent monitor when reviewers start", async () => {
+	test("installs the activity bar and locks editor when review starts", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: `{ "review": { "background": { "command": "/usr/bin/true" } } }`,
 		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		module.registerReview(pi);
-		let opened = 0;
+		let widgetInstalled = false;
+		let editorLocked = false;
 		const ctx = makeCtx(sessionManager);
-		(ctx.ui as Record<string, unknown>).custom = async () => { opened += 1; };
+		Object.assign(ctx.ui, {
+			setWidget: (key: string, next: unknown) => {
+				if (key === "fire-review" && next !== undefined) widgetInstalled = true;
+			},
+			setEditorComponent: (next: unknown) => {
+				if (next !== undefined) editorLocked = true;
+			},
+		});
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
 		await module.__reviewFlushForTests();
-		expect(opened).toBe(1);
+		expect(widgetInstalled).toBe(true);
+		expect(editorLocked).toBe(true);
 	});
 
 	test("queued user cancellation notifies immediately without persisting a result card", async () => {
@@ -339,7 +434,7 @@ describe("registerReview wiring", () => {
 		// streaming 时 sendMessage 会成为 steer；零发送是不能打断当前回复的关键合同。
 		expect(registered.sent).toHaveLength(0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
-		expect(ctx.statuses.at(-1)).toMatch(/^💯 review\/执行中 · 完成后自动审查 · 0s$/u);
+		expect(ctx.statuses.at(-1)).toMatch(/^🔥 执行中 · 完成后自动审查 · 0(?:\.0)?s$/u);
 
 		// FireCode 入口把 review 注册在所有自动续跑模块之后；收到 settled 时，
 		// 先前 handler 已完成且没有发起续跑，才会到这里。

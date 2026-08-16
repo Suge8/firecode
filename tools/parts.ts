@@ -1,6 +1,6 @@
 /** 工具行的着色片段：路径、命令、大小、耗时、diff 统计。 */
 import { homedir } from "node:os";
-import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { type ClipSide, clip, formatDuration, oneLine } from "../format.js";
 import { sizeColor } from "../theme.js";
@@ -13,7 +13,7 @@ const SIZE_MIN_CHARS = 100;
 const DURATION_MIN_MS = 1_000;
 
 /** 一段带颜色的文本片段；不给 color 则用终端默认前景色。 */
-export type Part = { text: string; color?: ThemeColor; bold?: boolean };
+export type Part = { text: string; color?: ThemeColor; bg?: ThemeBg; bold?: boolean };
 
 export function partsWidth(parts: Part[]): number {
 	return parts.reduce((total, part) => total + visibleWidth(part.text), 0);
@@ -22,8 +22,10 @@ export function partsWidth(parts: Part[]): number {
 export function paint(theme: Theme, parts: Part[]): string {
 	return parts
 		.map((part) => {
-			const text = part.bold ? theme.bold(part.text) : part.text;
-			return part.color ? theme.fg(part.color, text) : text;
+			let text = part.bold ? theme.bold(part.text) : part.text;
+			if (part.color && typeof theme.fg === "function") text = theme.fg(part.color, text);
+			if (part.bg && typeof theme.bg === "function") text = theme.bg(part.bg, text);
+			return text;
 		})
 		.join("");
 }
@@ -119,4 +121,20 @@ export function diffMeta(diff: string): Part[] {
 	if (added) parts.push({ text: ` +${added}`, color: "toolDiffAdded" });
 	if (removed) parts.push({ text: ` -${removed}`, color: "toolDiffRemoved" });
 	return parts;
+}
+
+export function genericArgsParts(args: unknown): Part[] {
+	if (!args || typeof args !== "object") {
+		return [{ text: String(args ?? ""), color: "accent" }];
+	}
+	const entries = Object.entries(args as Record<string, unknown>);
+	if (entries.length === 0) return [];
+	const preferredKey = ["prompt", "task", "query", "path", "command", "name", "message", "url"]
+		.find((k) => k in (args as object));
+	const [key, value] = preferredKey
+		? [preferredKey, (args as Record<string, unknown>)[preferredKey]]
+		: entries[0];
+	const valStr = typeof value === "string" ? value : JSON.stringify(value);
+	const text = oneLine(valStr.length > 60 ? `${valStr.slice(0, 57)}…` : valStr);
+	return [{ text: `${key}: `, color: "muted" }, { text, color: "accent" }];
 }

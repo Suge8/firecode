@@ -1,4 +1,10 @@
-/** 接管 read/bash/edit/write 的展示：单行摘要 + 耗时/大小列 + 连续行轨道。 */
+/**
+ * 接管默认 4 工具（read/bash/edit/write）的展示：单行摘要 + 耗时/大小列 + 连续行轨道。
+ *
+ * 只包装默认激活的工具：原版 pi 的 registerTool 是注册即激活（会话构建与 reload
+ * 固定 includeAllExtensionTools），给 grep/find/ls 挂渲染包装会把它们在所有会话
+ * 强制打开——渲染接管不得改变工具集，因此那三个用宿主默认渲染。
+ */
 import {
 	createBashTool,
 	createEditTool,
@@ -20,9 +26,16 @@ type ToolArgs = {
 	limit?: number;
 };
 
-const cache = new Map<string, ReturnType<typeof createTools>>();
+type ToolMap = {
+	read: ReturnType<typeof createReadTool>;
+	bash: ReturnType<typeof createBashTool>;
+	edit: ReturnType<typeof createEditTool>;
+	write: ReturnType<typeof createWriteTool>;
+};
 
-function createTools(cwd: string) {
+const cache = new Map<string, ToolMap>();
+
+function createTools(cwd: string): ToolMap {
 	return {
 		read: createReadTool(cwd),
 		bash: createBashTool(cwd),
@@ -32,7 +45,7 @@ function createTools(cwd: string) {
 }
 
 /** 工具实例按 cwd 复用：同一会话内 cwd 不变，切目录也不必重建全部工具。 */
-function tools(cwd: string) {
+function tools(cwd: string): ToolMap {
 	let value = cache.get(cwd);
 	if (!value) {
 		value = createTools(cwd);
@@ -66,10 +79,14 @@ function invoke<T extends (...args: never[]) => unknown>(
 
 export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
+	const decorated = new Set<string>(Object.keys(LABEL));
 
 	pi.on("session_start", async (_event, ctx) => {
 		clearDurations();
-		installGroupPatch(ctx.ui, new Set(Object.keys(LABEL)));
+		for (const tool of pi.getAllTools()) {
+			decorated.add(tool.name);
+		}
+		installGroupPatch(ctx.ui, decorated);
 	});
 	pi.on("session_shutdown", async () => {
 		clearDurations();
@@ -79,6 +96,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...initial.read,
 		label: LABEL.read,
+		renderShell: "self",
 		execute: (id, params, signal, update, ctx) =>
 			executeTimed(id, () => invoke(tools(ctx.cwd).read.execute, [id, params, signal, update, ctx])),
 		renderCall: (args, theme, ctx) =>
@@ -95,6 +113,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...initial.bash,
 		label: LABEL.bash,
+		renderShell: "self",
 		execute: (id, params, signal, update, ctx) =>
 			executeTimed(id, () => invoke(tools(ctx.cwd).bash.execute, [id, params, signal, update, ctx])),
 		renderCall: (args, theme, ctx) =>
@@ -112,7 +131,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...initial.edit,
 		label: LABEL.edit,
-		renderShell: "default",
+		renderShell: "self",
 		execute: (id, params, signal, update, ctx) =>
 			executeTimed(id, () => invoke(tools(ctx.cwd).edit.execute, [id, params, signal, update, ctx])),
 		renderCall: (args, theme, ctx) =>
@@ -134,6 +153,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...initial.write,
 		label: LABEL.write,
+		renderShell: "self",
 		execute: (id, params, signal, update, ctx) =>
 			executeTimed(id, () => invoke(tools(ctx.cwd).write.execute, [id, params, signal, update, ctx])),
 		renderCall: (args, theme, ctx) =>

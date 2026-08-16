@@ -1,7 +1,7 @@
 /** 单条工具行的渲染：状态字形 + 标签 + 主体 + 右侧耗时/大小，展开时附完整结果。 */
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type ClipSide, clip, oneLine } from "../format.js";
 import {
 	type Part,
@@ -21,9 +21,9 @@ const MIN_VALUE_WIDTH = 8;
 const ERROR_VALUE_RATIO = 0.4;
 
 const STATUS = {
-	run: { glyph: "●", color: "accent" },
-	ok: { glyph: "✓", color: "success" },
-	err: { glyph: "✗", color: "error" },
+	run: { glyph: "●", color: "accent", bg: "toolPendingBg" },
+	ok: { glyph: "✓", color: "success", bg: "toolSuccessBg" },
+	err: { glyph: "✗", color: "error", bg: "toolErrorBg" },
 } as const;
 
 /** renderCall / renderResult 之间共享的行状态。 */
@@ -103,6 +103,13 @@ class ExpandedResult implements Component {
 	}
 }
 
+function applyBg(line: string, width: number, bgFn?: (text: string) => string): string {
+	const visLen = visibleWidth(line);
+	const padNeeded = Math.max(0, width - visLen);
+	const padded = line + " ".repeat(padNeeded);
+	return bgFn ? bgFn(padded) : padded;
+}
+
 export class ToolLine implements Component {
 	constructor(private readonly options: ToolLineOptions) {}
 
@@ -123,7 +130,11 @@ export class ToolLine implements Component {
 			},
 		];
 		const headWidth = partsWidth(head);
-		if (safeWidth <= headWidth) return [paint(theme, clipParts(head, safeWidth, "end"))];
+		const bgFn = typeof theme.bg === "function" ? (text: string) => theme.bg(status.bg, text) : undefined;
+		if (safeWidth <= headWidth) {
+			const clipped = paint(theme, clipParts(head, safeWidth, "end"));
+			return [applyBg(clipped, width, bgFn)];
+		}
 
 		const meta = [...(this.options.meta ?? []), ...(state.meta ?? [])];
 		const right = [durationPart(state.durationMs), sizePart(state.chars)].filter(
@@ -153,12 +164,12 @@ export class ToolLine implements Component {
 		const body = [...head, ...value, ...(errorPart ? [errorPart] : [])];
 		let line = paint(theme, body);
 		if (right.length) {
-			const pad = safeWidth - partsWidth(body) - rightVisible;
+			const pad = Math.max(RIGHT_GAP, safeWidth - partsWidth(body) - rightVisible);
 			line +=
-				" ".repeat(Math.max(RIGHT_GAP, pad)) +
+				" ".repeat(pad) +
 				right.map((part) => paint(theme, [part])).join(theme.fg("dim", " · "));
 		}
-		return [line];
+		return [applyBg(line, width, bgFn)];
 	}
 }
 

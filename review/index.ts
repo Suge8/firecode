@@ -13,7 +13,9 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type Language, type ReviewConfig } from "../config.js";
-import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
+import { formatDuration } from "../format.js";
+import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
+import { buildCard, CARD_TYPE, decisionText, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
 	CHECKPOINT_TYPE,
@@ -32,10 +34,8 @@ import {
 } from "./progress.js";
 import {
 	type ActivityView,
-	DETAILS_SHORTCUT,
 	hideActivity,
 	lockEditor,
-	openDetails,
 	showActivity,
 	unlockEditor,
 } from "./ui.js";
@@ -57,6 +57,12 @@ import {
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 const STATUS_KEY = "fire-review";
 const OCCUPANCY_CHANNEL = "herdr:blocked";
+const OCCUPANCY_SOURCE = "firecode-review";
+/** herdr 按 seq 丢弃过期上报；同一 source 单调递增。 */
+let occupancySeq = Date.now() * 1000;
+/** 标签租约：TTL 要容得下至少两次续约失败，否则瞬断会让 Master 误读。 */
+const OCCUPANCY_TTL_MS = 60_000;
+const OCCUPANCY_REFRESH_MS = 20_000;
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
 const FEEDBACK_START_TIMEOUT_MS = 2_000;
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
@@ -104,6 +110,8 @@ interface Controller {
 	editorLocked?: boolean;
 	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
 	occupancyHeld?: boolean;
+	/** 占用标签租约续期计时器；释放与 shutdown 时清除。 */
+	occupancyTimer?: ReturnType<typeof setInterval>;
 }
 
 let controller: Controller | undefined;
@@ -118,10 +126,6 @@ export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = 
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
 		return;
 	}
-	pi.registerShortcut(DETAILS_SHORTCUT, {
-		description: "fire-review 进度详情",
-		handler: (ctx) => openDetails(ctx, activityView),
-	});
 	pi.registerCommand("fire-review", {
 		description: "对抗性审查：审这个会话到目前为止做完的事",
 		handler: (args, ctx) => handleCommand(pi, args, ctx),
@@ -616,9 +620,64 @@ function syncOccupancy(active: Controller): void {
 	setOccupancy(active, isActive(active.state));
 }
 
+/**
+ * 标签租约：持有期带 TTL 定时续约，释放时清除失败重试一次、再失败由 TTL 到期兜底。
+ * 定时续约是租约业务语义：herdr 没有“进程退出即清 metadata”的接口（源码核实），
+ * crash/kill 后无 TTL 的标签永驻会让 Master 把 Worker 的真提问误判为审查占用；
+ * 续约同时充当首次投递失败的重试。
+ */
+function publishOccupancyLabel(active: Controller, held: boolean): void {
+	if (held) {
+		void sendOccupancyLabel();
+		if (!active.occupancyTimer) {
+			active.occupancyTimer = setInterval(() => void sendOccupancyLabel(), OCCUPANCY_REFRESH_MS);
+			active.occupancyTimer.unref?.();
+		}
+		return;
+	}
+	if (active.occupancyTimer) {
+		clearInterval(active.occupancyTimer);
+		active.occupancyTimer = undefined;
+	}
+	void clearOccupancyLabel();
+}
+
+function sendOccupancyLabel(): Promise<boolean> {
+	const env = herdrPaneEnv();
+	if (!env) return Promise.resolve(false);
+	return herdrRequest(OCCUPANCY_SOURCE, "pane.report_metadata", {
+		pane_id: env.paneId,
+		source: OCCUPANCY_SOURCE,
+		state_labels: { blocked: OCCUPANCY_LABEL },
+		ttl_ms: OCCUPANCY_TTL_MS,
+		seq: (occupancySeq += 1),
+	});
+}
+
+async function clearOccupancyLabel(): Promise<void> {
+	const env = herdrPaneEnv();
+	if (!env) return;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		// 新审查已重新持有时中止重试：迟到的清除会撤掉新租约的标签。
+		if (controller?.occupancyHeld) return;
+		const delivered = await herdrRequest(OCCUPANCY_SOURCE, "pane.report_metadata", {
+			pane_id: env.paneId,
+			source: OCCUPANCY_SOURCE,
+			clear_state_labels: true,
+			seq: (occupancySeq += 1),
+		});
+		if (delivered) return;
+	}
+	// 两次未送达：标签带 TTL，最迟 60s 自行过期，不会永久残留。
+}
+
 function setOccupancy(active: Controller, held: boolean): void {
 	if (Boolean(active.occupancyHeld) === held) return;
 	active.occupancyHeld = held;
+	// 标签走 metadata state_labels：herdr 会丢弃 report_agent 的 message（实测），
+	// 只有这条通道能同时到达 Master（state_labels 判定）与侧边栏（state_text token）。
+	// 频道仍要发：它驱动 herdr 集成的 blocked 状态本身。占用信号不伤审查。
+	publishOccupancyLabel(active, held);
 	try {
 		active.pi.events.emit(OCCUPANCY_CHANNEL, {
 			active: held,
@@ -714,14 +773,12 @@ function renderStatus(
 	let prefix: string | undefined;
 	if (state.phase === "queued")
 		prefix = language === "en"
-			? "💯 review/running · review when done"
-			: "💯 review/执行中 · 完成后自动审查";
-	else if (state.phase === "reviewing")
-		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
-	else if (state.phase === "needs_fix")
-		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
+			? "🔥 running · review when done"
+			: "🔥 执行中 · 完成后自动审查";
+	else if (state.phase === "reviewing" || state.phase === "needs_fix")
+		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
 	else if (state.phase === "awaiting_fix")
-		prefix = `💯 review/${roundStatus(state.round, language === "en" ? "repair" : "修复中", language)}`;
+		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "repair" : "修复中", language)}`;
 	if (!prefix) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
@@ -733,20 +790,11 @@ function renderStatus(
 	const totalMs = state.startedAt ? Date.now() - state.startedAt : 0;
 	const showTotal = state.round > 1 || state.history.some((round) => round.result === "failed");
 	const elapsed = showTotal
-		? `${flowDuration(stepMs)} / ${language === "en" ? "total" : "总"} ${flowDuration(totalMs)}`
-		: flowDuration(stepMs);
+		? `${formatDuration(stepMs)} / ${language === "en" ? "total" : "总"} ${formatDuration(totalMs)}`
+		: formatDuration(stepMs);
 	ctx.ui.setStatus(STATUS_KEY, `${prefix} · ${elapsed}`);
 }
 
-function flowDuration(milliseconds: number) {
-	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	const remainder = seconds % 60;
-	if (minutes < 60) return remainder ? `${minutes}m${remainder}s` : `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h${minutes % 60}m${remainder ? `${remainder}s` : ""}`;
-}
 
 function roundStatus(round: number, phase: string, language: Language) {
 	if (round <= 1) return phase;
@@ -804,6 +852,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 				reviewer.status,
 				config.language,
 				reviewer.result.summary,
+				reviewer.result.details,
 			);
 	const evidence = buildEvidence(sessionEntries(), config.language);
 	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
@@ -814,8 +863,6 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 		history: state.history,
 		round: state.round,
 	});
-	// pi-flow 默认在审查启动时打开子代理监控；用户关闭后本轮不再自动重开。
-	void openDetails(active.ctx, activityView);
 	const tasks = currentActive.reviewers
 		.filter((reviewer) => reviewer.status === "running")
 		.map(async (reviewer) => {
@@ -844,6 +891,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						result.status,
 						config.language,
 						result.summary,
+						result.details,
 					);
 				if (!actionSignal.aborted)
 					await dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
@@ -876,7 +924,6 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	active.progressStartedAt = Date.now();
 	active.progressKind = "advisor";
 	active.progress = initialProgress([{ model: config.advisor.model }], config.language);
-	void openDetails(active.ctx, activityView);
 	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {
 		language: config.language,
 		focus: state.focus,
@@ -903,6 +950,7 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 				"passed",
 				config.language,
 				advisorSummary(result, config.language),
+				result.advice,
 			);
 		if (!actionSignal.aborted)
 			await dispatch(pi, { type: "ADVISOR_SETTLED", result });
@@ -915,15 +963,29 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
-/** 顾问落定后的一行摘要：裁决 + 建议首行，与审查者摘要同一展示通道。 */
+/** 顾问落定后的一行摘要：裁决 + 「下一步方向」首句，与审查者摘要同一展示通道。
+ * 建议正文以「核实结论」段开头，直取首行只会露出段标题星号，预览零信息量。 */
 function advisorSummary(result: AdvisorResult, language: Language) {
-	const labels = language === "en"
-		? { continue: "continue fixing", narrow: "narrow scope", stop: "stop" }
-		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" };
-	const label = labels[result.verdict];
-	const first = result.advice.split(/\r?\n/u).find((line) => line.trim())?.trim() ?? "";
+	const label = decisionText(result.verdict, language);
+	const first = adviceHighlight(result.advice);
 	if (!first) return label;
 	return language === "en" ? `${label}: ${first}` : `${label}：${first}`;
+}
+
+const NEXT_DIRECTION_LABEL = /^\*{0,2}(?:下一步方向|Next direction)\*{0,2}\s*[:：]\s*/iu;
+
+function adviceHighlight(advice: string) {
+	const lines = advice.split(/\r?\n/u);
+	const index = lines.findIndex((line) => NEXT_DIRECTION_LABEL.test(line.trim()));
+	const source = index >= 0
+		? [lines[index].trim().replace(NEXT_DIRECTION_LABEL, ""), ...lines.slice(index + 1)]
+		: lines;
+	const first = source.map(stripBold).find((line) => line.trim())?.trim() ?? "";
+	return first.replace(/^[-*+]\s*/u, "").trim();
+}
+
+function stripBold(text: string) {
+	return text.replace(/\*\*([^*]+)\*\*/gu, "$1");
 }
 
 function processErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {

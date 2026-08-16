@@ -20,7 +20,7 @@ export type PiProcessResult =
 	| { kind: "aborted" }
 	| { kind: "error"; message: string; stderr: string };
 
-/** 子进程实时进度：每行 JSON 事件解析后回调，供活动条与详情窗展示。 */
+/** 子进程实时进度：每行 JSON 事件解析后回调，供活动条展示。 */
 export type PiProcessEvent = Record<string, unknown>;
 
 export interface PiProcessOptions {
