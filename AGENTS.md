@@ -21,7 +21,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 |
-| `master/` | `/fire-master`：按需注入 `herdr_agents`，启动、追问、审查与停止 Herdr Worker |
+| `master/` | `/fire-master`：按需注入 `subagents` 工具，启动、追问、审查与停止 Herdr Worker |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 |
 | `config.ts` | 只读本目录 config.jsonc |
 
@@ -44,6 +44,10 @@ quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生
 这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线。
 每轮 findings 只完整显示一次；达到顾问阈值时先显示失败卡，若顾问裁定 stop，终止卡只显示顾问裁决，
 不再复制同一份 findings。
+质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环
+禁令的总结提示（followUp + triggerTurn，agent_start 回执、agent_end 收尾），总结回合结束才落
+`settled`；总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/
+基础设施错误/quit）不烧总结回合。占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
 `review/ui.ts` 沿用 pi-flow `/review` 的活动框与交互：≥ 48 列动态火焰（窄区间收紧边距）、更窄居中退化，
 审查者落定即在活动条显示结果摘要，顾问裁决摘要在迁入的修复相活动条显示（落定与相迁移同微任务链，needs_fix 相无渲染机会）；等待模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 相把输入交还用户。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
 `review/progress.ts` 从子进程事件派生模型进度、token、当前工具耗时及历史工具行，是纯 UI 态，不入 checkpoint。
@@ -62,7 +66,7 @@ reload 恢复时重新持有；该显示信号失败不影响审查。`review/ou
 预设名写入会话记录，重开会话只恢复名字与附加指令，不重放模型和工具切换。
 `herdr-display` 没有 feature 开关：herdr 之外（无 `HERDR_ENV`）与 Master Worker 内自我禁用。
 `review` 节（审查者/顾问模型、maxRounds、advisorAfterFailures、timeoutMinutes、tools、background、language）
-与 `master` 节（models 选型表：模型 id + 默认 thinking + 适用场景，注入 herdr_agents 提示词）
+与 `master` 节（models 选型表：模型 id + 默认 thinking + 适用场景，注入 subagents 工具提示词）
 未知字段、嵌套未知字段与类型错误都报配置问题；不读 pi-flow 的 config.json。
 master 节有配置问题时 `/fire-master` 激活与恢复拒绝启动——选型表错误会拿错模型真实发起 Worker。
 config.jsonc 解析失败或 review 节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；
@@ -85,9 +89,15 @@ FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每
 
 ## Master
 
-Master 默认休眠：普通 Pi 不带 `herdr_agents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
-`herdr_agents` 是唯一接口：start / send / review / list / stop。提示词决定何时委派、模型选型（依据 config 选型表，首次派发前把分波计划和每票模型一次性列给用户确认）和委派文本；
-工具只负责 Worker 生命周期、审查发起和异步结果回传。结果用 custom follow-up message 投递，不轮询、不拼进用户输入；
+Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
+`subagents` 是唯一接口：start / send / review / list / stop；工具名不带 herdr——名字里的 herdr 会把模型
+引向 CLI 逃生路径（实测夜跑事故根因），guidelines 另有硬禁令：禁止 bash herdr 管工人，脱管工人
+（在 herdr 里跑但不在池内）零回传，发现即收编（退出旧 pi → start 传 session 路径，ADR-0005）。
+提示词决定何时委派、模型选型（依据 config 选型表，首次派发前把分波计划和每票模型一次性列给用户确认）和委派文本；
+工具只负责 Worker 生命周期、审查发起和异步结果回传。`agent.start` 对 `agent_pane_busy` 退避重试 15s
+（herdr 进程快照高负载瞬态误判；shell 标记已匹配故 busy 必为瞬态），窗口用尽附 pane process-info 证据。
+结果用 custom follow-up message 投递，不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、
+投成写 ack（收件箱至少一次语义），crash/reload 后未 ack 差集在恢复激活时重投，重复投递无害；
 Master 回合进行中到达的结果暂存，agent_settled 后合并成一条再投（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
 Live Worker 可 stop 为保留上下文的 Dormant Worker；Herdr 报 `blocked` 时保持阻塞态并把 `state_labels` 中的问题通知
 Master，Master 用 send 回答后继续。`idle` 与未查看后台结果 `done` 都保留为可追问的 Live Worker，最终 assistant
@@ -114,7 +124,7 @@ pane 命名失败不影响启动只通知。
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，
 reload 按同样规则恢复；终态经 `review/outcome.ts` 读取并连同最终回复回传（passed / stopped=质量裁决终止，
 含 maxRounds 用尽 / failed=error·cancelled·timed_out 等审查未完成，不弱化成停止）。
-Worker Pool 状态 schema 为 v4、兼容 v3，用 mode 0600 的单个文件原子覆盖，不向 Pi session 追加快照；reload 恢复观察，
+Worker Pool 状态 schema 只认 v4（无用户，不留旧版兼容），用 mode 0600 的单个文件原子覆盖，不向 Pi session 追加快照；reload 恢复观察，
 quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning skill；多个 Worker 可并行写共享 checkout，Master 负责最终集成与验证。
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；
