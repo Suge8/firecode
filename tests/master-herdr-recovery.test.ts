@@ -1154,7 +1154,7 @@ function terminalReviewCheckpoint() {
 		type: "custom",
 		customType: "firecode-review-checkpoint",
 		data: {
-			version: 4,
+			version: 5,
 			seq: 9,
 			runId: "run-self-1",
 			phase: "settled",
@@ -1167,6 +1167,7 @@ function terminalReviewCheckpoint() {
 			active: null,
 			pending: null,
 			repair: null,
+			summary: null,
 			consecutiveFailures: 1,
 			startedAt: 1,
 			roundStartedAt: 2,

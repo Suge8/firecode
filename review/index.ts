@@ -40,7 +40,7 @@ import {
 	unlockEditor,
 } from "./ui.js";
 import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
-import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, readPrompt } from "./prompt.js";
+import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
 import {
@@ -55,6 +55,8 @@ import {
 } from "./state.js";
 
 export const FEEDBACK_TYPE = "firecode-review-feedback";
+/** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
+export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
 const STATUS_KEY = "fire-review";
 const OCCUPANCY_CHANNEL = "herdr:blocked";
 const OCCUPANCY_SOURCE = "firecode-review";
@@ -78,7 +80,10 @@ function isActive(state: ReviewState) {
 		state.phase === "queued" ||
 		state.phase === "reviewing" ||
 		state.phase === "needs_fix" ||
-		state.phase === "awaiting_fix"
+		state.phase === "awaiting_fix" ||
+		// 总结回合仍属审查生命周期：占用标签持有到总结完成，Master 才不会在
+		// 结果卡与总结之间的窗口提前结算、漏掉总结回复。
+		state.phase === "summarizing"
 	);
 }
 
@@ -134,8 +139,8 @@ export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = 
 	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
 	pi.on("resources_discover", (_event, ctx) => requestAdvance(pi, ctx));
 	pi.on("agent_start", () => handleAgentStart(pi));
-	// agent_end 只记录修复回合是否真的产出成功结果，不在此推进审查。
-	pi.on("agent_end", (event) => handleRepairAgentEnd(pi, event));
+	// agent_end 只记录修复/总结回合的结局，不在此推进审查。
+	pi.on("agent_end", (event) => handleAgentEnd(pi, event));
 	// settled 后尝试恢复；后续异步 handler 若再触发模型，agent_start 互锁会先停审查。
 	pi.on("agent_settled", (_event, ctx) => scheduleAfterAgentSettled(pi, ctx));
 	pi.on("session_shutdown", (event, ctx) => handleShutdown(pi, event.reason, ctx));
@@ -159,6 +164,7 @@ function settleUnavailableCheckpoint(
 			active: null,
 			pending: null,
 			repair: null,
+			summary: null,
 			updatedAt: Date.now(),
 		});
 	} catch (error) {
@@ -361,6 +367,14 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 		await dispatch(pi, { type: "REPAIR_STARTED" });
 		return;
 	}
+	if (
+		active.state.phase === "summarizing" &&
+		active.state.summary?.status === "awaiting_start"
+	) {
+		clearFeedbackStartTimer(active);
+		await dispatch(pi, { type: "SUMMARY_STARTED" });
+		return;
+	}
 	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
 	// 宿主会 await 本 handler，因此先 abort 并等所有审查子进程真正退出，再允许模型 turn_start。
 	if (!active.actionPromise) return;
@@ -371,14 +385,16 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 	active.actionPromise = undefined;
 }
 
-function handleRepairAgentEnd(
+function handleAgentEnd(
 	pi: ExtensionAPI,
 	event: { messages: readonly unknown[] },
 ): Promise<void> | void {
 	const active = controller;
+	if (!active || active.pi !== pi) return;
+	// 总结回合任何结局都收尾：裁决已落地，总结失败/中断不重试不升级。
+	if (active.state.phase === "summarizing" && active.state.summary?.status === "running")
+		return dispatch(pi, { type: "SUMMARY_SETTLED" });
 	if (
-		!active ||
-		active.pi !== pi ||
 		active.state.phase !== "awaiting_fix" ||
 		active.state.repair?.status !== "running"
 	) return;
@@ -435,6 +451,14 @@ async function advanceWhenIdle(
 	}
 	if (state.phase === "needs_fix") {
 		startAction(active, `advisor:${state.round}`, () => consultAdvisor(pi));
+		return;
+	}
+	if (state.phase === "summarizing") {
+		if (state.summary?.status !== "pending") return;
+		await dispatch(pi, { type: "SUMMARY_DISPATCHED" });
+		const current = controller?.state;
+		if (controller === active && current?.phase === "summarizing" && current.summary?.status === "awaiting_start")
+			deliverSummaryNow(pi, current);
 		return;
 	}
 	if (state.phase !== "awaiting_fix" || !state.repair) return;
@@ -588,6 +612,7 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 				active: null,
 				pending: null,
 				repair: null,
+				summary: null,
 			});
 		} catch {
 			sealed = false;
@@ -724,10 +749,10 @@ function releaseEditor(active: Controller) {
 	active.editorLocked = false;
 }
 
-/** 活动条快照；非活动相返回 undefined（组件据此不渲染）。 */
+/** 活动条快照；非活动相与总结回合返回 undefined（总结是普通可见回合，不需要活动框）。 */
 function activityView(): ActivityView | undefined {
 	const active = controller;
-	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;
+	if (!active || !isActive(active.state) || active.state.phase === "summarizing" || !active.ctx.hasUI) return undefined;
 	return {
 		phase: active.state.phase,
 		round: active.state.round,
@@ -779,6 +804,8 @@ function renderStatus(
 		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
 	else if (state.phase === "awaiting_fix")
 		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "repair" : "修复中", language)}`;
+	else if (state.phase === "summarizing")
+		prefix = language === "en" ? "🔥 summarizing" : "🔥 总结中";
 	if (!prefix) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		return;
@@ -1039,6 +1066,51 @@ function deliverFeedbackNow(
 	}
 }
 
+/** 总结提示投递：与修复反馈同一套 agent_start 回执机制；失败不升级，静默收尾。 */
+function deliverSummaryNow(pi: ExtensionAPI, state: ReviewState): void {
+	const active = controller;
+	if (!active || active.pi !== pi || !state.summary) return;
+	const last = state.history.at(-1);
+	const material = state.summary.kind === "advisor_stop"
+		? last?.advisor?.advice ?? last?.details ?? ""
+		: last?.details ?? "";
+	const prompt = buildSummaryPrompt({
+		language: active.config.language,
+		kind: state.summary.kind,
+		rounds: state.history.length,
+		material,
+	});
+	clearFeedbackStartTimer(active);
+	active.feedbackStartTimer = setTimeout(() => {
+		if (
+			controller !== active ||
+			active.state.phase !== "summarizing" ||
+			active.state.summary?.status !== "awaiting_start"
+		) return;
+		active.feedbackStartTimer = undefined;
+		// 总结是尽力而非必须：未能启动回合就静默收尾，裁决与结果卡已落地。
+		if (active.ctx.hasUI)
+			active.ctx.ui.notify(
+				active.config.language === "en"
+					? "fire-review summary turn did not start; finishing without it."
+					: "fire-review 总结回合未能启动，已直接收尾。",
+				"warning",
+			);
+		void dispatch(pi, { type: "SUMMARY_SETTLED" });
+	}, FEEDBACK_START_TIMEOUT_MS);
+	active.feedbackStartTimer.unref?.();
+	try {
+		pi.sendMessage(
+			{ customType: SUMMARY_REQUEST_TYPE, content: prompt, display: false },
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	} catch (error) {
+		clearFeedbackStartTimer(active);
+		notifyEffectFailure(error);
+		void dispatch(pi, { type: "SUMMARY_SETTLED" });
+	}
+}
+
 function sendCard(pi: ExtensionAPI, card: CardData) {
 	if (!controller) return;
 	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
@@ -1102,7 +1174,8 @@ function sessionEntries() {
 		(entry) =>
 			!isRecord(entry) ||
 			entry.type !== "custom_message" ||
-			(entry.customType !== CARD_TYPE && entry.customType !== FEEDBACK_TYPE),
+			(entry.customType !== CARD_TYPE && entry.customType !== FEEDBACK_TYPE &&
+				entry.customType !== SUMMARY_REQUEST_TYPE),
 	);
 }
 

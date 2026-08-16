@@ -204,7 +204,7 @@ describe("checkpoint schema", () => {
 	test("rejects version mismatch, unknown keys, and invalid phases (discard, no field-level compat)", async () => {
 		await loadAll();
 		const valid = {
-			version: 4,
+			version: 5,
 			seq: 1,
 			runId: "g",
 			phase: "reviewing",
@@ -218,15 +218,17 @@ describe("checkpoint schema", () => {
 			},
 			pending: null,
 			repair: null,
+			summary: null,
 			consecutiveFailures: 0,
 			startedAt: 1,
 			roundStartedAt: 1,
 			updatedAt: 1,
 		};
 		expect(isValidCheckpoint(valid)).toBe(true);
-		expect(isValidCheckpoint({ ...valid, version: 3 })).toBe(false);
+		expect(isValidCheckpoint({ ...valid, version: 4 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, extra: 1 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, phase: "bogus" })).toBe(false);
+		expect(isValidCheckpoint({ ...valid, summary: { kind: "passed", status: "done" } })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, active: null })).toBe(true);
 	});
 
@@ -266,18 +268,20 @@ describe("checkpoint schema", () => {
 		const advisorPhase = settle(state.reduce(repaired, { type: "ADVANCE" }, limits, 6).state);
 		expect(advisorPhase.phase).toBe("needs_fix");
 
+		// 质量裁决终态先经 summarizing；总结回合结束后才 settled。
+		const summarize = (from: typeof start) => state.reduce(from, { type: "SUMMARY_SETTLED" }, limits, 5).state;
 		const terminals = {
 			"reviewing→cancel": state.reduce(start, { type: "CANCEL", reason: "shutdown" }, limits, 4).state,
 			"reviewing→timeout": state.reduce(start, { type: "TIMEOUT" }, limits, 4).state,
 			"needs_fix→cancel": state.reduce(advisorPhase, { type: "CANCEL", reason: "user" }, limits, 4).state,
 			"needs_fix→timeout": state.reduce(advisorPhase, { type: "TIMEOUT" }, limits, 4).state,
-			"advisor→stop": state.reduce(
+			"advisor→stop": summarize(state.reduce(
 				advisorPhase,
 				{ type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } },
 				limits,
 				4,
-			).state,
-			"max_rounds": state.reduce(
+			).state),
+			"max_rounds": summarize(state.reduce(
 				state.reduce(
 					state.initialState("g2"),
 					{ type: "START", focus: "", busy: false },
@@ -287,12 +291,25 @@ describe("checkpoint schema", () => {
 				{ type: "REVIEWER_SETTLED", index: 0, result: failed },
 				singleRound,
 				2,
-			).state,
+			).state),
 		};
 		for (const [label, terminal] of Object.entries(terminals)) {
 			expect(`${label}:${terminal.phase}`).toBe(`${label}:settled`);
-			expect(`${label}:${isValidCheckpoint({ version: 4, seq: 1, ...terminal })}`).toBe(`${label}:true`);
+			expect(`${label}:${isValidCheckpoint({ version: 5, seq: 1, ...terminal })}`).toBe(`${label}:true`);
 		}
+		// summarizing 的每个中途状态都必须可持久化：reload 重投依赖它。
+		let summarizing = state.reduce(
+			advisorPhase,
+			{ type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } },
+			limits,
+			4,
+		).state;
+		expect(summarizing.phase).toBe("summarizing");
+		for (const event of ["SUMMARY_DISPATCHED", "SUMMARY_STARTED"] as const) {
+			expect(isValidCheckpoint({ version: 5, seq: 1, ...summarizing })).toBe(true);
+			summarizing = state.reduce(summarizing, { type: event }, limits, 5).state;
+		}
+		expect(isValidCheckpoint({ version: 5, seq: 1, ...summarizing })).toBe(true);
 	});
 });
 

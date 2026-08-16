@@ -4,7 +4,10 @@
  * 循环状态只存在这一个 reducer 里：模块级不持有可变循环状态，
  * 持久化与 UI 都是本状态在 checkpoint / 结果卡上的投影。
  *
- * 相：idle → queued → reviewing → needs_fix → awaiting_fix → reviewing，终态 settled。
+ * 相：idle → queued → reviewing → needs_fix → awaiting_fix → reviewing，终态 settled；
+ * 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 summarizing：投递一个总结回合
+ * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
+ * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 export type Phase =
@@ -13,6 +16,7 @@ export type Phase =
 	| "reviewing"
 	| "needs_fix"
 	| "awaiting_fix"
+	| "summarizing"
 	| "settled";
 
 export type ReviewerStatus = "running" | "passed" | "failed" | "error";
@@ -82,6 +86,15 @@ export interface RepairState {
 	status: RepairStatus;
 }
 
+export type SummaryKind = "passed" | "max_rounds" | "advisor_stop";
+export type SummaryStatus = "pending" | "awaiting_start" | "running";
+
+/** 质量裁决终态后的总结回合生命周期；持久化后 reload 才能重投未启动的总结。 */
+export interface SummaryState {
+	kind: SummaryKind;
+	status: SummaryStatus;
+}
+
 export interface ReviewState {
 	runId: string;
 	phase: Phase;
@@ -96,6 +109,8 @@ export interface ReviewState {
 	pending: PendingRound | null;
 	/** awaiting_fix 的反馈与修复回合生命周期。 */
 	repair: RepairState | null;
+	/** summarizing 的总结回合生命周期；其余相为 null。 */
+	summary: SummaryState | null;
 	/** 连续未通过轮数（顾问仲裁阈值）。 */
 	consecutiveFailures: number;
 	startedAt: number;
@@ -125,6 +140,9 @@ export type ReviewEvent =
 	| { type: "FEEDBACK_DISPATCHED" }
 	| { type: "REPAIR_STARTED" }
 	| { type: "REPAIR_COMPLETED" }
+	| { type: "SUMMARY_DISPATCHED" }
+	| { type: "SUMMARY_STARTED" }
+	| { type: "SUMMARY_SETTLED" }
 	| { type: "CANCEL"; reason: "user" | "shutdown" }
 	| { type: "TIMEOUT" };
 
@@ -167,6 +185,7 @@ export function initialState(runId: string): ReviewState {
 		active: null,
 		pending: null,
 		repair: null,
+		summary: null,
 		consecutiveFailures: 0,
 		startedAt: 0,
 		roundStartedAt: 0,
@@ -201,6 +220,12 @@ export function reduce(
 			return updateRepairStatus(state, "awaiting_start", "running", now);
 		case "REPAIR_COMPLETED":
 			return updateRepairStatus(state, "running", "completed", now);
+		case "SUMMARY_DISPATCHED":
+			return updateSummaryStatus(state, "pending", "awaiting_start", now);
+		case "SUMMARY_STARTED":
+			return updateSummaryStatus(state, "awaiting_start", "running", now);
+		case "SUMMARY_SETTLED":
+			return onSummarySettled(state, now);
 		case "CANCEL":
 			return onCancel(state, event.reason, now);
 		case "TIMEOUT":
@@ -250,14 +275,18 @@ function onStart(
 function onRecover(state: ReviewState): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled")
 		return { state, effects: [] };
-	// reload 会中断尚未确认完成的修复回合；重新投递同一份持久化反馈，不能跳到下一轮。
+	// reload 会中断尚未确认完成的修复/总结回合；重新投递同一份持久化内容，不能跳过。
 	const repair =
 		state.phase === "awaiting_fix" && state.repair && state.repair.status !== "completed"
 			? { ...state.repair, status: "pending" as const }
 			: state.repair;
+	const summary =
+		state.phase === "summarizing" && state.summary
+			? { ...state.summary, status: "pending" as const }
+			: state.summary;
 	// session_start 只恢复持久状态；宿主在所有 session_start handler 完成后
 	// 另发 resources_discover，执行器到那个正式边界才请求推进。
-	return { state: { ...state, repair }, effects: [] };
+	return { state: { ...state, repair, summary }, effects: [] };
 }
 
 function updateRepairStatus(
@@ -272,6 +301,34 @@ function updateRepairStatus(
 		state: { ...state, repair: { ...state.repair, status }, updatedAt: now },
 		effects: [],
 	};
+}
+
+function updateSummaryStatus(
+	state: ReviewState,
+	expected: SummaryStatus,
+	status: SummaryStatus,
+	now: number,
+): ReduceResult {
+	if (state.phase !== "summarizing" || state.summary?.status !== expected)
+		return { state, effects: [] };
+	return {
+		state: { ...state, summary: { ...state.summary, status }, updatedAt: now },
+		effects: [],
+	};
+}
+
+/** 总结回合结束（或投递失败放弃）：无论何种结局都落 settled，总结是尽力而非必须。 */
+function onSummarySettled(state: ReviewState, now: number): ReduceResult {
+	if (state.phase !== "summarizing") return { state, effects: [] };
+	return {
+		state: { ...state, phase: "settled", summary: null, updatedAt: now },
+		effects: [],
+	};
+}
+
+/** 进入总结相的统一出口：携带意图，由 advance 在 idle 边界投递总结提示。 */
+function summarizing(kind: SummaryKind): Pick<ReviewState, "phase" | "summary"> {
+	return { phase: "summarizing", summary: { kind, status: "pending" } };
 }
 
 function onAdvance(
@@ -299,12 +356,13 @@ function onAdvance(
 		return { state, effects: [] };
 	if (state.round >= limits.maxRounds)
 		return {
-			state: { ...state, phase: "settled", repair: null, updatedAt: now },
+			state: { ...state, ...summarizing("max_rounds"), repair: null, updatedAt: now },
 			effects: [
 				{
 					kind: "send_card",
 					card: { kind: "stop", reason: "max_rounds", round: state.round, details: "" },
 				},
+				{ kind: "advance" },
 			],
 		};
 	// 开始卡只发第 1 轮：后续轮的边界由结果卡的轮号承担，重复开始卡只制造噪声。
@@ -359,22 +417,32 @@ function settleRound(
 		: summary;
 	if (result === "passed" || result === "error") {
 		const round = roundRecord(active.round, result, archiveDetails, settled, undefined, state.roundStartedAt, now);
+		const history = [...state.history, round];
+		// 通过是质量裁决终态 → 总结回合；基础设施错误是事故 → 直接收尾。
+		if (result === "passed")
+			return {
+				state: { ...base, ...summarizing("passed"), history },
+				effects: [
+					{
+						kind: "send_card",
+						card: {
+							kind: "pass",
+							round: active.round,
+							summary: passSummary,
+							details: archiveDetails,
+							elapsedMs: round.elapsedMs,
+							totalElapsedMs,
+						},
+					},
+					{ kind: "advance" },
+				],
+			};
 		return {
-			state: { ...base, phase: "settled", history: [...state.history, round] },
+			state: { ...base, phase: "settled", history },
 			effects: [
 				{
 					kind: "send_card",
-					card:
-						result === "passed"
-							? {
-									kind: "pass",
-									round: active.round,
-									summary: passSummary,
-									details: archiveDetails,
-									elapsedMs: round.elapsedMs,
-									totalElapsedMs,
-								}
-							: { kind: "error", message: displayDetails, elapsedMs: round.elapsedMs, totalElapsedMs },
+					card: { kind: "error", message: displayDetails, elapsedMs: round.elapsedMs, totalElapsedMs },
 				},
 			],
 		};
@@ -385,7 +453,7 @@ function settleRound(
 		return {
 			state: {
 				...base,
-				phase: "settled",
+				...summarizing("max_rounds"),
 				consecutiveFailures,
 				history: [...state.history, round],
 			},
@@ -400,6 +468,7 @@ function settleRound(
 						elapsedMs: round.elapsedMs,
 					},
 				},
+				{ kind: "advance" },
 			],
 		};
 	}
@@ -453,7 +522,7 @@ function onAdvisorSettled(
 	if (advisor.verdict === "stop") {
 		const round = roundRecord(pending.round, "stopped", advisor.advice, pending.reviewers, advisor, state.roundStartedAt, now);
 		return {
-			state: { ...state, phase: "settled", pending: null, history: [...state.history, round], updatedAt: now },
+			state: { ...state, ...summarizing("advisor_stop"), pending: null, history: [...state.history, round], updatedAt: now },
 			effects: [
 				{
 					kind: "send_card",
@@ -470,6 +539,7 @@ function onAdvisorSettled(
 						totalElapsedMs: Math.max(0, now - state.startedAt),
 					},
 				},
+				{ kind: "advance" },
 			],
 		};
 	}
@@ -532,6 +602,8 @@ function onCancel(
 ): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled")
 		return { state, effects: [] };
+	// 总结相被取消/退出：质量裁决与结果卡已落地，静默收尾，不追加轮记录不发卡。
+	if (state.phase === "summarizing") return onSummarySettled(state, now);
 	if (state.phase === "queued")
 		return {
 			state: { ...state, phase: "settled", updatedAt: now },
@@ -558,6 +630,7 @@ function onInfrastructureError(
 	now: number,
 ): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled") return { state, effects: [] };
+	if (state.phase === "summarizing") return onSummarySettled(state, now);
 	const message = details.trim() || "review infrastructure unavailable";
 	const reviewers = state.active?.reviewers.flatMap((item) => item.result ? [item.result] : [])
 		?? state.pending?.reviewers
@@ -582,6 +655,8 @@ function onInfrastructureError(
 function onTimeout(state: ReviewState, now: number): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled")
 		return { state, effects: [] };
+	// 看门狗在总结相到点：裁决已落地，静默收尾不误报超时。
+	if (state.phase === "summarizing") return onSummarySettled(state, now);
 	if (state.phase === "queued")
 		return {
 			state: { ...state, phase: "settled", updatedAt: now },
@@ -626,6 +701,7 @@ function beginRound(
 		active: { round, reviewers, settledCount: 0 },
 		pending: null,
 		repair: null,
+		summary: null,
 		roundStartedAt: now,
 		updatedAt: now,
 	};

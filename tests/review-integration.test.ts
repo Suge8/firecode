@@ -318,6 +318,46 @@ describe("registerReview wiring", () => {
 		await rm(script, { force: true });
 	});
 
+	test("a pass runs a summary turn: prompt delivered, occupancy held until the turn ends", async () => {
+		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(verdict);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
+		// 质量裁决落地 → 总结提示已投递（awaiting_start），占用仍持有。
+		for (let wait = 0; wait < 200; wait += 1) {
+			if (readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start") break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
+		const sent = registered.sent as { customType?: string; content?: string; display?: boolean }[];
+		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
+		const cardIndex = sent.findIndex((message) => message.customType === "firecode-review-card");
+		expect(summaryIndex).toBeGreaterThan(cardIndex); // 结果卡先于总结提示
+		expect(sent[summaryIndex]?.content).toContain("对抗审查已通过");
+		expect(sent[summaryIndex]?.content).toContain("不要修改代码");
+		expect(sent[summaryIndex]?.display).toBe(false);
+		expect(registered.emitted).toEqual([OCCUPIED]);
+		// 总结回合启动与结束 → settled，占用释放。
+		for (const handler of registered.events.get("agent_start") ?? []) await handler({}, ctx);
+		for (const handler of registered.events.get("agent_end") ?? [])
+			await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		for (let wait = 0; wait < 80; wait += 1) {
+			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(readCheckpoint({ sessionManager })?.summary ?? null).toBeNull();
+		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		await rm(script, { force: true });
+	});
+
 	test("releases Herdr occupancy when max rounds stops the review", async () => {
 		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(FAIL_VERDICT, 1);
 		const sessionManager = makeSessionManager();
@@ -638,7 +678,7 @@ describe("checkpoint persistence", () => {
 
 		// 2. 模拟并发写者塞入不同 Run ID 的 checkpoint
 		sessionManager.appendCustomEntry("firecode-review-checkpoint", {
-			version: 4,
+			version: 5,
 			seq: 1,
 			runId: "foreign-writer",
 			phase: "queued",
@@ -648,6 +688,7 @@ describe("checkpoint persistence", () => {
 			active: null,
 			pending: null,
 			repair: null,
+			summary: null,
 			consecutiveFailures: 0,
 			startedAt: 1,
 			roundStartedAt: 1,
@@ -806,7 +847,7 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 4,
+				version: 5,
 				seq: 1,
 				runId: "g",
 				phase: "reviewing",
@@ -820,6 +861,7 @@ describe("review config is rejected at every entry point", () => {
 				},
 				pending: null,
 				repair: null,
+				summary: null,
 				consecutiveFailures: 0,
 				startedAt: 1,
 				roundStartedAt: 1,

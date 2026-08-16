@@ -19,10 +19,11 @@ import type {
 	ReviewRound,
 	ReviewState,
 	ReviewerResult,
+	SummaryState,
 } from "./state.js";
 
 export const CHECKPOINT_TYPE = "firecode-review-checkpoint";
-const VERSION = 4;
+const VERSION = 5;
 
 /** 写入凭证：同一场审查内 Run ID 不变，靠单调递增的 seq 识别陈旧写者。 */
 export interface CheckpointStamp {
@@ -51,6 +52,7 @@ const PHASES = new Set([
 	"reviewing",
 	"needs_fix",
 	"awaiting_fix",
+	"summarizing",
 	"settled",
 ]);
 const ROUND_RESULTS = new Set([
@@ -71,6 +73,8 @@ const STOP_REASONS = new Set([
 	"timeout",
 ]);
 const REPAIR_STATUSES = new Set(["pending", "awaiting_start", "running", "completed"]);
+const SUMMARY_KINDS = new Set(["passed", "max_rounds", "advisor_stop"]);
+const SUMMARY_STATUSES = new Set(["pending", "awaiting_start", "running"]);
 
 /**
  * 键白名单由领域类型派生：satisfies 要求逐字段列全，
@@ -130,6 +134,11 @@ const REPAIR_KEYS = keysOf({
 	status: true,
 } satisfies Record<keyof RepairState, true>);
 
+const SUMMARY_KEYS = keysOf({
+	kind: true,
+	status: true,
+} satisfies Record<keyof SummaryState, true>);
+
 const CHECKPOINT_KEYS = keysOf({
 	version: true,
 	seq: true,
@@ -141,6 +150,7 @@ const CHECKPOINT_KEYS = keysOf({
 	active: true,
 	pending: true,
 	repair: true,
+	summary: true,
 	consecutiveFailures: true,
 	startedAt: true,
 	roundStartedAt: true,
@@ -250,6 +260,15 @@ function isValidRepair(value: unknown): boolean {
 	);
 }
 
+function isValidSummary(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		hasOnlyKeys(value, SUMMARY_KEYS) &&
+		oneOf(value.kind, SUMMARY_KINDS) &&
+		oneOf(value.status, SUMMARY_STATUSES)
+	);
+}
+
 /** 一次性整体校验 checkpoint；结构或版本不符返回 false（调用方直接丢弃）。 */
 export function isValidCheckpoint(value: unknown): boolean {
 	if (!isRecord(value)) return false;
@@ -266,6 +285,7 @@ export function isValidCheckpoint(value: unknown): boolean {
 		(value.active === null || isValidActiveCheck(value.active)) &&
 		(value.pending === null || isValidPendingRound(value.pending)) &&
 		(value.repair === null || isValidRepair(value.repair)) &&
+		(value.summary === null || isValidSummary(value.summary)) &&
 		isNonNegativeInt(value.consecutiveFailures) &&
 		isNonNegativeInt(value.startedAt) &&
 		isNonNegativeInt(value.roundStartedAt) &&
@@ -284,6 +304,7 @@ function toCheckpoint(state: ReviewState) {
 		active: state.active,
 		pending: state.pending,
 		repair: state.repair,
+		summary: state.summary,
 		consecutiveFailures: state.consecutiveFailures,
 		startedAt: state.startedAt,
 		roundStartedAt: state.roundStartedAt,
