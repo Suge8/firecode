@@ -19,6 +19,8 @@ const MASTER_EVENT_TYPE = "firecode-master-event";
 /** 收件箱持久化：结果先落 Master 会话（pending），投递后写 ack；reload/crash 后未 ack 的重投。 */
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
+/** 投递失败后的自重试间隔（退避语义）：重试不依赖新事件或用户开口。 */
+const FLUSH_RETRY_DELAY_MS = 5_000;
 
 interface MasterEvent {
 	id: string;
@@ -34,6 +36,8 @@ interface MasterRuntime {
 	/** 显式回合状态位：宿主在 emit agent_settled 前就置 idle，不能拿 isIdle 当回合边界。 */
 	turnActive: boolean;
 	flushTimer?: NodeJS.Timeout;
+	/** 连续投递失败次数：只在首次失败时通知，避免持续故障下每 5s 刷一条警告。 */
+	flushFailures: number;
 }
 
 interface WorkerRuntime {
@@ -83,11 +87,16 @@ export function registerMaster(pi: ExtensionAPI): void {
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
 		} catch (error) {
-			// 投递失败不丢结果：留在队列等下一个回合边界重试；pending 未 ack，reload 也能续投。
+			// 投递失败不丢结果：回队列并定时重排，重试不依赖新事件；pending 未 ack，reload 也能续投。
 			active.events.unshift(...batch);
-			active.ctx.ui.notify(`Worker 结果投递失败，将自动重试：${String(error)}`, "warning");
+			if (active.flushFailures === 0)
+				active.ctx.ui.notify(`Worker 结果投递失败，将自动重试：${String(error)}`, "warning");
+			active.flushFailures += 1;
+			active.flushTimer = setTimeout(() => flushMasterEvents(active), FLUSH_RETRY_DELAY_MS);
+			active.flushTimer.unref?.();
 			return;
 		}
+		active.flushFailures = 0;
 		// ack 失败只影响去重（reload 后可能重复投递一次），不影响本次已成功的投递。
 		try {
 			pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
@@ -144,7 +153,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			await herdr.shutdown();
 			throw error;
 		}
-		const candidate: MasterRuntime = { role: "master", ctx, store, herdr, events: [], turnActive: false };
+		const candidate: MasterRuntime = { role: "master", ctx, store, herdr, events: [], turnActive: false, flushFailures: 0 };
 		runtime = candidate;
 		deliverMasterEvent = notifyMaster;
 		setTools("master");
