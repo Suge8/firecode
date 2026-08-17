@@ -229,7 +229,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			const input = args.trim();
 			if (input === "status") {
 				if (runtime?.role !== "master") {
-					ctx.ui.notify("Master 未启用", "info");
+					ctx.ui.notify("工人池未启用", "info");
 					return;
 				}
 				ctx.ui.notify(statusText(runtime.store.state.workers), "info");
@@ -238,7 +238,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			if (input === "off") {
 				const failures = await deactivate(true);
 				ctx.ui.notify(
-					failures.length ? `Master 已关闭，但 Worker 清理失败：${failures.join("；")}` : "Master 已关闭并清理 Worker",
+					failures.length ? `工人池已关闭，但工人清理失败：${failures.join("；")}` : "工人池已关闭并清理工人",
 					failures.length ? "warning" : "info",
 				);
 				return;
@@ -249,7 +249,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			}
 			try {
 				await activateMaster(ctx);
-				ctx.ui.notify("Master Worker Pool 已启用", "info");
+				ctx.ui.notify("工人池已启用", "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
