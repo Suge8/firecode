@@ -99,7 +99,9 @@ Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加
 必须已存在，校验失败拒绝启动；目录随档案持久化，休眠恢复回到同一 checkout）——能力缺口会把模型逼上
 CLI 逃生路径（ADR-0005）；guidelines 不教 worktree，共享 checkout 仍是默认。`agent.start` 对 `agent_pane_busy` 退避重试 15s
 （herdr 进程快照高负载瞬态误判；shell 标记已匹配故 busy 必为瞬态），窗口用尽附 pane process-info 证据。
-结果用 custom follow-up message 投递，不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、
+结果用 custom follow-up message 投递，事件卡默认紧凑（每事件一行「标题 — 正文首句」按宽截断，ctrl+o 展开全文；
+content 给模型、details 给渲染，无 details 的旧消息降级全文）；事件不携带模型/session 等静态身份——进场一次（start
+返回值）、按需重查（list），事件只装增量。不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、
 投成写 ack（收件箱至少一次语义），crash/reload 后未 ack 差集在恢复激活时重投，重复投递无害；
 Master 回合进行中到达的结果暂存，agent_settled 后合并成一条再投（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
 Live Worker 可 stop 为保留上下文的 Dormant Worker；Herdr 报 `blocked` 时保持阻塞态并把 `state_labels` 中的问题通知
@@ -139,7 +141,8 @@ quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
 重要实现票 start 时设 `review:true`；有可测行为变更的实现票默认 `/skill:tdd ` 开头并把 spec/Ticket
 已定的接缝与验收写进委派文本（接缝在计划层确认，工人不回头询问），调查/文档/收口/纯重构用普通说明；
-Master 不用 `/skill:implement`。
+委派技能前缀由 start/send 代码白名单强制（仅 `/skill:tdd `，`/skills:` 拼写错误一并拦截；提示词禁令实战失效
+26 次后改为机制），Master 不用 `/skill:implement`。
 工人 commit 带路径且只含自己的改动、禁止 push，指挥官在集成点验证后统一 push。
 斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；

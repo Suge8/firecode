@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MASTER_MODELS, loadConfig, type MasterModel } from "../config.js";
+import { MASTER_EVENT_TYPE, masterEventDetails, registerMasterEventRenderer } from "./event-card.js";
 import { HerdrWorkers } from "./herdr.js";
 import {
 	MasterStore,
@@ -16,7 +17,6 @@ import {
 } from "./state.js";
 
 const MASTER_TOOL = "subagents";
-const MASTER_EVENT_TYPE = "firecode-master-event";
 /** 收件箱持久化：结果先落 Master 会话（pending），投递后写 ack；reload/crash 后未 ack 的重投。 */
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
@@ -57,6 +57,8 @@ export function registerMaster(pi: ExtensionAPI): void {
 	let runtime: Runtime | undefined;
 	const masterModels = loadMasterModels();
 	const reviewGate = reviewGateError();
+	// 渲染器无条件注册（与 review 结果卡同策略）：live 与 reload 同一外观。
+	registerMasterEventRenderer(pi);
 
 	const setTools = (role?: Runtime["role"]) => {
 		const without = pi.getActiveTools().filter((name) => name !== MASTER_TOOL);
@@ -87,8 +89,9 @@ export function registerMaster(pi: ExtensionAPI): void {
 		const batch = active.events.splice(0);
 		const content = batch.map((event) => event.content).join("\n\n");
 		try {
+			// content 给模型（完整事实），details 给紧凑卡（每事件一行）；展开态回到 content。
 			pi.sendMessage(
-				{ customType: MASTER_EVENT_TYPE, content, display: true },
+				{ customType: MASTER_EVENT_TYPE, content, display: true, details: masterEventDetails(batch.map((event) => event.content)) },
 				{ deliverAs: "followUp", triggerTurn: true },
 			);
 		} catch (error) {
@@ -430,12 +433,12 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开工人。",
 	`指挥官拥有的工人（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
-	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让工人在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
+	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让工人在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能里说的『后台代理/子代理』在你的语境一律指 subagents 工人。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
 	"发现脱管工人（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
 	"复杂工作先用当前已加载的 planning skill 拆分；subagents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
-	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发即认领（远端打标或留言），收口即删票/关票。没有 Tracker 就没有这些票务动作。",
+	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发三连：start 成功 → 立即认领（远端 Tracker 加 assignee 并更新状态标签，本地 .scratch/ 在票内标注工人名）→ 才向用户汇报，依赖边变更时同步修正受影响票的状态；新立 Ticket 必须声明归属与触发来源——标题带线号或类别词（线号必须出自 spec），票内首行写「来源：哪张票/哪次事件 · 属哪条线 · 阻塞关系」，具体格式以项目 Tracker 约定为准；集成收口摘认领并删票/关票。没有 Tracker 就没有这些票务动作。",
 	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，工人不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
 	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它工人停笔；subagents 的 review action 可对任意 idle 工人手动补审（如轻量票事后需要把关）。",
@@ -483,8 +486,8 @@ function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 
 function dispositionReminderText(worker: string): string {
 	return [
-		`提醒：Worker ${worker} 已 idle，你上一回合收到了它的落定消息但未做任何处置。`,
-		"现在四选一：send 继续派活；review 补审把关；stop 收工休眠；hold 表示故意留着备用（在等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
+		`提醒：Worker ${worker} 的落定消息未处置`,
+		"send 继续派活；review 补审；stop 收工；hold 故意留着备用（等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
 	].join("\n");
 }
 

@@ -100,7 +100,8 @@ class ReviewCard implements Component {
 
 function nativeCard(details: CardDetails, theme: Theme): Component {
 	const container = new Container();
-	const box = new Box(1, 1, (text) => theme.bg(backgroundFor(details.tone), text));
+	// 全家卡统一无垂直内边距（与 tools 行、Master 事件卡同款），只留消息间距。
+	const box = new Box(1, 0, (text) => theme.bg(backgroundFor(details.tone), text));
 	box.addChild(new Text(`${details.icon} ${details.title}`, 0, 0));
 	box.addChild(new Spacer(1));
 	box.addChild(new Markdown(details.lines.join("\n"), 0, 0, getMarkdownTheme()));

@@ -19,7 +19,7 @@ export interface WorkerRef {
 	sessionPath?: string;
 	/** 工人 pane 的工作目录；仅显式指定时记录，休眠恢复沿用。 */
 	cwd?: string;
-	/** 中断时刻（epoch ms）：续监与五分钟自动续跑的依据，接手或续跑提醒后消耗。 */
+	/** 中断时刻（epoch ms）：中断态的唯一标记，驱动续监、自动续跑与审查票 send 门禁豁免；只在接手（send/review/用户派活）时消耗。 */
 	interruptedAt?: number;
 	disposition?: WorkerDisposition;
 	/** review action 投递前观察到的 runId；null 表示当时没有审查。 */

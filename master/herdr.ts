@@ -116,6 +116,7 @@ export class HerdrWorkers {
 	}
 
 	async start(ctx: ExtensionContext, options: StartWorkerOptions): Promise<WorkerRef> {
+		validateDelegationText(options.prompt);
 		// 入队即在全部身份下登记取消控制器；同名并发启动直接拒绝（排队等死还留取消盲区）。
 		const names = this.queuedStartNames(options);
 		for (const key of names)
@@ -281,6 +282,7 @@ export class HerdrWorkers {
 		if (worker.status === "idle" && worker.reviewNeeded && !worker.interruptedAt)
 			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
+		validateDelegationText(text);
 		// 追问接管监听权：中断续监让位，同名监听只能有一个；处置标记与中断时刻随之消耗。
 		this.runs.get(worker.name)?.abort();
 		this.runs.delete(worker.name);
@@ -1002,6 +1004,23 @@ function requiredText(value: unknown, field: string): string {
 	return value.trim();
 }
 
+/** 委派技能白名单：目前仅 tdd（其余技能要么含自审与对抗审查冲突，要么属 solo 场景）。 */
+const DELEGATION_SKILL_WHITELIST = ["/skill:tdd "];
+
+/**
+ * 提示词禁令实战失效（2026-08-16 夜跑 26 次 /skill:implement 委派）：纪律交给代码。
+ * /skills? 前缀一律拦截（含拼写错误——静默失效比违规更糟），白名单外直接拒绝。
+ */
+function validateDelegationText(prompt: unknown): void {
+	if (typeof prompt !== "string") return;
+	const text = prompt.trimStart();
+	if (!/^\/skills?:/u.test(text)) return;
+	if (DELEGATION_SKILL_WHITELIST.some((allowed) => text.startsWith(allowed))) return;
+	throw new Error(
+		"委派文本的技能前缀被拒绝：只允许 /skill:tdd 。implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通自包含说明；拼错的技能前缀会静默失效，同样拒绝。",
+	);
+}
+
 function requiredPane(worker: WorkerRef): string {
 	if (!worker.paneId || worker.paneId === "starting") throw new Error(`${worker.name} 缺少可用 pane`);
 	return worker.paneId;
@@ -1193,7 +1212,6 @@ async function resolveWorkerCwd(requested?: string): Promise<string | undefined>
 function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): string {
 	return [
 		`Worker ${worker.name} 被中断（回合被外部中止，非执行失败）`,
-		...workerHeader(worker),
 		...(worker.reviewNeeded ? ["审查票：审查意图保留，正常完成后仍会自动补审。"] : []),
 		latest.text ? `中断前最后输出：\n${bounded(latest.text)}` : "中断前没有输出。",
 		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 处置本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
@@ -1202,8 +1220,7 @@ function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): stri
 
 function autoResumeText(worker: WorkerRef): string {
 	return [
-		`Worker ${worker.name} 被中断已 5 分钟且无用户介入迹象，判定为意外中断（连接异常或误触）`,
-		...workerHeader(worker),
+		`Worker ${worker.name} 中断已 5 分钟无人接手，判定为意外中断（连接异常或误触）`,
 		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
 	].join("\n");
 }
@@ -1211,7 +1228,6 @@ function autoResumeText(worker: WorkerRef): string {
 function workerBlockedText(worker: WorkerRef, question?: string): string {
 	return [
 		`Worker ${worker.name} 等待输入`,
-		...workerHeader(worker),
 		question ? `问题：\n${bounded(question)}` : "Worker 未提供具体问题，请检查对应 pane。",
 		"使用 subagents send 回答后继续。",
 	].join("\n");
@@ -1219,9 +1235,7 @@ function workerBlockedText(worker: WorkerRef, question?: string): string {
 
 function reviewResultText(worker: WorkerRef, outcome: ReviewOutcome, latest: LatestAssistant | undefined): string {
 	return [
-		`Worker ${worker.name} 审查结束`,
-		`判定：${reviewOutcomeText(outcome)}`,
-		...workerHeader(worker),
+		`Worker ${worker.name} 审查结束：${reviewOutcomeText(outcome)}`,
 		latest?.text ? `最终回复：\n${bounded(latest.text)}` : "最终回复为空。",
 	].join("\n");
 }
@@ -1254,26 +1268,18 @@ function workerFailureText(
 	].filter(Boolean).join("\n") : "未找到最终 assistant 回复";
 	return [
 		`Worker ${worker.name} 执行失败`,
-		...workerHeader(worker),
 		...(review ? [review] : []),
 		`错误：\n${bounded(details)}`,
 	].join("\n");
 }
 
+// 事件不携带模型/session 等静态身份：进场一次（start 返回值）、按需重查（list），事件只装增量信号。
 function workerResultText(worker: WorkerRef, latest: LatestAssistant, review?: string): string {
 	return [
 		`Worker ${worker.name} 已停下`,
-		...workerHeader(worker),
 		...(review ? [review] : []),
 		latest.text ? `回复：\n${bounded(latest.text)}` : "回复为空。",
 	].join("\n");
-}
-
-function workerHeader(worker: WorkerRef): string[] {
-	return [
-		`模型：${worker.model} · ${worker.thinking}`,
-		`session：${worker.sessionPath ?? "未知"}`,
-	];
 }
 
 function bounded(value: string): string {

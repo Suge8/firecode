@@ -27,6 +27,7 @@ test("master mode is opt-in and only appends subagents", async () => {
 	let activeTools = ["read", "write", "edit", "bash"];
 	const notices: string[] = [];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool: (tool: { name: string; promptGuidelines?: string[] }) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
@@ -75,6 +76,7 @@ test("a failed recovery rolls activation back so the next attempt retries", asyn
 	let activeTools = ["read", "bash"];
 	const notices: string[] = [];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool() {},
 		getActiveTools: () => [...activeTools],
@@ -121,6 +123,7 @@ test("Worker results return as follow-up custom messages", async () => {
 	const messages: Array<{ message: Record<string, unknown>; options: Record<string, unknown> }> = [];
 	let activeTools = ["read", "bash"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
@@ -138,7 +141,13 @@ test("Worker results return as follow-up custom messages", async () => {
 	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	expect(messages).toEqual([{
-		message: { customType: "firecode-master-event", content: "Worker worker-1 已停下\n回复：完成", display: true },
+		message: {
+			customType: "firecode-master-event",
+			content: "Worker worker-1 已停下\n回复：完成",
+			display: true,
+			// content 给模型，details 驱动紧凑卡：每事件一行标题。
+			details: { version: 1, titles: ["Worker worker-1 已停下"] },
+		},
 		options: { deliverAs: "followUp", triggerTurn: true },
 	}]);
 });
@@ -176,6 +185,7 @@ test("review action exposes reviewing in Master status without accepting prompt 
 	const statuses: Array<string | undefined> = [];
 	let activeTools = ["read"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<Record<string, unknown>> }) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
@@ -219,6 +229,7 @@ test("Worker keeps pi default tools minus the Master tool and cannot edit/write 
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
 	let activeTools = ["read", "bash", "subagents"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand() {},
 		registerTool() {},
 		getActiveTools: () => [...activeTools],
@@ -276,6 +287,7 @@ test("review action is refused before delivery when fire-review is unavailable",
 	const tools = new Map<string, { execute: (...args: unknown[]) => Promise<Record<string, unknown>> }>();
 	let activeTools = ["read"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<Record<string, unknown>> }) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
@@ -321,6 +333,7 @@ test("worker events wait out a running Master turn and merge into one follow-up"
 	const sent: string[] = [];
 	let activeTools = ["read"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool() {},
 		getActiveTools: () => [...activeTools],
@@ -383,6 +396,7 @@ test("crash 后未 ack 的 Worker 结果在恢复时重投并补 ack", async () 
 	const appended: Array<[string, unknown]> = [];
 	let activeTools = ["read"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand() {},
 		registerTool() {},
 		getActiveTools: () => [...activeTools],
@@ -451,6 +465,7 @@ test("未处置的落定消息提醒一次、再不处置升级通知；hold 处
 	const notices: string[] = [];
 	let activeTools = ["read"];
 	const pi = {
+		registerMessageRenderer() {},
 		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
 		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],

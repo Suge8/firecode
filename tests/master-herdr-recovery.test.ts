@@ -415,7 +415,7 @@ test("review submits only the literal command and waits past blocked states", as
 		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
 	})}\n`);
 	releaseWait();
-	expect(await notice).toContain("判定：通过");
+	expect(await notice).toContain("审查结束：通过");
 	expect(await notice).toContain("最终回复：\n实现完成");
 	expect(store.state.workers[0]?.status).toBe("idle");
 	await rm(directory, { recursive: true, force: true });
@@ -805,7 +805,7 @@ test("a stalled prompt still tracks a review that started without the occupancy 
 	expect(store.state.workers[0]?.status).toBe("reviewing");
 	// 第一次 wait 观测到 idle 但 outcome 仍是 in_progress：不结算，退避后重挂直到终态。
 	const text = await notice;
-	expect(text).toContain("判定：通过");
+	expect(text).toContain("审查结束：通过");
 	expect(waits).toBe(2);
 	expect(store.state.workers[0]?.status).toBe("idle");
 	await rm(directory, { recursive: true, force: true });
@@ -855,7 +855,7 @@ test("reload restores filtered review listening and reports connection failure",
 		},
 	});
 	await pool.resume();
-	expect(await result).toContain("判定：通过");
+	expect(await result).toContain("审查结束：通过");
 	expect(notices[0]).toContain("审查监听失败，正在恢复");
 	expect(calls.filter((args) => args[0] === "agent" && args[1] === "wait")).toEqual([
 		["agent", "wait", "w1:p2", "--until", "idle", "--until", "done"],
@@ -1104,6 +1104,55 @@ test("cwd 校验失败拒绝启动，合法 cwd 进 pane 与档案", async () =>
 	await rm(checkout, { recursive: true, force: true });
 });
 
+test("委派技能白名单：非 tdd 技能前缀（含拼错）在投递前被拒，tdd 放行", async () => {
+	process.env.SHELL = "/bin/sh";
+	const store = createStore();
+	const pool = new HerdrWorkers({
+		pi: { exec: async () => response({}) } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	await expect(pool.start(ctx, { name: "a", prompt: "/skill:implement 执行工单 #1" })).rejects.toThrow("只允许 /skill:tdd");
+	await expect(pool.start(ctx, { name: "a", prompt: "/skills:implement 拼错的前缀" })).rejects.toThrow("只允许 /skill:tdd");
+	expect(store.state.workers).toEqual([]);
+	// tdd 放行：穿过白名单到达 shell 阶段（非 zsh 环境报的是握手错误，不是白名单拒绝）。
+	await expect(pool.start(ctx, { name: "a", prompt: "/skill:tdd 按 spec 实现" })).rejects.toThrow("zsh");
+	store.dispatch({ type: "UPSERT_WORKER", worker: worker("blocked") });
+	await expect(pool.send("worker-1", "/skill:implement 继续")).rejects.toThrow("只允许 /skill:tdd");
+	await pool.shutdown();
+});
+
+test("review 投递失败后中断续监重挂，监视与计时承诺不断线", async () => {
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), interruptedAt: Date.now() } });
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "agent" && args[1] === "prompt")
+				return { code: 1, stdout: "", stderr: "prompt rejected", killed: false };
+			if (args[0] === "agent" && args[1] === "wait")
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return liveAgent("idle");
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	await expect(pool.review("worker-1")).rejects.toThrow("失败");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	// 投递失败不能把中断态工人扔在无监视状态：续监重新挂上，中断时刻保留。
+	expect(calls.some((args) => args[1] === "wait" && args.includes("working"))).toBe(true);
+	expect(store.state.workers[0]).toMatchObject({ status: "idle" });
+	expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
+	await pool.shutdown();
+});
+
 test("a failed Herdr wait reattaches and still returns the result", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-reattach-"));
 	const sessionPath = join(directory, "worker.jsonl");
@@ -1213,14 +1262,14 @@ test("review-flagged worker settles, auto-review fires and relays the verdict", 
 		workspaceId: "w1",
 		notifyMaster: (notice) => {
 			notices.push(notice);
-			if (notice.includes("判定")) resolveVerdict(notice);
+			if (notice.includes("审查结束")) resolveVerdict(notice);
 		},
 	});
 	await pool.resume();
 	const text = await verdict;
-	// 结果与审查终态两条回传：先「已自动发起」，再「判定：通过（2 轮）」。
+	// 结果与审查终态两条回传：先「已自动发起」，再「审查结束：通过（2 轮）」。
 	expect(notices.some((notice) => notice.includes("将自动发起对抗审查"))).toBe(true);
-	expect(text).toContain("判定：通过（2 轮）");
+	expect(text).toContain("审查结束：通过（2 轮）");
 	// 审查意图一次性消耗：档案里不再带 reviewNeeded。
 	expect(store.state.workers[0]?.reviewNeeded).toBeUndefined();
 	expect(store.state.workers[0]?.status).toBe("idle");
