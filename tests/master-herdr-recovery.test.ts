@@ -1126,6 +1126,29 @@ test("中断的审查票可直接 send 续跑：门禁放行、中断态消耗�
 	await pool.shutdown();
 });
 
+test("send 可声明审查票：轻重之分跟任务走，追加的重活与 start 委派同权自动补审", async () => {
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: worker("idle") });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			if (args[0] === "agent" && (args[1] === "wait" || args[1] === "prompt"))
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return liveAgent("idle");
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	await pool.resume();
+	await pool.send("worker-1", "追加一个重要实现任务", true);
+	// 意图入档后与 start 声明的审查票同一条自动补审路径（落定→autoReview 已有覆盖）。
+	expect(store.state.workers[0]).toMatchObject({ status: "working", reviewNeeded: true });
+	await pool.shutdown();
+});
+
 test("Dormant 恢复与新建同布局：有同伴时 split 进 workers tab 而非新开 tab", async () => {
 	process.env.SHELL = "/bin/zsh";
 	const store = createStore();

@@ -277,7 +277,7 @@ export class HerdrWorkers {
 		}
 	}
 
-	async send(workerName: string, prompt: string): Promise<void> {
+	async send(workerName: string, prompt: string, review = false): Promise<void> {
 		const worker = requireWorker(this.store.state, workerName);
 		if (worker.status === "reviewing")
 			throw new Error(`${worker.name} 正在对抗审查，期间不能接收消息`);
@@ -293,7 +293,8 @@ export class HerdrWorkers {
 		this.runs.get(worker.name)?.abort();
 		this.runs.delete(worker.name);
 		const { disposition: _disposed, interruptedAt: _resumed, ...rest } = worker;
-		const active = { ...rest, status: "working" as const };
+		// send 也能声明审查票：追加的重要实现工作与 start 委派同权，落定后走同一条自动补审路径。
+		const active = { ...rest, status: "working" as const, ...(review ? { reviewNeeded: true } : {}) };
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: active });
 		void this.monitorPrompt(active, text);
 	}

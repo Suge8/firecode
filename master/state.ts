@@ -24,7 +24,7 @@ export interface WorkerRef {
 	disposition?: WorkerDisposition;
 	/** review action 投递前观察到的 runId；null 表示当时没有审查。 */
 	reviewPreviousRunId?: string | null;
-	/** start 时声明的审查意图：完成后由机器自动发起对抗审查，一次性消耗。 */
+	/** start/send 声明的审查意图：完成后由机器自动发起对抗审查，一次性消耗。 */
 	reviewNeeded?: boolean;
 }
 
