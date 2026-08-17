@@ -369,6 +369,9 @@ export class HerdrWorkers {
 	}
 
 	async stop(workerName: string, forget = false): Promise<void> {
+		// interrupt 的在飞标记随监听一并作废：结算被此处 abort 后不再执行，残留标记会把
+		// 同名子代理下次的外部中断误标为指令中断。
+		this.deliberateInterrupts.delete(workerName);
 		// 无条件中止该名字的在飞/排队任务：休眠分支也不能跳过。
 		// 停止意图随 abort reason 传给清理路径：默认 stop 保留原休眠引用，forget 才删。
 		const pending = this.runs.get(workerName);

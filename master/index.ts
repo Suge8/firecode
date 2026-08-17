@@ -312,11 +312,16 @@ export function registerMaster(pi: ExtensionAPI): void {
 				const name = requiredString(params.worker, "worker");
 				const target = requireWorker(active.store.state, name);
 				// 护栏：对没有待发落标记的非 idle 子代理 ack，唯一合理解释是把它误当暂停——
-				// 返回假成功会让指挥官以为子代理已停（真实事故，见 ADR-0007）。
-				if (!target.disposition && target.status !== "idle" && target.status !== "dormant")
-					throw new Error(
-						`ack 只把消息标为已处理，${name} 正在 ${target.status}，会继续跑。要打断用 interrupt（保会话），要收起用 sleep（休眠可唤醒）`,
-					);
+				// 返回假成功会让指挥官以为子代理已停（真实事故，见 ADR-0007）。报错出路按状态给：
+				// 指错动作会让模型多烧一个回合，和护栏要防的是同一类问题。
+				if (!target.disposition && target.status !== "idle" && target.status !== "dormant") {
+					const guidance = target.status === "blocked"
+						? "它在等回答，用 send 回答后继续"
+						: target.status === "reviewing"
+							? "它正在对抗审查，等审查终态回传"
+							: "要打断用 interrupt（保会话），要收起用 sleep（休眠可唤醒）";
+					throw new Error(`ack 只把消息标为已处理，${name} 正在 ${target.status}，不会因此停下。${guidance}`);
+				}
 				if (target.disposition) {
 					const { disposition: _acked, ...rest } = target;
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });

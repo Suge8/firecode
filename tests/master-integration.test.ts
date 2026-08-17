@@ -526,8 +526,15 @@ test("未处置的落定消息提醒一次、再不处置升级通知；ack 发�
 			name: "worker-2", paneId: "w1:p3", tabId: "w1:t2", sessionPath: "/tmp/w2.jsonl",
 			model: "p/m", thinking: "medium", status: "working",
 		} });
-		expect(tools.get("subagents")?.execute("call", { action: "ack", worker: "worker-2" }, undefined, undefined, ctx))
+		await expect(tools.get("subagents")?.execute("call", { action: "ack", worker: "worker-2" }, undefined, undefined, ctx))
 			.rejects.toThrow(/只把消息标为已处理.*interrupt/);
+		// blocked 的出路是 send 回答，报错不得指向 interrupt/sleep。
+		store?.dispatch({ type: "UPSERT_WORKER", worker: {
+			name: "worker-3", paneId: "w1:p4", tabId: "w1:t2", sessionPath: "/tmp/w3.jsonl",
+			model: "p/m", thinking: "medium", status: "blocked",
+		} });
+		await expect(tools.get("subagents")?.execute("call", { action: "ack", worker: "worker-3" }, undefined, undefined, ctx))
+			.rejects.toThrow(/用 send 回答/);
 	} finally {
 		rmSync(masterStatePath(sessionId), { force: true });
 		for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
