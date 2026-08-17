@@ -507,7 +507,9 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
 	const verb = action === "stop" && args.forget === true ? "遗忘" : ACTION_VERB[action] ?? action;
 	const parts: Part[] = [{ text: verb, bold: true }];
-	const target = optionalString(args.worker) ?? optionalString(args.session);
+	const session = optionalString(args.session);
+	// session 恢复只显示文件名：整条绝对路径会把行尾截断吃掉真正的信息。
+	const target = optionalString(args.worker) ?? session?.split("/").pop();
 	if (target) parts.push({ text: ` ${target}`, color: "accent" });
 	if (action === "start") {
 		const model = optionalString(args.model);

@@ -529,6 +529,53 @@ test("未处置的落定消息提醒一次、再不处置升级通知；hold 处
 	}
 });
 
+test("subagents 工具行：中文动词 + 目标 + 关键参数，session 恢复只显文件名", async () => {
+	process.env.HERDR_ENV = "1";
+	process.env.HERDR_WORKSPACE_ID = "w1";
+	delete process.env.FIRECODE_MASTER_WORKER;
+	const module = (await loadFirecodeModule("master/index.js", {
+		replacements: { 'from "./herdr.js"': 'from "./herdr-stub.js"' },
+		extraFiles: {
+			"master/herdr-stub.ts": "export class HerdrWorkers { async resume() {} shutdown() {} async cleanup() { return []; } }",
+		},
+	})) as { registerMaster: (pi: unknown) => void };
+	type Rendered = { render(width: number): string[] };
+	type ToolDef = {
+		label: string;
+		renderCall: (args: Record<string, unknown>, theme: unknown, ctx: unknown) => Rendered;
+	};
+	const registered = new Map<string, ToolDef>();
+	const pi = {
+		registerMessageRenderer() {},
+		registerCommand() {},
+		registerTool: (tool: ToolDef & { name: string }) => registered.set(tool.name, tool),
+		getActiveTools: () => ["read"],
+		setActiveTools() {},
+		on() {},
+		events: { on() {}, emit() {} },
+		appendEntry() {},
+		sendMessage() {},
+		sendUserMessage() {},
+		exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
+	};
+	module.registerMaster(pi);
+	const tool = registered.get("subagents");
+	expect(tool?.label).toBe("工人");
+	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+	const ctx = () => ({ state: {}, cwd: "/tmp", toolCallId: crypto.randomUUID(), isPartial: false, isError: false, expanded: false });
+	const line = (args: Record<string, unknown>) => tool?.renderCall(args, theme, ctx()).render(90)[0] ?? "";
+	const start = line({ action: "start", worker: "t2", model: "anthropic/claude-opus-5", review: true, prompt: "只回复 1\n第二行不进工具行" });
+	expect(start).toContain("工人 派工 t2 · claude-opus-5 · 审查票 — 只回复 1");
+	expect(start).not.toContain("第二行");
+	expect(line({ action: "send", worker: "t1", prompt: "继续" })).toContain("追问 t1 — 继续");
+	expect(line({ action: "stop", worker: "t2", forget: true })).toContain("遗忘 t2");
+	expect(line({ action: "hold", worker: "t1" })).toContain("待命 t1");
+	expect(line({ action: "list" })).toContain("清单");
+	// session 恢复：整条绝对路径只显文件名，行尾截断不吃真信息。
+	expect(line({ action: "start", session: "sessions/2026-08-16T01_abc.jsonl", prompt: "继续" }))
+		.toContain("派工 2026-08-16T01_abc.jsonl");
+});
+
 function makeCtx(notices: string[], cwd = "/tmp") {
 	return {
 		cwd,
