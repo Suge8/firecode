@@ -425,7 +425,7 @@ function reviewGateError(): string | undefined {
 		return `Master 配置读取失败：${error instanceof Error ? error.message : String(error)}`;
 	}
 	if (loaded.config.features.review === false)
-		return "fire-review 已关闭（features.review=false），不能发起 Worker 审查";
+		return "fire-review 已关闭（features.review=false），不能发起子代理审查";
 	const problems = loaded.problems.filter(
 		(problem) =>
 			problem.startsWith("review") ||
@@ -433,7 +433,7 @@ function reviewGateError(): string | undefined {
 			problem.startsWith("config.jsonc") ||
 			problem.startsWith("features"),
 	);
-	if (problems.length > 0) return `fire-review 配置有问题，不能发起 Worker 审查：${problems.join("；")}`;
+	if (problems.length > 0) return `fire-review 配置有问题，不能发起子代理审查：${problems.join("；")}`;
 	return undefined;
 }
 
