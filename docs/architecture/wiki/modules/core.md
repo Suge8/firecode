@@ -1,60 +1,58 @@
 ---
 sources:
-  - agent/extensions/firecode/index.ts 371b956bc12d REGISTRARS registerHerdrDisplay registerReview loadConfig session_start
-  - agent/extensions/firecode/config.ts 17512757882e loadConfig parseJsonc parseReviewConfig parseMasterConfig FEATURES DEFAULT_KEYS CONFIG_PATH problems cached rejectUnknownKeys
-  - agent/extensions/firecode/header.ts 1bd70c504b45 registerHeader FULL TINY FULL_WIDTH setHeader
-  - agent/extensions/firecode/format.ts 668b4e9de4dc clip oneLine formatTokens formatDuration formatModelName Segmenter
-  - agent/extensions/firecode/theme.ts 485324b650f0 FLAME ANSI pick contextColor cacheColor quotaColor sizeColor thinkingColor Threshold
-  - agent/extensions/firecode/flame-frames.ts ace06ae44d00 FLAME_FRAME_COUNT flameFrameLines flameFrameWidth scaledFrameCache scaleFrame
-  - agent/extensions/firecode/herdr-client.ts e6cf936c235e herdrPaneEnv herdrRequest HERDR_ENV REQUEST_TIMEOUT_MS hasResult
+  - agent/extensions/firecode/index.ts 371b956bc12d firecode REGISTRARS registerHeader registerHerdrDisplay registerReview registerMaster loadConfig
+  - agent/extensions/firecode/config.ts 17512757882e loadConfig FEATURES Feature FireCodeConfig LoadedConfig CONFIG_PATH parseJsonc parseReviewConfig parseMasterConfig DEFAULT_KEYS DEFAULT_MASTER_MODELS
+  - agent/extensions/firecode/format.ts 668b4e9de4dc oneLine clip formatTokens formatDuration formatModelName
+  - agent/extensions/firecode/theme.ts 485324b650f0 ANSI FLAME contextColor cacheColor quotaColor sizeColor thinkingColor
+  - agent/extensions/firecode/header.ts 1bd70c504b45 registerHeader
+  - agent/extensions/firecode/herdr-client.ts e6cf936c235e herdrPaneEnv herdrRequest
+  - agent/extensions/firecode/flame-frames.ts ace06ae44d00 flameFrameLines flameFrameWidth FLAME_FRAME_COUNT
 ---
 
 # 入口与共享基座
 
-覆盖 FireCode 的装配层与被各功能模块共用的无状态基座：入口 `index.ts`、配置事实源 `config.ts`、启动横幅 `header.ts`，以及共享件 `format.ts`、`theme.ts`、`flame-frames.ts`、`herdr-client.ts`。总体分层见 [../system.md](../system.md)。
-
 ## 职责
 
-入口 `index.ts` 替调用者（pi 宿主）封装一件事：**功能开关到注册函数的映射**。它读一次配置、按 `config.features` 逐个调 `registerX(pi)`，不持有任何跨模块状态，也不给模块之间牵线——每个 register 封闭自己的运行状态，关掉任何一个不影响其余。开关语义是「默认全开、显式 false 才关」（判定写成 `!== false`）。配置问题不阻断装配：入口在 `session_start` 把 `problems` 逐条 `ctx.ui.notify` 成 warning，是否因此拒绝启动由各功能自己决定（review/master 会拒绝，见下文数据流）。
+这一层负责两件事：把整个定制层装配起来，以及提供所有功能模块共用的底层能力。
 
-`config.ts` 是唯一配置事实源：只读插件目录下的 `config.jsonc`（`CONFIG_PATH` 由 `import.meta.url` 推出），不读项目级配置、不读 pi-flow 的 config.json，零外部依赖。它明确不管的：不抛异常中断调用方（校验产出 `{ config, problems }`，调用方拿到可用默认值同时看到全部问题）、不支持运行期热更（`loadConfig()` 进程内 `cached` 一次，改配置需重启）。校验姿态是**类型错误必须记录、不得静默回退**：开关写成字符串 `"false"` 会因 `!== false` 静默启用付费审查，`review`/`master` 节写错类型时静默当空对象会拿用户没配的模型真实发起调用，因此这两节还经 `rejectUnknownKeys` 对未知字段（含嵌套）做键白名单。
+装配的规则很简单——读一次配置，按开关逐个启用功能，任何一个功能关掉都不影响其余。配置只有一份文件，读一次后缓存，解析时不静默纠正用户的错误：写错的开关名、写错类型的值、重复占用的快捷键、审查与子代理花名册里的未知字段都会被收集成问题清单，会话启动时以警告形式提示，而不是悄悄回退成默认值再拿默认模型发起真实调用。
 
-`header.ts` 只做启动横幅：模块加载时把火焰 ASCII 与 wordmark 按行上色拼成 `FULL`（宽度存 `FULL_WIDTH`），渲染时只选「宽度够用 `FULL`，否则一行 `TINY`」再居中，`session_start` 后无状态。
-
-四个共享件都是纯函数或无状态客户端，不 import 任何 FireCode 功能模块，因此不构成模块间耦合：`format.ts` 管宽度/文本/数值格式化，`theme.ts` 集中**所有阈值到颜色的映射**与品牌火焰渐变常量，`flame-frames.ts` 是可缩放到任意高度的火焰帧素材，`herdr-client.ts` 是 herdr socket 单请求单连接客户端（herdr 之外直接返回未送达，从不抛异常）。
+共享基座包括四类东西：把任意文本安全塞进单行 UI 的宽度与数值格式化、把数值阈值映射成颜色的品牌配色表、会话开头的火焰横幅、以及一套可任意缩放的火焰动画帧素材。此外还有一个与外部终端复用器通信的最小客户端，供身份投影和审查占用标签共用。它们都是无状态的纯能力，谁需要谁调用，不反向依赖任何功能模块。
 
 ## 对外接口
 
-`index.ts` 只暴露默认导出 `firecode(pi)`，宿主加载插件时调一次；`REGISTRARS` 表不导出，键类型是 `Exclude<Feature, "review" | "master">`。
+| 文件 | 对外交付 |
+| --- | --- |
+| `index.ts` | 默认导出 `firecode(pi)`，插件唯一入口 |
+| `config.ts` | `loadConfig()`（带缓存，返回 `config` 与 `problems`）、`FEATURES` / `Feature`、`CONFIG_PATH`、`parseJsonc`、`parseReviewConfig` / `parseMasterConfig`（导出供测试）、`DEFAULT_KEYS`、`DEFAULT_MASTER_MODELS` |
+| `format.ts` | `oneLine` `clip` `formatTokens` `formatDuration` `formatModelName` |
+| `theme.ts` | `ANSI` `FLAME` 与 `contextColor` `cacheColor` `quotaColor` `sizeColor` `thinkingColor` |
+| `header.ts` | `registerHeader(pi)` |
+| `herdr-client.ts` | `herdrPaneEnv()` `herdrRequest(source, method, params)` |
+| `flame-frames.ts` | `flameFrameLines(height, frameIndex)` `flameFrameWidth(height)` `FLAME_FRAME_COUNT` |
 
-`config.ts` 的关键导出：
-
-- `loadConfig(): { config, problems }`——被 index、presets、rename、review、master、openai-native 共用的唯一读取入口，状态全在模块级 `cached`（一个变量，进程内单次解析）。
-- `parseReviewConfig` / `parseMasterConfig`——导出即为让测试直接打「未知字段、类型错误必须报 problems」这条契约（`tests/review-contract.test.ts`、`tests/master-state.test.ts` 在用）。
-- `FEATURES` / `Feature`——开关名单一事实源；`DEFAULT_MASTER_MODELS`——master 配置不可用时 `master/index.ts` 用它兜底渲染选型表提示词；`DEFAULT_KEYS`——三个内置快捷键兜底；`CONFIG_PATH`——openai-native 的 `ctrl+f` 写回配置时定位文件。
-- `parseJsonc`——手写注释剥离（字符串内斜杠不动，不支持尾逗号），避免为一个文件引依赖。
-
-`format.ts` 只暴露五个纯函数：`clip`（按显示宽度截断、`Intl.Segmenter` 保字素簇，`from` 决定保头部命令还是尾部路径 basename；带背景卡片里是 pi-tui 截断的唯一替代，见 AGENTS.md 禁令）、`oneLine`（压平换行塞单行）、`formatTokens`、`formatDuration`、`formatModelName`（剥 provider 前缀与日期后缀，状态栏、herdr 身份投影、审查进度共用同一种模型名写法）。
-
-`theme.ts` 暴露 `ANSI`/`FLAME` 常量与五个取色函数：`contextColor`、`cacheColor`（两者方向相反：填充越高越红、命中越高越绿，故分列两张表）、`quotaColor`、`sizeColor`、`thinkingColor`。内部 `pick` 按降序阈值表取首个 `value >= at` 档位，表用 `satisfies readonly Threshold[]` 约束颜色必须是宿主 `ThemeColor`。
-
-`flame-frames.ts` 暴露 `FLAME_FRAME_COUNT`、`flameFrameLines(height, frameIndex)`（最近邻缩放到任意高度）、`flameFrameWidth(height)`（缩放后可见宽度）、`flameFrameCacheSize`（测试用）。
-
-`herdr-client.ts` 只暴露 `herdrPaneEnv()`（校验 `HERDR_ENV=1` 与 pane/socket 环境变量）和 `herdrRequest(source, method, params): Promise<boolean>`——只在 herdr 回了不带 `error` 的对象型 `result` 时才算送达（`hasResult`），超时 500ms、连接错误、`end` 一律 `false`。
+`clip` 支持从头或从尾截断（`from: "start"` 保留尾部，用于路径），并接受自定义省略号——`header.ts` 的居中就用空省略号调用它。`herdrRequest` 返回是否送达：非受管环境、连接失败、超时（500ms）和响应带 error 一律为 `false`。
 
 ## 数据怎么流
 
-配置从 `config.jsonc` 单点进入：`loadConfig` 解析并缓存，`problems` 随返回值流向两条路——入口把全部问题 notify 给用户；`review/index.ts` 与 `master/index.ts` 各自按前缀（`review`/`master`/`未知字段 …`/`config.jsonc`/`features`）过滤，命中即拒绝启动而非降级（静默回退默认模型会花真钱跑错模型）。
+启动时入口先读配置。配置里的功能开关按「省略即开启」解释，于是只有显式写 `false` 才会跳过某个功能；对应的注册函数拿到宿主 API 后各自订阅事件、注册命令和渲染器，彼此之间没有调用关系。
 
-装配决策从 `firecode(pi)` 流出，三处例外直接写在入口：`registerHerdrDisplay` 无条件注册（无 feature 开关，靠自身在 herdr 之外自我禁用，见 [session.md](session.md)）；`registerMaster` 单独判定（不在 `REGISTRARS` 键类型里，见 [master.md](master.md)）；`registerReview` 额外接收「features 整节是否类型错误」——`features` 非对象时 config 把所有开关安全回退成 `false`，那是「配置坏」而非「用户关闭」，review 据此不封存活跃 checkpoint，且历史结果卡渲染与 checkpoint 收口始终注册、开关只控制命令与执行循环（见 [review.md](review.md)）。
+有两处刻意偏离这个规则。终端复用器的身份投影没有开关，它总是被启用，因为它在复用器之外会自我禁用，且只写显示层。对抗审查则不是简单的开或关：无论开关如何，历史结果卡的渲染与检查点收口都必须注册，否则重开会话会看到空白卡、未完成的审查也无人收尾；开关只决定命令和执行循环是否可用。还有一种情况要区分——整节开关写成了非对象，这时所有功能会被安全地全部关闭，但这属于配置坏而不是用户主动关闭，入口会把这个区别告诉审查模块，让它不要把进行中的检查点当成用户放弃而封存。
 
-共享件的消费方向全是单向流出：`format.ts` 流向状态栏、工具行、review 进度/卡片/UI 与 header（[statusbar.md](statusbar.md)、[tools.md](tools.md)、[review.md](review.md)）；`theme.ts` 流向状态栏（context/cache/quota/thinking）、工具行（`sizeColor`）与 header（`FLAME`/`ANSI`）；`flame-frames.ts` 流向 review 活动框与 working 火焰 widget（[review.md](review.md)、[session.md](session.md)）；`herdrRequest` 的布尔送达结果是上层重试与租约续约的判据——herdr 身份投影只把确认送达记为已发布，review 占用标签靠它做 TTL 续约兼投递重试。
+配置的问题清单不阻断启动。清单非空时，入口挂一个会话启动回调，把每条问题作为警告提示给用户；配置读取本身已缓存，同一进程内多次取用不会重复解析，也不会产生互相打架的第二份事实源。
+
+共享基座是被动的：状态栏、工具行、审查界面、子代理事件卡在渲染时向格式化与配色求值，横幅和工作火焰按当前终端宽高向火焰素材要对应尺寸的帧。配色表把所有阈值到颜色的判断收在一处，遵循「首个满足下限的档位胜出」；缓存命中率的方向与上下文填充相反，这类语义差异也表现在同一张表里，而不是散落在各个渲染点。
 
 ## 改动指南
 
-- 增删功能开关：同时改 `config.ts` 的 `FEATURES` 与 `index.ts` 的 `REGISTRARS`——两者由 `Exclude<Feature, "review" | "master">` 键类型编译期对齐，漏配会编译失败，这是有意的防漂移，不要绕。
-- 改 `features` 回退语义前先看入口注释：非对象回退成全关是「安全回退」，但 review 依赖「配置坏 ≠ 用户关闭」的区分（`problems.includes("features 必须是对象")` 作为第二参传入），改回退值会连带改变 checkpoint 封存行为。
-- 改 review/master 节校验：先看 `parseReviewConfig`/`parseMasterConfig` 与两侧的前缀过滤（`review/index.ts` 的 `loadReviewConfig`、`master/index.ts` 的 `loadMasterModels`）——problems 消息前缀就是门禁匹配键，改消息文案可能让门禁漏判；契约测试在 `tests/review-contract.test.ts`、`tests/master-state.test.ts`。
-- 改 `flame-frames.ts` 缩放：`scaleFrame` 裁行尾空白格是为了让实际渲染宽度与 `flameFrameWidth`（按 `trimEnd` 计宽）一致，去掉裁剪会让窄屏适配按小宽度放行、渲染却溢出；缓存 `scaledFrameCache` 只留最近一个高度，多高度轮换会整批重算。
-- 改 `herdrRequest` 前守住送达语义：`true` 必须意味着 herdr 真收到并回了 `result`，上层（身份投影去重、占用标签续约）都拿它当「已发布」判据，放宽会造成静默丢投递。Windows 端点是命名管道改写，别按 Unix socket 假设。
-- 带背景卡片里截断文本一律用 `format.ts` 的 `clip`，禁用 pi-tui `TruncatedText`/`truncateToWidth`（省略号带 `\x1b[0m` 全量重置，会掐断外层背景色）。
+新增一个功能模块时，在 `config.ts` 的 `FEATURES` 数组里加名字，再在 `index.ts` 的 `REGISTRARS` 表里加一行即可；`REGISTRARS` 的类型排除了 `review` 与 `master`，这两个不能塞进表里——`registerReview` 需要额外传入启用标志与「features 整节类型错误」标志，`registerMaster` 单独判断。
+
+配置解析的红线是「不静默回退」。`parseReviewConfig` 与 `parseMasterConfig` 对未知字段（含嵌套对象，走 `rejectUnknownKeys`）一律记录问题；改字段时记得同步 `REVIEW_KEYS` 白名单，漏改会让合法字段被报成未知。开关的类型校验也别去掉：写成字符串 `"false"` 时因为入口用 `!== false` 判断仍会启用，而启用审查意味着真实模型调用。同理，`features` 写成非对象时不能回退成 `{}`，因为 `{}` 在入口语义里正是「全部启用」。
+
+`parseJsonc` 是手写的注释剥离器，不支持尾逗号；配置文件里的注释是唯一用法文档，改配置结构时连注释一起改。
+
+带背景色的卡片里不要用 pi-tui 的 `TruncatedText` / `truncateToWidth`：它们的省略号带全量重置序列，会在截断点掐断外层背景色。单行截断一律走 `clip`，它按字素簇切分并用 `visibleWidth` 计宽，宽字符和 emoji 不会被劈开。
+
+`flame-frames.ts` 的缩放帧只缓存一个高度（`scaledFrameCache` 单槽）。同一时刻两处以不同高度交替取帧会不断重算，代价不高但不是零；真要并存多个尺寸，得先把缓存改成按高度分槽。
+
+`herdrRequest` 的失败是静默的，只以返回值表达送达与否。调用方必须自己决定重试或降级——审查占用标签就是靠定时续约兼作失败重试，因为对端没有「进程退出即清理」的接口。

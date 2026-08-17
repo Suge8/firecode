@@ -19,7 +19,7 @@ FireCode 是 pi 的个人定制扩展，单一入口 `index.ts` 按 `config.json
 | 模块页 | 覆盖 | 一句话职责 |
 | --- | --- | --- |
 | [入口与共享基座](modules/core.md) | index.ts、config.ts、header.ts、format/theme/flame-frames/herdr-client | 装配决策 + 无状态共享工具 |
-| [状态栏](modules/statusbar.md) | statusbar/ | 底部两行：位置/会话名 + 模型/额度/上下文/缓存/速度 |
+| [状态栏](modules/statusbar.md) | statusbar/ | 底部两行：位置/会话名/指挥官徽标 + 模型/额度/上下文/缓存/速度 |
 | [工具行渲染](modules/tools.md) | tools/ | 接管默认 4 工具的单行渲染与连续轨道 |
 | [会话功能](modules/session.md) | session/ | 预设、改名、/tokens、Bark 通知、herdr 身份投影、工作火焰 |
 | [Provider 请求层](modules/provider.md) | provider/ | Claude 归因头、OpenAI verbosity/加速档/原生压缩 |
@@ -39,8 +39,9 @@ FireCode 是 pi 的个人定制扩展，单一入口 `index.ts` 按 `config.json
    `makeResultRenderer` 纯组件画自己的 `subagents` 工具行。
 4. **review → working-flame（频道）**：review 在进程内 `herdr:blocked` 频道发布占用信号，
    工作火焰据此在审查活跃期退让；消费方不反向依赖 review 状态。
-5. **review / provider → statusbar（状态键）**：状态栏从宿主扩展状态表只读 `fire-review`
-   （审查进度）与 `pi-openai-native-fast`（加速档标记）两个键，键不存在时片段为空。
+5. **review / provider / Master → statusbar（状态键）**：状态栏从宿主扩展状态表只读
+   `fire-review`（审查进度）、`pi-openai-native-fast`（加速档标记）与 `master`
+   （指挥官徽标，Master 按子代理状态计数写入，窄屏整段丢弃）三个键，键不存在时片段为空。
 
 其余共享全是无状态基座：`format.ts`（宽度/文本格式化）、`theme.ts`（阈值配色）、
 `flame-frames.ts`（火焰帧素材，review 活动框与工作火焰共用）、`herdr-client.ts`

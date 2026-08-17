@@ -245,7 +245,7 @@ if (existsSync(dataPath)) {
 }
 function checkData(d) {
   const nodes = d.nodes || [], districts = d.districts || [];
-  const flows = d.flows || (d.flow ? [{ title: "主流程", steps: d.flow }] : []);
+  const flows = d.flows || [];
   const codes = new Set(nodes.map((n) => n.code));
   const touched = new Set();
   for (const l of d.links || []) {
@@ -253,7 +253,9 @@ function checkData(d) {
     if (!codes.has(l.from) || !codes.has(l.to))
       errors.push(`data.json: link ${l.from}→${l.to} references unknown node`);
   }
-  for (const f of flows)
+  for (const f of flows) {
+    if (f.page && !existsSync(join(wikiDir, f.page.split("#")[0])))
+      errors.push(`data.json: flow "${f.title}" page not found: ${f.page.split("#")[0]}`);
     for (const s of f.steps || []) {
       touched.add(s.from); touched.add(s.to);
       if (!codes.has(s.from) || !codes.has(s.to))
@@ -261,6 +263,7 @@ function checkData(d) {
       if (!s.sources?.length)
         errors.push(`data.json: flow "${f.title}" step "${s.title}" missing sources (call-site evidence)`);
     }
+  }
   for (const n of nodes) {
     if (!touched.has(n.code))
       errors.push(`data.json: orphan node ${n.code} (no link or flow touches it)`);

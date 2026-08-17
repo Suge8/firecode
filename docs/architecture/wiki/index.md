@@ -1,5 +1,5 @@
 ---
-baseline: 07e9f9034ad8cbf23b767c60daa5f87091987b83
+baseline: a72d6f8f40191ca1ef353d1436dcf121aa28b203
 sources:
   - agent/extensions/firecode/index.ts 371b956bc12d REGISTRARS
 ---

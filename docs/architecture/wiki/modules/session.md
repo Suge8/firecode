@@ -1,102 +1,62 @@
 ---
 sources:
-  - agent/extensions/firecode/session/presets.ts 1a9628dd591d registerPresets applyPreset clearPreset preset-state before_agent_start
-  - agent/extensions/firecode/session/rename.ts d03ae87c4332 registerSessionName cleanTitle MAX_TITLE_CHARS
-  - agent/extensions/firecode/session/stats.ts 253b5c7b8885 registerStats usageAttribution parseDays collect
-  - agent/extensions/firecode/session/bark.ts e76b3adf5dd4 registerBark buildBarkPayload hasBlockedWorker MAX_BODY_LENGTH
-  - agent/extensions/firecode/session/herdr-display.ts 227d461fb9f9 registerHerdrDisplay projectIdentity publish session_info_changed
-  - agent/extensions/firecode/session/working-flame.ts 672d8466be37 registerWorkingFlame flameHeightFor flameFitHeight WorkingFlame
-  - agent/extensions/firecode/herdr-client.ts e6cf936c235e herdrPaneEnv herdrRequest
-  - agent/extensions/firecode/master/state.ts e51063b2f460 loadMasterState masterStatePath WorkerStatus
+  - agent/extensions/firecode/session/presets.ts 1a9628dd591d registerPresets
+  - agent/extensions/firecode/session/rename.ts d03ae87c4332 registerSessionName
+  - agent/extensions/firecode/session/stats.ts 253b5c7b8885 registerStats usageAttribution parseDays
+  - agent/extensions/firecode/session/bark.ts e76b3adf5dd4 registerBark buildBarkPayload hasBlockedWorker
+  - agent/extensions/firecode/session/herdr-display.ts 227d461fb9f9 registerHerdrDisplay projectIdentity
+  - agent/extensions/firecode/session/working-flame.ts 672d8466be37 registerWorkingFlame flameHeightFor flameFitHeight
 ---
 
-# 会话功能
+# session：会话功能
 
 ## 职责
 
-`session/` 是六个彼此独立的会话级 feature，每个只导出一个 `registerX(pi)`，运行状态封闭在闭包里，互不引用。
-它们由 `index.ts` 按 `config.features` 逐个注册（见 [核心装配](core.md)），关掉任何一个不影响其余。
-对外只有三条接缝：bark 只读 `master/state.ts`、herdr-display 只用 `herdr-client.ts`、working-flame 只用
-`flame-frames.ts` 的帧素材。
+围绕「一次 pi 会话」本身提供六件互不依赖的小功能：一键切换工作档位（模型、思考等级、可用工具、附加指令），给会话改名，统计历史会话的 token 用量与花费，任务落定后把结论推到手机通知栏，把当前会话的身份显示到外部终端复用器的侧边栏，以及在模型工作期间用一团燃烧的火焰代替宿主默认的等待提示。
 
-- **presets.ts**：一键切换模型、思考等级、工具集与附加指令，预设定义在 config.jsonc 的 `presets` 节。
-- **rename.ts**：把 `/rename <name>` 与 `config.keys.rename` 收敛到 `pi.setSessionName`，只改 pi 会话名。
-- **stats.ts**：`/tokens` 扫描会话 jsonl 按模型汇总 token 与成本；零本地 import，与其余 feature 完全解耦。
-- **bark.ts**：任务彻底落定时推 iPhone Bark 通知；有待拍板子代理时升 timeSensitive。
-- **herdr-display.ts**：会话身份单向投影到 herdr agent 副标题，只写带 `source` 的显示元数据，不碰 pane/tab 持久名。
-- **working-flame.ts**：工作回合内编辑器上方居中的多行火焰 widget，审查占用期退让。
+这六件事共用的只有「会话」这个语境，彼此没有调用关系：关掉任何一件，其余照常工作。它们统一属于旁路增强——推送失败、外部显示失败、统计文件读不动都不会打断正在进行的对话，失败一律静默或降级。
+
+对外的两处只读依赖：手机通知需要知道有没有子代理正等着拍板，因此读一眼子代理池的持久化状态；火焰需要在对抗审查活跃期让位给审查活动条，因此监听审查发出的占用信号。两处都是单向读取，不回写。
 
 ## 对外接口
 
-各 feature 的注册入口与可独立测试的关键纯函数：
+每个文件导出一个 `registerX(pi)`，由 `index.ts` 按 `config.features` 逐个装配。
 
-| feature | 注册入口 | 关键纯函数 / 常量 |
+| 文件 | 导出 | 用户入口 |
 | --- | --- | --- |
-| presets.ts | `registerPresets` | `applyPreset`、`clearPreset`（闭包内，经命令/快捷键触达） |
-| rename.ts | `registerSessionName` | `cleanTitle`：控制字符转空格、零宽与双向控制字符删除、空白折叠、按字素切到 `MAX_TITLE_CHARS`（160） |
-| stats.ts | `registerStats` | `usageAttribution`（归因规则唯一出处）、`parseDays`（接受 `7`、`--days 7`、`0` 全部，默认 30） |
-| bark.ts | `registerBark` | `buildBarkPayload`（标题/正文/折叠 id/等级的唯一组装点）、`hasBlockedWorker`（只读旁路判定） |
-| herdr-display.ts | `registerHerdrDisplay` | `projectIdentity`：产出 `pi·模型/思考等级`（thinking 为 `off` 时省略等级）与会话名 |
-| working-flame.ts | `registerWorkingFlame` | `flameHeightFor`（终端行数四分之一钳在 3–10 行）、`flameFitHeight`（宽度不足逐级降高，装不下返回 0 即隐藏） |
+| `session/presets.ts` | `registerPresets` | `--preset <名>`、`/preset [名]`、每个预设自己的快捷键、`keys.cyclePreset` 轮切 |
+| `session/rename.ts` | `registerSessionName` | `/rename <新名字>`、`keys.rename` 弹输入框 |
+| `session/stats.ts` | `registerStats`、`usageAttribution`、`parseDays` | `/tokens [天数]`，`0` 表示全部历史，默认 30 天 |
+| `session/bark.ts` | `registerBark`、`buildBarkPayload`、`hasBlockedWorker` | 无命令；靠 `~/.pi/agent/bark-key` 是否存在启停 |
+| `session/herdr-display.ts` | `registerHerdrDisplay`、`projectIdentity` | 无命令；herdr 内自动生效 |
+| `session/working-flame.ts` | `registerWorkingFlame`、`flameHeightFor`、`flameFitHeight` | 无命令；工作回合内自动出现 |
 
-presets 的用户入口有四类：`--preset` 启动标志、`/preset [名字]` 命令、每个预设自带的 `key` 快捷键、
-`keys.cyclePreset` 在「无预设 + 各预设」之间轮切；选择器是 `ctx.ui.custom` 里的 `SelectList`，末尾固定追加清除项。
-`usageAttribution` 与 pi 自身的 usage-totals 对齐：assistant 消息归 `provider/model` 并计一次请求，
-toolResult 与 compaction / branch_summary 归 `tools/summaries` 且不计请求数。
+纯函数是测试的抓手，也是可被复用的部分：`usageAttribution` 决定一条会话记录算到哪个模型头上，`parseDays` 解析 `/tokens` 参数，`buildBarkPayload` 组装推送体，`hasBlockedWorker` 做只读旁路判定，`projectIdentity` 拼身份字符串，`flameHeightFor` / `flameFitHeight` 算火焰高度。对应测试为 `tests/presets.test.ts`、`tests/rename.test.ts`、`tests/stats.test.ts`、`tests/bark.test.ts`、`tests/herdr-display.test.ts`、`tests/working-flame.test.ts`。
+
+配置只来自 `firecode/config.jsonc`：预设定义在 `presets` 节，两个快捷键在 `keys` 节（`session/presets.ts`、`session/rename.ts` 各自 `loadConfig()`）。
 
 ## 数据怎么流
 
-**presets：config 进 → 宿主状态出 → 会话记录持久化。** `session_start` 从 `loadConfig()` 取 `presets` 节
-（配置问题由 index.ts 统一提示）；`applyPreset` 在**首次**应用前把当前模型、思考等级与激活工具集快照进
-`originalState`（按会话可用等级存，会话侧等级集合比预设可配置的多），`clearPreset` 用它恢复默认。
-附加指令不落宿主状态，而是在 `before_agent_start` 追加到 systemPrompt 末尾，每回合重新拼接。
-`turn_start` 把 `preset-state` 追加进会话记录，重开会话只取最后一条恢复名字与附加指令，
-**不重放** `setModel` / `setActiveTools`——用户当前选的模型优先。模型找不到、无 API key、工具名未知都只发
-warning 并继续应用其余字段。
+**预设**在会话启动时读配置拿到预设表。带命令行参数时立即套用；否则只从会话记录里捞回上次用的预设名，恢复名字与附加指令，不重放模型和工具切换——历史里的模型此刻可能已不可用，重放会在启动阶段抛出用户没要求的副作用。首次套用前会给当时的模型、思考等级和工具集拍一张快照，"清除预设"就是把快照放回去。附加指令不写进配置文件里的系统提示，而是在每次请求组装系统提示时追加到末尾。每个回合开始时把当前预设名写进会话记录，这就是下次恢复的来源。未知的模型或工具只警告不阻断，能套用多少套多少。
 
-**stats：会话 jsonl 进 → Markdown 出。** `collect` 递归扫描 agent 目录下 `sessions/` 的全部 `.jsonl` 逐行解析，
-读文件、读目录、解析行三处失败都按跳过处理——会话文件可能在扫描过程中被轮转；时间过滤用消息内 timestamp、
-缺失时回落条目 timestamp。TUI 下用宿主 `Markdown` 组件渲染在 `DynamicBorder` 卡里，非 TUI 直接 console 打印。
+**改名**把用户输入清洗后（去控制字符与不可见字符、压缩空白、限长）交给宿主，只改会话名，不碰任何外部持久名称。
 
-**bark：会话事件 + Master 状态文件进 → HTTP 推送出。** `message_end` 记住最后一条 assistant 文本；
-`agent_settled` 且 `ctx.isIdle()` 为真（不再自动续跑）时组包发送。标题优先会话名、回落 cwd 目录名，
-正文经 markdown 剥离后截到 `MAX_BODY_LENGTH`（200），`id` 固定取会话 id——同会话新通知靠 APNs CollapseID
-顶掉旧的。等级判定是与 [Master](master.md) 的唯一接缝：`hasBlockedWorker` 经 `masterStatePath(sessionId)` 用
-`loadMasterState` 读状态文件，有 `WorkerStatus` 为 `blocked` 的子代理即升 `timeSensitive` 并加「待拍板」副标题。
-推送地址取 `~/.pi/agent/bark-key`，缺失静默停用；网络失败吞掉。
+**统计**递归扫会话目录下所有 jsonl，逐行判定归属：助手消息算到"提供方/模型"并计一次请求，工具结果与压缩记录统一归到一个"工具与摘要"的伪模型且不计请求数，其余行忽略。时间过滤按记录自带的时间戳，没有时间戳的记录不会被排除掉。单个文件读失败或单行解析失败都跳过继续，最后汇总成 Markdown 表格；有界面时弹卡片，无界面时直接打印。
 
-**herdr-display：宿主事件进 → herdr-client 出。** 监听 `session_start`、`session_info_changed`
-（宿主已把 `/rename`、快捷键与自动命名收口到这一个事件，所以改名投影不从 rename.ts 接线）、
-`model_select`、`thinking_level_select`；投递经 `herdrRequest` 调 `pane.report_metadata`，同时写
-`display_agent`、`title` 和自定义 token `session`——herdr 侧边栏行布局只能消费自定义 token，`title` 不在
-token 集里。只有 `session_shutdown` 且 reason 为 `quit` 才清空，其余切换由新 `session_start` 覆盖；
-seq 单调递增，herdr 据此丢弃过期上报。
+**通知**在每轮消息里记住最后一段助手正文，等到本轮彻底落定且宿主确认已进入空闲才推送。标题优先用会话名，没有才退到工作目录名——直接在家目录跑时目录名恰好是用户名，不适合当标题。同一会话固定用会话 id 作通知 id，新通知会顶掉旧的，通知栏每会话只留一条。此时读一眼子代理池状态，若有子代理处于阻塞待答状态，就加"待拍板"副标题并升级为时效性通知以穿透专注模式。配置了端到端加密时整包加密，但通知 id 必须留在明文顶层——折叠是服务端写的推送头，它读不到密文里的字段。子代理进程内不发通知，通知只归指挥官会话。
 
-**working-flame：宿主事件 + 占用频道进 → TUI widget 出。** `agent_start` 挂载、`agent_end` 撤下
-`aboveEditor` 槽位的 `WorkingFlame` 组件（100ms 定时器驱动帧，随 dispose 清理），帧素材来自
-`flame-frames.ts` 的 `flameFrameLines` / `flameFrameWidth`，与 [审查](review.md) 活动框共用同一套。
-订阅 `herdr:blocked` 频道（review 模块发布）拿 `reviewHeld`，只有 `turnActive && !reviewHeld` 才挂 widget，
-宿主 Working 文本行在两者都不成立时才复显。模块只是频道消费方，不反向依赖 review 状态。
+**身份投影**是单向的：会话启动、宿主上报会话信息变化（改名、快捷键、自动命名都已在宿主收口）、选模型、选思考等级四类事件各触发一次同步，把「pi·模型/思考等级」写成外部 agent 副标题，会话名同时写标题和一个自定义 token 供侧边栏行布局引用。请求串行排队避免乱序覆盖，去重以队尾意图为准而非已确认身份——否则 A→B→A 快速切回会把过期的 B 永久留在界面上。只有确认收到成功回执才记为已发布，失败静默并由下一个事件重试。只有真正退出才清空显示；重载、切会话等由新会话的启动事件覆盖。非交互模式和子代理进程内不投影。
+
+**火焰**在工作回合开始时挂到编辑器上方的独立多行槽位，回合结束撤下，动画计时器随组件销毁清理。火焰出现即等待信号，因此同时隐藏宿主的文字版等待提示。审查活跃时审查活动条自带火焰，本模块整体退让避免两团火同烧。所有界面写入都推迟到微任务合并后一次落地，从而排在审查模块的同步写入之后当最终仲裁者——否则审查占用期一个回合结束事件就会无条件把文字提示复显出来。高度按终端行数取约四分之一、钳在 3 到 10 行之间；宽度装不下就逐级降高，实在放不下才整体隐藏。
 
 ## 改动指南
 
-**改哪个 feature 就只看它自己 + 一跳 import**：presets/rename 看 `config.ts`，bark 看 `master/state.ts`，
-herdr-display 看 `herdr-client.ts`，working-flame 看 `flame-frames.ts` 与 review 的占用频道发布端
-（`review/index.ts` 的 `herdr:blocked`）。测试对应 `tests/{presets,rename,stats,bark,herdr-display,working-flame}.test.ts`。
+预设的恢复语义是刻意的：`session_start` 只回填 `activeName` / `activePreset`，不调 `setModel` / `setActiveTools`。想改成"完全恢复"前先想清楚模型已下线、工具已改名时的失败路径。快照 `OriginalState` 的思考等级类型取自 `pi.getThinkingLevel()` 而非配置里的 `Preset["thinkingLevel"]`——会话侧的等级集合比预设可配的多（含 `max`），用窄类型存会丢档位。
 
-常见坑：
+`session/stats.ts` 的归属规则必须与 pi 自己的 usage-totals 保持一致，改 `usageAttribution` 前先对齐宿主口径，否则 `/tokens` 会和宿主状态栏对不上账。它扫的是磁盘上全部历史会话，不是当前会话。
 
-- **占用退让的 queueMicrotask 仲裁**（working-flame.ts）：review 也写 `setWorkingVisible`，且它的写入在同一
-  同步调度链里排在占用事件之后；本模块所有 UI 写入必须经 `queueMicrotask` 合并、在调度链收尾后作为最终仲裁者
-  落地，否则复发「占用期 `agent_end` 无条件复显 Working 行」的最后写者竞态。widget 槽位必须是 `aboveEditor`：
-  多行帧塞进单行 spinner 通道是旧 working-style.ts 的真实事故。
-- **投影的串行链与去重键**（herdr-display.ts）：`publish` 把请求串进一条 Promise 链避免乱序覆盖；去重键取
-  「链尾意图」而非已确认身份，否则 A→B→A 快速切回会把过时的 B 留在 pane 上。只有 `herdrRequest` 返回送达
-  才记为已发布，失败清空链尾意图由下一事件重试。自禁用条件三个都要保：`herdrPaneEnv()` 为空、
-  `FIRECODE_MASTER_WORKER`、`ctx.mode !== "tui"`——无头调用不能接管可见会话的显示。
-- **bark 加密时 id 必须在密文外**（bark.ts）：AES-256-GCM 时折叠头（CollapseID）由服务端写，它读不到密文内的
-  id，所以 `id` 提到顶层明文（只是本地会话 uuid，无内容敏感性）；level/subtitle 等内容字段由设备端解密应用，
-  留在密文内。`hasBlockedWorker` 是只读旁路：读失败一律按无待拍板降级，状态文件的完整性与恢复归 Master，
-  通知不放大故障。
-- **presets 的恢复语义是刻意收窄的**：重开会话只恢复名字与附加指令，不重放模型和工具切换；改这里前先确认
-  没有把「恢复」扩成「重放」。
+`session/bark.ts` 对 `master/state.ts` 是只读旁路：`hasBlockedWorker` 吞掉任何异常并按"无待拍板"降级，状态文件的损坏与恢复归 Master 报告，通知不放大故障。加密分支里 `id` 提到密文外是硬要求，挪回密文内折叠就失效。`registerBark` 开头对 `FIRECODE_MASTER_WORKER` 的早退不能删——子代理进程也会加载本插件。
+
+`session/herdr-display.ts` 只写带 `source` 的显示元数据（`display_agent` / `title` / 自定义 token）。不要在这里改 workspace、pane label 或 tab label：那些是持久共享名称，herdr 没有条件 rename 与 CAS 接口，"先查再改"消不掉 split/move 竞态。上报的 `seq` 必须单调递增，herdr 靠它丢弃过期上报。改名事件只订阅宿主的 `session_info_changed`，不要从 `session/rename.ts` 直接接线。
+
+`session/working-flame.ts` 必须走 `setWidget` 的 `aboveEditor` 槽位。把多行帧塞进单行 spinner 通道是已经发生过的事故，会与工具输出互相踩踏。`sync()` 的微任务合并同样不能改成同步调用——它保证本模块在同一调度链里最后落地，是"审查占用期不复显文字提示"的唯一保证。素材本身来自 `flame-frames.ts`，自带 ANSI 颜色与行尾复位，渲染时只加左侧缩进即可居中，不要再套截断或着色。
