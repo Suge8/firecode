@@ -1,0 +1,2183 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="wiki-digest" content="c8d78c31c5c0">
+<title>FireCode</title>
+<style>
+  :root {
+    --bg: #F0EEE6;
+    --surface: #EAE7DC;
+    --card: #FAF9F5;
+    --ink: #141413;
+    --ink-soft: #6F6D66;
+    --line: rgba(20, 20, 19, .09);
+    --accent: #CC785C;
+    --accent-deep: #A85B41;
+    --paper: var(--card);
+    --paper-hi: var(--card);
+    --mono: ui-monospace, "SF Mono", Menlo, "PingFang SC", monospace;
+    --sans: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    --serif: "Georgia", "Songti SC", serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 12.5px/1.65 var(--sans);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .ic { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.1;
+        stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; vertical-align: -2px; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px 4px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: 6px; }
+  .brand img, .brand svg.logo { width: 28px; height: 28px; }
+  .brand .k { display: none; }
+  .brand .v { font: 700 15px var(--serif); white-space: nowrap; }
+  .statbar {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 7px 14px;
+  }
+  .statbar .stat { display: flex; align-items: center; gap: 6px; }
+  .statbar .stat .ic { width: 12px; height: 12px; color: var(--accent-deep); }
+  .statbar .k { font-size: 11px; color: var(--ink-soft); }
+  .statbar .v { font: 700 12.5px var(--mono); white-space: nowrap; }
+  .statbar .sep { width: 1px; height: 14px; background: var(--line); }
+  header .spacer { flex: 1; }
+  header button {
+    display: flex; align-items: center; gap: 6px;
+    font: 600 12px var(--sans); cursor: pointer; border-radius: 10px;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); padding: 7px 14px;
+    transition: background .15s, color .15s;
+  }
+  header button.primary { background: var(--accent); color: #FFF; border-color: transparent; }
+  header button.primary:hover { background: var(--accent-deep); }
+  header button:not(.primary):hover { background: var(--surface); }
+  main { flex: 1; display: flex; min-height: 0; gap: 10px; padding: 10px 12px 12px; }
+  nav, #stage, aside {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  }
+  nav {
+    width: clamp(195px, 15vw, 235px);
+    overflow-y: auto; padding: 8px 8px 20px; flex-shrink: 0;
+  }
+  nav .filter { position: sticky; top: 0; background: var(--card); padding: 2px 2px 8px; z-index: 2; }
+  nav .filter input {
+    width: 100%; font: 12px var(--sans); padding: 6px 10px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); outline: none;
+  }
+  nav .filter input:focus { border-color: var(--accent); }
+  nav .grp {
+    display: flex; align-items: center; gap: 7px;
+    font: 700 10.5px var(--mono); letter-spacing: .1em;
+    margin: 12px 4px 4px; padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  }
+  nav .grp .ct { margin-left: auto; font-weight: 400; letter-spacing: 0; }
+  nav .grp .chev { transition: transform .15s; font-size: 9px; }
+  nav .grp.closed .chev { transform: rotate(-90deg); }
+  nav .grpbody.closed { display: none; }
+  nav .item {
+    display: flex; gap: 8px; align-items: center; padding: 5.5px 9px; margin: 2px 0;
+    cursor: pointer; border-radius: 8px; line-height: 1.4;
+  }
+  nav .item:hover { background: var(--surface); }
+  nav .item.sel { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent-deep); }
+  nav .item.hid { display: none; }
+  nav .code {
+    font: 700 10.5px var(--mono); border: 1px solid var(--line); border-radius: 5px;
+    padding: 0 4px; min-width: 26px; text-align: center; background: var(--bg); flex-shrink: 0;
+  }
+  nav .nm { font-size: 12.5px; }
+  nav .ct { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+  #stage { flex: 1; position: relative; min-width: 0; cursor: grab; overflow: hidden; }
+  #stage.panning { cursor: grabbing; }
+  #stage svg { width: 100%; height: 100%; display: block; }
+  #flowbar {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 3px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 3px; z-index: 5; max-width: 86%; overflow-x: auto;
+    box-shadow: 0 2px 10px rgba(20, 20, 19, .06);
+  }
+  #flowbar button {
+    font: 600 11.5px var(--sans); border: 1px solid transparent; background: none;
+    color: var(--ink-soft); padding: 5px 12px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+  }
+  #flowbar button.on { background: var(--accent); color: #FFF; }
+  aside {
+    width: clamp(295px, 24vw, 355px);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .tabs { display: flex; gap: 4px; margin: 10px 12px 0; background: var(--surface); border-radius: 11px; padding: 3px; }
+  .tabs button {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+    font: 600 12.5px var(--sans); padding: 7px 0; border-radius: 8px;
+    background: none; color: var(--ink-soft); border: 1px solid transparent; cursor: pointer;
+  }
+  .tabs button.on { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  #panel { flex: 1; overflow-y: auto; padding: 16px 20px 30px; }
+  #panel .kicker {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 10.5px; letter-spacing: .15em; color: var(--ink-soft);
+  }
+  #panel h2 { font: 700 18px/1.4 var(--serif); margin: 6px 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 9px; }
+  #panel h3 { font-size: 11px; letter-spacing: .13em; color: var(--ink-soft); margin: 18px 0 7px; }
+  #panel p { font: 13.5px/1.75 var(--sans); margin-bottom: 11px; }
+  #panel mark { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-deep); padding: 0 4px; border-radius: 4px; font-weight: 700; }
+  #panel ul { list-style: none; padding: 0; }
+  #panel li { font-size: 12px; margin: 4px 0; }
+  #panel li.src { display: flex; align-items: baseline; gap: 6px; }
+  #panel li.src code, #panel .src code { word-break: break-all; }
+  #panel code { font: 11.5px var(--mono); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; }
+  #panel .src { cursor: pointer; }
+  #panel .src:hover code { border-color: var(--accent); color: var(--accent-deep); }
+  #panel .steps li { cursor: pointer; padding: 3px 0; font-size: 12.5px; }
+  #panel .steps li:hover { color: var(--accent-deep); }
+  #panel .steps li.done { color: var(--ink-soft); }
+  #panel .steps li.now { color: var(--accent-deep); font-weight: 700; }
+  #panel .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
+  #panel .chip {
+    font: 600 11px var(--sans); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 3px 9px; cursor: pointer;
+  }
+  #panel .chip:hover { border-color: var(--accent); color: var(--accent-deep); }
+  #panel .dimtext { color: var(--ink-soft); font-size: 12px; }
+  #panel .md-body h1 { font: 700 15px/1.5 var(--serif); margin: 16px 0 8px; }
+  #panel .md-body h2 { font: 700 13.5px/1.5 var(--serif); margin: 14px 0 7px; border: none; padding: 0; }
+  #panel .md-body h3, #panel .md-body h4 { font: 700 12px var(--sans); letter-spacing: 0; color: var(--ink); margin: 12px 0 6px; }
+  #panel .md-body pre { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; margin: 0 0 11px; }
+  #panel .md-body pre code { border: none; background: none; padding: 0; font-size: 11px; line-height: 1.6; display: block; }
+  #panel .md-body ul { list-style: disc; padding-left: 18px; margin-bottom: 11px; }
+  #panel .md-body ol { padding-left: 18px; margin-bottom: 11px; }
+  #panel .md-body li { font: 12.5px/1.7 var(--sans); margin: 3px 0; }
+  #panel .md-body table { border-collapse: collapse; margin: 0 0 12px; width: 100%; }
+  #panel .md-body th, #panel .md-body td { border: 1px solid var(--line); padding: 4px 8px; font-size: 11.5px; text-align: left; }
+  #panel .md-body th { background: var(--surface); }
+  #panel .md-body blockquote { border-left: 3px solid var(--accent); padding: 2px 10px; color: var(--ink-soft); margin: 0 0 11px; }
+  #panel .md-body a { color: var(--accent-deep); }
+  #panel .md-body hr { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
+  #panel .wl { cursor: pointer; text-decoration: underline dotted; }
+  .b, .lk { transition: opacity .18s; cursor: pointer; }
+  .b.dim, .lk.dim { opacity: .13; }
+  #selring { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { #selring { animation: none; } }
+  @media (max-width: 1080px) { nav { display: none; } }
+  @media (max-width: 820px) { aside { display: none; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+<defs id="icondefs">
+<symbol id="ic-globe" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.6"/><ellipse cx="6" cy="6" rx="2" ry="4.6"/><line x1="1.4" y1="6" x2="10.6" y2="6"/></symbol>
+<symbol id="ic-sliders" viewBox="0 0 12 12"><line x1="1.5" y1="3.2" x2="10.5" y2="3.2"/><line x1="1.5" y1="8.8" x2="10.5" y2="8.8"/><circle cx="4.2" cy="3.2" r="1.3" fill="var(--paper-hi)"/><circle cx="7.8" cy="8.8" r="1.3" fill="var(--paper-hi)"/></symbol>
+<symbol id="ic-gateway" viewBox="0 0 12 12"><path d="M1.5 4.2h6.6m0 0L6 2.1m2.1 2.1L6 6.3"/><path d="M10.5 7.8H3.9m0 0L6 5.7M3.9 7.8 6 9.9"/></symbol>
+<symbol id="ic-lock" viewBox="0 0 12 12"><rect x="2.5" y="5.2" width="7" height="5.2" rx="1"/><path d="M4 5.2V3.8a2 2 0 0 1 4 0v1.4"/></symbol>
+<symbol id="ic-user" viewBox="0 0 12 12"><circle cx="6" cy="3.8" r="2.1"/><path d="M1.8 10.6a4.3 4.3 0 0 1 8.4 0"/></symbol>
+<symbol id="ic-card" viewBox="0 0 12 12"><rect x="1.2" y="2.8" width="9.6" height="6.4" rx="1"/><line x1="1.2" y1="5.2" x2="10.8" y2="5.2"/></symbol>
+<symbol id="ic-calendar" viewBox="0 0 12 12"><rect x="1.6" y="2.4" width="8.8" height="7.8" rx="1"/><line x1="1.6" y1="5" x2="10.4" y2="5"/><line x1="4" y1="1.2" x2="4" y2="3.2"/><line x1="8" y1="1.2" x2="8" y2="3.2"/></symbol>
+<symbol id="ic-target" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.4"/><circle cx="6" cy="6" r="1.6"/><circle cx="6" cy="6" r=".4" fill="currentColor"/></symbol>
+<symbol id="ic-shield" viewBox="0 0 12 12"><path d="M6 1.4 10 3v3.2c0 2.6-1.8 4.2-4 5-2.2-.8-4-2.4-4-5V3Z"/></symbol>
+<symbol id="ic-cube" viewBox="0 0 12 12"><path d="M6 1.4 10.4 3.9v4.2L6 10.6 1.6 8.1V3.9Z"/><path d="M1.6 3.9 6 6.4l4.4-2.5M6 6.4v4.2"/></symbol>
+<symbol id="ic-coin" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.6"/><path d="M4.2 4.4h3.6M4.2 6.4h3.6M6 4.4V9"/></symbol>
+<symbol id="ic-book" viewBox="0 0 12 12"><path d="M6 2.6C5 1.9 3.3 1.7 1.4 2v7.6c1.9-.3 3.6-.1 4.6.6 1-.7 2.7-.9 4.6-.6V2c-1.9-.3-3.6-.1-4.6.6Z"/><line x1="6" y1="2.6" x2="6" y2="10.2"/></symbol>
+<symbol id="ic-bridge" viewBox="0 0 12 12"><path d="M1 8.6c1.6-3.4 8.4-3.4 10 0"/><line x1="1" y1="5.4" x2="11" y2="5.4"/><line x1="3.2" y1="5.4" x2="3.2" y2="7.3"/><line x1="8.8" y1="5.4" x2="8.8" y2="7.3"/></symbol>
+<symbol id="ic-grid" viewBox="0 0 12 12"><rect x="1.4" y="1.4" width="3.8" height="3.8"/><rect x="6.8" y="1.4" width="3.8" height="3.8"/><rect x="1.4" y="6.8" width="3.8" height="3.8"/><rect x="6.8" y="6.8" width="3.8" height="3.8"/></symbol>
+<symbol id="ic-users" viewBox="0 0 12 12"><circle cx="4.2" cy="4" r="1.8"/><path d="M1 10.2a3.4 3.4 0 0 1 6.4 0"/><circle cx="8.8" cy="4.4" r="1.4"/><path d="M8.6 7.4c1.4.1 2.5 1 2.9 2.4"/></symbol>
+<symbol id="ic-chat" viewBox="0 0 12 12"><path d="M1.6 2.6h8.8v5.6H5.4L3 10.4V8.2H1.6Z"/></symbol>
+<symbol id="ic-layers" viewBox="0 0 12 12"><path d="M6 1.5 11 4 6 6.5 1 4Z"/><path d="M1 6.5 6 9l5-2.5"/><path d="M1 8.8 6 11.3l5-2.5"/></symbol>
+<symbol id="ic-file" viewBox="0 0 12 12"><path d="M2.6 1.4h4.6L9.4 3.6v7H2.6Z"/><path d="M7.2 1.4v2.2h2.2"/></symbol>
+<symbol id="ic-cpu" viewBox="0 0 12 12"><rect x="2.8" y="2.8" width="6.4" height="6.4" rx="1"/><rect x="5" y="5" width="2" height="2" fill="currentColor" stroke="none"/><path d="M6 .8v2M6 9.2v2M.8 6h2M9.2 6h2"/></symbol>
+<symbol id="ic-server" viewBox="0 0 12 12"><rect x="1.6" y="2" width="8.8" height="3.4" rx=".8"/><rect x="1.6" y="6.6" width="8.8" height="3.4" rx=".8"/><circle cx="3.6" cy="3.7" r=".5" fill="currentColor"/><circle cx="3.6" cy="8.3" r=".5" fill="currentColor"/></symbol>
+<symbol id="ic-wrench" viewBox="0 0 12 12"><path d="M7.6 4.4a2.4 2.4 0 0 0 3-3L8.9 3.1 7.4 1.6 9.1.1a2.4 2.4 0 0 0-3 3L1.6 7.6a1.3 1.3 0 1 0 1.8 1.8Z" transform="translate(.6 1.2)"/></symbol>
+<symbol id="ic-plug" viewBox="0 0 12 12"><path d="M4 1.4v2.4M8 1.4v2.4M3 3.8h6v2a3 3 0 0 1-6 0Z"/><line x1="6" y1="8.8" x2="6" y2="10.8"/></symbol>
+<symbol id="ic-db" viewBox="0 0 12 12"><ellipse cx="6" cy="2.8" rx="4.4" ry="1.7"/><path d="M1.6 2.8v6.4c0 .9 2 1.7 4.4 1.7s4.4-.8 4.4-1.7V2.8"/><path d="M1.6 6c0 .9 2 1.7 4.4 1.7S10.4 6.9 10.4 6"/></symbol>
+<symbol id="ic-bolt" viewBox="0 0 12 12"><path d="M6.6 1 2.8 6.8h2.6L5.4 11l3.8-5.8H6.6Z"/></symbol>
+<symbol id="ic-folder" viewBox="0 0 12 12"><path d="M1.4 2.6h3.4l1.2 1.6h4.6v5.8H1.4Z"/></symbol>
+<symbol id="ic-sparkle" viewBox="0 0 12 12"><path d="M6 1.2 7.1 4.9 10.8 6 7.1 7.1 6 10.8 4.9 7.1 1.2 6 4.9 4.9Z"/></symbol>
+<symbol id="ic-bell" viewBox="0 0 12 12"><path d="M6 1.6a3.4 3.4 0 0 1 3.4 3.4c0 2.5.8 3.2 1.2 3.6H1.4c.4-.4 1.2-1.1 1.2-3.6A3.4 3.4 0 0 1 6 1.6Z"/><path d="M4.8 10.4a1.3 1.3 0 0 0 2.4 0"/></symbol>
+<symbol id="ic-play" viewBox="0 0 12 12"><path d="M3 1.8 10 6 3 10.2Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-stepfwd" viewBox="0 0 12 12"><path d="M2 2.2 7.6 6 2 9.8Z" fill="currentColor" stroke="none"/><line x1="9.6" y1="2.2" x2="9.6" y2="9.8" stroke-width="1.6"/></symbol>
+<symbol id="ic-theme" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.6"/><path d="M6 1.4v9.2A4.6 4.6 0 0 0 6 1.4Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="ic-reset" viewBox="0 0 12 12"><path d="M2.2 6a3.8 3.8 0 1 1 1.1 2.7"/><path d="M2 5.4v2.8h2.8" fill="none"/></symbol>
+<symbol id="ic-doc" viewBox="0 0 12 12"><path d="M2.6 1.4h6.8v9.2H2.6Z"/><line x1="4.4" y1="4" x2="7.6" y2="4"/><line x1="4.4" y1="6" x2="7.6" y2="6"/><line x1="4.4" y1="8" x2="6.4" y2="8"/></symbol>
+</defs>
+</svg>
+<header id="hdr"></header>
+<main>
+  <nav id="nav"></nav>
+  <div id="stage"><div id="flowbar" hidden></div><svg id="svg" aria-label="等距系统地图"></svg></div>
+  <aside>
+    <div class="tabs">
+      <button id="tabPage" class="on"><svg class="ic"><use href="#ic-doc"/></svg>页面</button>
+      <button id="tabRel"><svg class="ic"><use href="#ic-gateway"/></svg>关系</button>
+    </div>
+    <div id="panel"></div>
+  </aside>
+</main>
+<script>
+const DATA = {
+ "meta": {
+  "title": "FireCode",
+  "headline": "FireCode · pi 个人定制层",
+  "stats": [
+   [
+    "语言",
+    "TypeScript"
+   ],
+   [
+    "功能模块",
+    "13"
+   ],
+   [
+    "命令入口",
+    "7"
+   ],
+   [
+    "外部系统",
+    "5"
+   ]
+  ],
+  "reading": "<p>每栋建筑是一个职责域，点击进面板读对应 wiki 页原文；分区是进程/部署边界——西侧装配与基座，北侧展示层，中部会话与审查/主控两大状态机，东侧虚线盒是外部进程与服务，南侧是磁盘状态。细虚线是静态依赖，实线是场景运行流：顶部 tab 切换场景，播放/单步沿调用点走完全程。</p>",
+  "sources": [
+   "docs/architecture/wiki/system.md",
+   "docs/architecture/wiki/data-flow.md"
+  ]
+ },
+ "districts": [
+  {
+   "id": "core",
+   "label": "装配与基座",
+   "icon": "plug",
+   "r": [
+    1,
+    4,
+    3.5,
+    8
+   ]
+  },
+  {
+   "id": "ui",
+   "label": "展示层",
+   "icon": "grid",
+   "r": [
+    6,
+    1,
+    8.5,
+    3.5
+   ]
+  },
+  {
+   "id": "session",
+   "label": "会话功能",
+   "icon": "chat",
+   "r": [
+    6,
+    6,
+    8.5,
+    6
+   ]
+  },
+  {
+   "id": "provider",
+   "label": "请求层",
+   "icon": "bolt",
+   "r": [
+    6,
+    13.5,
+    8.5,
+    4
+   ]
+  },
+  {
+   "id": "review",
+   "label": "对抗性审查",
+   "icon": "shield",
+   "r": [
+    16,
+    1,
+    9,
+    8
+   ]
+  },
+  {
+   "id": "master",
+   "label": "Master 主控",
+   "icon": "gateway",
+   "r": [
+    16,
+    10.5,
+    9,
+    6
+   ]
+  },
+  {
+   "id": "external",
+   "label": "外部进程与服务",
+   "icon": "server",
+   "r": [
+    27,
+    2,
+    4,
+    14
+   ]
+  },
+  {
+   "id": "disk",
+   "label": "磁盘状态",
+   "icon": "folder",
+   "r": [
+    16,
+    18,
+    9,
+    3.5
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "code": "C1",
+   "district": "core",
+   "name": "入口 index.ts",
+   "short": "装配",
+   "icon": "plug",
+   "form": "tall",
+   "x": 2.6,
+   "y": 5.2,
+   "h": 1.6,
+   "page": "modules/core.md",
+   "sources": [
+    "agent/extensions/firecode/index.ts"
+   ]
+  },
+  {
+   "code": "C2",
+   "district": "core",
+   "name": "config.ts 配置事实源",
+   "short": "配置",
+   "icon": "sliders",
+   "x": 2.6,
+   "y": 7.8,
+   "h": 0.9,
+   "page": "modules/core.md",
+   "sources": [
+    "agent/extensions/firecode/config.ts"
+   ]
+  },
+  {
+   "code": "C3",
+   "district": "core",
+   "name": "共享基座（format/theme/flame-frames/herdr-client）",
+   "short": "基座",
+   "icon": "layers",
+   "form": "slabs",
+   "count": 4,
+   "x": 2.6,
+   "y": 10.4,
+   "h": 0.7,
+   "page": "modules/core.md",
+   "sources": [
+    "agent/extensions/firecode/format.ts",
+    "agent/extensions/firecode/theme.ts",
+    "agent/extensions/firecode/flame-frames.ts",
+    "agent/extensions/firecode/herdr-client.ts"
+   ]
+  },
+  {
+   "code": "U1",
+   "district": "ui",
+   "name": "状态栏",
+   "short": "状态栏",
+   "icon": "grid",
+   "x": 7.2,
+   "y": 2.2,
+   "h": 0.9,
+   "page": "modules/statusbar.md",
+   "sources": [
+    "agent/extensions/firecode/statusbar/index.ts",
+    "agent/extensions/firecode/statusbar/render.ts",
+    "agent/extensions/firecode/statusbar/quota.ts"
+   ]
+  },
+  {
+   "code": "U2",
+   "district": "ui",
+   "name": "工具行渲染",
+   "short": "工具行",
+   "icon": "wrench",
+   "x": 9.8,
+   "y": 2.2,
+   "h": 0.9,
+   "page": "modules/tools.md",
+   "sources": [
+    "agent/extensions/firecode/tools/index.ts",
+    "agent/extensions/firecode/tools/grouping.ts"
+   ]
+  },
+  {
+   "code": "U3",
+   "district": "ui",
+   "name": "启动横幅",
+   "short": "横幅",
+   "icon": "sparkle",
+   "x": 12.4,
+   "y": 2.2,
+   "h": 0.7,
+   "page": "modules/core.md",
+   "sources": [
+    "agent/extensions/firecode/header.ts"
+   ]
+  },
+  {
+   "code": "S1",
+   "district": "session",
+   "name": "预设切换",
+   "short": "预设",
+   "icon": "target",
+   "x": 7.2,
+   "y": 7.2,
+   "h": 0.9,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/presets.ts"
+   ]
+  },
+  {
+   "code": "S2",
+   "district": "session",
+   "name": "改名与 /tokens 统计",
+   "short": "命令",
+   "icon": "file",
+   "form": "slabs",
+   "count": 2,
+   "x": 9.8,
+   "y": 7.2,
+   "h": 0.7,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/rename.ts",
+    "agent/extensions/firecode/session/stats.ts"
+   ]
+  },
+  {
+   "code": "S3",
+   "district": "session",
+   "name": "Bark 落定通知",
+   "short": "通知",
+   "icon": "bell",
+   "x": 8.5,
+   "y": 9.8,
+   "h": 0.9,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/bark.ts"
+   ]
+  },
+  {
+   "code": "S4",
+   "district": "session",
+   "name": "herdr 身份投影",
+   "short": "投影",
+   "icon": "bridge",
+   "x": 13.1,
+   "y": 7.2,
+   "h": 0.9,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/herdr-display.ts"
+   ]
+  },
+  {
+   "code": "S5",
+   "district": "session",
+   "name": "工作火焰",
+   "short": "火焰",
+   "icon": "sparkle",
+   "x": 11.1,
+   "y": 9.8,
+   "h": 0.9,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/working-flame.ts"
+   ]
+  },
+  {
+   "code": "P1",
+   "district": "provider",
+   "name": "Claude 归因",
+   "short": "归因",
+   "icon": "lock",
+   "x": 7.2,
+   "y": 15.2,
+   "h": 0.9,
+   "page": "modules/provider.md",
+   "sources": [
+    "agent/extensions/firecode/provider/claude-sub.ts"
+   ]
+  },
+  {
+   "code": "P2",
+   "district": "provider",
+   "name": "OpenAI 请求选项",
+   "short": "选项",
+   "icon": "bolt",
+   "x": 9.8,
+   "y": 15.2,
+   "h": 0.9,
+   "page": "modules/provider.md",
+   "sources": [
+    "agent/extensions/firecode/provider/openai-native/src/options.ts",
+    "agent/extensions/firecode/provider/openai-native/src/extension.ts"
+   ]
+  },
+  {
+   "code": "P3",
+   "district": "provider",
+   "name": "原生压缩",
+   "short": "压缩",
+   "icon": "cpu",
+   "x": 12.4,
+   "y": 15.2,
+   "h": 0.9,
+   "page": "modules/provider.md",
+   "sources": [
+    "agent/extensions/firecode/provider/openai-native/src/native-compaction.ts",
+    "agent/extensions/firecode/provider/openai-native/src/native-replay.ts"
+   ]
+  },
+  {
+   "code": "R1",
+   "district": "review",
+   "name": "审查执行器 review/index.ts",
+   "short": "执行器",
+   "icon": "shield",
+   "form": "tall",
+   "x": 17.5,
+   "y": 2.4,
+   "h": 1.7,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/index.ts"
+   ]
+  },
+  {
+   "code": "R2",
+   "district": "review",
+   "name": "状态机 state.ts",
+   "short": "状态机",
+   "icon": "cube",
+   "x": 20.1,
+   "y": 2.4,
+   "h": 1.1,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/state.ts"
+   ]
+  },
+  {
+   "code": "R3",
+   "district": "review",
+   "name": "审查者与顾问编排",
+   "short": "审查者",
+   "icon": "users",
+   "form": "slabs",
+   "count": 5,
+   "x": 22.7,
+   "y": 2.4,
+   "h": 0.7,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/reviewer.ts",
+    "agent/extensions/firecode/review/advisor.ts",
+    "agent/extensions/firecode/review/process.ts",
+    "agent/extensions/firecode/review/prompt.ts",
+    "agent/extensions/firecode/review/evidence.ts"
+   ]
+  },
+  {
+   "code": "R4",
+   "district": "review",
+   "name": "卡片与活动框",
+   "short": "卡片",
+   "icon": "chat",
+   "form": "slabs",
+   "count": 3,
+   "x": 18.8,
+   "y": 5.2,
+   "h": 0.7,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/card.ts",
+    "agent/extensions/firecode/review/ui.ts",
+    "agent/extensions/firecode/review/progress.ts"
+   ]
+  },
+  {
+   "code": "R5",
+   "district": "review",
+   "name": "终态出口 outcome.ts",
+   "short": "终态",
+   "icon": "book",
+   "x": 22.3,
+   "y": 5.2,
+   "h": 0.9,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/outcome.ts"
+   ]
+  },
+  {
+   "code": "M1",
+   "district": "master",
+   "name": "subagents 工具",
+   "short": "工具",
+   "icon": "gateway",
+   "form": "tall",
+   "x": 17.5,
+   "y": 11.8,
+   "h": 1.6,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/master/index.ts"
+   ]
+  },
+  {
+   "code": "M2",
+   "district": "master",
+   "name": "Worker 生命周期",
+   "short": "调度",
+   "icon": "users",
+   "form": "tall",
+   "x": 20.1,
+   "y": 11.8,
+   "h": 1.6,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/master/herdr.ts"
+   ]
+  },
+  {
+   "code": "M3",
+   "district": "master",
+   "name": "Worker Pool 状态",
+   "short": "池态",
+   "icon": "db",
+   "form": "stack",
+   "x": 19.4,
+   "y": 14.4,
+   "h": 0.9,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/master/state.ts"
+   ]
+  },
+  {
+   "code": "M4",
+   "district": "master",
+   "name": "事件卡",
+   "short": "事件",
+   "icon": "chat",
+   "x": 22.7,
+   "y": 11.8,
+   "h": 0.7,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/master/event-card.ts",
+    "agent/extensions/firecode/master/event-format.ts"
+   ]
+  },
+  {
+   "code": "X1",
+   "district": "external",
+   "name": "herdr 终端复用器",
+   "short": "herdr",
+   "icon": "server",
+   "form": "external",
+   "x": 28.7,
+   "y": 3.5,
+   "h": 1.1,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/herdr-client.ts"
+   ]
+  },
+  {
+   "code": "X2",
+   "district": "external",
+   "name": "Worker pi 进程",
+   "short": "子代理",
+   "icon": "cpu",
+   "form": "external",
+   "x": 28.7,
+   "y": 6,
+   "h": 1.1,
+   "page": "modules/master.md",
+   "sources": [
+    "agent/extensions/firecode/master/herdr.ts"
+   ]
+  },
+  {
+   "code": "X3",
+   "district": "external",
+   "name": "审查者子进程",
+   "short": "审查者",
+   "icon": "users",
+   "form": "external",
+   "x": 28.7,
+   "y": 8.5,
+   "h": 1.1,
+   "page": "modules/review.md",
+   "sources": [
+    "agent/extensions/firecode/review/process.ts"
+   ]
+  },
+  {
+   "code": "X4",
+   "district": "external",
+   "name": "模型供应商 API",
+   "short": "模型API",
+   "icon": "globe",
+   "form": "external",
+   "x": 28.7,
+   "y": 11,
+   "h": 1.1,
+   "page": "modules/provider.md",
+   "sources": [
+    "agent/extensions/firecode/statusbar/quota.ts"
+   ]
+  },
+  {
+   "code": "X5",
+   "district": "external",
+   "name": "Bark / APNs",
+   "short": "Bark",
+   "icon": "bell",
+   "form": "external",
+   "x": 28.7,
+   "y": 13.5,
+   "h": 1.1,
+   "page": "modules/session.md",
+   "sources": [
+    "agent/extensions/firecode/session/bark.ts"
+   ]
+  },
+  {
+   "code": "D1",
+   "district": "disk",
+   "name": "会话 jsonl",
+   "short": "会话",
+   "icon": "file",
+   "form": "stack",
+   "x": 18.5,
+   "y": 19.2,
+   "h": 0.9,
+   "page": "data-flow.md",
+   "sources": [
+    "agent/extensions/firecode/review/checkpoint.ts",
+    "agent/extensions/firecode/master/index.ts"
+   ]
+  },
+  {
+   "code": "D2",
+   "district": "disk",
+   "name": "状态与缓存文件",
+   "short": "文件",
+   "icon": "folder",
+   "form": "stack",
+   "x": 21.5,
+   "y": 19.2,
+   "h": 0.9,
+   "page": "data-flow.md",
+   "sources": [
+    "agent/extensions/firecode/master/state.ts",
+    "agent/extensions/firecode/statusbar/quota-cache.ts"
+   ]
+  }
+ ],
+ "links": [
+  {
+   "from": "C2",
+   "to": "C1",
+   "label": "features 决定装配"
+  },
+  {
+   "from": "C1",
+   "to": "U1",
+   "label": "装配展示层",
+   "what": "index.ts 按 features 逐个 registerX：statusbar/tools/header 同批注册，此边代表整批装配依赖。"
+  },
+  {
+   "from": "C1",
+   "to": "S1",
+   "label": "装配会话功能",
+   "what": "presets/rename/stats/bark/working-flame 同批注册；herdr 投影无条件注册。",
+   "via": [
+    [
+     5.2,
+     6.6
+    ]
+   ]
+  },
+  {
+   "from": "C1",
+   "to": "P1",
+   "label": "装配请求层",
+   "via": [
+    [
+     5.2,
+     7
+    ],
+    [
+     5.2,
+     14.6
+    ]
+   ]
+  },
+  {
+   "from": "C1",
+   "to": "R1",
+   "label": "注册审查收口",
+   "what": "卡渲染与 checkpoint 收口无条件注册，开关只控制命令与执行循环。"
+  },
+  {
+   "from": "C1",
+   "to": "M1",
+   "label": "注册 Master 命令",
+   "via": [
+    [
+     15.3,
+     8.6
+    ]
+   ]
+  },
+  {
+   "from": "C3",
+   "to": "U1",
+   "label": "共享格式化与配色"
+  },
+  {
+   "from": "U3",
+   "to": "C3",
+   "label": "横幅用基座素材",
+   "via": [
+    [
+     5.2,
+     3.6
+    ]
+   ]
+  },
+  {
+   "from": "M1",
+   "to": "U2",
+   "label": "复用 ToolLine 纯渲染",
+   "via": [
+    [
+     15.2,
+     9
+    ]
+   ]
+  },
+  {
+   "from": "M1",
+   "to": "M4",
+   "label": "注册事件卡渲染器"
+  },
+  {
+   "from": "S1",
+   "to": "C2",
+   "label": "读 presets 节"
+  },
+  {
+   "from": "S2",
+   "to": "D1",
+   "label": "/tokens 扫会话 jsonl",
+   "via": [
+    [
+     15.3,
+     13
+    ],
+    [
+     15.3,
+     17.4
+    ]
+   ]
+  },
+  {
+   "from": "S3",
+   "to": "M3",
+   "label": "只读待拍板",
+   "via": [
+    [
+     15.3,
+     12.6
+    ]
+   ]
+  },
+  {
+   "from": "S3",
+   "to": "X5",
+   "label": "Bark 推送",
+   "via": [
+    [
+     15.3,
+     10.1
+    ],
+    [
+     25.9,
+     10.1
+    ]
+   ]
+  },
+  {
+   "from": "S4",
+   "to": "X1",
+   "label": "身份投影",
+   "via": [
+    [
+     15.3,
+     5
+    ],
+    [
+     15.3,
+     0.4
+    ],
+    [
+     26.3,
+     0.4
+    ]
+   ]
+  },
+  {
+   "from": "S5",
+   "to": "C3",
+   "label": "火焰帧素材",
+   "via": [
+    [
+     5.2,
+     10.9
+    ]
+   ]
+  },
+  {
+   "from": "R1",
+   "to": "S5",
+   "label": "herdr:blocked 占用频道"
+  },
+  {
+   "from": "R1",
+   "to": "U1",
+   "label": "审查进度状态键",
+   "via": [
+    [
+     13.5,
+     4
+    ],
+    [
+     8.4,
+     4
+    ]
+   ]
+  },
+  {
+   "from": "R1",
+   "to": "X1",
+   "label": "占用标签直投",
+   "via": [
+    [
+     18.6,
+     3.8
+    ],
+    [
+     26,
+     3.6
+    ]
+   ]
+  },
+  {
+   "from": "P1",
+   "to": "X4",
+   "label": "OAuth 归因改写",
+   "via": [
+    [
+     15.5,
+     17.2
+    ],
+    [
+     26.6,
+     15.8
+    ]
+   ]
+  },
+  {
+   "from": "P2",
+   "to": "X4",
+   "label": "verbosity / service_tier",
+   "via": [
+    [
+     16,
+     17.2
+    ],
+    [
+     26.3,
+     15.5
+    ]
+   ]
+  },
+  {
+   "from": "P3",
+   "to": "D1",
+   "label": "压缩条目落盘"
+  },
+  {
+   "from": "C2",
+   "to": "P2",
+   "label": "openai 节配置",
+   "via": [
+    [
+     5.2,
+     10.5
+    ],
+    [
+     5.2,
+     14.3
+    ]
+   ]
+  },
+  {
+   "from": "M3",
+   "to": "D2",
+   "label": "原子落盘"
+  },
+  {
+   "from": "U1",
+   "to": "D2",
+   "label": "额度缓存共享",
+   "via": [
+    [
+     5.2,
+     4.9
+    ],
+    [
+     5.2,
+     18.6
+    ],
+    [
+     18.5,
+     18.3
+    ]
+   ]
+  }
+ ],
+ "flows": [
+  {
+   "title": "Master 委派",
+   "steps": [
+    {
+     "from": "M1",
+     "to": "M2",
+     "title": "start 委派",
+     "what": "参数校验与门禁（技能前缀白名单、review 可用性）通过后，HerdrWorkers 在串行临界区分配名字/模型/cwd 与布局容量。",
+     "sources": [
+      "agent/extensions/firecode/master/index.ts"
+     ]
+    },
+    {
+     "from": "M2",
+     "to": "X1",
+     "title": "拉起 pane",
+     "what": "split 2×2 象限或建 tab，临时 ZDOTDIR 挂 precmd 标记等真实 shell 就绪，再 agent start（busy 退避重试 15s）。",
+     "sources": [
+      "agent/extensions/firecode/master/herdr.ts"
+     ],
+     "via": [
+      [
+       25.9,
+       9.8
+      ]
+     ]
+    },
+    {
+     "from": "X1",
+     "to": "X2",
+     "title": "Worker 启动",
+     "what": "独立 pi 进程带 FIRECODE_MASTER_WORKER 启动，默认四工具，系统提示追加禁令段。",
+     "sources": [
+      "agent/extensions/firecode/master/herdr.ts"
+     ]
+    },
+    {
+     "from": "M2",
+     "to": "M3",
+     "title": "档案落盘",
+     "what": "starting 占位与后续每次状态变化都经 reduceMaster 立即原子落盘（v5、0600）。",
+     "sources": [
+      "agent/extensions/firecode/master/state.ts"
+     ]
+    },
+    {
+     "from": "X2",
+     "to": "M2",
+     "title": "落定分流",
+     "what": "monitorSettlement 无截止等待；带占用标签的 blocked 转 reviewing，stop 成功回传，中断走续监与五分钟自动续跑提醒。",
+     "sources": [
+      "agent/extensions/firecode/master/herdr.ts"
+     ],
+     "via": [
+      [
+       26.3,
+       9.8
+      ]
+     ]
+    },
+    {
+     "from": "M2",
+     "to": "X2",
+     "title": "自动补审",
+     "what": "声明 review:true 的成功落定由 autoReview 投递字面 /fire-review 到 Worker pane，意图只在确认启动时消耗。",
+     "sources": [
+      "agent/extensions/firecode/master/herdr.ts"
+     ],
+     "via": [
+      [
+       25.7,
+       10.1
+      ]
+     ]
+    },
+    {
+     "from": "X2",
+     "to": "R1",
+     "title": "Worker 内开审",
+     "what": "Worker 进程内的 review 执行器接管审查循环（进入「对抗性审查」场景）。",
+     "sources": [
+      "agent/extensions/firecode/review/index.ts"
+     ],
+     "via": [
+      [
+       26,
+       3.8
+      ],
+      [
+       19,
+       3.8
+      ]
+     ]
+    },
+    {
+     "from": "R5",
+     "to": "M2",
+     "title": "终态回读",
+     "what": "审查监听结算时 readReviewOutcome 只读 Worker session 取最近合法 checkpoint，in_progress 则退避重挂直到终态。",
+     "sources": [
+      "agent/extensions/firecode/review/outcome.ts",
+      "agent/extensions/firecode/master/herdr.ts"
+     ],
+     "via": [
+      [
+       22,
+       9.8
+      ]
+     ]
+    },
+    {
+     "from": "M2",
+     "to": "M1",
+     "title": "事件投递",
+     "what": "结果入队即以 pending entry 落会话，回合边界合并成一条 follow-up 投递，投成写 ack；落定类事件要求发落。",
+     "sources": [
+      "agent/extensions/firecode/master/index.ts"
+     ]
+    }
+   ]
+  },
+  {
+   "title": "对抗性审查",
+   "steps": [
+    {
+     "from": "R1",
+     "to": "R3",
+     "title": "组装审查票",
+     "what": "按配置清单组装参数：--exclude-tools write,edit，保留 bash 跑测试取证；证据由 evidence.ts 从会话分支裁剪。",
+     "sources": [
+      "agent/extensions/firecode/review/reviewer.ts",
+      "agent/extensions/firecode/review/evidence.ts"
+     ],
+     "via": [
+      [
+       18.6,
+       3.8
+      ],
+      [
+       21.9,
+       3.8
+      ]
+     ]
+    },
+    {
+     "from": "R3",
+     "to": "X3",
+     "title": "并行开审",
+     "what": "runPiProcess spawn pi --mode json，stdout 按行增量消费，超时与取消走进程树击杀。",
+     "sources": [
+      "agent/extensions/firecode/review/process.ts"
+     ],
+     "via": [
+      [
+       26.2,
+       3.9
+      ]
+     ]
+    },
+    {
+     "from": "X3",
+     "to": "R2",
+     "title": "落定聚合",
+     "what": "每票 REVIEWER_SETTLED 回灌 reducer：error 票判整轮 error，FAIL 进修复相，全 PASS 经总结相落 settled。",
+     "sources": [
+      "agent/extensions/firecode/review/state.ts"
+     ],
+     "via": [
+      [
+       26.2,
+       3.7
+      ],
+      [
+       21.6,
+       3.7
+      ]
+     ]
+    },
+    {
+     "from": "R2",
+     "to": "R4",
+     "title": "结果卡投递",
+     "what": "send_card 效果驱动：通过绿底、未通过红底，渲染器永不抛异常，details 校验失败降级纯文本。",
+     "sources": [
+      "agent/extensions/firecode/review/card.ts"
+     ]
+    },
+    {
+     "from": "R1",
+     "to": "D1",
+     "title": "checkpoint 落盘",
+     "what": "每次迁移把 reducer 状态整体写成 custom entry，runId + 单调 seq 的 CAS 防双运行时互踩。",
+     "sources": [
+      "agent/extensions/firecode/review/checkpoint.ts"
+     ],
+     "via": [
+      [
+       15.3,
+       4.8
+      ],
+      [
+       15.3,
+       17.2
+      ]
+     ]
+    },
+    {
+     "from": "R1",
+     "to": "X1",
+     "title": "占用标签直投",
+     "what": "state_labels.blocked 的 TTL 租约，续约兼作投递失败重试；进程内 herdr:blocked 频道同步驱动工作火焰退让。",
+     "sources": [
+      "agent/extensions/firecode/review/index.ts"
+     ],
+     "via": [
+      [
+       18.6,
+       3.9
+      ],
+      [
+       26.1,
+       3.5
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "title": "模型请求改写",
+   "steps": [
+    {
+     "from": "P1",
+     "to": "X4",
+     "title": "OAuth 归因",
+     "what": "before_provider_request 判定 anthropic + OAuth 后返回新 payload，system 首位插 Claude Code 归因块。",
+     "sources": [
+      "agent/extensions/firecode/provider/claude-sub.ts"
+     ],
+     "via": [
+      [
+       15.7,
+       17.2
+      ],
+      [
+       26.7,
+       15.9
+      ]
+     ]
+    },
+    {
+     "from": "P2",
+     "to": "X4",
+     "title": "选项改写",
+     "what": "verbosity 写给 Responses API 模型，白名单模型与 xai 写 service_tier: priority；写前比对，未变不复制。",
+     "sources": [
+      "agent/extensions/firecode/provider/openai-native/src/options.ts"
+     ],
+     "via": [
+      [
+       16.1,
+       17.3
+      ],
+      [
+       26.4,
+       15.6
+      ]
+     ]
+    },
+    {
+     "from": "P3",
+     "to": "X4",
+     "title": "压缩调用",
+     "what": "session_before_compact 触发：input 末尾追加 compaction_trigger 直调 Responses API，输出必须恰好一个 compaction 项。",
+     "sources": [
+      "agent/extensions/firecode/provider/openai-native/src/compact-client.ts"
+     ],
+     "via": [
+      [
+       16.8,
+       17.2
+      ],
+      [
+       26,
+       15.2
+      ]
+     ]
+    },
+    {
+     "from": "P3",
+     "to": "D1",
+     "title": "压缩条目落盘",
+     "what": "compactedWindow 连同身份四元组写成压缩条目 details，读回逐字段校验。",
+     "sources": [
+      "agent/extensions/firecode/provider/openai-native/src/native-details.ts"
+     ]
+    },
+    {
+     "from": "P3",
+     "to": "X4",
+     "title": "replay 改写",
+     "what": "后续每次请求重算期望 payload 深比较，一致才用 compactedWindow 替换压缩点前内容，不一致原样发出。",
+     "sources": [
+      "agent/extensions/firecode/provider/openai-native/src/native-replay.ts"
+     ],
+     "via": [
+      [
+       17,
+       16.9
+      ],
+      [
+       25.8,
+       14.9
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "title": "会话外围联动",
+   "steps": [
+    {
+     "from": "U1",
+     "to": "X4",
+     "title": "额度抓取",
+     "what": "会话启动/切模型/回合结束触发；只查订阅制供应商，OAuth 登录态校验后抓各家用量接口。",
+     "sources": [
+      "agent/extensions/firecode/statusbar/quota.ts"
+     ],
+     "via": [
+      [
+       15.3,
+       0.4
+      ],
+      [
+       26.3,
+       0.4
+      ],
+      [
+       27.3,
+       9.9
+      ]
+     ]
+    },
+    {
+     "from": "U1",
+     "to": "D2",
+     "title": "缓存与退避",
+     "what": "结果与 1/2/5 分钟退避写共享缓存文件，多会话复用同一次抓取。",
+     "sources": [
+      "agent/extensions/firecode/statusbar/quota-cache.ts"
+     ],
+     "via": [
+      [
+       5.2,
+       4.9
+      ],
+      [
+       5.2,
+       18.6
+      ],
+      [
+       18.5,
+       18.3
+      ]
+     ]
+    },
+    {
+     "from": "S3",
+     "to": "M3",
+     "title": "待拍板判定",
+     "what": "agent_settled 且 idle 时读 Worker Pool 状态文件，有 blocked 子代理则升 timeSensitive。",
+     "sources": [
+      "agent/extensions/firecode/session/bark.ts"
+     ],
+     "via": [
+      [
+       15.3,
+       12.6
+      ]
+     ]
+    },
+    {
+     "from": "S3",
+     "to": "X5",
+     "title": "Bark 推送",
+     "what": "同会话固定 id 靠 CollapseID 新顶旧；网络失败吞掉，Worker 进程内静默。",
+     "sources": [
+      "agent/extensions/firecode/session/bark.ts"
+     ],
+     "via": [
+      [
+       15.3,
+       10.1
+      ],
+      [
+       25.9,
+       10.1
+      ]
+     ]
+    },
+    {
+     "from": "S4",
+     "to": "X1",
+     "title": "身份投影",
+     "what": "session_info_changed/model_select 驱动，串行链 + 送达确认，quit 才清空。",
+     "sources": [
+      "agent/extensions/firecode/session/herdr-display.ts"
+     ],
+     "via": [
+      [
+       15.3,
+       5
+      ],
+      [
+       15.3,
+       0.5
+      ],
+      [
+       26.4,
+       0.5
+      ]
+     ]
+    },
+    {
+     "from": "R1",
+     "to": "S5",
+     "title": "占用退让",
+     "what": "审查活跃期经 herdr:blocked 频道通知工作火焰隐藏，UI 写入经 queueMicrotask 合并仲裁。",
+     "sources": [
+      "agent/extensions/firecode/session/working-flame.ts"
+     ]
+    }
+   ]
+  }
+ ],
+ "wiki": {
+  "data-flow.md": "---\nsources:\n  - agent/extensions/firecode/index.ts 371b956bc12d loadConfig session_start\n  - agent/extensions/firecode/provider/openai-native/src/request-pipeline.ts ed2089566058 rewriteOpenAIProviderRequest replayOpenAINative applyOpenAIOptions\n  - agent/extensions/firecode/provider/claude-sub.ts 03508d39cc7e before_provider_request buildBillingHeader\n  - agent/extensions/firecode/review/index.ts f2a6f35f299d dispatch advanceWhenIdle setOccupancy\n  - agent/extensions/firecode/master/herdr.ts 1e145c952309 monitorSettlement handleSettlement autoReview\n  - agent/extensions/firecode/master/index.ts a292b31177f3 flushMasterEvents PENDING_EVENT_TYPE\n  - agent/extensions/firecode/statusbar/quota.ts 1d978210b0e5 refresh subscriptionProvider\n  - agent/extensions/firecode/session/bark.ts e76b3adf5dd4 buildBarkPayload hasBlockedWorker\n  - agent/extensions/firecode/session/presets.ts 1a9628dd591d applyPreset\n  - agent/extensions/firecode/session/stats.ts 253b5c7b8885 collect\n---\n\n# 数据流\n\nFireCode 是 pi 扩展，没有自己的进程；一切数据流都从四类入口进入：**斜杠命令**、**快捷键**、\n**宿主事件钩子**、**外部投递**。下面每个真实入口至少一条端到端路径。\n\n## 入口清单\n\n| 入口 | 类型 | 落点 |\n| --- | --- | --- |\n| `/fire-review` | 命令 | review 执行器（`review/index.ts`），Master 也从外部把这个字面量投进 Worker pane |\n| `/fire-master [off\\|status]` | 命令 | Master 激活/关闭/状态（`master/index.ts`） |\n| `/preset [名]`、`/rename`、`/tokens`、`/fast`、`/tool-status` | 命令 | presets / rename / stats / openai-native / tools 各自模块 |\n| `keys.rename`、`keys.cyclePreset`、预设自带 key、`keys.fast` | 快捷键 | 与同名命令同一路径（启动时绑定，改配置需重启） |\n| `before_provider_request` | 宿主钩子 | provider 两条请求改写路径 |\n| `session_before_compact` | 宿主钩子 | 原生压缩（关闭时返回 undefined 走宿主默认压缩） |\n| `session_start` / `resources_discover` | 宿主事件 | 装配告警、review checkpoint 恢复、Master reconcile、额度抓取 |\n| `agent_start` / `agent_end` / `agent_settled` / `message_end` | 宿主事件 | working-flame 挂撤、review 互锁与开审、bark 推送、状态栏重绘 |\n\n## 场景一：Master 委派与回传（/fire-master → subagents）\n\n`/fire-master` 激活后 Master 会话获得 `subagents` 工具 → `start` 经 `master/herdr.ts` 在\nherdr 里 split pane（2×2 象限）、临时 ZDOTDIR 挂 precmd 标记等真实 shell 就绪、`agent start`\n拉起 Worker（独立 pi 进程，带 `FIRECODE_MASTER_WORKER`，busy 退避重试 15s）→ 每次状态变化经\n`master/state.ts` 原子落盘（v5、0600）→ `monitorSettlement` 无截止等待落定 →\n`handleSettlement` 分流：带 `REVIEW_OCCUPANCY_LABEL` 的 blocked 转 reviewing、其余 blocked\n回传提问、`stop` 成功回传、中断走续监与五分钟自动续跑提醒 → 声明 `review:true` 的成功落定由\n`autoReview` 投递字面 `/fire-review` 到 Worker pane（进入场景二）→ 终态经 `readReviewOutcome`\n读回 → 回传统一走收件箱：入队即以 `PENDING_EVENT_TYPE` 落 Master 会话，`flushMasterEvents`\n在回合边界合并成一条 follow-up 投递，投成写 ack，reload 后 pending−ack 差集重投。\n\n## 场景二：对抗性审查循环（/fire-review）\n\n命令进入 `review/index.ts` 执行器 → 事件经 `dispatch()` 串行灌入 `review/state.ts` 的\n`reduce()`，返回新状态 + effect → `advanceWhenIdle()` 过 idle 门后按配置清单 spawn 审查者\n子进程（`review/process.ts`，`pi --mode json`，排除 write/edit，stdout 按行增量消费）→\n每票 `REVIEWER_SETTLED` 回灌聚合（error 票判整轮 error、FAIL 进修复相、全 PASS 经总结相落\nsettled）→ FAIL 发现投回执行模型修复（`agent_start`/`agent_end` 回执确认），连续失败达阈值\n咨询顾问 → 全程每次迁移写 checkpoint（`review/checkpoint.ts`，runId+seq CAS 防双运行时）、\n发结果卡、`setOccupancy` 双通道发布占用（进程内 `herdr:blocked` 频道 + herdr-client 直投\n`state_labels.blocked` TTL 租约）。终态由外部经 `review/outcome.ts` 只读解析。\n\n## 场景三：模型请求改写（before_provider_request / session_before_compact）\n\n每次模型请求经 `before_provider_request`：Anthropic OAuth 会话由 `provider/claude-sub.ts`\n判定 `shouldApply` 后返回新 payload（system 首位插 `buildBillingHeader` 归因块，API Key 会话\n原样通过）；OpenAI/xAI 由 `request-pipeline.ts` 两步顺序改写——先在开启原生压缩时\n`replayOpenAINative` 用 `compactedWindow` 替换压缩点前的 input（重算期望 payload 深比较，\n不一致即放弃改写），再 `applyOpenAIOptions` 写 `text.verbosity` 与 `service_tier: \"priority\"`。\n压缩本体走 `session_before_compact`（`native-compaction.ts`）：触发取材 → 直调 Responses API\n`compaction_trigger` → 压缩条目连同身份四元组落会话 jsonl，供 replay 读回。\n\n## 场景四：会话外围联动（宿主事件驱动）\n\n- **额度**：`session_start` / `model_select` / `agent_end` 触发 `statusbar/quota.ts` 的\n  `refresh` → `subscriptionProvider` 判定订阅制供应商 → 抓各家用量接口 → 结果与 1/2/5 分钟\n  退避写 `~/.pi/agent/tmp/firecode-quota-<provider>.json` 跨会话共享 → 状态栏重绘。\n- **落定通知**：`agent_settled` 且 idle 时 `session/bark.ts` 的 `buildBarkPayload` 组通知 →\n  `hasBlockedWorker` 只读 Master 状态文件，有待拍板升 timeSensitive → 推 Bark APNs。\n- **身份投影**：`session_info_changed` / `model_select` 等 → `session/herdr-display.ts` 串行经\n  herdr-client 写 pane 副标题，送达确认才记已发布。\n- **工作火焰**：`agent_start`/`agent_end` 挂撤 widget，订阅 `herdr:blocked` 在审查活跃期退让。\n\n## 命令小径（不成场景的短路径）\n\n`/preset` → `applyPreset` 快照当前状态后切模型/工具/附加指令（附加指令在 `before_agent_start`\n拼进 systemPrompt）；`/rename` → 清洗后 `setSessionName`，显示投影由 herdr-display 事件承接；\n`/tokens` → `collect` 扫 `sessions/*.jsonl` 按 `usageAttribution` 归因输出 Markdown 表；\n`/fast` → 文件锁内只替换 config.jsonc 的 openai 节文本，原子覆盖立即生效；\n`/tool-status` → 列出已加载/已启用工具。\n\n## 启动装配（所有入口的前置）\n\npi 加载扩展 → `index.ts` 默认导出执行 `loadConfig()`（读插件目录 config.jsonc，产出\n`{ config, problems }`）→ 按 `features` 逐个 `registerX(pi)`；herdr 投影与 review 卡渲染/\ncheckpoint 收口无条件注册。配置问题不阻断装配，`session_start` 逐条 notify，由各功能自行\n决定拒绝启动（review/master 命中问题即拒绝）。\n",
+  "index.md": "---\nbaseline: 07e9f9034ad8cbf23b767c60daa5f87091987b83\nsources:\n  - agent/extensions/firecode/index.ts 371b956bc12d REGISTRARS\n---\n\n# FireCode 架构 Wiki\n\npi 的个人定制扩展层。代码是事实源，本 wiki 是持续维护的压缩理解；\n每页 frontmatter 记录来源文件哈希，`node docs/architecture/verify.mjs` 做过期检查。\n\n## 导航\n\n- [系统总览](system.md)——模块地图、五条跨模块接缝、设计不变量\n- [数据流](data-flow.md)——启动装配、请求改写、审查循环、Master 委派、辅助流\n\n### 模块页\n\n- [入口与共享基座](modules/core.md)——index.ts 装配、config.ts 配置事实源、共享工具\n- [状态栏](modules/statusbar.md)——底部两行渲染、订阅额度抓取与缓存退避\n- [工具行渲染](modules/tools.md)——默认 4 工具单行化、连续轨道、宿主原型 patch\n- [会话功能](modules/session.md)——预设、改名、/tokens、Bark、herdr 投影、工作火焰\n- [Provider 请求层](modules/provider.md)——Claude 归因、verbosity/加速档、原生压缩\n- [对抗性审查](modules/review.md)——reducer/执行器分层、状态机、checkpoint、占用信号\n- [Master 主控](modules/master.md)——subagents 工具、Worker 生命周期、事件投递\n\n## 维护\n\n同步流程见仓库 `~/.agents/skills/development/architecture-wiki/SKILL.md`：\n代码变更后按 baseline diff 定位受影响页面，改正文或刷哈希，重渲染 `architecture.html`。\n",
+  "system.md": "---\nsources:\n  - agent/extensions/firecode/index.ts 371b956bc12d REGISTRARS registerReview registerMaster registerHerdrDisplay\n  - agent/extensions/firecode/config.ts 17512757882e loadConfig FEATURES parseReviewConfig parseMasterConfig\n  - agent/extensions/firecode/review/outcome.ts 390ab5ea36a2 readReviewOutcome REVIEW_OCCUPANCY_LABEL\n  - agent/extensions/firecode/master/state.ts e51063b2f460 loadMasterState masterStatePath\n  - agent/extensions/firecode/tools/line.ts cd6bca3c9b27 ToolLine makeResultRenderer\n---\n\n# 系统总览\n\nFireCode 是 pi 的个人定制扩展，单一入口 `index.ts` 按 `config.jsonc` 的 `features` 开关逐个调\n`registerX(pi)` 装配十余个彼此封闭的功能模块。没有中央运行时、没有共享事件总线：每个 register\n把自己的状态关在闭包里，关掉任何一个不影响其余。配置的唯一事实源是 [config.ts](modules/core.md)，\n校验姿态是「类型错误记录为 problem、review/master 节命中问题即拒绝启动而非静默回退」。\n\n## 模块地图\n\n| 模块页 | 覆盖 | 一句话职责 |\n| --- | --- | --- |\n| [入口与共享基座](modules/core.md) | index.ts、config.ts、header.ts、format/theme/flame-frames/herdr-client | 装配决策 + 无状态共享工具 |\n| [状态栏](modules/statusbar.md) | statusbar/ | 底部两行：位置/会话名 + 模型/额度/上下文/缓存/速度 |\n| [工具行渲染](modules/tools.md) | tools/ | 接管默认 4 工具的单行渲染与连续轨道 |\n| [会话功能](modules/session.md) | session/ | 预设、改名、/tokens、Bark 通知、herdr 身份投影、工作火焰 |\n| [Provider 请求层](modules/provider.md) | provider/ | Claude 归因头、OpenAI verbosity/加速档/原生压缩 |\n| [对抗性审查](modules/review.md) | review/ | /fire-review：多模型并行审 + 顾问仲裁 + checkpoint |\n| [Master 主控](modules/master.md) | master/ | /fire-master：subagents 工具管 Herdr Worker 生命周期 |\n\n## 跨模块接缝\n\n模块间的真实耦合只有五条，全部单向：\n\n1. **Master → review**：`master/herdr.ts` 只读调 `review/outcome.ts` 的 `readReviewOutcome`\n   读 Worker 审查终态，并用 `REVIEW_OCCUPANCY_LABEL` 区分审查占用与 Worker 提问。\n   checkpoint 格式仍归 review 所有，两者不交换运行身份。\n2. **bark → Master 状态**：`session/bark.ts` 经 `loadMasterState(masterStatePath(id))` 只读\n   Worker Pool 持久化文件判断有无待拍板子代理，读失败按无待拍板降级。\n3. **Master → tools 渲染**：`master/index.ts` 复用 `tools/line.ts` 的 `ToolLine` /\n   `makeResultRenderer` 纯组件画自己的 `subagents` 工具行。\n4. **review → working-flame（频道）**：review 在进程内 `herdr:blocked` 频道发布占用信号，\n   工作火焰据此在审查活跃期退让；消费方不反向依赖 review 状态。\n5. **review / provider → statusbar（状态键）**：状态栏从宿主扩展状态表只读 `fire-review`\n   （审查进度）与 `pi-openai-native-fast`（加速档标记）两个键，键不存在时片段为空。\n\n其余共享全是无状态基座：`format.ts`（宽度/文本格式化）、`theme.ts`（阈值配色）、\n`flame-frames.ts`（火焰帧素材，review 活动框与工作火焰共用）、`herdr-client.ts`\n（herdr socket 短连接，身份投影与占用标签共用）。\n\n## 设计不变量\n\n- **单一状态事实源**：review 循环状态只在 `review/state.ts` 纯 reducer 中迁移，Worker Pool\n  只在 `master/state.ts` 的 v5 schema 文件中持久化；两者的执行器（`review/index.ts`、\n  `master/herdr.ts`）承担全部副作用。\n- **配置坏 ≠ 用户关闭**：review/master 节有问题时拒绝启动并保留 checkpoint，修好重启继续；\n  静默回退默认模型会拿用户没配的模型真实发起调用。\n- **宿主耦合收口**：碰 pi 内部实现的只有 `tools/grouping.ts`（组件树 + 原型 patch），\n  升级 pi 时优先检查这一处。\n- **纯函数可测**：`statusbar/render.ts`、`tools/line.ts`、`review/state.ts` 等纯函数层\n  被 `tests/` 直接覆盖，测试入口 `bun test agent/extensions/firecode/tests`。\n\n端到端运行路径见 [data-flow.md](data-flow.md)。\n",
+  "modules/core.md": "---\nsources:\n  - agent/extensions/firecode/index.ts 371b956bc12d REGISTRARS registerHerdrDisplay registerReview loadConfig session_start\n  - agent/extensions/firecode/config.ts 17512757882e loadConfig parseJsonc parseReviewConfig parseMasterConfig FEATURES DEFAULT_KEYS CONFIG_PATH problems cached rejectUnknownKeys\n  - agent/extensions/firecode/header.ts 1bd70c504b45 registerHeader FULL TINY FULL_WIDTH setHeader\n  - agent/extensions/firecode/format.ts 668b4e9de4dc clip oneLine formatTokens formatDuration formatModelName Segmenter\n  - agent/extensions/firecode/theme.ts 485324b650f0 FLAME ANSI pick contextColor cacheColor quotaColor sizeColor thinkingColor Threshold\n  - agent/extensions/firecode/flame-frames.ts ace06ae44d00 FLAME_FRAME_COUNT flameFrameLines flameFrameWidth scaledFrameCache scaleFrame\n  - agent/extensions/firecode/herdr-client.ts e6cf936c235e herdrPaneEnv herdrRequest HERDR_ENV REQUEST_TIMEOUT_MS hasResult\n---\n\n# 入口与共享基座\n\n覆盖 FireCode 的装配层与被各功能模块共用的无状态基座：入口 `index.ts`、配置事实源 `config.ts`、启动横幅 `header.ts`，以及共享件 `format.ts`、`theme.ts`、`flame-frames.ts`、`herdr-client.ts`。总体分层见 [../system.md](../system.md)。\n\n## 职责\n\n入口 `index.ts` 替调用者（pi 宿主）封装一件事：**功能开关到注册函数的映射**。它读一次配置、按 `config.features` 逐个调 `registerX(pi)`，不持有任何跨模块状态，也不给模块之间牵线——每个 register 封闭自己的运行状态，关掉任何一个不影响其余。开关语义是「默认全开、显式 false 才关」（判定写成 `!== false`）。配置问题不阻断装配：入口在 `session_start` 把 `problems` 逐条 `ctx.ui.notify` 成 warning，是否因此拒绝启动由各功能自己决定（review/master 会拒绝，见下文数据流）。\n\n`config.ts` 是唯一配置事实源：只读插件目录下的 `config.jsonc`（`CONFIG_PATH` 由 `import.meta.url` 推出），不读项目级配置、不读 pi-flow 的 config.json，零外部依赖。它明确不管的：不抛异常中断调用方（校验产出 `{ config, problems }`，调用方拿到可用默认值同时看到全部问题）、不支持运行期热更（`loadConfig()` 进程内 `cached` 一次，改配置需重启）。校验姿态是**类型错误必须记录、不得静默回退**：开关写成字符串 `\"false\"` 会因 `!== false` 静默启用付费审查，`review`/`master` 节写错类型时静默当空对象会拿用户没配的模型真实发起调用，因此这两节还经 `rejectUnknownKeys` 对未知字段（含嵌套）做键白名单。\n\n`header.ts` 只做启动横幅：模块加载时把火焰 ASCII 与 wordmark 按行上色拼成 `FULL`（宽度存 `FULL_WIDTH`），渲染时只选「宽度够用 `FULL`，否则一行 `TINY`」再居中，`session_start` 后无状态。\n\n四个共享件都是纯函数或无状态客户端，不 import 任何 FireCode 功能模块，因此不构成模块间耦合：`format.ts` 管宽度/文本/数值格式化，`theme.ts` 集中**所有阈值到颜色的映射**与品牌火焰渐变常量，`flame-frames.ts` 是可缩放到任意高度的火焰帧素材，`herdr-client.ts` 是 herdr socket 单请求单连接客户端（herdr 之外直接返回未送达，从不抛异常）。\n\n## 对外接口\n\n`index.ts` 只暴露默认导出 `firecode(pi)`，宿主加载插件时调一次；`REGISTRARS` 表不导出，键类型是 `Exclude<Feature, \"review\" | \"master\">`。\n\n`config.ts` 的关键导出：\n\n- `loadConfig(): { config, problems }`——被 index、presets、rename、review、master、openai-native 共用的唯一读取入口，状态全在模块级 `cached`（一个变量，进程内单次解析）。\n- `parseReviewConfig` / `parseMasterConfig`——导出即为让测试直接打「未知字段、类型错误必须报 problems」这条契约（`tests/review-contract.test.ts`、`tests/master-state.test.ts` 在用）。\n- `FEATURES` / `Feature`——开关名单一事实源；`DEFAULT_MASTER_MODELS`——master 配置不可用时 `master/index.ts` 用它兜底渲染选型表提示词；`DEFAULT_KEYS`——三个内置快捷键兜底；`CONFIG_PATH`——openai-native 的 `ctrl+f` 写回配置时定位文件。\n- `parseJsonc`——手写注释剥离（字符串内斜杠不动，不支持尾逗号），避免为一个文件引依赖。\n\n`format.ts` 只暴露五个纯函数：`clip`（按显示宽度截断、`Intl.Segmenter` 保字素簇，`from` 决定保头部命令还是尾部路径 basename；带背景卡片里是 pi-tui 截断的唯一替代，见 AGENTS.md 禁令）、`oneLine`（压平换行塞单行）、`formatTokens`、`formatDuration`、`formatModelName`（剥 provider 前缀与日期后缀，状态栏、herdr 身份投影、审查进度共用同一种模型名写法）。\n\n`theme.ts` 暴露 `ANSI`/`FLAME` 常量与五个取色函数：`contextColor`、`cacheColor`（两者方向相反：填充越高越红、命中越高越绿，故分列两张表）、`quotaColor`、`sizeColor`、`thinkingColor`。内部 `pick` 按降序阈值表取首个 `value >= at` 档位，表用 `satisfies readonly Threshold[]` 约束颜色必须是宿主 `ThemeColor`。\n\n`flame-frames.ts` 暴露 `FLAME_FRAME_COUNT`、`flameFrameLines(height, frameIndex)`（最近邻缩放到任意高度）、`flameFrameWidth(height)`（缩放后可见宽度）、`flameFrameCacheSize`（测试用）。\n\n`herdr-client.ts` 只暴露 `herdrPaneEnv()`（校验 `HERDR_ENV=1` 与 pane/socket 环境变量）和 `herdrRequest(source, method, params): Promise<boolean>`——只在 herdr 回了不带 `error` 的对象型 `result` 时才算送达（`hasResult`），超时 500ms、连接错误、`end` 一律 `false`。\n\n## 数据怎么流\n\n配置从 `config.jsonc` 单点进入：`loadConfig` 解析并缓存，`problems` 随返回值流向两条路——入口把全部问题 notify 给用户；`review/index.ts` 与 `master/index.ts` 各自按前缀（`review`/`master`/`未知字段 …`/`config.jsonc`/`features`）过滤，命中即拒绝启动而非降级（静默回退默认模型会花真钱跑错模型）。\n\n装配决策从 `firecode(pi)` 流出，三处例外直接写在入口：`registerHerdrDisplay` 无条件注册（无 feature 开关，靠自身在 herdr 之外自我禁用，见 [session.md](session.md)）；`registerMaster` 单独判定（不在 `REGISTRARS` 键类型里，见 [master.md](master.md)）；`registerReview` 额外接收「features 整节是否类型错误」——`features` 非对象时 config 把所有开关安全回退成 `false`，那是「配置坏」而非「用户关闭」，review 据此不封存活跃 checkpoint，且历史结果卡渲染与 checkpoint 收口始终注册、开关只控制命令与执行循环（见 [review.md](review.md)）。\n\n共享件的消费方向全是单向流出：`format.ts` 流向状态栏、工具行、review 进度/卡片/UI 与 header（[statusbar.md](statusbar.md)、[tools.md](tools.md)、[review.md](review.md)）；`theme.ts` 流向状态栏（context/cache/quota/thinking）、工具行（`sizeColor`）与 header（`FLAME`/`ANSI`）；`flame-frames.ts` 流向 review 活动框与 working 火焰 widget（[review.md](review.md)、[session.md](session.md)）；`herdrRequest` 的布尔送达结果是上层重试与租约续约的判据——herdr 身份投影只把确认送达记为已发布，review 占用标签靠它做 TTL 续约兼投递重试。\n\n## 改动指南\n\n- 增删功能开关：同时改 `config.ts` 的 `FEATURES` 与 `index.ts` 的 `REGISTRARS`——两者由 `Exclude<Feature, \"review\" | \"master\">` 键类型编译期对齐，漏配会编译失败，这是有意的防漂移，不要绕。\n- 改 `features` 回退语义前先看入口注释：非对象回退成全关是「安全回退」，但 review 依赖「配置坏 ≠ 用户关闭」的区分（`problems.includes(\"features 必须是对象\")` 作为第二参传入），改回退值会连带改变 checkpoint 封存行为。\n- 改 review/master 节校验：先看 `parseReviewConfig`/`parseMasterConfig` 与两侧的前缀过滤（`review/index.ts` 的 `loadReviewConfig`、`master/index.ts` 的 `loadMasterModels`）——problems 消息前缀就是门禁匹配键，改消息文案可能让门禁漏判；契约测试在 `tests/review-contract.test.ts`、`tests/master-state.test.ts`。\n- 改 `flame-frames.ts` 缩放：`scaleFrame` 裁行尾空白格是为了让实际渲染宽度与 `flameFrameWidth`（按 `trimEnd` 计宽）一致，去掉裁剪会让窄屏适配按小宽度放行、渲染却溢出；缓存 `scaledFrameCache` 只留最近一个高度，多高度轮换会整批重算。\n- 改 `herdrRequest` 前守住送达语义：`true` 必须意味着 herdr 真收到并回了 `result`，上层（身份投影去重、占用标签续约）都拿它当「已发布」判据，放宽会造成静默丢投递。Windows 端点是命名管道改写，别按 Unix socket 假设。\n- 带背景卡片里截断文本一律用 `format.ts` 的 `clip`，禁用 pi-tui `TruncatedText`/`truncateToWidth`（省略号带 `\\x1b[0m` 全量重置，会掐断外层背景色）。\n",
+  "modules/master.md": "---\nsources:\n  - agent/extensions/firecode/master/herdr.ts 1e145c952309 HerdrWorkers monitorSettlement handleSettlement handleReviewSettlement watchInterrupted autoReview splitPlan createShellReadyMarker validateDelegationText displayName agentName\n  - agent/extensions/firecode/master/index.ts a292b31177f3 registerMaster MASTER_TOOL PENDING_EVENT_TYPE EVENT_ACK_TYPE flushMasterEvents sweepDispositions unackedEvents workerInstructions reviewGateError listMeta STATUS_WORD\n  - agent/extensions/firecode/master/state.ts e51063b2f460 MasterStore MasterState WorkerRef WorkerStatus WorkerDisposition reduceMaster restoreMasterState masterStatePath loadMasterState liveWorkers\n  - agent/extensions/firecode/master/event-format.ts 8654a2c83e72 MASTER_EVENT_TYPE BODY_SECTIONS sectionLine masterEventDetails isValidMasterEventDetails\n  - agent/extensions/firecode/master/event-card.ts 6310bba8b667 registerMasterEventRenderer CompactTitle compactCard\n  - agent/extensions/firecode/review/outcome.ts 390ab5ea36a2 REVIEW_OCCUPANCY_LABEL readReviewOutcome ReviewOutcome\n---\n\n# Master 多 Agent 主控\n\n## 职责\n\nMaster 让一个 Pi 会话成为指挥官，把工作委派给运行在 Herdr pane 里的独立 Pi 进程（Worker），\n并把它们的落定结果异步回传。默认休眠：`registerMaster`（`master/index.ts`）注册命令与工具定义，\n但只有 `/fire-master` 激活后才把 `subagents` 追加进活动工具集；未激活的普通 Pi 完全不带这个工具。\n没有 Goal、Task 或任务板。激活前置条件写死在 `activateMaster`：必须运行在 Herdr 管理的 pane\n（`HERDR_ENV=1` 且有 `HERDR_WORKSPACE_ID`），且 `master` 节配置无问题（`loadMasterModels` 把配置\n问题变成拒绝启动的硬错误——选型表错会拿错模型真实发起 Worker）。\n\n子代理进程自身也加载本插件，靠环境变量 `FIRECODE_MASTER_WORKER` 识别成 Worker 角色：拿不到\n`subagents`，改为在系统提示里追加 `workerInstructions` 的禁令段，并由 `tool_call` 钩子把 edit/write\n限制在当前 checkout 内。隔离是纪律不是能力边界\n（[ADR-0004](../../../adr/0004-worker-default-tools-and-trust-model.md)）：Worker 用默认四工具含 bash，\n路径限制防误伤，真要物理隔离得上容器或只读挂载。\n\n## 对外接口\n\n`subagents` 是唯一接口，action 集合 start / send / interrupt / review / ack / list / sleep / kill\n（`master/index.ts` 的工具 schema，动作命名来历见\n[ADR-0007](../../../adr/0007-rename-disposition-actions-for-model-priors.md)）。语义边界：send 只对\n`idle` / `blocked` 放行，`working` 的出路是先 interrupt；review 只接受 `idle`；sleep 留下可唤醒的\nDormant 引用，kill 除名不可回；ack 只消发落标记。工具行渲染复用 [tools](tools.md) 的 `ToolLine` 与\n`makeResultRenderer` 纯组件；list 的结果渲染另回写 `context.state.meta` 行内后缀（与 edit ±diff 同一\n通道）：空池显「空」，否则列出各子代理名与中文状态词——`STATUS_WORD` 表以 `satisfies Record<WorkerStatus, string>`\n绑定，状态枚举增删不同步会编译失败。\n\n跨模块只读接缝有两条。其一：[session](session.md) 的 bark 通知用 `state.ts` 的 `loadMasterState` /\n`masterStatePath` 只读 Worker Pool 持久化状态，判断有没有 `blocked` 待拍板子代理（`WorkerStatus`\n注释明言这一耦合）。其二：对 [review](review.md) 只依赖 `review/outcome.ts` 的 `readReviewOutcome`\n与 `REVIEW_OCCUPANCY_LABEL`，不交换运行身份。\n\n事件类型常量：`MASTER_EVENT_TYPE`（`event-format.ts`，结果消息的 customType）、`PENDING_EVENT_TYPE`\n与 `EVENT_ACK_TYPE`（`master/index.ts`，收件箱持久化条目）。事件正文分节标记集中在 `BODY_SECTIONS`：\n`sectionLine` 是产文侧唯一入口，`masterEventDetails` 反向按同一标记提取每事件一行的紧凑预览，\n产文与提取两侧编译期同步。`event-card.ts` 据此渲染事件卡：默认紧凑、ctrl+o 展开全文，details 校验\n失败或旧消息降级为完整文本，渲染器永不抛异常；紧凑行截断用自带的 `CompactTitle`（基于 `format.ts`\n的 clip）而非 pi-tui `TruncatedText`——后者省略号带 `\\x1b[0m` 全量重置，会在截断点掐断外层 Box 的\n背景色（上游拒修）。\n\n## 数据怎么流\n\n**start 到 Worker 拉起**（`master/herdr.ts` 的 `HerdrWorkers`）分两段：串行临界区 `allocateWorker`\n解析名字/模型/thinking/cwd、算布局容量、建 shell 并写 `starting` 占位（shell 创建必须留在串行区，\n后一个的象限切分依赖前一个 pane 落位）；队外的 `launchWorker` 并行做 shell 握手与 `agent start`，\n首批工单因此真并行。`cwd` 必须是已存在的绝对路径（`resolveWorkerCwd`），校验失败即拒绝。布局由\n`splitPlan` 实现 2×2 象限切，每 tab 最多 4 个，满或 split 失败才建新 tab；清理时共享 tab 只收自己的\npane 不连坐。命名：`displayName` 给 pane/tab/Pi 显示名（`任务名-模型名`），`agentName` 是其满足\nHerdr 字符集硬约束 `[a-z][a-z0-9_-]{0,31}` 的净化版。shell 握手用临时 `ZDOTDIR` 挂 zsh precmd 打印\n随机标记（`createShellReadyMarker`，仅支持 zsh）；`agent start` 对 `agent_pane_busy` 退避重试 15 秒，\n窗口用尽附 pane 前台快照作证据。\n\n**落定分流回传**：`monitorSettlement` 是唯一监听循环，work/review 两模式共用，失败指数退避重挂。\n`handleSettlement` 分流：`blocked` 且状态标签含 `REVIEW_OCCUPANCY_LABEL` ＝外部审查占用，转\n`reviewing` 继续等终态，否则才是 Worker 提问；最终 assistant 是中断（`stopReason === \"aborted\"` 或\nerror 带 abort 字样）＝不算失败也不消耗审查意图，记 `interruptedAt` 并由 `watchInterrupted` 续监，\n用户接手则结果照常回流，五分钟无动静发自动续跑提醒把流程交还指挥官\n（[ADR-0006](../../../adr/0006-liveness-owned-by-code.md)）；只有 `stopReason === \"stop\"` 且无\nerrorMessage 才按成功回传，length / toolUse / error / 缺失回复一律按失败回传。\n\n**审查意图流转**：`reviewNeeded` 在 start/send 声明（跟任务走不跟渠道走）、随档案持久化，成功落定后 `autoReview` 自动发起，\n只在 `review()` 确认启动（`--wait --until working --until blocked` 观察到状态变化，或停滞时\nfire-review runId 推进）时消耗；投递失败保留意图，reload 与休眠恢复凭档案续上补审。\n`handleReviewSettlement` 用 `readReviewOutcome` 读 Worker session 的 checkpoint 得终态：runId 未推进\n判「审查未启动」，仍 `in_progress` 则退避重挂（占用信号失效时轮间会观测到 idle），终态连同最终回复回传。\n\n**收件箱 pending/ack**（`master/index.ts`）：结果以 custom follow-up message 投递（`flushMasterEvents`），\n至少一次语义——入队即以 `PENDING_EVENT_TYPE` 落 Master 会话，投成写 `EVENT_ACK_TYPE`，恢复时\n`unackedEvents` 取 pending−ack 差集重投，重复无害；投递失败整批退回队列 5 秒重排。落定类事件送达即置\n`disposition: \"pending\"`，回合结束 `sweepDispositions` 提醒一次（置 `reminded`），仍不发落升级为用户\n通知收口；标记持久化跨 reload 续期。事件只装增量，不携带模型/session 等静态身份。\n\n**状态文件读写**（`master/state.ts`）：纯 reducer `reduceMaster` + `MasterStore` 薄封装，每次 dispatch\n立即落盘。schema 只认 `version: 5`，`restoreMasterState` 逐字段校验并要求名字与 sessionPath 唯一、\ndormant 必有 sessionPath、live 必有 pane/tab，不兼容旧版。落盘走 `writeState`：临时文件按 pid+uuid\n命名、mode `0600` 写入后 `renameSync` 原子覆盖，目录 mode `0700`；路径由 `masterStatePath` 按会话 id\n派生到 `~/.pi/agent/tmp/`，不向 Pi session 追加快照；`CLEAR` 直接删文件。\n\n## 改动指南\n\n先看的文件按改动类型分：动工具参数/门禁/事件投递看 `master/index.ts`；动 Worker 生命周期、布局、\n监听与结算看 `master/herdr.ts`；动持久化 schema 看 `master/state.ts`（改 `WorkerStatus` 要同步 bark 的\n`hasBlockedWorker` 与 index.ts 的 `STATUS_WORD`，后者有 satisfies 编译期把守）；动事件文案分节先改\n`event-format.ts` 的 `BODY_SECTIONS`（产文与紧凑提取共用，单侧改词会静默丢预览）。测试在\n`tests/master-state.test.ts`、`tests/master-herdr-recovery.test.ts`、`tests/master-integration.test.ts`。\n\n常见坑：\n\n- **回合边界不能拿 isIdle**：宿主在 emit `agent_settled` 前就置 idle，那个窗口里 flush 会把同一批结果\n  拆投成多回合；投递门槛必须是显式的 `turnActive` 位（`agent_start` 置位、`agent_settled` 清位）。\n- **ack 对无标记子代理报错是护栏**：对没有待发落标记的非 idle 子代理 ack，唯一合理解释是把它误当\n  暂停，返回假成功会让指挥官以为子代理已停（真实事故，ADR-0007）；报错文案按状态给出路，不要弱化。\n- **reconcile 零副作用退场**：reload 时旧运行时 `shutdown()` 只中止在飞任务并等它们退出，不关 shell、\n  不写状态——现场必须完整交给新运行时的 `resume()` → `reconcile()` 按档案重新认领并重挂监听\n  （reviewing/working/中断态/待审票各有恢复路径）；`abandonStart` 在池关闭时同样零副作用。\n- **技能前缀白名单在代码不在提示词**：`validateDelegationText` 只放行 `/skill:tdd `，其余 `/skill:`\n  `/skills:`（含拼写错误）一律拒绝——提示词禁令实战失效 26 次后改为机制，别退回提示词约束。\n  同类的投递前门禁还有 `reviewGateError`：review 关闭或配置有误时拒绝 review action 与审查票 start/send，\n  避免 `/fire-review` 命令退化成普通模型输入。\n\n整体位置见[总览](../system.md)。\n",
+  "modules/provider.md": "---\nsources:\n  - agent/extensions/firecode/provider/claude-sub.ts 03508d39cc7e registerClaudeSub shouldApply buildBillingHeader detectClaudeCodeVersion before_provider_request\n  - agent/extensions/firecode/provider/openai-native/index.ts a678cad4eee9 registerOpenAINative CONFIG_PATH loadConfig\n  - agent/extensions/firecode/provider/openai-native/src/extension.ts ae8e5e0f857a openAINativeExtension VERBOSITY_FLAG toggleFastMode session_before_compact updateFastStatus\n  - agent/extensions/firecode/provider/openai-native/src/request-pipeline.ts ed2089566058 rewriteOpenAIProviderRequest replayOpenAINative applyOpenAIOptions\n  - agent/extensions/firecode/provider/openai-native/src/config.ts 65b3f6333305 loadOpenAINativeSettings togglePriority replaceKeyedObject openaiRoot withConfigLock\n  - agent/extensions/firecode/provider/openai-native/src/options.ts 8cc7c3f66613 applyOpenAIOptions supportsFastMode fastModeEnabled PRIORITY_MODEL_IDS FAST_STATUS_KEY\n  - agent/extensions/firecode/provider/openai-native/src/native-compaction.ts 3025e1abc3ae compactWithOpenAINative replayOpenAINative executeNativeCompaction resolveLatestNativeCompaction resolveNativeCompactionRuntime\n  - agent/extensions/firecode/provider/openai-native/src/native-replay.ts e754f172d8bb rewriteNativeResponsesPayload extractFreshPreamble expected-pi-replay-mismatch serializeLiveTailToResponsesInput\n---\n\n# Provider 请求层\n\n## 职责\n\nprovider/ 是 FireCode 唯一改写出站模型请求的地方，两个互不相干的扩展共用 pi 的\n`before_provider_request` 钩子：`claude-sub.ts` 给 Anthropic OAuth 会话补 Claude Code 归因，\n`openai-native/` 管 OpenAI 系的 verbosity、加速档（service_tier=priority）与可选的原生压缩。\n二者都由入口按 `config.features` 决定是否注册（见 [core.md](core.md)、[../system.md](../system.md)）。\n\n模块内部分工：`openai-native/index.ts` 只是薄适配，把根 `config.ts` 的 `CONFIG_PATH` 与\n`loadConfig().config.keys.fast` 喂给 `openAINativeExtension`；`src/extension.ts` 承担全部宿主接线；\n`src/request-pipeline.ts` 编排请求改写；`src/native-*.ts` 与 `src/compact-client.ts` 实现原生压缩；\n`src/responses-input.ts` 收口消息 ↔ Responses input 的双向序列化，被压缩与 replay 共用，\n保证两条路径产生同构的 input。\n\n## 对外接口\n\n**`registerClaudeSub(pi)`**（claude-sub.ts）：注册后做两件事——用\n`pi.registerProvider(\"anthropic\", …)` 静态挂上 `user-agent: claude-cli/<版本>` 与 `x-app: cli`\n两个请求头；再在 `before_provider_request` 里往 system 数组首位插一个以\n`x-anthropic-billing-header:` 开头的文本块。生效条件由 `shouldApply` 收口：当前模型是 anthropic\n供应商且 `modelRegistry.isUsingOAuth` 为真才改写，API Key 会话原样通过。环境变量\n`PI_CLAUDE_CODE_VERSION` / `PI_CLAUDE_CODE_ENTRYPOINT` / `PI_CLAUDE_OAUTH_LOG_FILE` 等是调试覆盖口。\n\n**`registerOpenAINative(pi)`**（openai-native/index.ts → extension.ts）：注册 `--verbosity` 标志\n（`VERBOSITY_FLAG`，覆盖配置里的 textVerbosity）、`/fast` 命令与加速档快捷键（默认 `ctrl+f`，\n来自根 config 的 `keys.fast`）。加速档开启且当前模型支持时，`updateFastStatus` 写状态项\n`⚡ fast`（键 `FAST_STATUS_KEY`），`model_select` 重算、`session_shutdown` 清除。\n\n**压缩条目 details 契约**（native-details.ts）：原生压缩写进会话的压缩条目 details 固定为\n`strategy: \"openai-native-compact\"` + 身份四元组（provider/api/model/baseUrl）+\n`compactedWindow` 数组 + `createdAt`。该文件同时提供逐字段校验（`isNativeCompactionDetails`）\n与结构化克隆——会话文件里的 details 是外部输入，读回来必须验；身份不匹配或校验失败即放弃接管。\n\n## 数据怎么流\n\n### before_provider_request 两条改写路径\n\nAnthropic 路径（claude-sub.ts）：`buildBillingHeader` 拼出的版本号 = 检测到的 Claude Code 版本 +\n`versionSuffix` 派生的三位后缀，后者对首条 user 文本的固定下标采样再哈希，同一会话稳定。\n版本来自 `detectClaudeCodeVersion`：环境变量优先，其次实测 `claude --version`（1 秒超时），\n都没有则用文件内的回退常量——本机没装 Claude Code 不阻塞启动。幂等性靠首块前缀判断：system\n里已有 billing 块就直接返回，不叠加；改写返回新 payload，不原地改宿主对象。日志文件存在时\n把注入内容按行追加成 JSONL，写失败静默。\n\nOpenAI 路径（request-pipeline.ts 的 `rewriteOpenAIProviderRequest`）：先在开启原生压缩时用\n`replayOpenAINative` 把 payload 换成压缩窗口版本（返回 undefined 就保留原 payload），再用\n`applyOpenAIOptions` 套 verbosity 与 service_tier。options.ts 定义两条能力边界：verbosity\n只加给 Responses API 模型（`openai-responses` 与 `openai-codex-responses`），写进\n`payload.text.verbosity`，非法值当作未设置；加速档 `supportsFastMode` 对 xai 全放行，对 OpenAI\n只认 `PRIORITY_MODEL_IDS` 白名单，`fastModeEnabled` 再叠加供应商配置的 `priority`，满足才写\n`service_tier: \"priority\"`。两处改写都是写前比对，已是目标值就不复制对象；payload 未变时\nextension.ts 返回 undefined，避免无谓复制。\n\n### session_before_compact 压缩三段流\n\n`nativeCompaction` 关闭时钩子返回 undefined，宿主走默认压缩。开启后由\n`compactWithOpenAINative`（native-compaction.ts）编排：\n\n**触发取材。** `resolveNativeCompactionTarget` 判定当前模型是否 openai/openai-codex +\nResponses API 且有 baseUrl，不匹配返回 undefined 交还宿主；`resolveNativeCompactionRuntime`\n再向 modelRegistry 取 apiKey 与 headers，取不到就 `cancel` 并报错——不静默降级。取材分两种：\n`resolveLatestNativeCompaction` 找到上一次本扩展写的压缩条目时，用它的 `compactedWindow` 加上\n`serializeLiveTailToResponsesInput` 序列化的增量尾巴；没有任何压缩时用 `buildSessionContext`\n的完整消息序列化成请求。上一次压缩不是本扩展写的、或身份四元组不匹配，则放弃接管。\n\n**压缩调用。** `compact-client.ts` 的 `executeNativeCompaction` 直接向 `responsesUrl` POST，\n`input` 末尾追加 `{ type: \"compaction_trigger\" }`，`store: false`、`stream: true`；响应兼容\n整段 JSON 与 SSE 两种形态，openai-codex 额外补 `chatgpt-account-id`（从 JWT 解出）等归因头。\n输出里必须恰好一个 `type: \"compaction\"` 项，否则算失败；成功时按约 64k token 预算从尾部回收\nuser/developer/system 消息，与压缩项一起组成新的 `compactedWindow`。失败分类（`non-2xx`、\n`empty-body`、`malformed-response`、`network-error` 等）转成用户可见错误，`aborted` 静默取消。\n\n**落盘 replay。** 窗口连同身份四元组按 details 契约写成压缩条目。之后每次请求经\n`replayOpenAINative` → `rewriteNativeResponsesPayload`（native-replay.ts）：先用\n`extractFreshPreamble` 剥出首尾的 developer/system 提示包裹，再按 pi 自己的序列化规则重算一份\n「期望 payload」，与宿主实际给的 `input` 深比较；不一致就以 `expected-pi-replay-mismatch`\n放弃改写、原样发出。只有确认宿主拼法与预期一致，才用 `compactedWindow` 替换压缩点之前的\n全部内容，保留其后的实时尾巴。\n\n### /fast 写回 config\n\n`/fast` 与快捷键触发 `togglePriority`（src/config.ts）：在 `<config>.lock` 文件锁内读—改—写，\n`replaceKeyedObject` 只替换 `openai` 这一段文本以保住 jsonc 注释，再经临时文件 + rename 原子\n覆盖。切换成功后扩展内的 settings 立刻更新，无需重启；写失败弹错误通知。读取侧\n`loadOpenAINativeSettings` 经 `openaiRoot` 取 `openai` 子节（根对象没有该键时把整个文件当设置，\n供独立单测用），字段类型不对只记 warning 并回退默认（`nativeCompaction: false`、空 providers），\n首条 warning 在 `session_start` 提示一次，不阻塞会话。\n\n## 改动指南\n\n先看的文件：动宿主接线（钩子、命令、状态项）改 `src/extension.ts`；动请求改写顺序改\n`src/request-pipeline.ts`；动压缩流程从 `src/native-compaction.ts` 入手，HTTP 细节在\n`src/compact-client.ts`，replay 校验在 `src/native-replay.ts`，details 契约在\n`src/native-details.ts`；动配置读写改 `src/config.ts`。测试在 `src/*.test.ts` 与 `test/`\n（含 native-runtime 单测与 pi 冒烟测试）。\n\n常见坑：\n\n- **压缩改写必须在选项改写前**：`replayOpenAINative` 整体重建 `input` 数组，而\n  `applyOpenAIOptions` 只动顶层字段；调换顺序会让选项写在被丢弃的旧 payload 上。\n- **replay 深比较是安全阀，不是冗余**：`expected-pi-replay-mismatch` 分支保证 pi 侧序列化规则\n  变化时 replay 自动失效退回原样发送，而不是发出拼错的上下文。改 `responses-input.ts` 的\n  序列化必须同时想到压缩与 replay 两个消费方。\n- **openai 节容错与根 config 严格策略相反**：根 `config.ts` 对 review/master 节报配置问题即\n  拒绝启动（错配会拿错模型真实发起调用），而这里错配至多少一个请求字段，故只 warning 回退默认。\n  不要把两侧策略拉齐。\n- **文件锁的夺锁语义**：锁文件记 pid，`withConfigLock` 发现持锁进程已死才夺锁重建，活进程持锁\n  时直接抛错。改锁逻辑要保住\"多 pi 进程并发 `/fast` 不互相覆盖\"这一前提。\n",
+  "modules/review.md": "---\nsources:\n  - agent/extensions/firecode/review/state.ts e31966837f1f reduce ReviewState Phase ReviewEffect settleRound\n  - agent/extensions/firecode/review/index.ts f2a6f35f299d registerReview dispatch advanceWhenIdle setOccupancy deliverFeedbackNow deliverSummaryNow\n  - agent/extensions/firecode/review/checkpoint.ts 7310bfa9cf8a isValidCheckpoint beginCheckpoint writeCheckpoint CheckpointConflictError CHECKPOINT_TYPE\n  - agent/extensions/firecode/review/outcome.ts 390ab5ea36a2 readReviewOutcome ReviewOutcome REVIEW_OCCUPANCY_LABEL\n  - agent/extensions/firecode/review/reviewer.ts 41b8e170867f runReviewer parseReviewOutput ReviewModelConfig\n  - agent/extensions/firecode/review/advisor.ts 593d2673b179 runAdvisor parseAdvisorOutput\n  - agent/extensions/firecode/review/process.ts 7a85429b06c7 runPiProcess PiProcessResult\n  - agent/extensions/firecode/review/prompt.ts 903045a0ca6e buildReviewPrompt buildAdvisorPrompt buildFixFeedback buildSummaryPrompt\n---\n\n# 对抗性审查\n\n## 职责\n\n`/fire-review` 用外部模型对当前会话已完成的工作做对抗性审查：多个审查者子进程并行审同一份证据，\n不通过就把发现投回执行模型修复，连续失败到阈值请顾问模型仲裁，最后以质量裁决或事故收尾。\n这是仓库最大的模块（review/ 约 5000 行），也是唯一被 [Master](master.md) 反向依赖的模块。\n\n架构上分两层：领域状态只存在于 `review/state.ts` 的纯 reducer 中——零 IO、零本地 import，\n所有迁移经 `reduce(state, event, limits, now)` 计算，返回新状态与 `ReviewEffect` 列表\n（只有两种效果：`advance` 请求推进、`send_card` 请求发卡），持久化和 UI 都只是这份状态的投影；\n`review/index.ts` 是唯一执行器，持有全局唯一的 `controller`，负责全部副作用：起子进程、投递反馈、\n发卡、写 checkpoint、状态栏与活动条，子进程结果一律回灌成事件交给 reducer。\n\n## 对外接口\n\n只有两条对外接缝，都是单向只读；此外还有一个进程内的 UI 状态键：\n\n- **唯一外读入口**：`review/outcome.ts` 的 `readReviewOutcome(sessionPath)` 只读 Worker session 文件，\n  跳过写到一半的损坏尾行，取最近一条合法 checkpoint 并映射为 `ReviewOutcome`：\n  `passed` / `stopped`（顾问叫停与 maxRounds 用尽，两者都是质量裁决终止，顾问建议一并带出）/\n  `failed`（error、cancelled、timed_out 等审查未完成）/ `in_progress` / `none`。\n  checkpoint 格式仍归 review 所有，[Master](master.md) 只消费这个函数。\n- **占用信号双通道**：由 index.ts 的 `setOccupancy` 配对发布。进程内 `herdr:blocked` 频道驱动\n  herdr 集成的 blocked 状态；同时经 herdr-client 直投 `pane.report_metadata` 的 `state_labels.blocked`，\n  标签常量 `REVIEW_OCCUPANCY_LABEL` 定义在 outcome.ts（因为它是跨模块接缝）。标签是带 TTL 的租约，\n  持有期定时续约（续约兼作投递失败重试），终态与退出时清除、失败重试一次后由 TTL 兜底。\n  Master 据此把「审查占用」与「Worker 真在提问」区分开，[会话层](session.md)的工作火焰 widget\n  在审查活跃期退让。占用信号失败只通知，不影响审查状态机。\n- **状态栏键**：index.ts 以 `fire-review` 为键（`STATUS_KEY`）向状态栏投影一行审查实况，属 UI 展示，非跨模块契约。\n\n## 数据怎么流\n\n**命令进**：`/fire-review` 命令经配置校验（任何 review 节配置问题都拒绝启动，不静默回退默认模型）\n后建 controller 并 `START`。模型忙时进入 `queued` 相排队不发卡，idle 边界再 `ADVANCE` 开审。\n所有启动动作统一走 `advanceWhenIdle()` 这道 idle 门：只有宿主 `ctx.isIdle()` 且无待发消息时才按当前相\n启动审查者、顾问、反馈或总结投递；`agent_start` 另作互锁，执行模型开跑前先 abort 并等子进程退出。\n迁移经 `dispatch()` 串行化（同一时刻只有一个迁移在跑），副作用异常只被通知捕获、不允许让队列\nrejected——否则连 esc 取消都会失效。\n\n**审查循环**：`Phase` 主线 `idle → queued → reviewing → needs_fix → awaiting_fix → reviewing`，终态 `settled`。\n`reviewing` 相由 `beginRound` 按配置清单起并行子进程：`review/process.ts` 的 `runPiProcess` spawn\n`pi --mode json`，stdout 按行增量消费提取最终回复；`review/reviewer.ts` 组装参数\n（`--exclude-tools write,edit`，保留 bash 以便跑测试取证——只读是契约不是能力边界）并由\n`parseReviewOutput` 解析 PASS/FAIL 契约（事实源 `prompts/review.{zh,en}.md`，每条发现六要素齐全，\n非法发现整票作废为基础设施错误）。证据由 `review/evidence.ts` 从会话分支裁剪：首条用户消息固定保留，\n工具调用轨迹作为范围归因证据。每票以 `REVIEWER_SETTLED` 回灌，全部落定后 `settleRound` 聚合。\n连续失败数达到 `advisorAfterFailures` 时先发失败卡再入 `needs_fix` 咨询顾问，\n`review/advisor.ts` 的 `parseAdvisorOutput` 把裁决收敛成 `continue | stop | narrow` 三选一，\n子进程故障不伪装成仲裁结论；裁 `stop` 即终止，否则转入修复相并补一张顾问卡。\n\n**修复反馈往返**：`awaiting_fix` 把 FAIL 票（只含失败票）与顾问建议经 `deliverFeedbackNow` 投给执行模型，\n修复生命周期 `pending → awaiting_start → running → completed` 写进 checkpoint；宿主 `sendMessage`\n无返回值，故用 `agent_start` 作启动回执、`agent_end` 作完成确认，只有 `completed` 才进入下一轮。\n`review/prompt.ts` 纯拼装四类文本（审查、顾问、修复反馈、总结），往轮发现清单随轮注入顾问裁决，\n避免审查者原样重提已仲裁事项。\n\n**总结回合与终态**：质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相——结果卡照发，\n再由 `deliverSummaryNow` 投一个带反循环禁令的总结回合，回合结束才落 `settled`；事故终态\n（`CANCEL`/`TIMEOUT`/基础设施错误）直接 `settled` 不烧总结回合，看门狗在总结相到点也只静默收尾。\n不变量由 reducer 保证：同一时刻至多一个活动轮、`round` 单调递增、`history` 只追加不改写。\n\n**checkpoint 出与恢复**：`review/checkpoint.ts` 把 reducer 状态整体写成 pi 的 custom entry\n（`CHECKPOINT_TYPE`，不进 LLM 上下文）。新审查首写 `beginCheckpoint` 无条件替换旧终态，\n后续 `writeCheckpoint` 带 runId + 单调 seq 的 CAS，冲突抛 `CheckpointConflictError`\n（同一场审查被两个运行时恢复时只有 runId 不够）。持久化失败时 `dispatch` 直接中止本次迁移的副作用，\n避免拿不一致的状态起子进程。恢复路径：`session_start` 只重建 controller 并 `RECOVER`\n（把未确认完成的修复/总结回合回退成 `pending` 以便重投），宿主在所有异步 handler 完成后发的\n`resources_discover` 才允许推进；`reload/new/resume/fork` 保留 checkpoint 交给新运行时，只有 `quit` 落终态。\n功能被用户关闭时封存活动 checkpoint；配置坏掉不算关闭——保留原样，修好重启继续恢复。\n\n**卡片与 UI 出**：结果卡经 `send_card` 效果投递，`review/card.ts` 渲染；`review/ui.ts` 提供活动框与交互，\n等模型时编辑器完全隐藏并禁止输入，esc/Ctrl+C 取消；`review/progress.ts` 从子进程事件派生模型进度、\ntoken 与工具耗时，是纯 UI 态，明确不入 checkpoint。\n\n## 改动指南\n\n改状态机先看 `state.ts`（reducer 与全部相迁移）+ `tests/review-state.test.ts`；改启动/恢复/投递时序看\n`index.ts` 的 `advanceWhenIdle` 与 `dispatch`；改持久化看 `checkpoint.ts`；改输出契约同时改\n`prompts/review.{zh,en}.md` 与 `reviewer.ts` 的解析。行为回归由 `tests/review-*.test.ts` 八个用例覆盖\n（状态机、契约解析、卡片与 checkpoint、子进程、outcome、UI、集成）。\n\n常见坑：\n\n- **checkpoint 键白名单靠 `satisfies` 防漂移**：校验键集用 `satisfies Record<keyof …, true>` 从领域类型派生，\n  state.ts 增删字段而 checkpoint.ts 未同步时编译失败——这是手写校验漂移的唯一防线，绕过它曾导致终态写不进去、\n  重启恢复出幽灵审查。\n- **stdout 按行消费不得尾截**：process.ts 只保留未完成的残行，不做尾部截断；截尾会把长输出误判为空。\n- **error 票不判失败**：`settleRound` 聚合时任何非格式错误的 error 票让整轮判 `error`（基础设施错误），\n  即使同轮已有 FAIL 也不能把未完整形成的审查误报为 Review Failed。\n- **渲染器永不抛异常**：card.ts 的渲染器在 `registerReview` 里无条件注册（即使功能关闭，保证 reload 与\n  live 外观一致），details 校验失败降级 content 纯文本，任何输入都不得抛出。\n- 带背景的卡片里禁用 pi-tui 的截断组件（省略号带全量 ANSI 重置会掐断背景色），单行截断用共享 `clip`。\n\n总览见 [../system.md](../system.md)。\n",
+  "modules/session.md": "---\nsources:\n  - agent/extensions/firecode/session/presets.ts 1a9628dd591d registerPresets applyPreset clearPreset preset-state before_agent_start\n  - agent/extensions/firecode/session/rename.ts d03ae87c4332 registerSessionName cleanTitle MAX_TITLE_CHARS\n  - agent/extensions/firecode/session/stats.ts 253b5c7b8885 registerStats usageAttribution parseDays collect\n  - agent/extensions/firecode/session/bark.ts e76b3adf5dd4 registerBark buildBarkPayload hasBlockedWorker MAX_BODY_LENGTH\n  - agent/extensions/firecode/session/herdr-display.ts 227d461fb9f9 registerHerdrDisplay projectIdentity publish session_info_changed\n  - agent/extensions/firecode/session/working-flame.ts 672d8466be37 registerWorkingFlame flameHeightFor flameFitHeight WorkingFlame\n  - agent/extensions/firecode/herdr-client.ts e6cf936c235e herdrPaneEnv herdrRequest\n  - agent/extensions/firecode/master/state.ts e51063b2f460 loadMasterState masterStatePath WorkerStatus\n---\n\n# 会话功能\n\n## 职责\n\n`session/` 是六个彼此独立的会话级 feature，每个只导出一个 `registerX(pi)`，运行状态封闭在闭包里，互不引用。\n它们由 `index.ts` 按 `config.features` 逐个注册（见 [核心装配](core.md)），关掉任何一个不影响其余。\n对外只有三条接缝：bark 只读 `master/state.ts`、herdr-display 只用 `herdr-client.ts`、working-flame 只用\n`flame-frames.ts` 的帧素材。\n\n- **presets.ts**：一键切换模型、思考等级、工具集与附加指令，预设定义在 config.jsonc 的 `presets` 节。\n- **rename.ts**：把 `/rename <name>` 与 `config.keys.rename` 收敛到 `pi.setSessionName`，只改 pi 会话名。\n- **stats.ts**：`/tokens` 扫描会话 jsonl 按模型汇总 token 与成本；零本地 import，与其余 feature 完全解耦。\n- **bark.ts**：任务彻底落定时推 iPhone Bark 通知；有待拍板子代理时升 timeSensitive。\n- **herdr-display.ts**：会话身份单向投影到 herdr agent 副标题，只写带 `source` 的显示元数据，不碰 pane/tab 持久名。\n- **working-flame.ts**：工作回合内编辑器上方居中的多行火焰 widget，审查占用期退让。\n\n## 对外接口\n\n各 feature 的注册入口与可独立测试的关键纯函数：\n\n| feature | 注册入口 | 关键纯函数 / 常量 |\n| --- | --- | --- |\n| presets.ts | `registerPresets` | `applyPreset`、`clearPreset`（闭包内，经命令/快捷键触达） |\n| rename.ts | `registerSessionName` | `cleanTitle`：控制字符转空格、零宽与双向控制字符删除、空白折叠、按字素切到 `MAX_TITLE_CHARS`（160） |\n| stats.ts | `registerStats` | `usageAttribution`（归因规则唯一出处）、`parseDays`（接受 `7`、`--days 7`、`0` 全部，默认 30） |\n| bark.ts | `registerBark` | `buildBarkPayload`（标题/正文/折叠 id/等级的唯一组装点）、`hasBlockedWorker`（只读旁路判定） |\n| herdr-display.ts | `registerHerdrDisplay` | `projectIdentity`：产出 `pi·模型/思考等级`（thinking 为 `off` 时省略等级）与会话名 |\n| working-flame.ts | `registerWorkingFlame` | `flameHeightFor`（终端行数四分之一钳在 3–10 行）、`flameFitHeight`（宽度不足逐级降高，装不下返回 0 即隐藏） |\n\npresets 的用户入口有四类：`--preset` 启动标志、`/preset [名字]` 命令、每个预设自带的 `key` 快捷键、\n`keys.cyclePreset` 在「无预设 + 各预设」之间轮切；选择器是 `ctx.ui.custom` 里的 `SelectList`，末尾固定追加清除项。\n`usageAttribution` 与 pi 自身的 usage-totals 对齐：assistant 消息归 `provider/model` 并计一次请求，\ntoolResult 与 compaction / branch_summary 归 `tools/summaries` 且不计请求数。\n\n## 数据怎么流\n\n**presets：config 进 → 宿主状态出 → 会话记录持久化。** `session_start` 从 `loadConfig()` 取 `presets` 节\n（配置问题由 index.ts 统一提示）；`applyPreset` 在**首次**应用前把当前模型、思考等级与激活工具集快照进\n`originalState`（按会话可用等级存，会话侧等级集合比预设可配置的多），`clearPreset` 用它恢复默认。\n附加指令不落宿主状态，而是在 `before_agent_start` 追加到 systemPrompt 末尾，每回合重新拼接。\n`turn_start` 把 `preset-state` 追加进会话记录，重开会话只取最后一条恢复名字与附加指令，\n**不重放** `setModel` / `setActiveTools`——用户当前选的模型优先。模型找不到、无 API key、工具名未知都只发\nwarning 并继续应用其余字段。\n\n**stats：会话 jsonl 进 → Markdown 出。** `collect` 递归扫描 agent 目录下 `sessions/` 的全部 `.jsonl` 逐行解析，\n读文件、读目录、解析行三处失败都按跳过处理——会话文件可能在扫描过程中被轮转；时间过滤用消息内 timestamp、\n缺失时回落条目 timestamp。TUI 下用宿主 `Markdown` 组件渲染在 `DynamicBorder` 卡里，非 TUI 直接 console 打印。\n\n**bark：会话事件 + Master 状态文件进 → HTTP 推送出。** `message_end` 记住最后一条 assistant 文本；\n`agent_settled` 且 `ctx.isIdle()` 为真（不再自动续跑）时组包发送。标题优先会话名、回落 cwd 目录名，\n正文经 markdown 剥离后截到 `MAX_BODY_LENGTH`（200），`id` 固定取会话 id——同会话新通知靠 APNs CollapseID\n顶掉旧的。等级判定是与 [Master](master.md) 的唯一接缝：`hasBlockedWorker` 经 `masterStatePath(sessionId)` 用\n`loadMasterState` 读状态文件，有 `WorkerStatus` 为 `blocked` 的子代理即升 `timeSensitive` 并加「待拍板」副标题。\n推送地址取 `~/.pi/agent/bark-key`，缺失静默停用；网络失败吞掉。\n\n**herdr-display：宿主事件进 → herdr-client 出。** 监听 `session_start`、`session_info_changed`\n（宿主已把 `/rename`、快捷键与自动命名收口到这一个事件，所以改名投影不从 rename.ts 接线）、\n`model_select`、`thinking_level_select`；投递经 `herdrRequest` 调 `pane.report_metadata`，同时写\n`display_agent`、`title` 和自定义 token `session`——herdr 侧边栏行布局只能消费自定义 token，`title` 不在\ntoken 集里。只有 `session_shutdown` 且 reason 为 `quit` 才清空，其余切换由新 `session_start` 覆盖；\nseq 单调递增，herdr 据此丢弃过期上报。\n\n**working-flame：宿主事件 + 占用频道进 → TUI widget 出。** `agent_start` 挂载、`agent_end` 撤下\n`aboveEditor` 槽位的 `WorkingFlame` 组件（100ms 定时器驱动帧，随 dispose 清理），帧素材来自\n`flame-frames.ts` 的 `flameFrameLines` / `flameFrameWidth`，与 [审查](review.md) 活动框共用同一套。\n订阅 `herdr:blocked` 频道（review 模块发布）拿 `reviewHeld`，只有 `turnActive && !reviewHeld` 才挂 widget，\n宿主 Working 文本行在两者都不成立时才复显。模块只是频道消费方，不反向依赖 review 状态。\n\n## 改动指南\n\n**改哪个 feature 就只看它自己 + 一跳 import**：presets/rename 看 `config.ts`，bark 看 `master/state.ts`，\nherdr-display 看 `herdr-client.ts`，working-flame 看 `flame-frames.ts` 与 review 的占用频道发布端\n（`review/index.ts` 的 `herdr:blocked`）。测试对应 `tests/{presets,rename,stats,bark,herdr-display,working-flame}.test.ts`。\n\n常见坑：\n\n- **占用退让的 queueMicrotask 仲裁**（working-flame.ts）：review 也写 `setWorkingVisible`，且它的写入在同一\n  同步调度链里排在占用事件之后；本模块所有 UI 写入必须经 `queueMicrotask` 合并、在调度链收尾后作为最终仲裁者\n  落地，否则复发「占用期 `agent_end` 无条件复显 Working 行」的最后写者竞态。widget 槽位必须是 `aboveEditor`：\n  多行帧塞进单行 spinner 通道是旧 working-style.ts 的真实事故。\n- **投影的串行链与去重键**（herdr-display.ts）：`publish` 把请求串进一条 Promise 链避免乱序覆盖；去重键取\n  「链尾意图」而非已确认身份，否则 A→B→A 快速切回会把过时的 B 留在 pane 上。只有 `herdrRequest` 返回送达\n  才记为已发布，失败清空链尾意图由下一事件重试。自禁用条件三个都要保：`herdrPaneEnv()` 为空、\n  `FIRECODE_MASTER_WORKER`、`ctx.mode !== \"tui\"`——无头调用不能接管可见会话的显示。\n- **bark 加密时 id 必须在密文外**（bark.ts）：AES-256-GCM 时折叠头（CollapseID）由服务端写，它读不到密文内的\n  id，所以 `id` 提到顶层明文（只是本地会话 uuid，无内容敏感性）；level/subtitle 等内容字段由设备端解密应用，\n  留在密文内。`hasBlockedWorker` 是只读旁路：读失败一律按无待拍板降级，状态文件的完整性与恢复归 Master，\n  通知不放大故障。\n- **presets 的恢复语义是刻意收窄的**：重开会话只恢复名字与附加指令，不重放模型和工具切换；改这里前先确认\n  没有把「恢复」扩成「重放」。\n",
+  "modules/statusbar.md": "---\nsources:\n  - agent/extensions/firecode/statusbar/index.ts a042a8c55ec6 registerStatusBar setFooter fitStatusLine message_end\n  - agent/extensions/firecode/statusbar/quota.ts 1d978210b0e5 registerQuota refresh subscriptionProvider loadQuota BACKOFF_MS FRESH_MS requestGeneration\n  - agent/extensions/firecode/statusbar/quota-cache.ts 51567221d542 fileQuotaCache QuotaCache QuotaCacheEntry nextAttemptAt failures\n  - agent/extensions/firecode/statusbar/quota-parse.ts 1818c49ceebb parseOpenAIQuota parseAnthropicQuota parseGrokQuota QuotaWindow QuotaStatus\n  - agent/extensions/firecode/statusbar/render.ts 4611e8748c9a StatusLineParts fitStatusLine fitMetadataLine alignRight renderQuota renderContext renderCache renderTps latestCacheHitPercent reviewStatus badge\n  - agent/extensions/firecode/statusbar/tps.ts 01cead660b89 registerTps TpsStatus MIN_SAMPLE_MS UPDATE_INTERVAL_MS\n  - agent/extensions/firecode/theme.ts 485324b650f0 quotaColor contextColor cacheColor thinkingColor\n---\n\n# 状态栏\n\n## 职责\n\n接管 pi 的 footer，输出固定两行：首行是工作目录 / Git 分支 / 会话名，可附带 Master 的指挥官徽标（扩展状态表 `master` 键，见 [master.md](./master.md)），并把 `/fire-review` 广播的审查进度右对齐挂在行末；次行是模型（含思考等级与 fast 标记）、订阅额度、上下文占用、缓存命中率与生成速度。额度抓取覆盖 openai-codex / anthropic / xai 三家订阅制供应商，事件驱动、无定时轮询，结果与失败退避写在跨进程文件缓存里，多个 pi 会话共享同一次请求。模块自持三份可变状态：额度快照、速度快照、宿主给的重绘回调；额度与速度由各自 register 通过回调推入并立刻请求重绘（见 [../system.md](../system.md) 的 feature 装配）。\n\n## 对外接口\n\n- `registerStatusBar`（`statusbar/index.ts`）：模块唯一注册入口，`session_start` 时经 `ctx.ui.setFooter` 挂渲染器，`session_shutdown` 置空。插件其余部分只调这一个函数。\n- `registerQuota` / `registerTps`（`quota.ts` / `tps.ts`）：以回调形式向 index.ts 推送 `QuotaStatus` / `TpsStatus` 快照，`registerQuota` 额外接收 `QuotaCache` 实现（生产用 `fileQuotaCache`，测试可注入内存实现，`tests/quota.test.ts` 即如此覆盖）。\n- `render.ts` 的纯函数层：`fitStatusLine`、`fitMetadataLine`、`alignRight`、`renderQuota`、`renderContext`、`renderCache`、`renderTps`、`latestCacheHitPercent`、`reviewStatus`——入参是数据加宽度，出参字符串，不触碰会话状态，被 `tests/layout.test.ts` 直接调用。\n- `quota-parse.ts` 零依赖，导出三家解析函数与 `QuotaWindow`/`QuotaStatus` 类型，`record`/`finiteNumber`/`epochMillis` 容错工具也被 quota.ts 复用。\n\n消费本模块之外，状态栏自己只读三个外部信号：`fire-review` 状态键（[review.md](./review.md) 广播审查进度）、`pi-openai-native-fast` 状态键（[provider.md](./provider.md) 注册 fast 通道标记）、`master` 状态键；键不存在时对应片段为空，状态栏不感知这些模块是否启用。\n\n## 数据怎么流\n\n**进**：三路来源汇入 index.ts 的渲染闭包。\n\n1. 宿主 ctx 与事件：模型与思考等级（`ctx.model`、`pi.getThinkingLevel()`）、上下文占用（`ctx.getContextUsage()`）、会话名与条目（`ctx.sessionManager`）、分支变化订阅与扩展状态表（`footerData`）。缓存命中率由 `latestCacheHitPercent` 从最近一条带 usage 的助手消息反推 `cacheRead / (input + cacheRead + cacheWrite)`，因此 `message_end`（助手消息）也触发重绘。\n2. 额度 API：`session_start` 与 `model_select` 强制刷新（先推 `loading` 态），`agent_end` 每轮跟一次不强制。`subscriptionProvider` 先过滤——provider 须属三家之一，anthropic / xai 还须 OAuth 登录态（`modelRegistry.isUsingOAuth`）。token 来源各异：OpenAI 与 Anthropic 走 pi 凭据，OpenAI 还从 JWT payload 解出 `chatgpt_account_id` 补请求头；xAI billing 拒绝 pi 的 OAuth token，只认官方 CLI 写在 `~/.grok/auth.json` 的登录态（按 scope 前缀筛选并检查过期）。请求 3 秒超时；xAI 月度与周度两请求走 `Promise.allSettled`，全败才算失败。\n3. 缓存文件：`fileQuotaCache` 每个 provider 一个 JSON 文件（`~/.pi/agent/tmp/firecode-quota-<provider>.json`），条目只有窗口数据、`nextAttemptAt`、连续失败数三个字段；读取用 `isEntry` 校验形状，损坏当无缓存；写入走临时文件加 rename 原子覆盖，避免多进程互相截断。在 `nextAttemptAt` 之前其他会话直接复用结果，不发请求。\n4. 速度：`tps.ts` 从 `before_provider_request` 起表，`message_update` 的文本/思考/工具增量累加估算 token（4 字符≈1 token，官方 output token 优先），`message_end` 结算整轮耗时。\n\n**出**：所有数据拼成 `StatusLineParts` 交给 render.ts 纯函数产出两行字符串，经 `tui.requestRender` 画进 footer。着色阈值统一走 `theme.ts` 的 `quotaColor`/`contextColor`/`cacheColor`/`thinkingColor`，裁剪走 `format.ts` 的 `clip`/`formatTokens`/`formatDuration`。\n\n## 改动指南\n\n先看的文件按改动类型分：改布局或降级顺序看 `render.ts`（配 `tests/layout.test.ts`）；改抓取时机、退避或 token 来源看 `quota.ts`（配 `tests/quota.test.ts`）；改某家供应商的响应解析只看 `quota-parse.ts`；改数据接线看 `index.ts`。\n\n常见坑：\n\n- **七级降级候选**：`fitStatusLine` 按固定序列逐级收窄——完整 → 去速度 → 模型去 fast 标记 → 额度只留最紧窗口 → 去额度 → 去缓存 → 上下文紧凑形式，取第一个 `visibleWidth` 不超限的候选；全放不下再保上下文、裁模型名。新增片段必须排进这个序列，否则窄终端会溢出。空片段在拼接时被过滤，不会留孤立分隔符。首行的 `badge`（指挥官态）是整段取舍：放不下就丢，不截半个；会话名与位置则有截断阶梯。宽度一律用 `visibleWidth`，片段都带 ANSI 颜色码。\n- **requestGeneration 世代号**：切模型或关会话让在飞额度响应失效，回来的旧结果只写缓存不更新 UI，防止把上个模型的额度画到新模型上。绕过世代号直接 `update` 会重新引入这个竞态。\n- **缓存文件退避档**：发请求前先把 `nextAttemptAt` 推到当前时间加 `FRESH_MS`（60 秒）占住窗口，兼作进程内并发保护；成功按同 TTL 重写，失败按 `BACKOFF_MS` 的 1 / 2 / 5 分钟递增并清空窗口，末档为上限。退避状态在文件里跨进程共享，改档位影响所有并行会话。\n- **三家解析容错**：供应商响应是各家 CLI 内部接口而非公开契约，解析不得抛错——逐层 `record`/`finiteNumber` 校验，缺字段的窗口被过滤而非报错。OpenAI 标签从 `limit_window_seconds` 反推，Anthropic 读 `five_hour`/`seven_day` 的 utilization，xAI 要把月度 used/limit 折算百分比再并周度信用。改解析先跑 `tests/quota.test.ts`。\n- **速度抖动阈值**：实时 t/s 要求采样窗口至少 `MIN_SAMPLE_MS`（1 秒）、刷新间隔不低于 `UPDATE_INTERVAL_MS`（250ms），删掉会导致状态栏高频重绘。\n",
+  "modules/tools.md": "---\nsources:\n  - agent/extensions/firecode/tools/index.ts ab23e4cc43df registerToolRendering renderShell executeTimed makeResultRenderer registerCommand\n  - agent/extensions/firecode/tools/grouping.ts 2afb3a443a91 installGroupPatch uninstallGroupPatch patchToolRows FIRECODE_TOOLS renderFallbackToolRow followsToolRow GROUP_PATCH REQUEST_RENDER_PATCH\n  - agent/extensions/firecode/tools/line.ts cd6bca3c9b27 ToolLine RowState makeResultRenderer ExpandedResult\n  - agent/extensions/firecode/tools/parts.ts 67d1c047aa15 Part pathValue commandParts diffMeta genericArgsParts clipParts\n  - agent/extensions/firecode/tools/timing.ts 01f73aa80080 executeTimed takeDuration clearDurations\n---\n\n# 工具行渲染\n\n## 职责\n\n把 pi 默认 4 工具（read/bash/edit/write）的展示收敛成单行：状态字形 + 中文标签 + 主体 +\n右侧耗时/大小列，连续的工具行再合并成一条无空行的轨道；未知第三方工具收口为通用单行兜底。\n渲染接管不改变工具集——`tools/index.ts` 的文件头说明了为什么不包装 grep/find/ls：\n原版 pi 注册即激活，包装它们等于在所有会话强制打开这三个工具。\n\n`tools/index.ts` 是唯一注册入口：对四个工具各调一次 `pi.registerTool`，以 `renderShell: \"self\"`\n接管外壳，用 `LABEL` 把工具名换成「读取/操作/修改/写入」，原生 `createReadTool` 等实例按 cwd\n缓存复用；同文件还注册了 `tool-status` 命令用于查看已加载与已启用工具。\n\n## 对外接口\n\n`line.ts` 与 `parts.ts` 是纯渲染，不依赖注册流程，构成被 [Master](./master.md) 复用的接缝：\n`master/index.ts` 直接 import `ToolLine`、`makeResultRenderer` 和 `Part` 画自己的 `subagents` 工具行。\n\n- `ToolLine`（`line.ts`）：单行组件，输入标签、`Part[]` 主体、截断方向、meta 后缀与\n  `RenderContext`，输出一行带背景色的成品。`RowState` 是 renderCall / renderResult 之间共享的\n  行状态（字符数、耗时、±diff 后缀、错误摘要）。\n- `makeResultRenderer(sized)`（`line.ts`）：折叠时只回写 `RowState`，展开时才产出\n  `ExpandedResult` 的完整输出；`sized` 决定是否统计结果字符数驱动大小列。\n- `Part` 及其原语（`parts.ts`）：`pathValue` 路径按 cwd/家目录缩写、目录暗 basename 亮；\n  `commandParts` 命令分层着色；`diffMeta` 从 diff 文本算 ±N；`genericArgsParts` 给兜底行挑\n  最能代表意图的参数；`clipParts` 的方向参数决定路径保尾、命令保头。大小与耗时列有噪音阈值\n  （小于 100 字符、快于 1 秒不占列）。\n- `FIRECODE_TOOLS`（`grouping.ts`）：走 pi 原生渲染（会消费工具自带 renderCall）的白名单，\n  含本模块 4 工具 + grep/find/ls + `subagents`。这是一条契约：自带渲染的工具必须登记，\n  否则会被通用兜底行盖掉。\n\n宽度与文本处理下沉在共享的 `format.ts`，配色阈值在 `theme.ts`，与\n[状态栏](./statusbar.md)共用同一套品牌色。\n\n## 数据怎么流\n\n工具调用进入渲染管线走 pi 的 renderCall/renderResult 双钩子：renderCall 用参数构造 `ToolLine`\n（read 附 offset/limit 转成的 `:12-40` 区间后缀，write 附 `+N` 行数），renderResult 经\n`makeResultRenderer` 把结果折算进 `RowState`，下一帧 `ToolLine` 再把这些状态画到右侧列。\nedit 的 `renderResult` 额外从结果 `details.diff` 派生 `±N` 写进 `state.meta`。\n\n耗时从执行侧流到渲染侧靠 `timing.ts` 的一张 `Map`：`index.ts` 把每个工具的 `execute` 包进\n`executeTimed` 写入真实耗时，渲染侧按 `toolCallId` 用 `takeDuration` 取走即删，\n会话起止再 `clearDurations` 兜底，避免长会话堆积。\n\ngrouping patch 的介入点在每帧渲染前：`installGroupPatch` 包装 tui 的 `requestRender`，\n每次触发先尝试 `patchToolRows`——因为工具行组件要等聊天区里真的出现一行才能拿到它的原型。\n替换后的行 `render` 做两件事：白名单内或已展开的行走原生渲染，其余走 `renderFallbackToolRow`；\n随后若本行紧跟另一条工具行（`followsToolRow` 经增量索引判定，聊天记录只增不改所以从上次\n长度续算，结果存 WeakSet），就砍掉首个空行形成连续轨道。\n\n## 改动指南\n\n改行内布局先看 `line.ts`（宽度分配：右侧列不够 `MIN_VALUE_WIDTH` 就逐个 pop，错误时主体\n压到四成给摘要让位），改着色与片段先看 `parts.ts`，改注册与各工具的 renderCall 差异看\n`index.ts`，改轨道合并与兜底看 `grouping.ts`。行为回归由 `tests/tools.test.ts` 保护：\n紧凑状态行的渲染结果，以及只有相邻工具行才合并轨道。\n\n常见坑：\n\n- 原型 patch 的宿主耦合：`grouping.ts` 是与宿主耦合最紧的一处。它借一次 `ui.setWidget`\n  生命周期拿 tui 实例（拿到即注销 widget），`findChatContainer` 在组件树里深度优先找\n  「children 中含工具行」的容器，靠鸭子类型识别行对象（同时具备 `render`、`setExpanded`、\n  `toolName`），再 `Object.getPrototypeOf` 替换其 `render`。组件树形状、`children` 数组、\n  行字段名、`render` 签名都是 pi 内部实现，升级宿主时优先检查这里。patch 失败不中断渲染，\n  只在首次异常 `ui.notify` 一次警告。\n- globalThis 状态与热重载：patch 状态挂在 `globalThis` 上（`Symbol.for` 打标记幂等安装卸载），\n  因为扩展热重载会重新执行模块，状态留在模块作用域就卸载不掉旧 patch；\n  `uninstallGroupPatch` 只在当前函数仍是自己装的那一份时才还原。\n- 白名单漏登记：新工具若自带渲染却不在 `FIRECODE_TOOLS`，会被兜底行遮掉——`subagents`\n  在名单里就是这个原因。\n\n模块整体的注册位置与 feature 开关见[总览](../system.md)。\n"
+ }
+
+};
+const FLOWS = DATA.flows || (DATA.flow ? [{ title: "主流程", steps: DATA.flow }] : []);
+const WIKI = DATA.wiki || {};
+let activeFlow = 0;
+
+const ic = (name, s = 13) => `<svg class="ic" style="width:${s}px;height:${s}px"><use href="#ic-${name}"/></svg>`;
+
+/* ── 分区色（Anthropic 风暖调低饱和）── */
+const TINTS = ["#CC785C", "#8E9A6D", "#8B9BAA", "#A08BA6", "#A79E8B", "#D4A27F"];
+const tintOf = {};
+DATA.districts.forEach((d, i) => tintOf[d.id] = d.tint || TINTS[i % TINTS.length]);
+const mix = (c, pct, base) => `color-mix(in srgb, ${c} ${pct}%, ${base})`;
+
+/* ── header ── */
+const STAT_ICONS = [["语言", "globe"], ["模块", "cube"], ["入口", "gateway"], ["场景", "play"], ["外部", "plug"], ["依赖", "plug"], ["页", "book"], ["服务", "server"], ["测试", "shield"]];
+const statIcon = k => (STAT_ICONS.find(([p]) => k.includes(p)) || [0, "sparkle"])[1];
+document.getElementById("hdr").innerHTML =
+  `<div class="brand">${DATA.meta.logo || ""}<div class="v">${DATA.meta.title}</div></div>` +
+  `<div class="statbar">` + DATA.meta.stats.map(([k, v, tip]) =>
+    `<div class="stat"${tip ? ` title="${tip}"` : ""}>${ic(statIcon(k), 12)}<span class="k">${k}</span><span class="v">${v}</span></div>`
+  ).join(`<span class="sep"></span>`) + `</div>` +
+  `<div class="spacer"></div>
+   <button id="btnPlay" class="primary">${ic("play")}播放场景</button>
+   <button id="btnStep">${ic("stepfwd")}单步</button>
+   <button id="btnReset">${ic("reset")}重置</button>`;
+
+/* ── 数据索引 ── */
+const N = {}; DATA.nodes.forEach(n => { n.w ??= 1.1; n.d ??= 1.1; N[n.code] = n; });
+const DIST = {}; DATA.districts.forEach(d => DIST[d.id] = d);
+const adj = {};
+const addAdj = (a, b) => { (adj[a] ??= new Set()).add(b); (adj[b] ??= new Set()).add(a); };
+DATA.links.forEach(l => addAdj(l.from, l.to));
+FLOWS.forEach(f => f.steps.forEach(s => addAdj(s.from, s.to)));
+
+/* ── 迷你 Markdown 渲染（零依赖，覆盖 wiki 页常用子集）── */
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function inline(s) {
+  s = esc(s);
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, t, u) =>
+    /\.md(#|$)/.test(u) && !/^https?:/.test(u)
+      ? `<a class="wl" data-href="${u}">${t}</a>`
+      : `<a href="${u}" target="_blank" rel="noopener">${t}</a>`);
+  return s;
+}
+function mdRender(text) {
+  const body = text.replace(/^---\n[\s\S]*?\n---\n?/, "");
+  const lines = body.split("\n"), out = [];
+  let i = 0, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+  while (i < lines.length) {
+    const L = lines[i];
+    if (/^```/.test(L)) {
+      flush(); const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`); continue;
+    }
+    const h = L.match(/^(#{1,4})\s+(.*)/);
+    if (h) { flush(); out.push(`<h${h[1].length} data-h="${esc(h[2].trim())}">${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*[-*]\s+/.test(L)) {
+      flush(); const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
+      out.push(`<ul>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ul>`); continue;
+    }
+    if (/^\s*\d+\.\s+/.test(L)) {
+      flush(); const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+\.\s+/, ""));
+      out.push(`<ol>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ol>`); continue;
+    }
+    if (/^\|/.test(L) && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1] || "")) {
+      flush(); const rows = [];
+      while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]);
+      const cells = r => r.replace(/^\||\|$/g, "").split("|").map(c => inline(c.trim()));
+      out.push(`<table><thead><tr>${cells(rows[0]).map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
+        rows.slice(2).map(r => `<tr>${cells(r).map(c => `<td>${c}</td>`).join("")}</tr>`).join("") + "</tbody></table>");
+      continue;
+    }
+    if (/^>\s?/.test(L)) {
+      flush(); const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${inline(buf.join(" "))}</blockquote>`); continue;
+    }
+    if (/^---+\s*$/.test(L)) { flush(); out.push("<hr>"); i++; continue; }
+    if (/^\s*$/.test(L)) { flush(); i++; continue; }
+    para.push(L); i++;
+  }
+  flush();
+  return `<div class="md-body">${out.join("")}</div>`;
+}
+function resolvePage(cur, href) {
+  const base = cur.includes("/") ? cur.slice(0, cur.lastIndexOf("/") + 1) : "";
+  const stack = [];
+  for (const seg of (base + href.split("#")[0]).split("/")) {
+    if (seg === "." || seg === "") continue;
+    if (seg === "..") stack.pop(); else stack.push(seg);
+  }
+  return stack.join("/");
+}
+
+/* ── 等距投影 ── */
+const S = 38, ORX = 500, ORY = 56;
+const iso = (x, y, z = 0) => [ORX + (x - y) * S * .866, ORY + (x + y) * S * .5 - z * S];
+const P = a => a.map(p => p.map(v => +v.toFixed(1)).join(",")).join(" ");
+const svg = document.getElementById("svg");
+const NS = "http://www.w3.org/2000/svg";
+const el = (t, a, parent) => { const e = document.createElementNS(NS, t);
+  for (const k in a) e.setAttribute(k, a[k]); (parent || svg).appendChild(e); return e; };
+
+const defs = el("defs", {});
+defs.innerHTML = `
+  <marker id="arr" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--ink)"/></marker>
+  <marker id="arrA" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="7.5" markerHeight="7.5" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--accent)"/></marker>
+  <filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2.2"/></filter>`;
+/* 软体积风（Zdog 风味）：无描边，面用同色粗圆角 stroke 制造圆棱 */
+const faceColors = did => ({
+  top: mix(tintOf[did], 10, "var(--paper-hi)"),
+  right: mix(tintOf[did], 26, "var(--paper)"),
+  front: mix(tintOf[did], 44, "var(--paper)"),
+});
+
+const world = el("g", { id: "world" });
+const gGrid = el("g", {}, world), gDist = el("g", {}, world), gSel = el("g", {}, world),
+      gLink = el("g", {}, world), gFlow = el("g", {}, world), gDot = el("g", {}, world),
+      gNode = el("g", {}, world), gPlate = el("g", {}, world), gTag = el("g", {}, world);
+
+const GX = Math.ceil(Math.max(...DATA.districts.map(d => d.r[0] + d.r[2]))) + 2;
+const GY = Math.ceil(Math.max(...DATA.districts.map(d => d.r[1] + d.r[3]))) + 2;
+for (let i = -1; i <= GX; i++)
+  el("polyline", { points: P([iso(i, -1), iso(i, GY)]), stroke: "var(--ink)", "stroke-width": .25, opacity: .1, fill: "none" }, gGrid);
+for (let i = -1; i <= GY; i++)
+  el("polyline", { points: P([iso(-1, i), iso(GX, i)]), stroke: "var(--ink)", "stroke-width": .25, opacity: .1, fill: "none" }, gGrid);
+for (const d of DATA.districts) {
+  const [x, y, w, dd] = d.r;
+  el("polygon", { points: P([iso(x,y),iso(x+w,y),iso(x+w,y+dd),iso(x,y+dd)]),
+    fill: mix(tintOf[d.id], 6, "transparent"),
+    stroke: mix(tintOf[d.id], 60, "var(--ink-soft)"), "stroke-width": 1.8,
+    "stroke-dasharray": "0.5 7", "stroke-linecap": "round" }, gDist);
+}
+
+/* ── 建筑绘制 ── */
+function face(g, pts, fill, extra = {}) {
+  return el("polygon", { points: P(pts), fill, "stroke-linejoin": "round", ...extra }, g);
+}
+function shadow(g, x, y, w, d, light = false) {
+  el("polygon", { points: P([iso(x + .22, y + .22), iso(x + w + .3, y + .22), iso(x + w + .3, y + d + .3), iso(x + .22, y + d + .3)]),
+    fill: "var(--ink)", opacity: light ? .05 : .08, filter: "url(#soft)", stroke: "none" }, g);
+}
+const soft = (c, sw = 5) => ({ stroke: c, "stroke-width": sw, "stroke-linejoin": "round", "stroke-linecap": "round" });
+function box(g, did, x, y, w, d, h, z0 = 0, dashed = false) {
+  const F = faceColors(did);
+  const sw = Math.min(w, d) < .6 || h < .3 ? 2.2 : 5;  // 薄片细描边，免得糊成一块
+  const ex = dashed
+    ? { stroke: "var(--ink)", "stroke-opacity": .5, "stroke-width": .9, "stroke-dasharray": "3 2.4" }
+    : null;
+  face(g, [iso(x,y+d,z0+h),iso(x+w,y+d,z0+h),iso(x+w,y+d,z0),iso(x,y+d,z0)], F.front, ex || soft(F.front, sw));
+  face(g, [iso(x+w,y,z0+h),iso(x+w,y+d,z0+h),iso(x+w,y+d,z0),iso(x+w,y,z0)], F.right, ex || soft(F.right, sw));
+  face(g, [iso(x,y,z0+h),iso(x+w,y,z0+h),iso(x+w,y+d,z0+h),iso(x,y+d,z0+h)], F.top, ex || soft(F.top, sw));
+}
+function cylinder(g, did, x, y, w, d, h) {
+  const F = faceColors(did);
+  const cx = x + w / 2, cy = y + d / 2, r = Math.min(w, d) / 2;
+  const [tx, ty] = iso(cx, cy, h), [bx, by] = iso(cx, cy, 0);
+  const rx = r * S * 1.22, ry = r * S * .71;
+  el("path", { d: `M${(tx-rx).toFixed(1)} ${ty.toFixed(1)} A${rx} ${ry} 0 0 0 ${(tx+rx).toFixed(1)} ${ty.toFixed(1)} L${(bx+rx).toFixed(1)} ${by.toFixed(1)} A${rx} ${ry} 0 0 1 ${(bx-rx).toFixed(1)} ${by.toFixed(1)} Z`,
+    fill: F.front, ...soft(F.front) }, g);
+  el("ellipse", { cx: tx, cy: ty, rx, ry, fill: F.top, ...soft(F.top) }, g);
+}
+function building(n) {
+  const g = el("g", { class: "b", "data-code": n.code }, gNode);
+  const did = n.district, { x, y, w, d, h } = n;
+  shadow(g, x, y, w, d, n.form === "external");
+  if (n.form === "stack") for (let i = 0; i < 4; i++) box(g, did, x, y, w, d, .16, i * .28);
+  else if (n.form === "slabs") {
+    const k = 4, gap = w / k;
+    for (let i = 0; i < k; i++) box(g, did, x + i * gap, y, gap * .5, d, h);
+  }
+  else if (n.form === "cylinder") cylinder(g, did, x, y, w, d, h);
+  else if (n.form === "external") box(g, did, x, y, w, d, h, 0, true);
+  else box(g, did, x, y, w, d, h);
+  return g;
+}
+/* 名牌落地：放在建筑前方地面通道，不遮后排 */
+function plate(n) {
+  const g = el("g", { class: "b", "data-code": n.code, "data-plate": 1 }, gPlate);
+  const [cx, cy] = iso(n.x + n.w / 2, n.y + n.d, 0);
+  const label = `${n.code} ${n.short || n.name}`;
+  const t = el("text", { x: 0, y: 0, "font-size": 9.5, "font-weight": 700, fill: "var(--ink)" }, g);
+  t.textContent = label;
+  const tw = t.getComputedTextLength() + (n.icon ? 26 : 12);
+  const px = cx - tw / 2, py = cy + 4;
+  el("rect", { x: px, y: py, width: tw, height: 15, rx: 5, fill: "var(--card)",
+    stroke: "var(--line)", "stroke-width": 1 }, g);
+  g.insertBefore(g.firstChild, null); // keep text last
+  t.setAttribute("x", px + (n.icon ? 20 : 6)); t.setAttribute("y", py + 11);
+  if (n.icon) {
+    const u = el("use", { href: `#ic-${n.icon}`, x: px + 5, y: py + 2.5, width: 10, height: 10 }, g);
+    u.setAttribute("style", `stroke:${tintOf[n.district]};fill:none;stroke-width:1.2`);
+  }
+  g.appendChild(t);
+  n._plate = g;
+  return g;
+}
+/* 名牌避让：密集区重叠的名牌逐块下移 */
+function resolvePlates() {
+  const items = [...gPlate.children].map(g => ({ g, b: g.getBBox(), dy: 0 }));
+  items.sort((a, b) => a.b.y - b.b.y);
+  for (let pass = 0; pass < 3; pass++)
+    for (let i = 0; i < items.length; i++)
+      for (let j = 0; j < i; j++) {
+        const A = items[j], B = items[i];
+        const ay0 = A.b.y + A.dy, ay1 = ay0 + A.b.height;
+        const by0 = B.b.y + B.dy, by1 = by0 + B.b.height;
+        if (A.b.x < B.b.x + B.b.width - 2 && B.b.x < A.b.x + A.b.width - 2 &&
+            ay0 < by1 - 1 && by0 < ay1 - 1) B.dy = ay1 - B.b.y + 3;
+      }
+  for (const it of items) if (it.dy) it.g.setAttribute("transform", `translate(0 ${it.dy})`);
+}
+
+/* ── 连线：世界坐标裁到扩展 footprint 边缘，箭头绝不进盒 ── */
+function clipToRect(pOut, pIn, n, m = .45) {
+  const x0 = n.x - m, y0 = n.y - m, x1 = n.x + n.w + m, y1 = n.y + n.d + m;
+  const [ax, ay] = pOut, [bx, by] = pIn;
+  let t = 1;
+  const cand = [];
+  if (bx !== ax) { cand.push((x0 - ax) / (bx - ax), (x1 - ax) / (bx - ax)); }
+  if (by !== ay) { cand.push((y0 - ay) / (by - ay), (y1 - ay) / (by - ay)); }
+  for (const k of cand) {
+    if (k <= 0 || k > 1) continue;
+    const px = ax + (bx - ax) * k, py = ay + (by - ay) * k;
+    if (px >= x0 - 1e-6 && px <= x1 + 1e-6 && py >= y0 - 1e-6 && py <= y1 + 1e-6) t = Math.min(t, k);
+  }
+  return [ax + (bx - ax) * t, ay + (by - ay) * t];
+}
+const center = n => [n.x + n.w / 2, n.y + n.d / 2];
+function edgePath(a, b, via, off = 0) {
+  let pts = [center(N[a]), ...(via || []), center(N[b])];
+  if (off && !via?.length) {
+    const [p0, p1] = [pts[0], pts[1]];
+    const dx = p1[0] - p0[0], dy = p1[1] - p0[1], len = Math.hypot(dx, dy) || 1;
+    pts = [p0, [(p0[0] + p1[0]) / 2 - dy / len * off, (p0[1] + p1[1]) / 2 + dx / len * off], p1];
+  }
+  pts[pts.length - 1] = clipToRect(pts[pts.length - 2], pts[pts.length - 1], N[b]);
+  pts[0] = clipToRect(pts[1], pts[0], N[a], .25);
+  return "M" + pts.map(p => iso(p[0], p[1], .04).map(v => +v.toFixed(1)).join(" ")).join(" L");
+}
+
+/* ── 边构建：links + 当前场景步骤；同对节点平行边自动错道 ── */
+let linkEls = [], flowEls = [];
+const ambient = [];
+function makeDot(parent, r = 3.2) {
+  const g = el("g", {}, parent);
+  el("circle", { r: r * 2.1, fill: "var(--accent)", opacity: .16 }, g);
+  el("circle", { r, fill: "var(--accent)", stroke: "var(--card)", "stroke-width": 1 }, g);
+  return g;
+}
+const motionOK = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+function buildEdges() {
+  gLink.innerHTML = ""; gFlow.innerHTML = ""; gDot.innerHTML = ""; ambient.length = 0;
+  const steps = FLOWS[activeFlow]?.steps || [];
+  const key = (a, b) => a < b ? a + "|" + b : b + "|" + a;
+  const cnt = {}, idx = {};
+  for (const e of [...DATA.links, ...steps]) if (!e.via?.length) cnt[key(e.from, e.to)] = (cnt[key(e.from, e.to)] || 0) + 1;
+  const offFor = e => {
+    if (e.via?.length) return 0;
+    const k = key(e.from, e.to), i = idx[k] = (idx[k] ?? -1) + 1, c = cnt[k];
+    return c > 1 ? (i - (c - 1) / 2) * .55 : 0;
+  };
+  linkEls = DATA.links.map((l, i) => {
+    const g = el("g", { class: "lk", "data-n": l.from + " " + l.to }, gLink);
+    const p = el("path", { d: edgePath(l.from, l.to, l.via, offFor(l)), stroke: "var(--ink-soft)", "stroke-width": 1,
+      "stroke-dasharray": "2.5 3.5", fill: "none", opacity: .65 }, g);
+    el("path", { d: p.getAttribute("d"), stroke: "transparent", "stroke-width": 12, fill: "none" }, g);
+    g.addEventListener("mouseenter", () => { p.setAttribute("stroke-width", 2); showEdgeTag(p, l.label); });
+    g.addEventListener("mouseleave", () => { p.setAttribute("stroke-width", 1); edgeTag.style.display = "none"; });
+    g.addEventListener("click", e => { e.stopPropagation(); select("L" + i); });
+    return { g, p, l };
+  });
+  flowEls = steps.map((f, i) => {
+    const g = el("g", { class: "lk", "data-n": f.from + " " + f.to }, gFlow);
+    const glow = el("path", { d: edgePath(f.from, f.to, f.via, offFor(f)), stroke: "var(--accent)", "stroke-width": 6,
+      fill: "none", opacity: 0, "stroke-linecap": "round" }, g);
+    const p = el("path", { d: glow.getAttribute("d"), stroke: "var(--ink)", "stroke-width": 1.6,
+      fill: "none", "marker-end": "url(#arr)" }, g);
+    el("path", { d: glow.getAttribute("d"), stroke: "transparent", "stroke-width": 12, fill: "none" }, g);
+    g.addEventListener("mouseenter", () => showEdgeTag(p, `${i + 1}. ${f.title}`));
+    g.addEventListener("mouseleave", () => edgeTag.style.display = "none");
+    g.addEventListener("click", e => { e.stopPropagation(); pauseAuto(); showStep(i); });
+    return { g, p, glow, f };
+  });
+  if (motionOK) for (const { p } of flowEls)
+    ambient.push({ c: makeDot(gDot, 3), p, len: p.getTotalLength(), t: Math.random() });
+}
+
+const order = [...DATA.nodes].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+const nodeEls = {};
+for (const n of order) nodeEls[n.code] = building(n);
+for (const n of order) plate(n);
+resolvePlates();
+{
+  /* 分区标签统一挂在西角（最左顶点）下方：永远在空地，规则一致 */
+  DATA.districts.forEach((d) => {
+    const [x, y, w, dd] = d.r;
+    const [lx, ly] = iso(x, y + dd);
+    const cy = ly + 8;
+    const g = el("g", {}, gTag);
+    const t = el("text", { "font-size": 11.5, "letter-spacing": ".1em", "font-weight": 700,
+      fill: mix(tintOf[d.id], 78, "var(--ink)") }, g);
+    t.textContent = d.label;
+    const tw = t.getComputedTextLength() + 40;
+    el("rect", { x: lx - tw / 2, y: cy, width: tw, height: 24, rx: 12,
+      fill: mix(tintOf[d.id], 16, "var(--card)"),
+      stroke: mix(tintOf[d.id], 45, "var(--card)"), "stroke-width": 1.2 }, g);
+    const u = el("use", { href: `#ic-${d.icon}`, x: lx - tw / 2 + 10, y: cy + 6, width: 12, height: 12 }, g);
+    u.setAttribute("style", `stroke:${mix(tintOf[d.id], 78, "var(--ink)")};fill:none;stroke-width:1.2`);
+    t.setAttribute("x", lx - tw / 2 + 27); t.setAttribute("y", cy + 16.5);
+    g.appendChild(t);
+  });
+}
+/* 连线说明浮牌 */
+const edgeTag = el("g", { style: "display:none;pointer-events:none" }, gTag);
+const etRect = el("rect", { fill: "var(--ink)", height: 16, rx: 6 }, edgeTag);
+const etText = el("text", { "font-size": 10, "font-weight": 700, fill: "var(--paper)" }, edgeTag);
+function showEdgeTag(pathEl, label) {
+  etText.textContent = label;
+  edgeTag.style.display = "";
+  const mid = pathEl.getPointAtLength(pathEl.getTotalLength() / 2);
+  const w = etText.getComputedTextLength() + 12;
+  etRect.setAttribute("x", mid.x - w / 2); etRect.setAttribute("y", mid.y - 22); etRect.setAttribute("width", w);
+  etText.setAttribute("x", mid.x - w / 2 + 6); etText.setAttribute("y", mid.y - 10);
+}
+buildEdges();
+
+let playDot = null;
+(function tick(prev) {
+  requestAnimationFrame(now => {
+    const dt = prev ? Math.min(now - prev, 50) : 16;
+    for (const d of ambient) {
+      d.t = (d.t + dt * .00045) % 1;
+      const pt = d.p.getPointAtLength(d.t * d.len);
+      d.c.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+    }
+    tick(now);
+  });
+})();
+
+/* ── 场景切换 ── */
+const flowbar = document.getElementById("flowbar");
+if (FLOWS.length > 1) {
+  flowbar.hidden = false;
+  flowbar.innerHTML = FLOWS.map((f, i) =>
+    `<button data-f="${i}" class="${i === 0 ? "on" : ""}">${f.title}</button>`).join("");
+  flowbar.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (b) setFlow(+b.dataset.f);
+  });
+}
+function setFlow(i) {
+  if (i === activeFlow) return;
+  stopFlowVisual(); activeFlow = i;
+  [...flowbar.children].forEach((b, j) => b.classList.toggle("on", j === i));
+  buildEdges();
+  if (typeof sel === "number") sel = null;
+  focusSet(typeof sel === "string" && !sel.startsWith("L") ? hood(sel) : null);
+  render();
+}
+
+/* ── 左侧索引：分区折叠 + 过滤 ── */
+const nav = document.getElementById("nav");
+const manyNodes = DATA.nodes.length > 14;
+nav.insertAdjacentHTML("beforeend", `<div class="filter"><input id="navq" placeholder="过滤模块…"></div>`);
+for (const d of DATA.districts) {
+  const items = DATA.nodes.filter(n => n.district === d.id);
+  nav.insertAdjacentHTML("beforeend",
+    `<div class="grp ${manyNodes ? "closed" : ""}" data-d="${d.id}"
+       style="color:${mix(tintOf[d.id], 72, "var(--ink)")};background:${mix(tintOf[d.id], 14, "var(--card)")}">
+       ${ic(d.icon)}<span>${d.label}</span><span class="ct">${items.length}</span><span class="chev">▾</span></div>
+     <div class="grpbody ${manyNodes ? "closed" : ""}" data-d="${d.id}">` +
+    items.map(n =>
+      `<div class="item" data-code="${n.code}">${ic(n.icon || d.icon, 12)}<span class="code">${n.code}</span>
+       <span class="nm">${n.short || n.name}</span>${n.count ? `<span class="ct" title="群组节点：汇聚 ${n.count} 个同类模块">${n.count} 模块</span>` : ""}</div>`).join("") +
+    `</div>`);
+}
+nav.addEventListener("click", e => {
+  const grp = e.target.closest(".grp");
+  if (grp) {
+    grp.classList.toggle("closed");
+    nav.querySelector(`.grpbody[data-d="${grp.dataset.d}"]`).classList.toggle("closed");
+    return;
+  }
+  const it = e.target.closest(".item"); if (it) select(it.dataset.code);
+});
+document.getElementById("navq").addEventListener("input", e => {
+  const q = e.target.value.trim().toLowerCase();
+  for (const body of nav.querySelectorAll(".grpbody")) {
+    let vis = 0;
+    for (const it of body.children) {
+      const hit = !q || it.textContent.toLowerCase().includes(q);
+      it.classList.toggle("hid", !hit); if (hit) vis++;
+    }
+    const open = q ? vis > 0 : !manyNodes;
+    body.classList.toggle("closed", !open);
+    nav.querySelector(`.grp[data-d="${body.dataset.d}"]`).classList.toggle("closed", !open);
+  }
+});
+nav.addEventListener("mouseover", e => {
+  const it = e.target.closest(".item");
+  if (it && typeof sel !== "number") focusSet(hood(it.dataset.code));
+});
+nav.addEventListener("mouseout", () => {
+  if (typeof sel !== "number") focusSet(typeof sel === "string" && !sel.startsWith("L") ? hood(sel) : null);
+});
+
+/* ── 面板：页面（wiki md 直渲）/ 关系（图数据派生）── */
+let tab = "page", sel = null;
+const panel = document.getElementById("panel");
+const tabPage = document.getElementById("tabPage"), tabRel = document.getElementById("tabRel");
+function srcList(a) {
+  if (!a?.length) return "";
+  const repo = DATA.meta.repoUrl;
+  return `<h3>出处</h3><ul>` + a.map(s =>
+    repo ? `<li>${ic("file", 11)} <a class="src" target="_blank" href="${repo}/${s}"><code>${s}</code></a></li>`
+         : `<li class="src" data-path="${s}">${ic("file", 11)} <code>${s}</code></li>`).join("") + "</ul>";
+}
+const kicker = (icn, label, color) =>
+  `<div class="kicker" ${color ? `style="color:${color}"` : ""}>${ic(icn)}<span>${label}</span></div>`;
+const chips = arr => arr.length ? `<div class="chips">${arr.join("")}</div>` : `<p class="dimtext">无</p>`;
+const nodeChip = (code, extra) =>
+  `<span class="chip" data-code="${code}">${N[code].short || N[code].name}${extra ? " · " + extra : ""}</span>`;
+function flowRefs(code) {
+  const out = [];
+  FLOWS.forEach((f, fi) => f.steps.forEach((s, si) => {
+    if (s.from === code || s.to === code)
+      out.push(`<span class="chip" data-flow="${fi}" data-step="${si}">${f.title} · ${si + 1}. ${s.title}</span>`);
+  }));
+  return out;
+}
+function pageBody(pageRef) {
+  const page = pageRef?.split("#")[0];
+  return page && WIKI[page] ? mdRender(WIKI[page]) : "";
+}
+function systemPanel() {
+  const m = DATA.meta;
+  if (tab === "page")
+    return kicker("globe", "系统") + `<h2>${m.headline}</h2>` +
+      (pageBody("system.md") || m.what || "");
+  return kicker("globe", "系统") + `<h2>怎么读这张图</h2>${m.reading}
+    <h3>场景</h3>` + chips(FLOWS.map((f, i) =>
+      `<span class="chip" data-flow="${i}" data-step="0">${f.title} · ${f.steps.length} 步</span>`)) +
+    srcList(m.sources);
+}
+function nodePanel(code) {
+  const n = N[code], d = DIST[n.district];
+  const head = kicker(n.icon || d.icon, d.label, mix(tintOf[d.id], 55, "var(--ink)")) + `<h2>${n.name}</h2>` +
+    (n.count ? `<p class="dimtext">群组节点 · 汇聚 ${n.count} 个同类模块为一栋</p>` : "");
+  if (tab === "page") {
+    const body = pageBody(n.page);
+    return head + (body || `<p class="dimtext">未关联 wiki 页。</p>`);
+  }
+  const up = DATA.links.filter(l => l.to === code).map(l => nodeChip(l.from, l.label));
+  const down = DATA.links.filter(l => l.from === code).map(l => nodeChip(l.to, l.label));
+  return head +
+    `<h3>上游 · 谁依赖它</h3>` + chips(up) +
+    `<h3>下游 · 它依赖谁</h3>` + chips(down) +
+    `<h3>参与场景</h3>` + chips(flowRefs(code)) +
+    srcList(n.sources);
+}
+function wikiPanel() {
+  return kicker("book", "WIKI") + `<h2>${sel.page.replace(/\.md$/, "")}</h2>` +
+    (pageBody(sel.page) || `<p class="dimtext">页面不存在：${esc(sel.page)}</p>`);
+}
+function linkPanel(i) {
+  const l = DATA.links[i];
+  return kicker("gateway", "结构关系") + `<h2>${l.label}</h2>
+    <p>${l.what || ""}</p><p><code>${N[l.from].name}</code> → <code>${N[l.to].name}</code></p>
+    ${srcList([...(N[l.from].sources || []).slice(0, 1), ...(N[l.to].sources || []).slice(0, 1)])}`;
+}
+function flowPanel(i) {
+  const F = FLOWS[activeFlow], f = F.steps[i];
+  const list = F.steps.map((s, j) =>
+    `<li class="${j < i ? "done" : j === i ? "now" : ""}" data-step="${j}">${j + 1}. ${s.title}</li>`).join("");
+  return kicker("play", F.title) + `<h2>第 ${i + 1}/${F.steps.length} 步 · ${f.title}</h2>
+    <p>${f.what}</p><p><code>${N[f.from].name}</code> → <code>${N[f.to].name}</code></p>
+    ${srcList(f.sources || [...(N[f.from].sources || []).slice(0, 1), ...(N[f.to].sources || []).slice(0, 1)])}
+    <h3>全部步骤（可点击）</h3><ul class="steps">${list}</ul>`;
+}
+function scrollToAnchor(pageRef) {
+  const anchor = pageRef?.split("#")[1];
+  if (!anchor) { panel.scrollTop = 0; return; }
+  const h = [...panel.querySelectorAll("[data-h]")].find(e => e.dataset.h === anchor);
+  if (h) h.scrollIntoView({ block: "start" });
+}
+function render() {
+  panel.innerHTML =
+    sel == null ? systemPanel() :
+    typeof sel === "number" ? flowPanel(sel) :
+    typeof sel === "object" ? wikiPanel() :
+    sel.startsWith("L") ? linkPanel(+sel.slice(1)) : nodePanel(sel);
+  document.querySelectorAll("nav .item").forEach(e =>
+    e.classList.toggle("sel", e.dataset.code === sel));
+  panel.querySelectorAll(".steps li").forEach(li =>
+    li.addEventListener("click", () => { pauseAuto(); showStep(+li.dataset.step); }));
+  panel.querySelectorAll("li.src").forEach(li =>
+    li.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(li.dataset.path); } catch {}
+      const c = li.querySelector("code"), t = c.textContent;
+      c.textContent = "已复制 ✓"; setTimeout(() => c.textContent = t, 900);
+    }));
+  panel.querySelectorAll(".chip[data-code]").forEach(ch =>
+    ch.addEventListener("click", () => select(ch.dataset.code)));
+  panel.querySelectorAll(".chip[data-flow]").forEach(ch =>
+    ch.addEventListener("click", () => {
+      const fi = +ch.dataset.flow;
+      if (fi !== activeFlow) setFlow(fi);
+      pauseAuto(); showStep(+ch.dataset.step);
+    }));
+  panel.querySelectorAll("a.wl").forEach(a =>
+    a.addEventListener("click", () => {
+      const cur = typeof sel === "object" ? sel.page :
+        (typeof sel === "string" && !sel.startsWith("L") && N[sel]?.page) || "index.md";
+      const target = resolvePage(cur.split("#")[0], a.dataset.href);
+      const anchor = a.dataset.href.split("#")[1];
+      sel = { page: target + (anchor ? "#" + anchor : "") };
+      render();
+    }));
+  if (typeof sel === "object" && sel) scrollToAnchor(sel.page);
+  else if (typeof sel === "string" && !sel.startsWith("L") && tab === "page") scrollToAnchor(N[sel]?.page);
+}
+tabPage.onclick = () => { tab = "page"; tabPage.classList.add("on"); tabRel.classList.remove("on"); render(); };
+tabRel.onclick = () => { tab = "rel"; tabRel.classList.add("on"); tabPage.classList.remove("on"); render(); };
+
+/* ── 聚焦 ── */
+function focusSet(set) {
+  for (const [c, g] of Object.entries(nodeEls)) g.classList.toggle("dim", !!set && !set.has(c));
+  for (const g of gPlate.children) g.classList.toggle("dim", !!set && !set.has(g.dataset.code));
+  for (const g of [...gLink.children, ...gFlow.children]) {
+    const [a, b] = g.dataset.n.split(" ");
+    g.classList.toggle("dim", !!set && !(set.has(a) && set.has(b)));
+  }
+}
+const hood = code => new Set([code, ...(adj[code] || [])]);
+function markSel(code) {
+  gSel.innerHTML = "";
+  if (!code) return;
+  const n = N[code];
+  el("polygon", { id: "selring", points: P([
+    iso(n.x - .35, n.y - .35), iso(n.x + n.w + .35, n.y - .35),
+    iso(n.x + n.w + .35, n.y + n.d + .35), iso(n.x - .35, n.y + n.d + .35)]),
+    fill: "none", stroke: "var(--accent)", "stroke-width": 2 }, gSel);
+}
+function select(code) {
+  stopFlowVisual(); sel = code;
+  markSel(typeof code === "string" && !code.startsWith("L") ? code : null);
+  focusSet(typeof code === "string" && !code.startsWith("L") ? hood(code) : null);
+  render();
+}
+function bindNode(g) {
+  const code = g.dataset.code;
+  g.addEventListener("mouseenter", () => {
+    if (typeof sel !== "number") { focusSet(hood(code)); if (sel == null) panel.innerHTML = nodePanel(code); }
+  });
+  g.addEventListener("mouseleave", () => {
+    if (typeof sel !== "number") {
+      focusSet(typeof sel === "string" && !sel.startsWith("L") ? hood(sel) : null);
+      if (sel == null) render();
+    }
+  });
+  g.addEventListener("click", e => { e.stopPropagation(); select(code); });
+}
+Object.values(nodeEls).forEach(bindNode);
+[...gPlate.children].forEach(bindNode);
+
+/* ── 流程追踪 ── */
+let auto = null, stepIdx = -1;
+function showStep(i) {
+  stepIdx = i; sel = i; markSel(null); render();
+  flowEls.forEach(({ p, glow }, j) => {
+    p.setAttribute("stroke", j === i ? "var(--accent)" : "var(--ink)");
+    p.setAttribute("stroke-width", j === i ? 2.6 : j < i ? 2 : 1.6);
+    p.setAttribute("marker-end", j === i ? "url(#arrA)" : "url(#arr)");
+    p.setAttribute("opacity", j <= i ? 1 : .35);
+    glow.setAttribute("opacity", j === i ? .22 : 0);
+  });
+  const f = FLOWS[activeFlow].steps[i];
+  focusSet(new Set([f.from, f.to]));
+  gDot.style.display = "none";
+  if (playDot) playDot.remove();
+  const p = flowEls[i].p, len = p.getTotalLength(), t0 = performance.now(), dur = motionOK ? 260 : 0;
+  playDot = makeDot(gTag, 4.5);
+  (function anim(now) {
+    const k = dur ? Math.min((now - t0) / dur, 1) : 1;
+    const pt = p.getPointAtLength(k * len);
+    playDot.setAttribute("transform", `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+    if (k < 1 && stepIdx === i) requestAnimationFrame(anim);
+  })(t0);
+}
+function pauseAuto() { if (auto) clearTimeout(auto); auto = null; }
+function stopFlowVisual() {
+  pauseAuto(); stepIdx = -1;
+  if (playDot) { playDot.remove(); playDot = null; }
+  gDot.style.display = "";
+  flowEls.forEach(({ p, glow }) => { p.setAttribute("stroke", "var(--ink)");
+    p.setAttribute("stroke-width", 1.6); p.setAttribute("marker-end", "url(#arr)");
+    p.setAttribute("opacity", 1); glow.setAttribute("opacity", 0); });
+}
+document.getElementById("btnPlay").onclick = () => {
+  stopFlowVisual(); showStep(0);
+  const steps = FLOWS[activeFlow]?.steps || [];
+  const tick = () => {
+    if (stepIdx + 1 >= steps.length) { auto = null; return; }
+    showStep(stepIdx + 1);
+    auto = setTimeout(tick, motionOK ? 620 : 400);
+  };
+  auto = setTimeout(tick, motionOK ? 620 : 400);
+};
+document.getElementById("btnStep").onclick = () => {
+  pauseAuto(); showStep((stepIdx + 1) % (FLOWS[activeFlow]?.steps.length || 1));
+};
+
+/* ── 取景 / 平移缩放 / 响应式 ── */
+const stage = document.getElementById("stage");
+function fitHome() {
+  const boxes = [gDist.getBBox(), gNode.getBBox(), gPlate.getBBox(), gTag.getBBox()];
+  const x = Math.min(...boxes.map(b => b.x)) - 18, y = Math.min(...boxes.map(b => b.y)) - 16;
+  return { x, y,
+    w: Math.max(...boxes.map(b => b.x + b.width)) + 18 - x,
+    h: Math.max(...boxes.map(b => b.y + b.height)) + 16 - y };
+}
+const HOME = fitHome();
+let vb = { ...HOME }, homeView = true;
+const applyVB = () => svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+document.getElementById("btnReset").onclick = () => { stopFlowVisual(); select(null); vb = { ...HOME }; homeView = true; applyVB(); };
+new ResizeObserver(() => { if (homeView) applyVB(); }).observe(stage);
+let pan = null, moved = false;
+stage.addEventListener("pointerdown", e => {
+  if (e.target.closest(".b") || e.target.closest(".lk") || e.target.closest("#flowbar")) return;
+  pan = { px: e.clientX, py: e.clientY, x: vb.x, y: vb.y }; moved = false;
+  stage.classList.add("panning"); stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener("pointermove", e => {
+  if (!pan) return;
+  if (Math.hypot(e.clientX - pan.px, e.clientY - pan.py) > 3) moved = true;
+  const k = vb.w / stage.clientWidth;
+  vb.x = pan.x - (e.clientX - pan.px) * k; vb.y = pan.y - (e.clientY - pan.py) * k;
+  if (moved) { homeView = false; applyVB(); }
+});
+stage.addEventListener("pointerup", e => {
+  const wasPan = pan; pan = null; stage.classList.remove("panning");
+  if (wasPan && !moved && !e.target.closest(".b") && !e.target.closest(".lk") && !e.target.closest("#flowbar")) select(null);
+});
+stage.addEventListener("wheel", e => {
+  e.preventDefault();
+  const k = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  const r = svg.getBoundingClientRect();
+  const mx = vb.x + (e.clientX - r.left) / r.width * vb.w;
+  const my = vb.y + (e.clientY - r.top) / r.height * vb.h;
+  vb = { x: mx - (mx - vb.x) * k, y: my - (my - vb.y) * k, w: vb.w * k, h: vb.h * k };
+  homeView = false; applyVB();
+}, { passive: false });
+
+applyVB();
+render();
+</script>
+</body>
+</html>
