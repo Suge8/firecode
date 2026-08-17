@@ -2,7 +2,7 @@
 
 pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Anthropic OAuth 归因、`/fire-review` 对抗性审查与按需 `/fire-master` 多 Agent 主控。
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。
-每个 register 封闭自己的运行状态，关掉任何一个不影响其余；跨模块接缝只有两条只读调用：Master 调 `review/outcome.ts`，bark 调 `master/state.ts` 的持久化状态。
+每个 register 封闭自己的运行状态，关掉任何一个不影响其余；跨模块接缝只有三条：Master 只读调 `review/outcome.ts`，bark 只读调 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行。
 
 ## 模块
 

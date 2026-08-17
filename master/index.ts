@@ -3,6 +3,8 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MASTER_MODELS, loadConfig, type MasterModel } from "../config.js";
+import { ToolLine, makeResultRenderer } from "../tools/line.js";
+import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { MASTER_EVENT_TYPE, masterEventDetails } from "./event-format.js";
 import { HerdrWorkers } from "./herdr.js";
@@ -256,8 +258,14 @@ export function registerMaster(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: MASTER_TOOL,
-		label: "Subagents",
+		// 显示词用"工人"：术语表把"子代理"保留给 fire-review 的审查者子进程。
+		// 渲染字段长在自己的工具定义上，不改注册/激活语义（与"包装原生工具即强制激活"无关）。
+		label: "工人",
 		description: "启动、追问、审查、待命、列出、休眠或遗忘 Master 拥有的并行 Worker。结果异步回传。",
+		renderShell: "self",
+		renderCall: (args, theme, ctx) =>
+			new ToolLine({ label: "工人", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+		renderResult: makeResultRenderer(false),
 		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
 		parameters: Type.Object({
 			action: StringEnum(["list", "start", "send", "review", "hold", "stop"] as const),
@@ -483,6 +491,33 @@ function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 			for (const id of data.ids) if (typeof id === "string") acked.add(id);
 	}
 	return [...pending.values()].filter((event) => !acked.has(event.id));
+}
+
+const ACTION_VERB: Record<string, string> = {
+	start: "派工",
+	send: "追问",
+	review: "审查",
+	hold: "待命",
+	list: "清单",
+	stop: "收工",
+};
+
+/** 工具行一行制：动词 + 目标工人 + 关键参数，委派文本取首句由 ToolLine 按宽截断。 */
+function subagentsCallParts(args: Record<string, unknown>): Part[] {
+	const action = typeof args.action === "string" ? args.action : "?";
+	const verb = action === "stop" && args.forget === true ? "遗忘" : ACTION_VERB[action] ?? action;
+	const parts: Part[] = [{ text: verb, bold: true }];
+	const target = optionalString(args.worker) ?? optionalString(args.session);
+	if (target) parts.push({ text: ` ${target}`, color: "accent" });
+	if (action === "start") {
+		const model = optionalString(args.model);
+		if (model) parts.push({ text: ` · ${model.split("/").pop()}`, color: "muted" });
+		if (args.review === true) parts.push({ text: " · 审查票", color: "muted" });
+	}
+	const prompt = optionalString(args.prompt)?.split("\n", 1)[0];
+	if (prompt && (action === "start" || action === "send"))
+		parts.push({ text: ` — ${prompt}`, color: "muted" });
+	return parts;
 }
 
 function dispositionReminderText(worker: string): string {
