@@ -22,7 +22,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 |
-| `master/` | `/fire-master`：按需注入 `subagents` 工具，启动、追问、审查与停止 Herdr Worker |
+| `master/` | `/fire-master`：按需注入 `subagents` 工具，启动、发消息、中断、审查、休眠与移除 Herdr Worker |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 |
 | `config.ts` | 只读本目录 config.jsonc |
 
@@ -91,7 +91,7 @@ FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每
 ## Master
 
 Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
-`subagents` 是唯一接口：start / send / review / hold / list / stop；工具名不带 herdr——名字里的 herdr 会把模型
+`subagents` 是唯一接口：start / send / interrupt / review / ack / list / sleep / kill（动作集来历见 ADR-0007）；工具名不带 herdr——名字里的 herdr 会把模型
 引向 CLI 逃生路径（实测夜跑事故根因），guidelines 另有硬禁令：禁止 bash herdr 管子代理，脱管子代理
 （在 herdr 里跑但不在池内）零回传，发现即收编（退出旧 pi → start 传 session 路径，ADR-0005）。
 提示词决定何时委派、模型选型（依据 config 选型表，首次派发前把分波计划和每票模型一次性列给用户确认）和委派文本；
@@ -104,15 +104,18 @@ content 给模型、details 给渲染，无 details 的旧消息降级全文）�
 返回值）、按需重查（list），事件只装增量。不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、
 投成写 ack（收件箱至少一次语义），crash/reload 后未 ack 差集在恢复激活时重投，重复投递无害；
 Master 回合进行中到达的结果暂存，agent_settled 后合并成一条再投（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
-Live Worker 可 stop 为保留上下文的 Dormant Worker；Herdr 报 `blocked` 时保持阻塞态并把 `state_labels` 中的问题通知
+Live Worker 可 sleep 为保留上下文的 Dormant Worker，kill 才删除引用；两者对运行中子代理都会立即中止并收 pane。
+Herdr 报 `blocked` 时保持阻塞态并把 `state_labels` 中的问题通知
 Master，Master 用 send 回答后继续。`idle` 与未查看后台结果 `done` 都保留为可追问的 Live Worker，最终 assistant
-只有以 `stop` 结束才回传完成；`length`、`toolUse`、非中断的 `error`、缺失回复均按失败回传。中断（`aborted`
-或 abort 字样的 `error`，即 esc 手动介入或连接异常）不按失败回传也不消耗审查意图：事件告知 Master 按兵不动，
-插件续监动静（用户接手则结果照常回流），五分钟无人接手再发自动续跑提醒让 Master 续派；中断时刻随档案持久化，
-reload 重挂续监与剩余计时（ADR-0006）。落定类事件（结果/中断/审查终态/续跑提醒）送达即要求发落：回合内无
-send/review/stop/hold 则下个回合边界注入一次可见提醒，提醒后仍不发落升级为用户通知收口；发落标记持久化，
-活性归代码、发落决策归模型。普通工作监听用
-无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复，forget 才删除引用。
+只有以 `stop` 结束（LLM 停止原因）才回传完成；`length`、`toolUse`、非中断的 `error`、缺失回复均按失败回传。中断（`aborted`
+或 abort 字样的 `error`，即 interrupt 指令、esc 手动介入或连接异常）不按失败回传也不消耗审查意图：事件告知 Master，
+插件续监动静（接手则结果照常回流），五分钟无动静再发自动续跑提醒让 Master 续派；中断时刻随档案持久化，
+reload 重挂续监与剩余计时（ADR-0006）。interrupt 发 esc 主动打断 working 子代理，走同一条中断结算路径，
+事件文案注明是指令中断（在飞标记不持久，reload 后退化为外部中断文案，无害），就绪信号经中断事件回传。
+落定类事件（结果/中断/审查终态/续跑提醒）送达即要求发落：回合内无
+send/review/sleep/kill/ack 则下个回合边界注入一次可见提醒，提醒后仍不发落升级为用户通知收口；发落标记持久化，
+ack 对无待发落标记的非 idle 子代理报错（把它误当暂停是真实事故，ADR-0007），活性归代码、发落决策归模型。普通工作监听用
+无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复。
 新 Worker 优先在当前 Worker tab 内 split（2×2 象限切，避免嵌套同向切把后来者挤成 1/8 宽），每 tab 最多 4 个，
 满或 split 失败才建 tab；单子代理 tab 标签是其显示名，第二个子代理加入后改组名「子代理」；不 rebalance；
 Dormant 恢复与新建同一套布局（cwd 随档案持久化，混住同 tab 无碍）。中止或清理共享 tab 里的子代理只收其 pane，不连坐关 tab；reload 时旧运行时

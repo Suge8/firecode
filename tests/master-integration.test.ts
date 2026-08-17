@@ -435,7 +435,7 @@ test("crash 后未 ack 的 Worker 结果在恢复时重投并补 ack", async () 
 	}
 });
 
-test("未处置的落定消息提醒一次、再不处置升级通知；hold 处置后不再打扰", async () => {
+test("未处置的落定消息提醒一次、再不处置升级通知；ack 发落后不再打扰，对运行中子代理 ack 报错", async () => {
 	process.env.HERDR_ENV = "1";
 	process.env.HERDR_WORKSPACE_ID = "w1";
 	delete process.env.FIRECODE_MASTER_WORKER;
@@ -512,15 +512,22 @@ test("未处置的落定消息提醒一次、再不处置升级通知；hold 处
 		expect(sent).toHaveLength(2);
 		expect(notices.join()).toContain("仍未发落");
 		expect(store?.state.workers[0]?.disposition).toBeUndefined();
-		// hold 是合法处置：清标记，后续回合零打扰。
+		// ack 是合法发落：清标记，后续回合零打扰。
 		notify?.("子代理 worker-1 已停下", "worker-1");
 		await new Promise((resolve) => setTimeout(resolve, 150));
 		expect(store?.state.workers[0]?.disposition).toBe("pending");
-		await tools.get("subagents")?.execute("call", { action: "hold", worker: "worker-1" }, undefined, undefined, ctx);
+		await tools.get("subagents")?.execute("call", { action: "ack", worker: "worker-1" }, undefined, undefined, ctx);
 		expect(store?.state.workers[0]?.disposition).toBeUndefined();
 		const before = sent.length;
 		await settle();
 		expect(sent).toHaveLength(before);
+		// 护栏：对无待发落标记的运行中子代理 ack 报错指向 interrupt/sleep，不返回假成功（ADR-0007）。
+		store?.dispatch({ type: "UPSERT_WORKER", worker: {
+			name: "worker-2", paneId: "w1:p3", tabId: "w1:t2", sessionPath: "/tmp/w2.jsonl",
+			model: "p/m", thinking: "medium", status: "working",
+		} });
+		expect(tools.get("subagents")?.execute("call", { action: "ack", worker: "worker-2" }, undefined, undefined, ctx))
+			.rejects.toThrow(/只把消息标为已处理.*interrupt/);
 	} finally {
 		rmSync(masterStatePath(sessionId), { force: true });
 		for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
@@ -565,15 +572,20 @@ test("subagents 工具行：中文动词 + 目标 + 关键参数，session 恢�
 	const ctx = () => ({ state: {}, cwd: "/tmp", toolCallId: crypto.randomUUID(), isPartial: false, isError: false, expanded: false });
 	const line = (args: Record<string, unknown>) => tool?.renderCall(args, theme, ctx()).render(90)[0] ?? "";
 	const start = line({ action: "start", worker: "t2", model: "anthropic/claude-opus-5", review: true, prompt: "只回复 1\n第二行不进工具行" });
-	expect(start).toContain("子代理 派遣 t2 · claude-opus-5 · 审查票 — 只回复 1");
+	expect(start).toContain("子代理 启动 t2 · claude-opus-5 · 审查票 — 只回复 1");
 	expect(start).not.toContain("第二行");
-	expect(line({ action: "send", worker: "t1", prompt: "继续" })).toContain("追问 t1 — 继续");
-	expect(line({ action: "stop", worker: "t2", forget: true })).toContain("遗忘 t2");
+	expect(line({ action: "send", worker: "t1", prompt: "继续" })).toContain("发送 t1 — 继续");
+	expect(line({ action: "interrupt", worker: "t1" })).toContain("中断 t1");
+	expect(line({ action: "ack", worker: "t1" })).toContain("待命 t1");
+	expect(line({ action: "sleep", worker: "t1" })).toContain("休眠 t1");
+	expect(line({ action: "kill", worker: "t2" })).toContain("移除 t2");
+	expect(line({ action: "list" })).toContain("查看");
+	// 历史会话里的退役动作名仍能渲染（ADR-0007）。
 	expect(line({ action: "hold", worker: "t1" })).toContain("待命 t1");
-	expect(line({ action: "list" })).toContain("清单");
+	expect(line({ action: "stop", worker: "t2", forget: true })).toContain("移除 t2");
 	// session 恢复：整条绝对路径只显文件名，行尾截断不吃真信息。
 	expect(line({ action: "start", session: "sessions/2026-08-16T01_abc.jsonl", prompt: "继续" }))
-		.toContain("派遣 2026-08-16T01_abc.jsonl");
+		.toContain("启动 2026-08-16T01_abc.jsonl");
 });
 
 test("自渲染工具必须在分流白名单内，否则兜底行会遮掉其 renderCall", async () => {

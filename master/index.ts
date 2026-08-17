@@ -81,7 +81,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		const reviewing = runtime.store.state.workers.filter((worker) => worker.status === "reviewing").length;
 		const total = runtime.store.state.workers.length;
 		runtime.ctx.ui.setStatus("master", total === 0
-			? "◆ 待派遣"
+			? "◆ 无子代理"
 			: `◆ ${live}${reviewing ? ` · 审${reviewing}` : ""}${dormant ? ` · 眠${dormant}` : ""}`);
 	};
 
@@ -263,14 +263,14 @@ export function registerMaster(pi: ExtensionAPI): void {
 		name: MASTER_TOOL,
 		// 渲染字段长在自己的工具定义上，不改注册/激活语义（与"包装原生工具即强制激活"无关）。
 		label: "子代理",
-		description: "启动、追问、审查、待命、列出、休眠或遗忘指挥官拥有的并行子代理。结果异步回传。",
+		description: "指挥官的并行子代理接口：start 启动或唤醒、send 发消息、interrupt 打断当前回合（会话保留）、review 审查、ack 将落定消息标为已处理、list 查看、sleep 休眠（可唤醒）、kill 移除（不可回）。结果异步回传。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
 		renderResult: makeResultRenderer(false),
 		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
 		parameters: Type.Object({
-			action: StringEnum(["list", "start", "send", "review", "hold", "stop"] as const),
+			action: StringEnum(["list", "start", "send", "review", "interrupt", "ack", "sleep", "kill"] as const),
 			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标子代理" })),
 			prompt: Type.Optional(Type.String()),
 			model: Type.Optional(Type.String({ description: "可选 provider/model；省略则继承当前模型" })),
@@ -278,7 +278,6 @@ export function registerMaster(pi: ExtensionAPI): void {
 			session: Type.Optional(Type.String({ description: "可选：休眠子代理名或 Pi session path" })),
 			cwd: Type.Optional(Type.String({ description: "start 可选：子代理工作目录（绝对路径，必须已存在）；默认当前目录" })),
 			review: Type.Optional(Type.Boolean({ description: "start 可选：重要票——完成后自动发起对抗审查并回传终态" })),
-			forget: Type.Optional(Type.Boolean({ description: "stop 时彻底删除引用；默认保留为休眠子代理" })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
@@ -303,15 +302,26 @@ export function registerMaster(pi: ExtensionAPI): void {
 				await active.herdr.send(requiredString(params.worker, "worker"), requiredString(params.prompt, "prompt"));
 				return toolResult({ sent: true });
 			}
-			if (params.action === "hold") {
-				// 待命：显式"故意留着备用"，只消发落标记；不动中断计时（自动续跑不受 hold 影响）。
+			if (params.action === "interrupt") {
+				// 就绪信号不在此同步等待：中断结算经现有中断事件异步回传，与其它结果同一条通道。
+				await active.herdr.interrupt(requiredString(params.worker, "worker"));
+				return toolResult({ interrupted: true, note: "中断已投递，就绪信号经中断事件回传，到达后再 send" });
+			}
+			if (params.action === "ack") {
+				// 待命（Ack）：只消发落标记，子代理保持原状；不动中断计时（自动续跑不受 ack 影响）。
 				const name = requiredString(params.worker, "worker");
 				const target = requireWorker(active.store.state, name);
+				// 护栏：对没有待发落标记的非 idle 子代理 ack，唯一合理解释是把它误当暂停——
+				// 返回假成功会让指挥官以为子代理已停（真实事故，见 ADR-0007）。
+				if (!target.disposition && target.status !== "idle" && target.status !== "dormant")
+					throw new Error(
+						`ack 只把消息标为已处理，${name} 正在 ${target.status}，会继续跑。要打断用 interrupt（保会话），要收起用 sleep（休眠可唤醒）`,
+					);
 				if (target.disposition) {
-					const { disposition: _held, ...rest } = target;
+					const { disposition: _acked, ...rest } = target;
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
 				}
-				return toolResult({ held: true, worker: name });
+				return toolResult({ acked: true, worker: name });
 			}
 			if (params.action === "review") {
 				// 门禁：review 关闭时 Worker 会话没有 /fire-review 命令，投递会退化成普通模型输入；
@@ -321,10 +331,11 @@ export function registerMaster(pi: ExtensionAPI): void {
 				renderStatus();
 				return toolResult({ reviewing: true });
 			}
-			if (params.action === "stop") {
-				await active.herdr.stop(requiredString(params.worker, "worker"), params.forget === true);
+			if (params.action === "sleep" || params.action === "kill") {
+				// 两者共享同一条中止+关 pane 路径，只差结局：sleep 留休眠引用可唤醒，kill 除名不可回。
+				await active.herdr.stop(requiredString(params.worker, "worker"), params.action === "kill");
 				renderStatus();
-				return toolResult({ stopped: true, forgotten: params.forget === true });
+				return toolResult(params.action === "kill" ? { killed: true } : { sleeping: true });
 			}
 			throw new Error(`未知 subagents action：${String(params.action)}`);
 		},
@@ -453,8 +464,9 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，子代理不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口子代理，指挥官只派活、分析和决策，不直接改代码。",
 	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它子代理停笔；subagents 的 review action 可对任意 idle 子代理手动补审（如轻量票事后需要把关）。",
-	"子代理结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合发落：send 继续、review 补审、stop 收工，或 hold 表示故意留着备用（等用户决策也用 hold）；未发落会收到一次提醒。子代理被中断时按事件指引发落（通常 hold 等待），不要立即重发任务。",
-	"生命周期：一波集成过审后就 stop 该波子代理（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应子代理修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
+	"子代理结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合发落：send 继续、review 补审、sleep 休眠（关 pane 保上下文，start 传名字可唤醒）、kill 移除（不可再按名字唤醒）、ack 待命（只标记已处理，子代理保持原状；等用户决策也用 ack 并向用户说明）。子代理被中断时按事件指引发落，不要立即重发任务。",
+	"中途改方向：interrupt 打断 working 子代理的当前回合（发 esc，会话与 pane 保留，进行中的输出作废），中断事件回来后再 send 新指令。",
+	"生命周期：一波集成过审后就 sleep 该波子代理（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了唤醒对应子代理修，绿了再 kill；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
 	"子代理共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。子代理在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
 	];
 }
@@ -496,18 +508,24 @@ function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 }
 
 const ACTION_VERB: Record<string, string> = {
-	start: "派遣",
-	send: "追问",
+	start: "启动",
+	send: "发送",
 	review: "审查",
+	interrupt: "中断",
+	ack: "待命",
+	list: "查看",
+	sleep: "休眠",
+	kill: "移除",
+	// 已退役动作名：仅供历史会话重新渲染旧工具行（ADR-0007）。
 	hold: "待命",
-	list: "清单",
-	stop: "收工",
+	stop: "休眠",
 };
 
 /** 工具行一行制：动词 + 目标子代理 + 关键参数，委派文本取首句由 ToolLine 按宽截断。 */
 function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
-	const verb = action === "stop" && args.forget === true ? "遗忘" : ACTION_VERB[action] ?? action;
+	// stop+forget 同属历史渲染兜底：旧会话里的遗忘调用按现行词汇显示。
+	const verb = action === "stop" && args.forget === true ? "移除" : ACTION_VERB[action] ?? action;
 	const parts: Part[] = [{ text: verb, bold: true }];
 	const session = optionalString(args.session);
 	// session 恢复只显示文件名：整条绝对路径会把行尾截断吃掉真正的信息。
@@ -527,7 +545,7 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 function dispositionReminderText(worker: string): string {
 	return [
 		`提醒：子代理 ${worker} 已交活，等你发落`,
-		"send 继续派活；review 补审；stop 收工；hold 留用备用（等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
+		"send 继续派活；review 补审；sleep 休眠；kill 移除；ack 待命（子代理保持原状；等用户决策也用 ack 并向用户说明）。此提醒只此一次。",
 	].join("\n");
 }
 

@@ -80,6 +80,11 @@ export class HerdrWorkers {
 	private readonly workspaceId: string;
 	private readonly notifyMaster: (content: string, dispositionWorker?: string) => void;
 	private readonly runs = new Map<string, AbortController>();
+	/**
+	 * interrupt 指令在飞标记：只改中断事件文案的归因（指令中断 vs 外部介入），不入档案：
+	 * reload 丢标记只退化为外部中断文案，状态机与续监完全一致，不值得为此动 schema。
+	 */
+	private readonly deliberateInterrupts = new Set<string>();
 	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿子代理复活。 */
 	private readonly lifecycle = new AbortController();
 	/** 在飞启动集合：shutdown 要等它们真正退出，reload 后新旧运行时才不会同时写状态文件。 */
@@ -275,13 +280,13 @@ export class HerdrWorkers {
 	async send(workerName: string, prompt: string): Promise<void> {
 		const worker = requireWorker(this.store.state, workerName);
 		if (worker.status === "reviewing")
-			throw new Error(`${worker.name} 正在对抗审查，期间不能接收追问`);
+			throw new Error(`${worker.name} 正在对抗审查，期间不能接收消息`);
 		if (worker.status !== "idle" && worker.status !== "blocked")
-			throw new Error(`${worker.name} 当前是 ${worker.status}，不能接收追问`);
+			throw new Error(`${worker.name} 当前是 ${worker.status}，不能接收消息${worker.status === "working" ? "；要中途改方向先 interrupt，中断事件回来后再 send" : ""}`);
 		// blocked（提问）时 send 是回答通道必须放行；idle 且审查意图未消耗 = 自动审查投递窗口，追问会撞审查。
 		// 中断态（interruptedAt 在档）不是投递窗口——中断不触发自动补审，send 正是续跑通道（ADR-0006）。
 		if (worker.status === "idle" && worker.reviewNeeded && !worker.interruptedAt)
-			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
+			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再发送（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
 		validateDelegationText(text);
 		// 追问接管监听权：中断续监让位，同名监听只能有一个；发落标记与中断时刻随之消耗。
@@ -291,6 +296,25 @@ export class HerdrWorkers {
 		const active = { ...rest, status: "working" as const };
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: active });
 		void this.monitorPrompt(active, text);
+	}
+
+	/**
+	 * 打断 working 子代理的当前回合（会话与 pane 保留）：发 esc，与用户亲手中断走同一条
+	 * 中断结算路径（idle + interruptedAt，send 放行），就绪信号经中断事件异步回传。
+	 * esc 与回合自然结束的竞态无害：esc 落在空闲界面无副作用，结算按正常完成回传，
+	 * 在飞标记随任意结算消费，不会污染下一次中断的归因。
+	 */
+	async interrupt(workerName: string): Promise<void> {
+		const worker = requireWorker(this.store.state, workerName);
+		if (worker.status !== "working")
+			throw new Error(`${worker.name} 当前是 ${worker.status}，只有 working 子代理可以中断`);
+		this.deliberateInterrupts.add(worker.name);
+		try {
+			await this.run("agent.send-keys(esc)", ["agent", "send-keys", requiredPane(worker), "esc"], 10_000);
+		} catch (error) {
+			this.deliberateInterrupts.delete(worker.name);
+			throw error;
+		}
 	}
 
 	async review(workerName: string): Promise<void> {
@@ -724,6 +748,8 @@ export class HerdrWorkers {
 			return "done";
 		}
 		const latest = await this.latest(worker);
+		// 任意结算都消费在飞标记：esc 未命中（回合恰好自然结束）时标记不得残留到下次中断。
+		const deliberate = this.deliberateInterrupts.delete(worker.name);
 		if (signal.aborted) return "done";
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return "done";
@@ -731,7 +757,7 @@ export class HerdrWorkers {
 			// 中断不是执行失败：不消耗审查意图，续监动静，无人接手再交还指挥官（ADR-0006）。
 			const interrupted: WorkerRef = { ...settled, status: "idle", interruptedAt: Date.now() };
 			this.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
-			this.notifyMaster(workerInterruptedText(interrupted, latest), interrupted.name);
+			this.notifyMaster(workerInterruptedText(interrupted, latest, deliberate), interrupted.name);
 			this.watchInterrupted(interrupted);
 			return "done";
 		}
@@ -1210,19 +1236,24 @@ async function resolveWorkerCwd(requested?: string): Promise<string | undefined>
 	return real;
 }
 
-function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): string {
+function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant, deliberate: boolean): string {
 	return [
-		`子代理 ${worker.name} 被中断（回合被外部中止，非执行失败）`,
+		deliberate
+			? `子代理 ${worker.name} 已按你的 interrupt 指令停下（回合中止，会话与上下文保留）`
+			: `子代理 ${worker.name} 被中断（回合被外部中止，非执行失败）`,
 		...(worker.reviewNeeded ? ["审查票：审查意图保留，正常完成后仍会自动补审。"] : []),
 		latest.text ? `${sectionLine("lastOutput")}\n${bounded(latest.text)}` : "中断前没有输出。",
-		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 发落本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
+		deliberate
+			? "send 继续或改方向；要留它待命就 ack 发落本条。插件持续盯着它：若五分钟无动静，你会另收到自动续跑提醒。"
+			: "多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 ack 发落本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
 	].join("\n");
 }
 
 function autoResumeText(worker: WorkerRef): string {
 	return [
-		`子代理 ${worker.name} 中断已 5 分钟无人接手，判定为意外中断（连接异常或误触）`,
-		"流程交还给你：子代理上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
+		// 不断言中断来源：指令中断标记不持久，reload 后无法区分指令中断与意外中断。
+		`子代理 ${worker.name} 中断后已 5 分钟无动静`,
+		"流程交还给你：子代理上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）；仍要搁置就 ack。无需与用户确认。",
 	].join("\n");
 }
 

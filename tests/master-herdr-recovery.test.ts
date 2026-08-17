@@ -410,7 +410,7 @@ test("review submits only the literal command and waits past blocked states", as
 		["agent", "prompt", "w1:p2", "/fire-review", "--wait", "--until", "working", "--until", "blocked", "--timeout", "8000"],
 		["agent", "wait", "w1:p2", "--until", "idle", "--until", "done"],
 	]);
-	await expect(pool.send("worker-1", "顺便改一下")).rejects.toThrow("正在对抗审查，期间不能接收追问");
+	await expect(pool.send("worker-1", "顺便改一下")).rejects.toThrow("正在对抗审查，期间不能接收消息");
 	await writeFile(sessionPath, `${fixture}${JSON.stringify({
 		id: "assistant-1",
 		message: { role: "assistant", content: [{ type: "text", text: "实现完成" }], stopReason: "stop" },
@@ -1015,6 +1015,59 @@ test("外部中止按中断回传：意图保留、中断时刻入档、续监�
 	}
 });
 
+test("interrupt 指令：发 esc、结算按指令中断文案回传，非 working 拒绝", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-deliberate-interrupt-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "message",
+		id: "a1",
+		parentId: null,
+		message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "aborted" },
+	}) + "\n");
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker(), sessionPath } });
+	const calls: string[][] = [];
+	let releaseWait!: () => void;
+	const waitGate = new Promise<void>((resolve) => { releaseWait = resolve; });
+	let resolveNotice!: (value: string) => void;
+	const notice = new Promise<string>((resolve) => { resolveNotice = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "agent" && args[1] === "send-keys") {
+				releaseWait();
+				return response({});
+			}
+			// 中断后的续监（--until working）在真实 herdr 里会挂住。
+			if (args[0] === "agent" && args[1] === "wait" && args.includes("working"))
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			// 工作监听：esc 投递后才落定为 idle。
+			if (args[0] === "agent" && args[1] === "wait")
+				return waitGate.then(() => liveAgent("idle", sessionPath));
+			if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: resolveNotice,
+	});
+	await pool.resume();
+	await pool.interrupt("worker-1");
+	expect(calls.some((args) => args[1] === "send-keys" && args.includes("esc"))).toBe(true);
+	const text = await notice;
+	expect(text).toContain("已按你的 interrupt 指令停下");
+	expect(text).not.toContain("被外部中止");
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(store.state.workers[0]?.status).toBe("idle");
+	expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
+	// 护栏：已经停下的子代理不可再中断。
+	await expect(pool.interrupt("worker-1")).rejects.toThrow("只有 working 子代理可以中断");
+	await pool.shutdown();
+	await rm(directory, { recursive: true, force: true });
+});
+
 test("reload 后过期的中断计时立即触发自动续跑提醒，中断态保留到接手", async () => {
 	const store = createStore();
 	store.dispatch({
@@ -1038,7 +1091,7 @@ test("reload 后过期的中断计时立即触发自动续跑提醒，中断态�
 	});
 	await pool.resume();
 	const text = await notice;
-	expect(text).toContain("判定为意外中断");
+	expect(text).toContain("中断后已 5 分钟无动静");
 	expect(text).toContain("无需与用户确认");
 	// 中断时刻不随提醒消耗：它是中断态唯一标记，审查票的 send 门禁豁免凭它识别。
 	expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
