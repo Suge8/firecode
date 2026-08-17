@@ -12,6 +12,7 @@ const worker = (status: string) => ({
 	paneId: "p1",
 	tabId: "t1",
 });
+const worker2 = (status: string) => ({ ...worker(status), name: "w2", paneId: "p2", tabId: "t2" });
 
 test("有工人待拍板时升 timeSensitive 并带副标题，否则 active 无副标题", () => {
 	const base = { title: "s", body: "b", group: "g", sessionId: "sid" };
@@ -40,5 +41,3 @@ test("hasBlockedWorker：blocked 为真；全忙、文件缺失、文件损坏�
 		await rm(dir, { recursive: true, force: true });
 	}
 });
-
-const worker2 = (status: string) => ({ ...worker(status), name: "w2", paneId: "p2", tabId: "t2" });

@@ -92,8 +92,10 @@ async function sendBark(payload: BarkPayload): Promise<void> {
 	const barkUrl = readBarkUrl();
 	if (!barkUrl) return;
 	const cryptoConfig = readCryptoConfig();
+	// 加密时 id 必须提到顶层明文：折叠（CollapseID）由服务端写 APNs 头，密文内的 id 它读不到；
+	// id 只是本地会话 uuid，无内容敏感性。level/subtitle 等内容字段由设备端解密后应用，留在密文内。
 	const body = cryptoConfig
-		? { ciphertext: encryptPayload(payload, cryptoConfig.key, cryptoConfig.iv), iv: cryptoConfig.iv }
+		? { ciphertext: encryptPayload(payload, cryptoConfig.key, cryptoConfig.iv), iv: cryptoConfig.iv, id: payload.id }
 		: payload;
 	try {
 		await fetch(barkUrl.endsWith("/") ? barkUrl : `${barkUrl}/`, {
