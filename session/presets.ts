@@ -9,7 +9,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { type Preset, loadConfig } from "../config.js";
 
-const CLEAR_ITEM = "(none)";
+const CLEAR_ITEM = "（无）";
 const INSTRUCTIONS_PREVIEW_CHARS = 30;
 const SELECTOR_MAX_ROWS = 10;
 
@@ -139,7 +139,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		const choice = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 			const container = new Container();
 			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("Select Preset"))));
+			container.addChild(new Text(theme.fg("accent", theme.bold("选择预设"))));
 
 			const selectList = new SelectList(items, Math.min(items.length, SELECTOR_MAX_ROWS), {
 				selectedPrefix: (text) => theme.fg("accent", text),
@@ -151,7 +151,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			selectList.onSelect = (item) => done(item.value);
 			selectList.onCancel = () => done(null);
 			container.addChild(selectList);
-			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel")));
+			container.addChild(new Text(theme.fg("dim", "↑↓ 选择 • enter 确认 • esc 取消")));
 			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 
 			return {

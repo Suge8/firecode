@@ -221,7 +221,7 @@ function buildMarkdown(report: Report): string {
 		report.days === 0
 			? "全部"
 			: `最近 ${report.days} 天（${dateTime(report.from as number)} ~ ${dateTime(report.to)}）`;
-	const headers = ["Input", "Output", "Cache Read", "Cache Write", "Tokens", "Cost"];
+	const headers = ["输入", "输出", "缓存读", "缓存写", "总 Token", "成本"];
 	const aligns = headers.map(() => "---:");
 	const lines = [
 		"# Token 用量",
