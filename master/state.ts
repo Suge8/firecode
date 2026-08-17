@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
+/** 注意：session/bark.ts 以 blocked 作为「待拍板」升档判据；新增其他等用户态时需同步扩展 hasBlockedWorker。 */
 export type WorkerStatus = "starting" | "working" | "blocked" | "idle" | "reviewing" | "dormant";
 /** 处置状态：落定类事件送达置 pending，提醒送达置 reminded，任一处置动作清除（ADR-0006）。 */
 export type WorkerDisposition = "pending" | "reminded";
