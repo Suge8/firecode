@@ -453,7 +453,7 @@ export class HerdrWorkers {
 
 	/**
 	 * 2×2 象限布局：第 2 个右切首 pane，第 3 个下切首 pane，第 4 个下切第 2 个 pane。
-	 * 嵌套同向切会把后来者挤成 1/8 宽，象限切保证四个 Worker 各占ᵇ四分之一。
+	 * 嵌套同向切会把后来者挤成 1/8 宽，象限切保证四个 Worker 各占四分之一。
 	 */
 	private splitPlan(): { target: PositionedWorker; direction: "right" | "down" } | undefined {
 		const positioned = liveWorkers(this.store.state).filter(hasPaneLocation);

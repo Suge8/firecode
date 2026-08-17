@@ -1321,6 +1321,9 @@ test("review-flagged worker settles, auto-review fires and relays the verdict", 
 	// 结果与审查终态两条回传：先「已自动发起」，再「审查结束：通过（2 轮）」。
 	expect(notices.some((notice) => notice.includes("将自动发起对抗审查"))).toBe(true);
 	expect(text).toContain("审查结束：通过（2 轮）");
+	// 真实产文 → 紧凑行：日常最高频的两条路径（已停下/审查结束）同样锁到共享常量。
+	expect(masterEventDetails([notices[0] ?? ""]).titles[0]).toBe("Worker worker-1 已停下 — 实现完成");
+	expect(masterEventDetails([text]).titles[0]).toBe("Worker worker-1 审查结束：通过（2 轮） — 实现完成");
 	// 审查意图一次性消耗：档案里不再带 reviewNeeded。
 	expect(store.state.workers[0]?.reviewNeeded).toBeUndefined();
 	expect(store.state.workers[0]?.status).toBe("idle");
