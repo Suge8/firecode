@@ -258,7 +258,7 @@ test("Worker keeps pi default tools minus the Master tool and cannot edit/write 
 	]) expect(await guard?.({ toolName: "edit", input: { path } }, ctx)).toBeUndefined();
 	expect(await guard?.({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toEqual({
 		block: true,
-		reason: "工人只能修改当前 checkout：../outside.ts",
+		reason: "子代理只能修改当前 checkout：../outside.ts",
 	});
 	expect(await guard?.({ toolName: "edit", input: { path: "src/index.ts" } }, ctx)).toBeUndefined();
 	await rm(directory, { recursive: true, force: true });
@@ -574,6 +574,12 @@ test("subagents 工具行：中文动词 + 目标 + 关键参数，session 恢�
 	// session 恢复：整条绝对路径只显文件名，行尾截断不吃真信息。
 	expect(line({ action: "start", session: "sessions/2026-08-16T01_abc.jsonl", prompt: "继续" }))
 		.toContain("派遣 2026-08-16T01_abc.jsonl");
+});
+
+test("自渲染工具必须在分流白名单内，否则兜底行会遮掉其 renderCall", async () => {
+	const { FIRECODE_TOOLS } = (await loadFirecodeModule("tools/grouping.js")) as { FIRECODE_TOOLS: Set<string> };
+	// 曾踩过的坑：subagents 挂了 renderCall 却不在白名单，中文工具行从未被调用。
+	for (const name of ["read", "bash", "edit", "write", "subagents"]) expect(FIRECODE_TOOLS.has(name)).toBe(true);
 });
 
 function makeCtx(notices: string[], cwd = "/tmp") {

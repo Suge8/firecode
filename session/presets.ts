@@ -45,7 +45,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	let originalState: OriginalState | undefined;
 
 	pi.registerFlag("preset", {
-		description: "Preset configuration to use",
+		description: "要启用的预设名",
 		type: "string",
 	});
 
@@ -127,13 +127,13 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 		const items: SelectItem[] = names.map((name) => ({
 			value: name,
-			label: name === activeName ? `${name} (active)` : name,
+			label: name === activeName ? `${name}（当前）` : name,
 			description: describe(presets[name]),
 		}));
 		items.push({
 			value: CLEAR_ITEM,
 			label: CLEAR_ITEM,
-			description: "Clear active preset, restore defaults",
+			description: "清除当前预设，恢复默认",
 		});
 
 		const choice = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
@@ -185,20 +185,20 @@ export function registerPresets(pi: ExtensionAPI): void {
 	const { keys, presets: configured } = loadConfig().config;
 
 	pi.registerShortcut(keys.cyclePreset as never, {
-		description: "Cycle presets",
+		description: "轮切预设",
 		handler: (ctx) => cyclePreset(ctx),
 	});
 
 	for (const [name, preset] of Object.entries(configured)) {
 		if (!preset.key) continue;
 		pi.registerShortcut(preset.key as never, {
-			description: `Activate preset ${name}`,
+			description: `启用预设「${name}」`,
 			handler: (ctx) => activate(name, ctx),
 		});
 	}
 
 	pi.registerCommand("preset", {
-		description: "Switch preset configuration",
+		description: "切换预设",
 		handler: async (args, ctx) => {
 			const name = args?.trim();
 			if (!name) {

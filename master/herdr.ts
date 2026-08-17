@@ -46,13 +46,13 @@ interface StartWorkerOptions {
 	model?: string;
 	thinking?: string;
 	session?: string;
-	/** 工人工作目录（绝对路径，必须已存在）；缺此能力时模型会绕道 CLI（ADR-0005）。 */
+	/** 子代理工作目录（绝对路径，必须已存在）；缺此能力时模型会绕道 CLI（ADR-0005）。 */
 	cwd?: string;
 	/** 重要票：完成后由机器自动发起对抗审查。 */
 	review?: boolean;
 }
 
-/** 分配完成、尚待并行启动的工人：串行临界区的产出，交给 launchWorker 收尾。 */
+/** 分配完成、尚待并行启动的子代理：串行临界区的产出，交给 launchWorker 收尾。 */
 interface WorkerLaunch {
 	provisional: WorkerRef;
 	prompt: string;
@@ -80,7 +80,7 @@ export class HerdrWorkers {
 	private readonly workspaceId: string;
 	private readonly notifyMaster: (content: string, dispositionWorker?: string) => void;
 	private readonly runs = new Map<string, AbortController>();
-	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿工人复活。 */
+	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿子代理复活。 */
 	private readonly lifecycle = new AbortController();
 	/** 在飞启动集合：shutdown 要等它们真正退出，reload 后新旧运行时才不会同时写状态文件。 */
 	private readonly launches = new Set<Promise<unknown>>();
@@ -100,7 +100,7 @@ export class HerdrWorkers {
 
 	/**
 	 * 入队时能解析出的全部身份：显式命名，加 session/休眠引用反查出的旧名。
-	 * 改名恢复期间工人池展示的仍是旧名，按两个身份 stop 都必须命中同一个取消控制器。
+	 * 改名恢复期间子代理池展示的仍是旧名，按两个身份 stop 都必须命中同一个取消控制器。
 	 */
 	private queuedStartNames(options: StartWorkerOptions): string[] {
 		const names = new Set<string>();
@@ -141,7 +141,7 @@ export class HerdrWorkers {
 
 	/**
 	 * 串行临界区：名字/模型解析、布局容量计算、shell 创建与占位状态写入。
-	 * shell 创建必须留在串行区：后一个工人的象限切分依赖前一个 pane 的落位，
+	 * shell 创建必须留在串行区：后一个子代理的象限切分依赖前一个 pane 的落位，
 	 * 并发创建会互相拿错容量、误切同一 pane；代价是宿主降级时（pane/tab 创建慢）
 	 * 后续分配最长等 60 秒，这是保布局正确性的有意取舍；shell 握手与 agent 启动已在队外并行。
 	 */
@@ -170,7 +170,7 @@ export class HerdrWorkers {
 		const model = options.model?.trim() || dormant?.model || currentModel(ctx);
 		const thinking = parseThinking(options.thinking) ?? dormant?.thinking ?? parseThinking(ctx.thinkingLevel) ?? "medium";
 		const sessionPath = dormant?.sessionPath ?? options.session?.trim();
-		// cwd 校验失败即拒绝：静默回退 Master 目录会让工人在错误的 checkout 真实动手。
+		// cwd 校验失败即拒绝：静默回退 Master 目录会让子代理在错误的 checkout 真实动手。
 		const cwd = await resolveWorkerCwd(options.cwd ?? dormant?.cwd);
 		const previous = dormant;
 		if (dormant && dormant.name !== name)
@@ -240,7 +240,7 @@ export class HerdrWorkers {
 		shell: WorkerShell | undefined,
 		controller: AbortController,
 	): Promise<void> {
-		// 池关闭（reload/退出）：零副作用——不关 shell、不写状态。reload 要保留工人现场
+		// 池关闭（reload/退出）：零副作用——不关 shell、不写状态。reload 要保留子代理现场
 		// 交给下个运行时 reconcile；off/quit 的实体清理由 cleanup() 的 stop 负责。
 		if (this.lifecycle.signal.aborted) return;
 		if (shell) {
@@ -409,7 +409,7 @@ export class HerdrWorkers {
 				const pane = nestedRecord(created, ["result", "pane"]);
 				const paneId = requiredField(pane, "pane_id", "pane.split.pane");
 				await this.renamePane(paneId, display);
-				// tab 从“首工人专属”变成分组：标签改组名，不再冒用首工人的名字。
+				// tab 从“首子代理专属”变成分组：标签改组名，不再冒用首子代理的名字。
 				await this.renameTab(plan.target.tabId, "子代理");
 				return { paneId, tabId: plan.target.tabId, close: "pane" };
 			} catch (error) {
@@ -755,7 +755,7 @@ export class HerdrWorkers {
 
 	/**
 	 * review 投递失败收尾：先释放本次投递的监听位（finally 的清理在 throw 后才跑，
-	 * 不先删会挡住重挂），再把中断态工人挂回续监——否则监视与计时承诺断到下次 reload。
+	 * 不先删会挡住重挂），再把中断态子代理挂回续监——否则监视与计时承诺断到下次 reload。
 	 */
 	private reviewDeliveryFailure(name: string, controller: AbortController, error: unknown): unknown {
 		if (this.runs.get(name) === controller) this.runs.delete(name);
@@ -895,7 +895,7 @@ export class HerdrWorkers {
 
 	private async closeWorkerShell(shell: WorkerShell, ownerName?: string): Promise<void> {
 		if (shell.close === "pane") return this.closePane(shell.paneId);
-		// 开 tab 的首工人被中止时，同 tab 可能已有并行启动的其他工人：不能连坐关整 tab。
+		// 开 tab 的首子代理被中止时，同 tab 可能已有并行启动的其他子代理：不能连坐关整 tab。
 		const shared = liveWorkers(this.store.state).some((candidate) =>
 			candidate.name !== ownerName && candidate.tabId === shell.tabId
 		);
@@ -1222,7 +1222,7 @@ function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): stri
 function autoResumeText(worker: WorkerRef): string {
 	return [
 		`子代理 ${worker.name} 中断已 5 分钟无人接手，判定为意外中断（连接异常或误触）`,
-		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
+		"流程交还给你：子代理上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
 	].join("\n");
 }
 

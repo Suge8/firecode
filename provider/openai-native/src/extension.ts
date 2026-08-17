@@ -21,7 +21,7 @@ function updateFastStatus(ctx: ExtensionContext, settings: OpenAINativeSettings)
 }
 
 function notifyUnsupportedFastMode(ctx: ExtensionContext): void {
-	ctx.ui.notify("Fast mode is not supported for this model", "warning");
+	ctx.ui.notify("当前模型不支持加速档", "warning");
 }
 
 export default function openAINativeExtension(
@@ -46,30 +46,30 @@ export default function openAINativeExtension(
 			loadedSettings = result.loaded;
 			settings = loadedSettings.settings;
 			updateFastStatus(ctx, settings);
-			ctx.ui.notify(`Fast mode: ${result.enabled ? "on" : "off"}`, "info");
+			ctx.ui.notify(`加速档：${result.enabled ? "开" : "关"}`, "info");
 		} catch (error) {
-			ctx.ui.notify(`Failed to save Fast mode: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`加速档保存失败：${error instanceof Error ? error.message : String(error)}`, "error");
 		}
 	}
 
 	pi.registerFlag(VERBOSITY_FLAG, {
-		description: "Override OpenAI text verbosity: low, medium, high",
+		description: "覆盖 OpenAI 回答详略：low、medium、high",
 		type: "string",
 	});
 	pi.registerCommand("fast", {
-		description: "Toggle priority processing for supported OpenAI models",
+		description: "开关当前 OpenAI 系供应商的加速档",
 		handler: async (_args, ctx) => {
 			toggleFastMode(ctx);
 		},
 	});
 	pi.registerShortcut(fastShortcut as never, {
-		description: "Toggle Fast mode",
+		description: "开关加速档",
 		handler: toggleFastMode,
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (loadedSettings.warnings.length > 0 && ctx.hasUI) {
-			ctx.ui.notify(`FireCode openai: ${loadedSettings.warnings[0]}`, "warning");
+			ctx.ui.notify(`FireCode openai 配置：${loadedSettings.warnings[0]}`, "warning");
 		}
 		updateFastStatus(ctx, settings);
 	});

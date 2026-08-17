@@ -138,7 +138,7 @@ function followsToolRow(row: ToolRow): boolean {
 
 /** 走 pi 原生渲染（会消费工具自带 renderCall）的工具；其余走通用兜底行。
  * subagents 自带中文 ToolLine 渲染（master/index.ts），不列入会被兜底行遮掉。 */
-const FIRECODE_TOOLS = new Set(["read", "bash", "edit", "write", "find", "grep", "ls", "subagents"]);
+export const FIRECODE_TOOLS = new Set(["read", "bash", "edit", "write", "find", "grep", "ls", "subagents"]);
 
 function patchToolRows(): void {
 	if (globalState.patchedPrototype) return;

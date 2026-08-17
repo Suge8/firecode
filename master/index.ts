@@ -29,7 +29,7 @@ const FLUSH_RETRY_DELAY_MS = 5_000;
 interface MasterEvent {
 	id: string;
 	content: string;
-	/** 关联工人：落定类事件送达后要求指挥官发落（ADR-0006）。 */
+	/** 关联子代理：落定类事件送达后要求指挥官发落（ADR-0006）。 */
 	worker?: string;
 	/** 发落提醒事件：送达即把发落状态推进到 reminded，不再重复提醒。 */
 	remind?: boolean;
@@ -79,7 +79,10 @@ export function registerMaster(pi: ExtensionAPI): void {
 		const live = liveWorkers(runtime.store.state).length;
 		const dormant = runtime.store.state.workers.length - live;
 		const reviewing = runtime.store.state.workers.filter((worker) => worker.status === "reviewing").length;
-		runtime.ctx.ui.setStatus("master", `◆ ${live}${reviewing ? ` · 审${reviewing}` : ""}${dormant ? ` · 眠${dormant}` : ""}`);
+		const total = runtime.store.state.workers.length;
+		runtime.ctx.ui.setStatus("master", total === 0
+			? "◆ 待派遣"
+			: `◆ ${live}${reviewing ? ` · 审${reviewing}` : ""}${dormant ? ` · 眠${dormant}` : ""}`);
 	};
 
 	const flushMasterEvents = (active: MasterRuntime) => {
@@ -440,8 +443,8 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		.join("；");
 	return [
 	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开子代理。",
-	`指挥官拥有的子代理（子代理）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
-	"硬约束：禁止用 bash 调 herdr CLI 起子代理、给子代理发消息或管子代理生命周期——CLI 起的子代理是脱管子代理，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让子代理在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能里说的『后台代理/子代理』在你的语境一律指 subagents 子代理。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
+	`指挥官拥有的子代理（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
+	"硬约束：禁止用 bash 调 herdr CLI 起子代理、给子代理发消息或管子代理生命周期——CLI 起的子代理是脱管子代理，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让子代理在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能文本里的『后台代理』在你的语境即经 subagents 工具管理的子代理，不得用 bash/CLI 另起任何代理进程。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
 	"发现脱管子代理（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
@@ -501,7 +504,7 @@ const ACTION_VERB: Record<string, string> = {
 	stop: "收工",
 };
 
-/** 工具行一行制：动词 + 目标工人 + 关键参数，委派文本取首句由 ToolLine 按宽截断。 */
+/** 工具行一行制：动词 + 目标子代理 + 关键参数，委派文本取首句由 ToolLine 按宽截断。 */
 function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
 	const verb = action === "stop" && args.forget === true ? "遗忘" : ACTION_VERB[action] ?? action;
@@ -561,7 +564,7 @@ async function outsideCheckoutReason(path: string, cwd: string): Promise<string 
 	const target = await canonicalWritePath(resolve(cwd, path));
 	const local = relative(root, target);
 	return local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local)
-		? `工人只能修改当前 checkout：${path}`
+		? `子代理只能修改当前 checkout：${path}`
 		: undefined;
 }
 

@@ -3,7 +3,7 @@
  * 把最后一条回复推送到 iPhone 的 Bark App。
  *
  * - Worker 进程静默：通知全部由指挥官会话发出（判据同 herdr-display.ts）。
- * - 工人池里有待拍板的工人（Herdr blocked 态）时升 timeSensitive 并带副标题，
+ * - 子代理池里有待拍板的子代理（Herdr blocked 态）时升 timeSensitive 并带副标题，
  *   可穿透专注模式；平时为默认 active。
  * - 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知，通知栏每会话只留最新一条。
  * - 推送地址在 ~/.pi/agent/bark-key（整行即 https://api.day.app/<key>/），

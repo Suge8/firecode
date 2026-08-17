@@ -22,18 +22,18 @@ export function registerSessionName(pi: ExtensionAPI): void {
 	};
 
 	pi.registerShortcut(loadConfig().config.keys.rename as never, {
-		description: "Rename current session",
+		description: "重命名当前会话",
 		handler: async (ctx) => {
 			if (!ctx.hasUI) return;
 			const current = pi.getSessionName() ?? "";
-			const next = await ctx.ui.input("Rename session", current || "Session name");
+			const next = await ctx.ui.input("重命名会话", current || "新名字");
 			const name = cleanTitle(next ?? "");
 			if (name) rename(ctx, name);
 		},
 	});
 
 	pi.registerCommand("rename", {
-		description: "Rename current session",
+		description: "重命名当前会话",
 		handler: async (args, ctx) => {
 			const name = cleanTitle(args);
 			if (!name) {
