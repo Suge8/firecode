@@ -277,7 +277,8 @@ export class HerdrWorkers {
 		if (worker.status !== "idle" && worker.status !== "blocked")
 			throw new Error(`${worker.name} 当前是 ${worker.status}，不能接收追问`);
 		// blocked（提问）时 send 是回答通道必须放行；idle 且审查意图未消耗 = 自动审查投递窗口，追问会撞审查。
-		if (worker.status === "idle" && worker.reviewNeeded)
+		// 中断态（interruptedAt 在档）不是投递窗口——中断不触发自动补审，send 正是续跑通道（ADR-0006）。
+		if (worker.status === "idle" && worker.reviewNeeded && !worker.interruptedAt)
 			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
 		// 追问接管监听权：中断续监让位，同名监听只能有一个；处置标记与中断时刻随之消耗。
@@ -310,13 +311,17 @@ export class HerdrWorkers {
 				"--wait", "--until", "working", "--until", "blocked", "--timeout", "8000",
 			], 15_000, signal);
 		} catch (error) {
-			if (!isPromptStall(error)) throw error;
+			if (!isPromptStall(error)) throw this.reviewDeliveryFailure(worker.name, controller, error);
 			// 占用信号失效时会话可能全程观察不到状态变化：以 runId 是否推进判定审查是否真的启动。
 			const observed = worker.sessionPath
 				? reviewRunId(readReviewOutcome(worker.sessionPath)) ?? null
 				: null;
 			if (observed === previousRunId)
-				throw new Error(`${worker.name} 审查未启动：投递后状态与 fire-review runId 均无变化`);
+				throw this.reviewDeliveryFailure(
+					worker.name,
+					controller,
+					new Error(`${worker.name} 审查未启动：投递后状态与 fire-review runId 均无变化`),
+				);
 		} finally {
 			if (this.runs.get(worker.name) === controller) this.runs.delete(worker.name);
 		}
@@ -745,6 +750,18 @@ export class HerdrWorkers {
 		return "done";
 	}
 
+	/**
+	 * review 投递失败收尾：先释放本次投递的监听位（finally 的清理在 throw 后才跑，
+	 * 不先删会挡住重挂），再把中断态工人挂回续监——否则监视与计时承诺断到下次 reload。
+	 */
+	private reviewDeliveryFailure(name: string, controller: AbortController, error: unknown): unknown {
+		if (this.runs.get(name) === controller) this.runs.delete(name);
+		const current = this.store.state.workers.find((candidate) => candidate.name === name);
+		if (current?.status === "idle" && current.interruptedAt && !this.runs.has(name))
+			this.watchInterrupted(current);
+		return error;
+	}
+
 	/** 中断续监：用户接手（working）则结果照常回流；五分钟无动静把流程交还指挥官。 */
 	private watchInterrupted(worker: WorkerRef): void {
 		const controller = new AbortController();
@@ -760,9 +777,8 @@ export class HerdrWorkers {
 			const current = currentWorkerRun(this.store.state.workers, worker);
 			if (signal.aborted || !current || current.status !== "idle" || current.interruptedAt !== worker.interruptedAt)
 				return;
-			// 续跑提醒消耗中断时刻（不重复计时）；续监保留，指挥官 send 时自然接管。
-			const { interruptedAt: _consumed, ...rest } = current;
-			this.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+			// 中断时刻不在此消耗：它是"中断态"的唯一标记，send 门禁豁免与续监都凭它识别，
+			// 直到接手（send/review/用户派活）才清；本轮定时器已烧尽，不会重复提醒（reload 重挂除外）。
 			this.notifyMaster(autoResumeText(current), current.name);
 		}, delay);
 		timer.unref?.();
@@ -1155,7 +1171,7 @@ function dormantWorker(worker: WorkerRef): WorkerRef {
 }
 
 /** 中断识别：pi 自身信号中止记 aborted；经其它层浮出的中止是 error + abort 字样错误串。漏识别只退回失败分类，不伤流转。 */
-export function isInterrupted(latest: LatestAssistant): boolean {
+function isInterrupted(latest: LatestAssistant): boolean {
 	if (latest.stopReason === "aborted") return true;
 	return latest.stopReason === "error" && /abort/iu.test(latest.errorMessage ?? "");
 }
@@ -1188,7 +1204,7 @@ function autoResumeText(worker: WorkerRef): string {
 	return [
 		`Worker ${worker.name} 被中断已 5 分钟且无用户介入迹象，判定为意外中断（连接异常或误触）`,
 		...workerHeader(worker),
-		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；要调整方向就直接给新指令）。无需与用户确认。",
+		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
 	].join("\n");
 }
 

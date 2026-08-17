@@ -1005,7 +1005,7 @@ test("外部中止按中断回传：意图保留、中断时刻入档、续监�
 	}
 });
 
-test("reload 后过期的中断计时立即触发自动续跑提醒并消耗中断时刻", async () => {
+test("reload 后过期的中断计时立即触发自动续跑提醒，中断态保留到接手", async () => {
 	const store = createStore();
 	store.dispatch({
 		type: "UPSERT_WORKER",
@@ -1030,8 +1030,36 @@ test("reload 后过期的中断计时立即触发自动续跑提醒并消耗中�
 	const text = await notice;
 	expect(text).toContain("判定为意外中断");
 	expect(text).toContain("无需与用户确认");
-	expect(store.state.workers[0]?.interruptedAt).toBeUndefined();
+	// 中断时刻不随提醒消耗：它是中断态唯一标记，审查票的 send 门禁豁免凭它识别。
+	expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
 	expect(store.state.workers[0]?.status).toBe("idle");
+	await pool.shutdown();
+});
+
+test("中断的审查票可直接 send 续跑：门禁放行、中断态消耗、审查意图保留", async () => {
+	const store = createStore();
+	store.dispatch({
+		type: "UPSERT_WORKER",
+		worker: { ...worker("idle"), reviewNeeded: true, interruptedAt: Date.now() - 400_000 },
+	});
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			if (args[0] === "agent" && (args[1] === "wait" || args[1] === "prompt"))
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return liveAgent("idle");
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	await pool.resume();
+	// 自动续跑指引的动作必须真实可执行：审查票在中断态不是投递窗口，send 不得拒绝。
+	await pool.send("worker-1", "继续刚才被中断的工作");
+	expect(store.state.workers[0]).toMatchObject({ status: "working", reviewNeeded: true });
+	expect(store.state.workers[0]?.interruptedAt).toBeUndefined();
 	await pool.shutdown();
 });
 

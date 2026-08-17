@@ -109,10 +109,11 @@ export function registerMaster(pi: ExtensionAPI): void {
 			// 重复投递无害，静默即可；下一条 ack 会一并覆盖。
 		}
 		// 送达即标记处置要求：落定类事件置 pending，提醒事件置 reminded（ADR-0006）。
+		// 只标 idle：投递窗口内被用户接手（working）或已休眠的不再背处置要求，避免残留脏标记。
 		for (const event of batch) {
 			if (!event.worker) continue;
 			const target = active.store.state.workers.find((candidate) => candidate.name === event.worker);
-			if (!target || target.status === "dormant") continue;
+			if (!target || target.status !== "idle") continue;
 			active.store.dispatch({
 				type: "UPSERT_WORKER",
 				worker: { ...target, disposition: event.remind ? "reminded" : "pending" },
