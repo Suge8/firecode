@@ -9,7 +9,7 @@
  * payload 校验零外部依赖：纯函数一次性整体校验，不做字段级兼容。
  */
 import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
 import { formatDuration } from "../format.js";
 import type { CardData, StopReason } from "./state.js";
@@ -99,15 +99,12 @@ class ReviewCard implements Component {
 }
 
 function nativeCard(details: CardDetails, theme: Theme): Component {
-	const container = new Container();
-	// 全家卡统一无垂直内边距（与 tools 行、Master 事件卡同款），只留消息间距。
+	// 全家卡统一：无垂直内边距；消息间距由宿主 CustomMessageComponent 提供，不再叠加。
 	const box = new Box(1, 0, (text) => theme.bg(backgroundFor(details.tone), text));
 	box.addChild(new Text(`${details.icon} ${details.title}`, 0, 0));
 	box.addChild(new Spacer(1));
 	box.addChild(new Markdown(details.lines.join("\n"), 0, 0, getMarkdownTheme()));
-	container.addChild(new Spacer(1));
-	container.addChild(box);
-	return container;
+	return box;
 }
 
 function backgroundFor(tone: CardDetails["tone"]) {

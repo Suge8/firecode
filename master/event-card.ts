@@ -5,7 +5,7 @@
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Container, Markdown, Spacer, Text, TruncatedText } from "@earendil-works/pi-tui";
+import { Box, type Component, Markdown, Text, TruncatedText } from "@earendil-works/pi-tui";
 
 export const MASTER_EVENT_TYPE = "firecode-master-event";
 const VERSION = 1;
@@ -97,13 +97,10 @@ function fullCard(text: string, theme: Theme): Component {
 }
 
 function card(theme: Theme, children: Component[]): Component {
-	const container = new Container();
-	// 与全家卡统一：无垂直内边距（paddingY 0），只留消息间距。
+	// 宿主 CustomMessageComponent 已自带一行消息间距，这里不再叠加；垂直内边距也为 0。
 	const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
 	for (const child of children) box.addChild(child);
-	container.addChild(new Spacer(1));
-	container.addChild(box);
-	return container;
+	return box;
 }
 
 function plainContent(content: string | (string | unknown)[]): string {
