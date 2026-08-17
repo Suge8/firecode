@@ -109,7 +109,7 @@ test("Worker results return as follow-up custom messages", async () => {
 					constructor(options) { this.notify = options.notifyMaster; }
 					async resume() {}
 					async start() {
-						this.notify("Worker worker-1 已停下\\n回复：完成");
+						this.notify("子代理 worker-1 已停下\\n回复：完成");
 						return { name: "worker-1", model: "p/m", thinking: "medium", status: "idle" };
 					}
 					shutdown() {}
@@ -143,10 +143,10 @@ test("Worker results return as follow-up custom messages", async () => {
 	expect(messages).toEqual([{
 		message: {
 			customType: "firecode-master-event",
-			content: "Worker worker-1 已停下\n回复：完成",
+			content: "子代理 worker-1 已停下\n回复：完成",
 			display: true,
 			// content 给模型，details 驱动紧凑卡：每事件一行标题。
-			details: { version: 1, titles: ["Worker worker-1 已停下"] },
+			details: { version: 1, titles: ["子代理 worker-1 已停下"] },
 		},
 		options: { deliverAs: "followUp", triggerTurn: true },
 	}]);
@@ -216,7 +216,7 @@ test("review action exposes reviewing in Master status without accepting prompt 
 	);
 	await commands.get("fire-master")?.handler("status", ctx);
 	expect(result?.details).toEqual({ reviewing: true });
-	expect(statuses.at(-1)).toContain("1 reviewing");
+	expect(statuses.at(-1)).toContain("审1");
 	expect(notices.at(-1)).toContain("worker-1 reviewing");
 	await commands.get("fire-master")?.handler("off", ctx);
 });
@@ -498,22 +498,22 @@ test("未处置的落定消息提醒一次、再不处置升级通知；hold 处
 			model: "p/m", thinking: "medium", status: "idle",
 		} });
 		// 落定消息送达即置 pending。
-		notify?.("Worker worker-1 已停下", "worker-1");
+		notify?.("子代理 worker-1 已停下", "worker-1");
 		await new Promise((resolve) => setTimeout(resolve, 150));
 		expect(sent).toHaveLength(1);
 		expect(store?.state.workers[0]?.disposition).toBe("pending");
 		// 回合结束未处置 → 提醒一次，送达后推进到 reminded。
 		await settle();
 		expect(sent).toHaveLength(2);
-		expect(sent[1]).toContain("提醒：Worker worker-1");
+		expect(sent[1]).toContain("提醒：子代理 worker-1");
 		expect(store?.state.workers[0]?.disposition).toBe("reminded");
 		// 提醒回合仍不处置 → 升级用户通知并收口，不再追加。
 		await settle();
 		expect(sent).toHaveLength(2);
-		expect(notices.join()).toContain("仍未处置");
+		expect(notices.join()).toContain("仍未发落");
 		expect(store?.state.workers[0]?.disposition).toBeUndefined();
 		// hold 是合法处置：清标记，后续回合零打扰。
-		notify?.("Worker worker-1 已停下", "worker-1");
+		notify?.("子代理 worker-1 已停下", "worker-1");
 		await new Promise((resolve) => setTimeout(resolve, 150));
 		expect(store?.state.workers[0]?.disposition).toBe("pending");
 		await tools.get("subagents")?.execute("call", { action: "hold", worker: "worker-1" }, undefined, undefined, ctx);
@@ -560,12 +560,12 @@ test("subagents 工具行：中文动词 + 目标 + 关键参数，session 恢�
 	};
 	module.registerMaster(pi);
 	const tool = registered.get("subagents");
-	expect(tool?.label).toBe("工人");
+	expect(tool?.label).toBe("子代理");
 	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 	const ctx = () => ({ state: {}, cwd: "/tmp", toolCallId: crypto.randomUUID(), isPartial: false, isError: false, expanded: false });
 	const line = (args: Record<string, unknown>) => tool?.renderCall(args, theme, ctx()).render(90)[0] ?? "";
 	const start = line({ action: "start", worker: "t2", model: "anthropic/claude-opus-5", review: true, prompt: "只回复 1\n第二行不进工具行" });
-	expect(start).toContain("工人 派工 t2 · claude-opus-5 · 审查票 — 只回复 1");
+	expect(start).toContain("子代理 派遣 t2 · claude-opus-5 · 审查票 — 只回复 1");
 	expect(start).not.toContain("第二行");
 	expect(line({ action: "send", worker: "t1", prompt: "继续" })).toContain("追问 t1 — 继续");
 	expect(line({ action: "stop", worker: "t2", forget: true })).toContain("遗忘 t2");
@@ -573,7 +573,7 @@ test("subagents 工具行：中文动词 + 目标 + 关键参数，session 恢�
 	expect(line({ action: "list" })).toContain("清单");
 	// session 恢复：整条绝对路径只显文件名，行尾截断不吃真信息。
 	expect(line({ action: "start", session: "sessions/2026-08-16T01_abc.jsonl", prompt: "继续" }))
-		.toContain("派工 2026-08-16T01_abc.jsonl");
+		.toContain("派遣 2026-08-16T01_abc.jsonl");
 });
 
 function makeCtx(notices: string[], cwd = "/tmp") {

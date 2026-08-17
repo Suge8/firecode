@@ -15,7 +15,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `session/rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `session/herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `session/stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
-| `session/bark.ts` | 任务落定时推 iPhone Bark 通知：同会话固定 id 新顶旧，有工人待拍板升 timeSensitive（只读 `master/state.ts` 持久化），Worker 静默 |
+| `session/bark.ts` | 任务落定时推 iPhone Bark 通知：同会话固定 id 新顶旧，有子代理待拍板升 timeSensitive（只读 `master/state.ts` 持久化），Worker 静默 |
 | `session/working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget（高随终端自适应 3–10 行，宽不够逐级降高；回合内隐藏 Working 文本行，订阅占用频道在审查活跃期退让） |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 |
@@ -92,10 +92,10 @@ FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每
 
 Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
 `subagents` 是唯一接口：start / send / review / hold / list / stop；工具名不带 herdr——名字里的 herdr 会把模型
-引向 CLI 逃生路径（实测夜跑事故根因），guidelines 另有硬禁令：禁止 bash herdr 管工人，脱管工人
+引向 CLI 逃生路径（实测夜跑事故根因），guidelines 另有硬禁令：禁止 bash herdr 管子代理，脱管子代理
 （在 herdr 里跑但不在池内）零回传，发现即收编（退出旧 pi → start 传 session 路径，ADR-0005）。
 提示词决定何时委派、模型选型（依据 config 选型表，首次派发前把分波计划和每票模型一次性列给用户确认）和委派文本；
-工具只负责 Worker 生命周期、审查发起和异步结果回传。start 的 `cwd` 参数指定工人工作目录（绝对路径、
+工具只负责 Worker 生命周期、审查发起和异步结果回传。start 的 `cwd` 参数指定子代理工作目录（绝对路径、
 必须已存在，校验失败拒绝启动；目录随档案持久化，休眠恢复回到同一 checkout）——能力缺口会把模型逼上
 CLI 逃生路径（ADR-0005）；guidelines 不教 worktree，共享 checkout 仍是默认。`agent.start` 对 `agent_pane_busy` 退避重试 15s
 （herdr 进程快照高负载瞬态误判；shell 标记已匹配故 busy 必为瞬态），窗口用尽附 pane process-info 证据。
@@ -109,13 +109,13 @@ Master，Master 用 send 回答后继续。`idle` 与未查看后台结果 `done
 只有以 `stop` 结束才回传完成；`length`、`toolUse`、非中断的 `error`、缺失回复均按失败回传。中断（`aborted`
 或 abort 字样的 `error`，即 esc 手动介入或连接异常）不按失败回传也不消耗审查意图：事件告知 Master 按兵不动，
 插件续监动静（用户接手则结果照常回流），五分钟无人接手再发自动续跑提醒让 Master 续派；中断时刻随档案持久化，
-reload 重挂续监与剩余计时（ADR-0006）。落定类事件（结果/中断/审查终态/续跑提醒）送达即要求处置：回合内无
-send/review/stop/hold 则下个回合边界注入一次可见提醒，提醒后仍不处置升级为用户通知收口；处置标记持久化，
-活性归代码、处置决策归模型。普通工作监听用
+reload 重挂续监与剩余计时（ADR-0006）。落定类事件（结果/中断/审查终态/续跑提醒）送达即要求发落：回合内无
+send/review/stop/hold 则下个回合边界注入一次可见提醒，提醒后仍不发落升级为用户通知收口；发落标记持久化，
+活性归代码、发落决策归模型。普通工作监听用
 无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复，forget 才删除引用。
 新 Worker 优先在当前 Worker tab 内 split（2×2 象限切，避免嵌套同向切把后来者挤成 1/8 宽），每 tab 最多 4 个，
-满或 split 失败才建 tab；单工人 tab 标签是其显示名，第二个工人加入后改组名 `workers`；不 rebalance；
-Dormant 恢复与新建同一套布局（cwd 随档案持久化，混住同 tab 无碍）。中止或清理共享 tab 里的工人只收其 pane，不连坐关 tab；reload 时旧运行时
+满或 split 失败才建 tab；单子代理 tab 标签是其显示名，第二个子代理加入后改组名 `workers`；不 rebalance；
+Dormant 恢复与新建同一套布局（cwd 随档案持久化，混住同 tab 无碍）。中止或清理共享 tab 里的子代理只收其 pane，不连坐关 tab；reload 时旧运行时
 静默退场（等在飞启动退出、不关 shell 不写状态），现场由新运行时 reconcile。
 命名四层统一：pane/tab/Pi 显示名为 `任务名-模型名`（Pi 前缀 `↳`，不截断），Herdr agent 名是其净化版
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；
@@ -140,10 +140,10 @@ quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning
 路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；
 审查自动修复期间不 start/send，整体收口派专门 Worker，Master 只派活、分析和决策。没有 Tracker 的日常委派仍按需直接进行。
 重要实现票 start 时设 `review:true`；有可测行为变更的实现票默认 `/skill:tdd ` 开头并把 spec/Ticket
-已定的接缝与验收写进委派文本（接缝在计划层确认，工人不回头询问），调查/文档/收口/纯重构用普通说明；
+已定的接缝与验收写进委派文本（接缝在计划层确认，子代理不回头询问），调查/文档/收口/纯重构用普通说明；
 委派技能前缀由 start/send 代码白名单强制（仅 `/skill:tdd `，`/skills:` 拼写错误一并拦截；提示词禁令实战失效
 26 次后改为机制），Master 不用 `/skill:implement`。
-工人 commit 带路径且只含自己的改动、禁止 push，指挥官在集成点验证后统一 push。
+子代理 commit 带路径且只含自己的改动、禁止 push，指挥官在集成点验证后统一 push。
 斜杠技能只在文本开头且后跟空格才展开，写错静默失效。
 Worker 带 `FIRECODE_MASTER_WORKER` 启动，用 pi 默认工具集（read/bash/edit/write，ADR-0004），能自跑测试；
 隔离是纪律不是能力边界：系统提示禁令（herdr、git push、装依赖、越界写；commit 限自己路径）+ 自测义务 +

@@ -6,7 +6,7 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
 /** 注意：session/bark.ts 以 blocked 作为「待拍板」升档判据；新增其他等用户态时需同步扩展 hasBlockedWorker。 */
 export type WorkerStatus = "starting" | "working" | "blocked" | "idle" | "reviewing" | "dormant";
-/** 处置状态：落定类事件送达置 pending，提醒送达置 reminded，任一处置动作清除（ADR-0006）。 */
+/** 发落状态：落定类事件送达置 pending，提醒送达置 reminded，任一发落动作清除（ADR-0006）。 */
 export type WorkerDisposition = "pending" | "reminded";
 
 export interface WorkerRef {
@@ -120,7 +120,7 @@ export function liveWorkers(state: MasterState): WorkerRef[] {
 
 export function requireWorker(state: MasterState, name: string): WorkerRef {
 	const worker = state.workers.find((candidate) => candidate.name === name);
-	if (!worker) throw new Error(`Worker 不存在：${name}`);
+	if (!worker) throw new Error(`子代理不存在：${name}`);
 	return worker;
 }
 

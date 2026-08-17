@@ -18,7 +18,7 @@ function cleanTitle(raw: string): string {
 export function registerSessionName(pi: ExtensionAPI): void {
 	const rename = (ctx: ExtensionContext, name: string) => {
 		pi.setSessionName(name);
-		ctx.ui.notify(`Session renamed: ${name}`, "info");
+		ctx.ui.notify(`会话已改名：${name}`, "info");
 	};
 
 	pi.registerShortcut(loadConfig().config.keys.rename as never, {
@@ -37,7 +37,7 @@ export function registerSessionName(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			const name = cleanTitle(args);
 			if (!name) {
-				ctx.ui.notify("Usage: /rename <session name>", "error");
+				ctx.ui.notify("用法：/rename <新名字>", "error");
 				return;
 			}
 			rename(ctx, name);

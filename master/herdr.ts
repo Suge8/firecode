@@ -166,7 +166,7 @@ export class HerdrWorkers {
 		if (!name) throw new Error("start 需要 worker 名：用简短任务词命名（如 fix-outcome、scan-dups）");
 		validateWorkerName(name);
 		const existing = this.store.state.workers.find((worker) => worker.name === name);
-		if (existing && existing !== dormant) throw new Error(`Worker 已存在：${name}`);
+		if (existing && existing !== dormant) throw new Error(`子代理已存在：${name}`);
 		const model = options.model?.trim() || dormant?.model || currentModel(ctx);
 		const thinking = parseThinking(options.thinking) ?? dormant?.thinking ?? parseThinking(ctx.thinkingLevel) ?? "medium";
 		const sessionPath = dormant?.sessionPath ?? options.session?.trim();
@@ -247,7 +247,7 @@ export class HerdrWorkers {
 			try {
 				await this.closeWorkerShell(shell, name);
 			} catch (cleanupError) {
-				this.notifyMaster(`Worker ${name} 启动失败后的 pane 清理也失败：${String(cleanupError)}`);
+				this.notifyMaster(`子代理 ${name} 启动失败后的 pane 清理也失败：${String(cleanupError)}`);
 			}
 		}
 		this.store.dispatch({ type: "REMOVE_WORKER", name });
@@ -268,7 +268,7 @@ export class HerdrWorkers {
 		try {
 			await rm(shellReady.directory, { recursive: true, force: true });
 		} catch (error) {
-			this.notifyMaster(`Worker ${name} 的临时 shell 配置清理失败：${String(error)}`);
+			this.notifyMaster(`子代理 ${name} 的临时 shell 配置清理失败：${String(error)}`);
 		}
 	}
 
@@ -284,7 +284,7 @@ export class HerdrWorkers {
 			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
 		validateDelegationText(text);
-		// 追问接管监听权：中断续监让位，同名监听只能有一个；处置标记与中断时刻随之消耗。
+		// 追问接管监听权：中断续监让位，同名监听只能有一个；发落标记与中断时刻随之消耗。
 		this.runs.get(worker.name)?.abort();
 		this.runs.delete(worker.name);
 		const { disposition: _disposed, interruptedAt: _resumed, ...rest } = worker;
@@ -353,7 +353,7 @@ export class HerdrWorkers {
 		const existing = this.store.state.workers.find((candidate) => candidate.name === workerName);
 		if (!existing) {
 			if (pending) return;
-			throw new Error(`Worker 不存在：${workerName}`);
+			throw new Error(`子代理不存在：${workerName}`);
 		}
 		const worker = existing;
 		if (worker.status !== "dormant") await this.closeOwnedWorker(worker);
@@ -410,7 +410,7 @@ export class HerdrWorkers {
 				const paneId = requiredField(pane, "pane_id", "pane.split.pane");
 				await this.renamePane(paneId, display);
 				// tab 从“首工人专属”变成分组：标签改组名，不再冒用首工人的名字。
-				await this.renameTab(plan.target.tabId, "workers");
+				await this.renameTab(plan.target.tabId, "子代理");
 				return { paneId, tabId: plan.target.tabId, close: "pane" };
 			} catch (error) {
 				// Layout is best-effort: a fresh tab keeps Worker startup independent of split support.
@@ -438,7 +438,7 @@ export class HerdrWorkers {
 		try {
 			await this.run("pane.rename", ["pane", "rename", paneId, label]);
 		} catch (error) {
-			this.notifyMaster(`pane 命名失败（不影响 Worker）：${String(error)}`);
+			this.notifyMaster(`pane 命名失败（不影响子代理）：${String(error)}`);
 		}
 	}
 
@@ -447,7 +447,7 @@ export class HerdrWorkers {
 		try {
 			await this.run("tab.rename", ["tab", "rename", tabId, label]);
 		} catch (error) {
-			this.notifyMaster(`tab 命名失败（不影响 Worker）：${String(error)}`);
+			this.notifyMaster(`tab 命名失败（不影响子代理）：${String(error)}`);
 		}
 	}
 
@@ -561,7 +561,7 @@ export class HerdrWorkers {
 		const live = await this.findLiveAgent(worker);
 		if (!live) {
 			if (worker.status === "starting") await this.closeStartingShell(worker);
-			this.makeDormantOrForget(worker, "Worker 进程已不存在");
+			this.makeDormantOrForget(worker, "子代理进程已不存在");
 			return;
 		}
 		const sessionPath = optionalSessionPath(live);
@@ -682,11 +682,11 @@ export class HerdrWorkers {
 					const current = currentWorkerRun(this.store.state.workers, worker);
 					if (!current || current.status === "dormant") return;
 					if (isMissingAgent(error)) {
-						this.makeDormantOrForget(current, "Worker 进程已不存在");
+						this.makeDormantOrForget(current, "子代理进程已不存在");
 						return;
 					}
 					if (failures === 0)
-						this.notifyMaster(`Worker ${worker.name} ${mode === "review" ? "审查" : ""}监听失败，正在恢复：${error instanceof Error ? error.message : String(error)}`);
+						this.notifyMaster(`子代理 ${worker.name} ${mode === "review" ? "审查" : ""}监听失败，正在恢复：${error instanceof Error ? error.message : String(error)}`);
 					else await retryDelay(Math.min(1000 * 2 ** (failures - 1), MAX_RETRY_DELAY_MS), controller.signal);
 					failures += 1;
 					operation = mode === "review" ? "agent.wait(review)" : "agent.wait";
@@ -812,7 +812,7 @@ export class HerdrWorkers {
 					const current = currentWorkerRun(this.store.state.workers, worker);
 					if (!current || current.status !== "idle") return;
 					if (isMissingAgent(error)) {
-						this.makeDormantOrForget(current, "Worker 进程已不存在");
+						this.makeDormantOrForget(current, "子代理进程已不存在");
 						return;
 					}
 					await retryDelay(Math.min(1000 * 2 ** failures, MAX_RETRY_DELAY_MS), signal);
@@ -830,7 +830,7 @@ export class HerdrWorkers {
 			await this.review(name);
 		} catch (error) {
 			this.notifyMaster(
-				`Worker ${name} 自动审查发起失败（意图保留，reload 后自动重试，也可手动 review）：${error instanceof Error ? error.message : String(error)}`,
+				`子代理 ${name} 自动审查发起失败（意图保留，reload 后自动重试，也可手动 review）：${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
@@ -850,7 +850,7 @@ export class HerdrWorkers {
 		if (!settled || settled.status !== "reviewing") return true;
 		const observed: ReviewOutcome = settled.sessionPath
 			? readReviewOutcome(settled.sessionPath)
-			: { status: "error", message: "Worker 缺少 Pi session 路径" };
+			: { status: "error", message: "子代理缺少 Pi session 路径" };
 		const stale = previousRunId !== undefined && (reviewRunId(observed) ?? null) === previousRunId;
 		// runId 已推进但仍在循环中：占用信号失效时轮间会观测到 idle，不能就此结算。
 		if (!stale && observed.status === "in_progress") return false;
@@ -1212,31 +1212,31 @@ async function resolveWorkerCwd(requested?: string): Promise<string | undefined>
 
 function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): string {
 	return [
-		`Worker ${worker.name} 被中断（回合被外部中止，非执行失败）`,
+		`子代理 ${worker.name} 被中断（回合被外部中止，非执行失败）`,
 		...(worker.reviewNeeded ? ["审查票：审查意图保留，正常完成后仍会自动补审。"] : []),
 		latest.text ? `${sectionLine("lastOutput")}\n${bounded(latest.text)}` : "中断前没有输出。",
-		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 处置本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
+		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 发落本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
 	].join("\n");
 }
 
 function autoResumeText(worker: WorkerRef): string {
 	return [
-		`Worker ${worker.name} 中断已 5 分钟无人接手，判定为意外中断（连接异常或误触）`,
+		`子代理 ${worker.name} 中断已 5 分钟无人接手，判定为意外中断（连接异常或误触）`,
 		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；审查票的 send 在中断态放行，审查意图不受影响；要调整方向就直接给新指令）。无需与用户确认。",
 	].join("\n");
 }
 
 function workerBlockedText(worker: WorkerRef, question?: string): string {
 	return [
-		`Worker ${worker.name} 等待输入`,
-		question ? `${sectionLine("question")}\n${bounded(question)}` : "Worker 未提供具体问题，请检查对应 pane。",
-		"使用 subagents send 回答后继续。",
+		`子代理 ${worker.name} 等待输入`,
+		question ? `${sectionLine("question")}\n${bounded(question)}` : "子代理未提供具体问题，请检查对应 pane。",
+		"用 subagents send 回答后继续。",
 	].join("\n");
 }
 
 function reviewResultText(worker: WorkerRef, outcome: ReviewOutcome, latest: LatestAssistant | undefined): string {
 	return [
-		`Worker ${worker.name} 审查结束：${reviewOutcomeText(outcome)}`,
+		`子代理 ${worker.name} 审查结束：${reviewOutcomeText(outcome)}`,
 		latest?.text ? `${sectionLine("finalReply")}\n${bounded(latest.text)}` : "最终回复为空。",
 	].join("\n");
 }
@@ -1268,7 +1268,7 @@ function workerFailureText(
 		latest.text,
 	].filter(Boolean).join("\n") : "未找到最终 assistant 回复";
 	return [
-		`Worker ${worker.name} 执行失败`,
+		`子代理 ${worker.name} 执行失败`,
 		...(review ? [review] : []),
 		`${sectionLine("error")}\n${bounded(details)}`,
 	].join("\n");
@@ -1277,7 +1277,7 @@ function workerFailureText(
 // 事件不携带模型/session 等静态身份：进场一次（start 返回值）、按需重查（list），事件只装增量信号。
 function workerResultText(worker: WorkerRef, latest: LatestAssistant, review?: string): string {
 	return [
-		`Worker ${worker.name} 已停下`,
+		`子代理 ${worker.name} 已停下`,
 		...(review ? [review] : []),
 		latest.text ? `${sectionLine("reply")}\n${bounded(latest.text)}` : "回复为空。",
 	].join("\n");

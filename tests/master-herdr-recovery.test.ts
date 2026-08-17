@@ -234,7 +234,7 @@ test("new Workers fill the current tab to four panes before opening another", as
 	expect(calls).toContainEqual(["pane", "rename", "w1:p1", "worker-1-m"]);
 	expect(calls).toContainEqual(["pane", "rename", "w1:p2", "worker-2-m"]);
 	// 第二个工人加入后 tab 变分组：标签改组名，不再冒用首工人名字。
-	expect(calls).toContainEqual(["tab", "rename", "w1:t1", "workers"]);
+	expect(calls).toContainEqual(["tab", "rename", "w1:t1", "子代理"]);
 	// agent 名同样携带模型（Herdr 字符集内）；Pi 名为完整显示名加 ↳ 前缀。
 	const start = calls.find((args) => args[0] === "agent" && args[1] === "start" && args[2] === "worker-1-m");
 	expect(start?.slice(start.indexOf("--name"), start.indexOf("--name") + 2)).toEqual(["--name", "↳worker-1-m"]);
@@ -951,7 +951,7 @@ test("non-success assistant stops are returned as failures", async () => {
 		expect(text).toContain(sample.expected);
 		// 真实产文 → 紧凑行：标记词汇与产文共用 event-format 常量，改词两侧同步、此处当场红。
 		expect(masterEventDetails([text]).titles[0]).toBe(
-			`Worker worker-1 执行失败 — 停止原因：${sample.stopReason}`,
+			`子代理 worker-1 执行失败 — 停止原因：${sample.stopReason}`,
 		);
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -1000,12 +1000,12 @@ test("外部中止按中断回传：意图保留、中断时刻入档、续监�
 		await pool.resume();
 		const text = await notice;
 		expect(text).toContain("被中断");
-		expect(text).not.toContain(`Worker worker-1 执行失败`);
+		expect(text).not.toContain(`子代理 worker-1 执行失败`);
 		expect(text).toContain("审查意图保留");
 		// 真实产文 → 紧凑行：有正文时预览取中断前输出首句，无正文退化纯标题。
 		expect(masterEventDetails([text]).titles[0]).toBe(sample.text
-			? "Worker worker-1 被中断（回合被外部中止，非执行失败） — partial"
-			: "Worker worker-1 被中断（回合被外部中止，非执行失败）");
+			? "子代理 worker-1 被中断（回合被外部中止，非执行失败） — partial"
+			: "子代理 worker-1 被中断（回合被外部中止，非执行失败）");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(store.state.workers[0]).toMatchObject({ status: "idle", reviewNeeded: true });
 		expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
@@ -1322,8 +1322,8 @@ test("review-flagged worker settles, auto-review fires and relays the verdict", 
 	expect(notices.some((notice) => notice.includes("将自动发起对抗审查"))).toBe(true);
 	expect(text).toContain("审查结束：通过（2 轮）");
 	// 真实产文 → 紧凑行：日常最高频的两条路径（已停下/审查结束）同样锁到共享常量。
-	expect(masterEventDetails([notices[0] ?? ""]).titles[0]).toBe("Worker worker-1 已停下 — 实现完成");
-	expect(masterEventDetails([text]).titles[0]).toBe("Worker worker-1 审查结束：通过（2 轮） — 实现完成");
+	expect(masterEventDetails([notices[0] ?? ""]).titles[0]).toBe("子代理 worker-1 已停下 — 实现完成");
+	expect(masterEventDetails([text]).titles[0]).toBe("子代理 worker-1 审查结束：通过（2 轮） — 实现完成");
 	// 审查意图一次性消耗：档案里不再带 reviewNeeded。
 	expect(store.state.workers[0]?.reviewNeeded).toBeUndefined();
 	expect(store.state.workers[0]?.status).toBe("idle");

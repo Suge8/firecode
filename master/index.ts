@@ -29,9 +29,9 @@ const FLUSH_RETRY_DELAY_MS = 5_000;
 interface MasterEvent {
 	id: string;
 	content: string;
-	/** 关联工人：落定类事件送达后要求指挥官处置（ADR-0006）。 */
+	/** 关联工人：落定类事件送达后要求指挥官发落（ADR-0006）。 */
 	worker?: string;
-	/** 处置提醒事件：送达即把处置状态推进到 reminded，不再重复提醒。 */
+	/** 发落提醒事件：送达即把发落状态推进到 reminded，不再重复提醒。 */
 	remind?: boolean;
 }
 
@@ -79,7 +79,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		const live = liveWorkers(runtime.store.state).length;
 		const dormant = runtime.store.state.workers.length - live;
 		const reviewing = runtime.store.state.workers.filter((worker) => worker.status === "reviewing").length;
-		runtime.ctx.ui.setStatus("master", `◆ ${live}w${reviewing ? ` ${reviewing} reviewing` : ""}${dormant ? ` ${dormant}d` : ""}`);
+		runtime.ctx.ui.setStatus("master", `◆ ${live}${reviewing ? ` · 审${reviewing}` : ""}${dormant ? ` · 眠${dormant}` : ""}`);
 	};
 
 	const flushMasterEvents = (active: MasterRuntime) => {
@@ -101,7 +101,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			// 投递失败不丢结果：回队列并定时重排，重试不依赖新事件；pending 未 ack，reload 也能续投。
 			active.events.unshift(...batch);
 			if (active.flushFailures === 0)
-				active.ctx.ui.notify(`Worker 结果投递失败，将自动重试：${String(error)}`, "warning");
+				active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
 			active.flushFailures += 1;
 			active.flushTimer = setTimeout(() => flushMasterEvents(active), FLUSH_RETRY_DELAY_MS);
 			active.flushTimer.unref?.();
@@ -114,8 +114,8 @@ export function registerMaster(pi: ExtensionAPI): void {
 		} catch {
 			// 重复投递无害，静默即可；下一条 ack 会一并覆盖。
 		}
-		// 送达即标记处置要求：落定类事件置 pending，提醒事件置 reminded（ADR-0006）。
-		// 只标 idle：投递窗口内被用户接手（working）或已休眠的不再背处置要求，避免残留脏标记。
+		// 送达即标记发落要求：落定类事件置 pending，提醒事件置 reminded（ADR-0006）。
+		// 只标 idle：投递窗口内被用户接手（working）或已休眠的不再背发落要求，避免残留脏标记。
 		for (const event of batch) {
 			if (!event.worker) continue;
 			const target = active.store.state.workers.find((candidate) => candidate.name === event.worker);
@@ -128,7 +128,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		renderStatus();
 	};
 
-	/** 回合结束时的处置检查：未处置先提醒一次，提醒后仍不处置升级为用户通知，到此为止。 */
+	/** 回合结束时的发落检查：未发落先提醒一次，提醒后仍不发落升级为用户通知，到此为止。 */
 	const sweepDispositions = (active: MasterRuntime) => {
 		for (const target of active.store.state.workers) {
 			if (target.status !== "idle" || !target.disposition) continue;
@@ -144,7 +144,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			}
 			const { disposition: _cleared, ...rest } = target;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
-			active.ctx.ui.notify(`Worker ${target.name} 的落定消息经提醒后仍未处置，请人工跟进`, "warning");
+			active.ctx.ui.notify(`子代理 ${target.name} 的结果经提醒仍未发落，请人工跟进`, "warning");
 		}
 	};
 
@@ -154,7 +154,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 				pi.appendEntry(PENDING_EVENT_TYPE, event);
 			} catch (error) {
 				// 持久化失败不阻断投递，只失去 crash 恢复保障；如实告知。
-				active.ctx.ui.notify(`Worker 结果持久化失败（crash 时可能丢失这条）：${String(error)}`, "warning");
+				active.ctx.ui.notify(`子代理结果持久化失败（crash 时可能丢失这条）：${String(error)}`, "warning");
 			}
 		}
 		active.events.push(event);
@@ -176,7 +176,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			runtime.ctx = ctx;
 			return runtime;
 		}
-		if (runtime?.role === "worker") throw new Error("Worker 不能提升为 Master");
+		if (runtime?.role === "worker") throw new Error("子代理不能提升为指挥官");
 		const path = masterStatePath(ctx.sessionManager.getSessionId());
 		const store = new MasterStore(path, restored);
 		const activationEvents: Array<{ content: string; worker?: string }> = [];
@@ -224,12 +224,12 @@ export function registerMaster(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("fire-master", {
-		description: "启用 Master Worker Pool：/fire-master [status|off]",
+		description: "启动指挥官模式（子代理池）：/fire-master [status|off]",
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
 				if (runtime?.role !== "master") {
-					ctx.ui.notify("工人池未启用", "info");
+					ctx.ui.notify("指挥官模式未启动", "info");
 					return;
 				}
 				ctx.ui.notify(statusText(runtime.store.state.workers), "info");
@@ -238,7 +238,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			if (input === "off") {
 				const failures = await deactivate(true);
 				ctx.ui.notify(
-					failures.length ? `工人池已关闭，但工人清理失败：${failures.join("；")}` : "工人池已关闭并清理工人",
+					failures.length ? `指挥官模式已关闭，但子代理清理失败：${failures.join("；")}` : "指挥官模式已关闭，子代理已清理",
 					failures.length ? "warning" : "info",
 				);
 				return;
@@ -249,7 +249,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			}
 			try {
 				await activateMaster(ctx);
-				ctx.ui.notify("工人池已启用", "info");
+				ctx.ui.notify("指挥官模式已启动", "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
@@ -258,25 +258,24 @@ export function registerMaster(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: MASTER_TOOL,
-		// 显示词用"工人"：术语表把"子代理"保留给 fire-review 的审查者子进程。
 		// 渲染字段长在自己的工具定义上，不改注册/激活语义（与"包装原生工具即强制激活"无关）。
-		label: "工人",
-		description: "启动、追问、审查、待命、列出、休眠或遗忘 Master 拥有的并行 Worker。结果异步回传。",
+		label: "子代理",
+		description: "启动、追问、审查、待命、列出、休眠或遗忘指挥官拥有的并行子代理。结果异步回传。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
-			new ToolLine({ label: "工人", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
 		renderResult: makeResultRenderer(false),
 		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
 		parameters: Type.Object({
 			action: StringEnum(["list", "start", "send", "review", "hold", "stop"] as const),
-			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标 Worker" })),
+			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标子代理" })),
 			prompt: Type.Optional(Type.String()),
 			model: Type.Optional(Type.String({ description: "可选 provider/model；省略则继承当前模型" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
-			session: Type.Optional(Type.String({ description: "可选 Dormant Worker 名或 Pi session path" })),
-			cwd: Type.Optional(Type.String({ description: "start 可选：工人工作目录（绝对路径，必须已存在）；默认当前目录" })),
+			session: Type.Optional(Type.String({ description: "可选：休眠子代理名或 Pi session path" })),
+			cwd: Type.Optional(Type.String({ description: "start 可选：子代理工作目录（绝对路径，必须已存在）；默认当前目录" })),
 			review: Type.Optional(Type.Boolean({ description: "start 可选：重要票——完成后自动发起对抗审查并回传终态" })),
-			forget: Type.Optional(Type.Boolean({ description: "stop 时彻底删除引用；默认保留为 Dormant Worker" })),
+			forget: Type.Optional(Type.Boolean({ description: "stop 时彻底删除引用；默认保留为休眠子代理" })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
@@ -302,7 +301,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 				return toolResult({ sent: true });
 			}
 			if (params.action === "hold") {
-				// 待命：显式"故意留着备用"，只消处置标记；不动中断计时（自动续跑不受 hold 影响）。
+				// 待命：显式"故意留着备用"，只消发落标记；不动中断计时（自动续跑不受 hold 影响）。
 				const name = requiredString(params.worker, "worker");
 				const target = requireWorker(active.store.state, name);
 				if (target.disposition) {
@@ -345,7 +344,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 				const queued = new Set(active.events.map((event) => event.id));
 				for (const event of unackedEvents(ctx))
 					if (!queued.has(event.id)) enqueueMasterEvent(active, event, false);
-				// 持久化的处置状态跨 reload 续期：没有在途事件兑底时补一次提醒（ADR-0006）。
+				// 持久化的发落状态跨 reload 续期：没有在途事件兑底时补一次提醒（ADR-0006）。
 				for (const target of active.store.state.workers) {
 					if (target.status !== "idle" || !target.disposition) continue;
 					if (active.events.some((event) => event.worker === target.name)) continue;
@@ -359,7 +358,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 			} else setTools();
 		} catch (error) {
 			setTools();
-			ctx.ui.notify(`Master 恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`指挥官模式恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
 		}
 	});
 
@@ -440,26 +439,26 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`)
 		.join("；");
 	return [
-	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开工人。",
-	`指挥官拥有的工人（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
-	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让工人在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能里说的『后台代理/子代理』在你的语境一律指 subagents 工人。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
-	"发现脱管工人（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
+	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开子代理。",
+	`指挥官拥有的子代理（子代理）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
+	"硬约束：禁止用 bash 调 herdr CLI 起子代理、给子代理发消息或管子代理生命周期——CLI 起的子代理是脱管子代理，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让子代理在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能里说的『后台代理/子代理』在你的语境一律指 subagents 子代理。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
+	"发现脱管子代理（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
-	"复杂工作先用当前已加载的 planning skill 拆分；subagents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（工人必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
-	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发三连：start 成功 → 立即认领（远端 Tracker 一条命令加 assignee、摘待领标签、挂进行中标签，标签名以项目约定为准；本地 .scratch/ 在票内标注工人名）→ 才向用户汇报，依赖边变更时同步修正受影响票的状态；新立 Ticket 必须声明归属与触发来源——标题带线号或类别词（线号必须出自 spec），票内首行写「来源：哪张票/哪次事件 · 属哪条线 · 阻塞关系」，具体格式以项目 Tracker 约定为准；集成收口摘认领并删票/关票。没有 Tracker 就没有这些票务动作。",
-	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，工人不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
-	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
-	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它工人停笔；subagents 的 review action 可对任意 idle 工人手动补审（如轻量票事后需要把关）。",
-	"工人结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合处置：send 继续、review 补审、stop 收工，或 hold 表示故意留着备用（等用户决策也用 hold）；未处置会收到一次提醒。工人被中断时按事件指引处置（通常 hold 等待），不要立即重发任务。",
-	"生命周期：一波集成过审后就 stop 该波工人（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应工人修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
-	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
+	"复杂工作先用当前已加载的 planning skill 拆分；subagents 不依赖任何具体 skill。start 的 prompt 必须自包含：任务、交付物、限制、验证要求（子代理必须自跑受影响测试并附证据），以及最终回复必须包含的结论、证据和未决风险。",
+	"仅当项目已有本次流程的 Tracker（本地 .scratch/ 或远端 issue tracker，约定见项目 docs/agents/issue-tracker.md）时才有票务纪律：按 Ticket 阻塞边分波、首批调查票全并行、一波集成验证后解锁下一波；阻塞边除显式依赖外还包括触及路径重叠——共享 checkout 上同文件并行编辑会在提交前就互毁，重叠的 Ticket 必须串行不同波或合并为一票（无 Tracker 的日常并行委派同理）；派发三连：start 成功 → 立即认领（远端 Tracker 一条命令加 assignee、摘待领标签、挂进行中标签，标签名以项目约定为准；本地 .scratch/ 在票内标注子代理名）→ 才向用户汇报，依赖边变更时同步修正受影响票的状态；新立 Ticket 必须声明归属与触发来源——标题带线号或类别词（线号必须出自 spec），票内首行写「来源：哪张票/哪次事件 · 属哪条线 · 阻塞关系」，具体格式以项目 Tracker 约定为准；集成收口摘认领并删票/关票。没有 Tracker 就没有这些票务动作。",
+	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，子代理不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
+	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口子代理，指挥官只派活、分析和决策，不直接改代码。",
+	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它子代理停笔；subagents 的 review action 可对任意 idle 子代理手动补审（如轻量票事后需要把关）。",
+	"子代理结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合发落：send 继续、review 补审、stop 收工，或 hold 表示故意留着备用（等用户决策也用 hold）；未发落会收到一次提醒。子代理被中断时按事件指引发落（通常 hold 等待），不要立即重发任务。",
+	"生命周期：一波集成过审后就 stop 该波子代理（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应子代理修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
+	"子代理共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。子代理在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
 	];
 }
 
 function workerInstructions(name: string): string {
 	return `<firecode_worker name="${name}">
-你是指挥官（Master）委派的工人（Worker），不是指挥官，只完成收到的工作说明。
+你是指挥官（Master）委派的子代理（Worker），不是指挥官，只完成收到的工作说明。
 义务：改完必须自己跑受影响的测试/检查，最终回复交付结论、已运行的验证命令与结果证据、未决风险。
 禁令（除非工作说明明确授权）：不碰 herdr 命令、不启动子 Agent、不 git push、不新增或升级依赖（跑现有依赖的测试不受限）、不写 checkout 之外的路径。
 提交必须带路径：先 git add <你的路径>，再 git commit -m <msg> -- <你的路径>；带路径提交走临时索引，不会带上他人已暂存的内容；遇 index.lock 冲突稍候重试。
@@ -494,7 +493,7 @@ function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 }
 
 const ACTION_VERB: Record<string, string> = {
-	start: "派工",
+	start: "派遣",
 	send: "追问",
 	review: "审查",
 	hold: "待命",
@@ -524,13 +523,13 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 
 function dispositionReminderText(worker: string): string {
 	return [
-		`提醒：Worker ${worker} 的落定消息未处置`,
-		"send 继续派活；review 补审；stop 收工；hold 故意留着备用（等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
+		`提醒：子代理 ${worker} 已交活，等你发落`,
+		"send 继续派活；review 补审；stop 收工；hold 留用备用（等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
 	].join("\n");
 }
 
 function statusText(workers: WorkerRef[]): string {
-	if (!workers.length) return "没有 Worker";
+	if (!workers.length) return "没有子代理";
 	return workers.map((worker) => `${worker.name} ${worker.status} ${worker.model}`).join(" · ");
 }
 

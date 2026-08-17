@@ -41,7 +41,7 @@ test("renames through Pi and binds Ctrl+R", async () => {
 
 	expect(shortcut).toBe("ctrl+r");
 	expect(sessionName).toBe("new name");
-	expect(notifications).toEqual(["Session renamed: new name"]);
+	expect(notifications).toEqual(["会话已改名：new name"]);
 });
 
 test("Ctrl+R prompts for and applies a session name", async () => {
@@ -96,5 +96,5 @@ test("rejects an empty rename without touching the session", async () => {
 	});
 
 	expect(sessionName).toBe("old");
-	expect(notifications).toEqual([["Usage: /rename <session name>", "error"]]);
+	expect(notifications).toEqual([["用法：/rename <新名字>", "error"]]);
 });

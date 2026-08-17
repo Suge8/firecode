@@ -90,7 +90,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			const valid = preset.tools.filter((tool) => known.has(tool));
 			const unknown = preset.tools.filter((tool) => !known.has(tool));
 			if (unknown.length)
-				ctx.ui.notify(`Preset "${name}": Unknown tools: ${unknown.join(", ")}`, "warning");
+				ctx.ui.notify(`预设「${name}」含未知工具：${unknown.join("、")}`, "warning");
 			if (valid.length) pi.setActiveTools(valid);
 		}
 
@@ -102,7 +102,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		const preset = presets[name];
 		if (!preset) return;
 		await applyPreset(name, preset, ctx);
-		ctx.ui.notify(`Preset "${name}" activated`, "info");
+		ctx.ui.notify(`已切换预设「${name}」`, "info");
 		updateStatus(ctx);
 	}
 
@@ -114,7 +114,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			pi.setThinkingLevel(originalState.thinkingLevel);
 			pi.setActiveTools(originalState.tools);
 		}
-		ctx.ui.notify("Preset cleared, defaults restored", "info");
+		ctx.ui.notify("预设已清除，恢复默认", "info");
 		updateStatus(ctx);
 	}
 
@@ -207,7 +207,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			}
 			if (!presets[name]) {
 				const available = Object.keys(presets).join(", ") || "(none defined)";
-				ctx.ui.notify(`Unknown preset "${name}". Available: ${available}`, "error");
+				ctx.ui.notify(`未知预设「${name}」，可用：${available}`, "error");
 				return;
 			}
 			await activate(name, ctx);
@@ -227,10 +227,10 @@ export function registerPresets(pi: ExtensionAPI): void {
 		if (typeof flag === "string" && flag) {
 			if (presets[flag]) {
 				await applyPreset(flag, presets[flag], ctx);
-				ctx.ui.notify(`Preset "${flag}" activated`, "info");
+				ctx.ui.notify(`已切换预设「${flag}」`, "info");
 			} else {
 				const available = Object.keys(presets).join(", ") || "(none defined)";
-				ctx.ui.notify(`Unknown preset "${flag}". Available: ${available}`, "warning");
+				ctx.ui.notify(`未知预设「${flag}」，可用：${available}`, "warning");
 			}
 		} else {
 			// 恢复上次会话的预设：只认名字，不重放模型与工具切换。
