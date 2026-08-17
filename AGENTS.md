@@ -114,8 +114,8 @@ send/review/stop/hold 则下个回合边界注入一次可见提醒，提醒后�
 活性归代码、处置决策归模型。普通工作监听用
 无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复，forget 才删除引用。
 新 Worker 优先在当前 Worker tab 内 split（2×2 象限切，避免嵌套同向切把后来者挤成 1/8 宽），每 tab 最多 4 个，
-满或 split 失败才建 tab；单工人 tab 标签是其显示名，第二个工人加入后改组名 `workers`；不 rebalance，
-Dormant 恢复建新 tab。中止或清理共享 tab 里的工人只收其 pane，不连坐关 tab；reload 时旧运行时
+满或 split 失败才建 tab；单工人 tab 标签是其显示名，第二个工人加入后改组名 `workers`；不 rebalance；
+Dormant 恢复与新建同一套布局（cwd 随档案持久化，混住同 tab 无碍）。中止或清理共享 tab 里的工人只收其 pane，不连坐关 tab；reload 时旧运行时
 静默退场（等在飞启动退出、不关 shell 不写状态），现场由新运行时 reconcile。
 命名四层统一：pane/tab/Pi 显示名为 `任务名-模型名`（Pi 前缀 `↳`，不截断），Herdr agent 名是其净化版
 （字符集硬约束 [a-z0-9_-]、32 封顶，点号降为 `-`）；start 必须提供短任务词，没有 worker-N 退化；

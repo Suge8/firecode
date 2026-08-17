@@ -195,7 +195,7 @@ export class HerdrWorkers {
 		let shellReady: Awaited<ReturnType<typeof createShellReadyMarker>> | undefined;
 		try {
 			shellReady = await createShellReadyMarker();
-			const shell = await this.createWorkerShell(cwd ?? ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
+			const shell = await this.createWorkerShell(cwd ?? ctx.cwd, name, displayName(name, model), shellReady, signal);
 			this.store.dispatch({
 				type: "UPSERT_WORKER",
 				worker: { ...provisional, paneId: shell.paneId, tabId: shell.tabId },
@@ -395,10 +395,10 @@ export class HerdrWorkers {
 		name: string,
 		display: string,
 		shellReady: Awaited<ReturnType<typeof createShellReadyMarker>>,
-		allowSplit: boolean,
 		signal?: AbortSignal,
 	): Promise<WorkerShell> {
-		const plan = allowSplit ? this.splitPlan() : undefined;
+		// 恢复与新建同一套布局：cwd 随档案持久化，pane 级 --cwd 支持混住同一 tab。
+		const plan = this.splitPlan();
 		if (plan) {
 			try {
 				const created = await this.run("pane.split", [
