@@ -10,6 +10,7 @@ import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
 import { registerHerdrDisplay } from "./session/herdr-display.js";
 import { registerSessionName } from "./session/rename.js";
+import { registerBark } from "./session/bark.js";
 import { registerStats } from "./session/stats.js";
 import { registerWorkingFlame } from "./session/working-flame.js";
 import { registerStatusBar } from "./statusbar/index.js";
@@ -27,6 +28,7 @@ const REGISTRARS: Record<Exclude<Feature, "review" | "master">, (pi: ExtensionAP
 	claudeSub: registerClaudeSub,
 	openaiNative: registerOpenAINative,
 	workingFlame: registerWorkingFlame,
+	bark: registerBark,
 };
 
 export default function firecode(pi: ExtensionAPI): void {

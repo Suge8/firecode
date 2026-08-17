@@ -74,6 +74,7 @@ export const FEATURES = [
 	"claudeSub",
 	"openaiNative",
 	"workingFlame",
+	"bark",
 	"review",
 	"master",
 ] as const;

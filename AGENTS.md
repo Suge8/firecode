@@ -2,7 +2,7 @@
 
 pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Anthropic OAuth 归因、`/fire-review` 对抗性审查与按需 `/fire-master` 多 Agent 主控。
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。
-每个 register 封闭自己的运行状态，关掉任何一个不影响其余；唯一跨模块接缝是 Master 只读调用 `review/outcome.ts`。
+每个 register 封闭自己的运行状态，关掉任何一个不影响其余；跨模块接缝只有两条只读调用：Master 调 `review/outcome.ts`，bark 调 `master/state.ts` 的持久化状态。
 
 ## 模块
 
@@ -15,6 +15,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `session/rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `session/herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `session/stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `session/bark.ts` | 任务落定时推 iPhone Bark 通知：同会话固定 id 新顶旧，有工人待拍板升 timeSensitive（只读 `master/state.ts` 持久化），Worker 静默 |
 | `session/working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget（高随终端自适应 3–10 行，宽不够逐级降高；回合内隐藏 Working 文本行，订阅占用频道在审查活跃期退让） |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 |
