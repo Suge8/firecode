@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { REVIEW_OCCUPANCY_LABEL, readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import {
@@ -20,6 +20,8 @@ const MAX_RETRY_DELAY_MS = 30_000;
 const START_BUSY_RETRY_WINDOW_MS = 15_000;
 /** 占用信号失效时审查监听的轮询兑底间隔。 */
 const REVIEW_POLL_DELAY_MS = 2_000;
+/** 中断后无人接手的自动续跑等待：定时即业务语义（把流程交还指挥官），非轮询。 */
+const INTERRUPT_RESUME_DELAY_MS = 300_000;
 const MAX_WORKERS_PER_TAB = 4;
 
 interface HerdrAgent {
@@ -43,6 +45,8 @@ interface StartWorkerOptions {
 	model?: string;
 	thinking?: string;
 	session?: string;
+	/** 工人工作目录（绝对路径，必须已存在）；缺此能力时模型会绕道 CLI（ADR-0005）。 */
+	cwd?: string;
 	/** 重要票：完成后由机器自动发起对抗审查。 */
 	review?: boolean;
 }
@@ -73,7 +77,7 @@ export class HerdrWorkers {
 	private readonly pi: ExtensionAPI;
 	private readonly store: MasterStore;
 	private readonly workspaceId: string;
-	private readonly notifyMaster: (content: string) => void;
+	private readonly notifyMaster: (content: string, dispositionWorker?: string) => void;
 	private readonly runs = new Map<string, AbortController>();
 	/** 池级生命周期：shutdown 后中止一切在飞启动，防止清理完成后孤儿工人复活。 */
 	private readonly lifecycle = new AbortController();
@@ -85,7 +89,7 @@ export class HerdrWorkers {
 		pi: ExtensionAPI;
 		store: MasterStore;
 		workspaceId: string;
-		notifyMaster: (content: string) => void;
+		notifyMaster: (content: string, dispositionWorker?: string) => void;
 	}) {
 		this.pi = options.pi;
 		this.store = options.store;
@@ -164,6 +168,8 @@ export class HerdrWorkers {
 		const model = options.model?.trim() || dormant?.model || currentModel(ctx);
 		const thinking = parseThinking(options.thinking) ?? dormant?.thinking ?? parseThinking(ctx.thinkingLevel) ?? "medium";
 		const sessionPath = dormant?.sessionPath ?? options.session?.trim();
+		// cwd 校验失败即拒绝：静默回退 Master 目录会让工人在错误的 checkout 真实动手。
+		const cwd = await resolveWorkerCwd(options.cwd ?? dormant?.cwd);
 		const previous = dormant;
 		if (dormant && dormant.name !== name)
 			this.store.dispatch({ type: "REMOVE_WORKER", name: dormant.name });
@@ -175,6 +181,7 @@ export class HerdrWorkers {
 			paneId: "starting",
 			tabId: "starting",
 			...(sessionPath ? { sessionPath } : {}),
+			...(cwd ? { cwd } : {}),
 			...(options.review || dormant?.reviewNeeded ? { reviewNeeded: true } : {}),
 		};
 		// 启动也注册进 runs：stop/shutdown 能中止在飞启动，不只是监听；排队期被 stop 的直接短路。
@@ -187,7 +194,7 @@ export class HerdrWorkers {
 		let shellReady: Awaited<ReturnType<typeof createShellReadyMarker>> | undefined;
 		try {
 			shellReady = await createShellReadyMarker();
-			const shell = await this.createWorkerShell(ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
+			const shell = await this.createWorkerShell(cwd ?? ctx.cwd, name, displayName(name, model), shellReady, !sessionPath, signal);
 			this.store.dispatch({
 				type: "UPSERT_WORKER",
 				worker: { ...provisional, paneId: shell.paneId, tabId: shell.tabId },
@@ -273,7 +280,11 @@ export class HerdrWorkers {
 		if (worker.status === "idle" && worker.reviewNeeded)
 			throw new Error(`${worker.name} 是待自动审查的审查票，等待审查终态后再追问（或先手动 review）`);
 		const text = requiredText(prompt, "prompt");
-		const active = { ...worker, status: "working" as const };
+		// 追问接管监听权：中断续监让位，同名监听只能有一个；处置标记与中断时刻随之消耗。
+		this.runs.get(worker.name)?.abort();
+		this.runs.delete(worker.name);
+		const { disposition: _disposed, interruptedAt: _resumed, ...rest } = worker;
+		const active = { ...rest, status: "working" as const };
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: active });
 		void this.monitorPrompt(active, text);
 	}
@@ -284,8 +295,10 @@ export class HerdrWorkers {
 		const previousRunId = worker.sessionPath
 			? reviewRunId(readReviewOutcome(worker.sessionPath)) ?? null
 			: null;
-		// 投递窗口纳入 stop 的中止范围：idle Worker 没有监听控制器在 runs 里，
+		// 投递窗口纳入 stop 的中止范围：idle Worker 只可能挂着中断续监，先让它退位；
 		// 不注册的话 stop 中止不到在飞投递，迟到返回会复活已休眠的 Worker。
+		this.runs.get(worker.name)?.abort();
+		this.runs.delete(worker.name);
 		const controller = new AbortController();
 		const signal = AbortSignal.any([this.lifecycle.signal, controller.signal]);
 		this.runs.set(worker.name, controller);
@@ -313,7 +326,7 @@ export class HerdrWorkers {
 		if (signal.aborted || !current || current.status !== "idle") return;
 		// 审查意图在此消耗：只有确认审查真正启动（状态变化或 runId 推进）才算送达，
 		// 投递失败时意图保留在档案里，由 reload/resume 自动重试或手动 review 兜底。
-		const { reviewNeeded: _consumed, ...launched } = current;
+		const { reviewNeeded: _consumed, disposition: _disposed, interruptedAt: _resumed, ...launched } = current;
 		const reviewing = {
 			...launched,
 			status: "reviewing" as const,
@@ -481,6 +494,7 @@ export class HerdrWorkers {
 			model,
 			thinking,
 			status: "working",
+			...(provisional.cwd ? { cwd: provisional.cwd } : {}),
 			...(provisional.reviewNeeded ? { reviewNeeded: true } : {}),
 		};
 		this.store.dispatch({ type: "UPSERT_WORKER", worker });
@@ -557,6 +571,8 @@ export class HerdrWorkers {
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: refreshed });
 		if (refreshed.status === "reviewing") void this.monitorReview(refreshed);
 		else if (refreshed.status === "working") void this.monitorWait(refreshed);
+		// 中断现场恢复：续监与剩余续跑计时一并重挂（ADR-0006）。
+		else if (refreshed.status === "idle" && refreshed.interruptedAt) this.watchInterrupted(refreshed);
 		// reload 落在自动审查投递窗口内：意图仍在档案里，凭它续上被打断的补审。
 		else if (refreshed.status === "idle" && refreshed.reviewNeeded) void this.autoReview(refreshed.name);
 	}
@@ -703,22 +719,90 @@ export class HerdrWorkers {
 		if (signal.aborted) return "done";
 		const settled = currentWorkerRun(this.store.state.workers, worker);
 		if (!settled || settled.status === "dormant") return "done";
+		if (latest && isInterrupted(latest)) {
+			// 中断不是执行失败：不消耗审查意图，续监动静，无人接手再交还指挥官（ADR-0006）。
+			const interrupted: WorkerRef = { ...settled, status: "idle", interruptedAt: Date.now() };
+			this.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
+			this.notifyMaster(workerInterruptedText(interrupted, latest), interrupted.name);
+			this.watchInterrupted(interrupted);
+			return "done";
+		}
 		// 意图不在此消耗：只有 review() 确认启动才消耗，失败与 reload 都能凭档案重试。
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...settled, status: "idle" } });
 		if (!latest || latest.stopReason !== "stop" || latest.errorMessage) {
 			this.notifyMaster(workerFailureText(settled, latest, settled.reviewNeeded
 				? "审查票：执行失败未发起自动审查，意图保留"
-				: undefined));
+				: undefined), settled.name);
 			return "done";
 		}
 		if (settled.reviewNeeded) {
 			// 先如实回传「将发起」，成功与否由 review()/autoReview 各自落地，不提前宣称已启动。
-			this.notifyMaster(workerResultText(settled, latest, "审查票：将自动发起对抗审查，终态另行回传"));
+			this.notifyMaster(workerResultText(settled, latest, "审查票：将自动发起对抗审查，终态另行回传"), settled.name);
 			await this.autoReview(settled.name);
 			return "done";
 		}
-		this.notifyMaster(workerResultText(settled, latest));
+		this.notifyMaster(workerResultText(settled, latest), settled.name);
 		return "done";
+	}
+
+	/** 中断续监：用户接手（working）则结果照常回流；五分钟无动静把流程交还指挥官。 */
+	private watchInterrupted(worker: WorkerRef): void {
+		const controller = new AbortController();
+		this.runs.set(worker.name, controller);
+		const signal = AbortSignal.any([this.lifecycle.signal, controller.signal]);
+		this.armAutoResume(worker, signal);
+		void this.runInterruptWatch(worker, controller, signal);
+	}
+
+	private armAutoResume(worker: WorkerRef, signal: AbortSignal): void {
+		const delay = Math.max(0, (worker.interruptedAt ?? 0) + INTERRUPT_RESUME_DELAY_MS - Date.now());
+		const timer = setTimeout(() => {
+			const current = currentWorkerRun(this.store.state.workers, worker);
+			if (signal.aborted || !current || current.status !== "idle" || current.interruptedAt !== worker.interruptedAt)
+				return;
+			// 续跑提醒消耗中断时刻（不重复计时）；续监保留，指挥官 send 时自然接管。
+			const { interruptedAt: _consumed, ...rest } = current;
+			this.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+			this.notifyMaster(autoResumeText(current), current.name);
+		}, delay);
+		timer.unref?.();
+		signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+	}
+
+	private async runInterruptWatch(worker: WorkerRef, controller: AbortController, signal: AbortSignal): Promise<void> {
+		let failures = 0;
+		try {
+			while (!signal.aborted) {
+				try {
+					await this.run("agent.wait(interrupted)", [
+						"agent", "wait", requiredPane(worker), "--until", "working",
+					], null, signal);
+					if (signal.aborted) return;
+					const current = currentWorkerRun(this.store.state.workers, worker);
+					if (!current || current.status !== "idle") return;
+					const { interruptedAt: _resumed, ...rest } = current;
+					const resumed: WorkerRef = { ...rest, status: "working" };
+					this.store.dispatch({ type: "UPSERT_WORKER", worker: resumed });
+					if (this.runs.get(worker.name) === controller) this.runs.delete(worker.name);
+					// 接手后自毁：清掉自动续跑定时器，落定监听交给 monitorWait。
+					controller.abort();
+					void this.monitorWait(resumed);
+					return;
+				} catch (error) {
+					if (signal.aborted) return;
+					const current = currentWorkerRun(this.store.state.workers, worker);
+					if (!current || current.status !== "idle") return;
+					if (isMissingAgent(error)) {
+						this.makeDormantOrForget(current, "Worker 进程已不存在");
+						return;
+					}
+					await retryDelay(Math.min(1000 * 2 ** failures, MAX_RETRY_DELAY_MS), signal);
+					failures += 1;
+				}
+			}
+		} finally {
+			if (this.runs.get(worker.name) === controller) this.runs.delete(worker.name);
+		}
 	}
 
 	/** 审查票自动补审：意图只在 review() 成功转入 reviewing 时消耗；失败保留意图待重试。 */
@@ -756,7 +840,7 @@ export class HerdrWorkers {
 			: observed;
 		const { reviewPreviousRunId: _previousRunId, ...finished } = settled;
 		this.store.dispatch({ type: "UPSERT_WORKER", worker: { ...finished, status: "idle" } });
-		this.notifyMaster(reviewResultText(settled, outcome, latest));
+		this.notifyMaster(reviewResultText(settled, outcome, latest), settled.name);
 		return true;
 	}
 
@@ -1064,9 +1148,48 @@ function dormantWorker(worker: WorkerRef): WorkerRef {
 		thinking: worker.thinking,
 		status: "dormant",
 		sessionPath: worker.sessionPath,
-		// 未消耗的审查意图随休眠保留：恢复后完成交付仍会自动补审。
+		// 工作目录与未消耗的审查意图随休眠保留：恢复后回到同一 checkout、仍会自动补审。
+		...(worker.cwd ? { cwd: worker.cwd } : {}),
 		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
 	};
+}
+
+/** 中断识别：pi 自身信号中止记 aborted；经其它层浮出的中止是 error + abort 字样错误串。漏识别只退回失败分类，不伤流转。 */
+export function isInterrupted(latest: LatestAssistant): boolean {
+	if (latest.stopReason === "aborted") return true;
+	return latest.stopReason === "error" && /abort/iu.test(latest.errorMessage ?? "");
+}
+
+async function resolveWorkerCwd(requested?: string): Promise<string | undefined> {
+	const path = requested?.trim();
+	if (!path) return undefined;
+	if (!isAbsolute(path)) throw new Error(`cwd 必须是绝对路径：${path}`);
+	let real: string;
+	try {
+		real = await realpath(path);
+	} catch {
+		throw new Error(`cwd 目录不存在：${path}`);
+	}
+	if (!(await stat(real)).isDirectory()) throw new Error(`cwd 不是目录：${path}`);
+	return real;
+}
+
+function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): string {
+	return [
+		`Worker ${worker.name} 被中断（回合被外部中止，非执行失败）`,
+		...workerHeader(worker),
+		...(worker.reviewNeeded ? ["审查票：审查意图保留，正常完成后仍会自动补审。"] : []),
+		latest.text ? `中断前最后输出：\n${bounded(latest.text)}` : "中断前没有输出。",
+		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 处置本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
+	].join("\n");
+}
+
+function autoResumeText(worker: WorkerRef): string {
+	return [
+		`Worker ${worker.name} 被中断已 5 分钟且无用户介入迹象，判定为意外中断（连接异常或误触）`,
+		...workerHeader(worker),
+		"流程交还给你：工人上下文完整，用 send 让它从断点继续（一句「继续刚才被中断的工作」即可；要调整方向就直接给新指令）。无需与用户确认。",
+	].join("\n");
 }
 
 function workerBlockedText(worker: WorkerRef, question?: string): string {

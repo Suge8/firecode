@@ -10,6 +10,7 @@ import {
 	liveWorkers,
 	loadMasterState,
 	masterStatePath,
+	requireWorker,
 	type MasterState,
 	type WorkerRef,
 } from "./state.js";
@@ -25,6 +26,10 @@ const FLUSH_RETRY_DELAY_MS = 5_000;
 interface MasterEvent {
 	id: string;
 	content: string;
+	/** 关联工人：落定类事件送达后要求指挥官处置（ADR-0006）。 */
+	worker?: string;
+	/** 处置提醒事件：送达即把处置状态推进到 reminded，不再重复提醒。 */
+	remind?: boolean;
 }
 
 interface MasterRuntime {
@@ -103,7 +108,37 @@ export function registerMaster(pi: ExtensionAPI): void {
 		} catch {
 			// 重复投递无害，静默即可；下一条 ack 会一并覆盖。
 		}
+		// 送达即标记处置要求：落定类事件置 pending，提醒事件置 reminded（ADR-0006）。
+		for (const event of batch) {
+			if (!event.worker) continue;
+			const target = active.store.state.workers.find((candidate) => candidate.name === event.worker);
+			if (!target || target.status === "dormant") continue;
+			active.store.dispatch({
+				type: "UPSERT_WORKER",
+				worker: { ...target, disposition: event.remind ? "reminded" : "pending" },
+			});
+		}
 		renderStatus();
+	};
+
+	/** 回合结束时的处置检查：未处置先提醒一次，提醒后仍不处置升级为用户通知，到此为止。 */
+	const sweepDispositions = (active: MasterRuntime) => {
+		for (const target of active.store.state.workers) {
+			if (target.status !== "idle" || !target.disposition) continue;
+			if (target.disposition === "pending") {
+				if (active.events.some((event) => event.remind && event.worker === target.name)) continue;
+				enqueueMasterEvent(active, {
+					id: crypto.randomUUID(),
+					content: dispositionReminderText(target.name),
+					worker: target.name,
+					remind: true,
+				}, false);
+				continue;
+			}
+			const { disposition: _cleared, ...rest } = target;
+			active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+			active.ctx.ui.notify(`Worker ${target.name} 的落定消息经提醒后仍未处置，请人工跟进`, "warning");
+		}
 	};
 
 	const enqueueMasterEvent = (active: MasterRuntime, event: MasterEvent, persist: boolean) => {
@@ -121,9 +156,9 @@ export function registerMaster(pi: ExtensionAPI): void {
 		active.flushTimer.unref?.();
 	};
 
-	const notifyMaster = (content: string) => {
+	const notifyMaster = (content: string, worker?: string) => {
 		if (runtime?.role !== "master") return;
-		enqueueMasterEvent(runtime, { id: crypto.randomUUID(), content }, true);
+		enqueueMasterEvent(runtime, { id: crypto.randomUUID(), content, ...(worker ? { worker } : {}) }, true);
 	};
 
 	const activateMaster = async (ctx: ExtensionContext, restored?: MasterState): Promise<MasterRuntime> => {
@@ -137,15 +172,15 @@ export function registerMaster(pi: ExtensionAPI): void {
 		if (runtime?.role === "worker") throw new Error("Worker 不能提升为 Master");
 		const path = masterStatePath(ctx.sessionManager.getSessionId());
 		const store = new MasterStore(path, restored);
-		const activationEvents: string[] = [];
-		let deliverMasterEvent = (content: string): void => {
-			activationEvents.push(content);
+		const activationEvents: Array<{ content: string; worker?: string }> = [];
+		let deliverMasterEvent = (content: string, worker?: string): void => {
+			activationEvents.push({ content, ...(worker ? { worker } : {}) });
 		};
 		const herdr = new HerdrWorkers({
 			pi,
 			store,
 			workspaceId: process.env.HERDR_WORKSPACE_ID,
-			notifyMaster: (content) => deliverMasterEvent(content),
+			notifyMaster: (content, worker) => deliverMasterEvent(content, worker),
 		});
 		try {
 			await herdr.resume();
@@ -157,7 +192,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		runtime = candidate;
 		deliverMasterEvent = notifyMaster;
 		setTools("master");
-		for (const content of activationEvents) notifyMaster(content);
+		for (const event of activationEvents) notifyMaster(event.content, event.worker);
 		renderStatus();
 		return candidate;
 	};
@@ -217,15 +252,16 @@ export function registerMaster(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: MASTER_TOOL,
 		label: "Subagents",
-		description: "启动、追问、审查、列出、休眠或遗忘 Master 拥有的并行 Worker。结果异步回传。",
+		description: "启动、追问、审查、待命、列出、休眠或遗忘 Master 拥有的并行 Worker。结果异步回传。",
 		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
 		parameters: Type.Object({
-			action: StringEnum(["list", "start", "send", "review", "stop"] as const),
+			action: StringEnum(["list", "start", "send", "review", "hold", "stop"] as const),
 			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标 Worker" })),
 			prompt: Type.Optional(Type.String()),
 			model: Type.Optional(Type.String({ description: "可选 provider/model；省略则继承当前模型" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
 			session: Type.Optional(Type.String({ description: "可选 Dormant Worker 名或 Pi session path" })),
+			cwd: Type.Optional(Type.String({ description: "start 可选：工人工作目录（绝对路径，必须已存在）；默认当前目录" })),
 			review: Type.Optional(Type.Boolean({ description: "start 可选：重要票——完成后自动发起对抗审查并回传终态" })),
 			forget: Type.Optional(Type.Boolean({ description: "stop 时彻底删除引用；默认保留为 Dormant Worker" })),
 		}),
@@ -243,6 +279,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 					...(optionalString(params.model) ? { model: optionalString(params.model) } : {}),
 					...(optionalString(params.thinking) ? { thinking: optionalString(params.thinking) } : {}),
 					...(optionalString(params.session) ? { session: optionalString(params.session) } : {}),
+					...(optionalString(params.cwd) ? { cwd: optionalString(params.cwd) } : {}),
 				});
 				renderStatus();
 				return toolResult({ started: true, worker: compactWorker(worker) });
@@ -250,6 +287,16 @@ export function registerMaster(pi: ExtensionAPI): void {
 			if (params.action === "send") {
 				await active.herdr.send(requiredString(params.worker, "worker"), requiredString(params.prompt, "prompt"));
 				return toolResult({ sent: true });
+			}
+			if (params.action === "hold") {
+				// 待命：显式"故意留着备用"，只消处置标记；不动中断计时（自动续跑不受 hold 影响）。
+				const name = requiredString(params.worker, "worker");
+				const target = requireWorker(active.store.state, name);
+				if (target.disposition) {
+					const { disposition: _held, ...rest } = target;
+					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+				}
+				return toolResult({ held: true, worker: name });
 			}
 			if (params.action === "review") {
 				// 门禁：review 关闭时 Worker 会话没有 /fire-review 命令，投递会退化成普通模型输入；
@@ -285,6 +332,17 @@ export function registerMaster(pi: ExtensionAPI): void {
 				const queued = new Set(active.events.map((event) => event.id));
 				for (const event of unackedEvents(ctx))
 					if (!queued.has(event.id)) enqueueMasterEvent(active, event, false);
+				// 持久化的处置状态跨 reload 续期：没有在途事件兑底时补一次提醒（ADR-0006）。
+				for (const target of active.store.state.workers) {
+					if (target.status !== "idle" || !target.disposition) continue;
+					if (active.events.some((event) => event.worker === target.name)) continue;
+					enqueueMasterEvent(active, {
+						id: crypto.randomUUID(),
+						content: dispositionReminderText(target.name),
+						worker: target.name,
+						remind: true,
+					}, false);
+				}
 			} else setTools();
 		} catch (error) {
 			setTools();
@@ -300,6 +358,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		if (runtime?.role !== "master") return;
 		runtime.ctx = ctx;
 		runtime.turnActive = false;
+		sweepDispositions(runtime);
 		if (runtime.events.length === 0 || runtime.flushTimer) return;
 		const active = runtime;
 		active.flushTimer = setTimeout(() => flushMasterEvents(active), 100);
@@ -370,7 +429,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开工人。",
 	`指挥官拥有的工人（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
-	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
+	"硬约束：禁止用 bash 调 herdr CLI 起工人、给工人发消息或管工人生命周期——CLI 起的工人是脱管工人，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让工人在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
 	"发现脱管工人（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
 	"从 Tracker 首次派发前，把完整分波计划连同每张 Ticket 的模型/thinking（建议值取选型表）一次性列给用户确认；确认后各波自动执行不再重复询问，计划变更（如模型无额度）才重新征询。",
@@ -379,7 +438,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"轻重之分靠 start 的 review 参数：重要实现票设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，工人不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口工人，指挥官只派活、分析和决策，不直接改代码。",
 	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它工人停笔；subagents 的 review action 可对任意 idle 工人手动补审（如轻量票事后需要把关）。",
-	"工人结果会以 custom follow-up message 回来。收到后决定继续 send、stop 为可恢复的休眠工人（Dormant Worker），或 stop forget=true 删除引用。",
+	"工人结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合处置：send 继续、review 补审、stop 收工，或 hold 表示故意留着备用（等用户决策也用 hold）；未处置会收到一次提醒。工人被中断时按事件指引处置（通常 hold 等待），不要立即重发任务。",
 	"生命周期：一波集成过审后就 stop 该波工人（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了复活对应工人修，绿了再 forget；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
 	"工人共享 checkout 且可能并行写入；需要额外限制（如禁改依赖）必须写进工作说明（Delegation）。工人在发起自审前用带路径提交固定只包含自己的改动（`git commit -m <msg> -- <自己的路径>`，带路径提交走临时索引，天然不携带他人已暂存内容；遇 index.lock 冲突稍候重试；禁止 push），修复回合同样收尾即提交；指挥官在集成点检查新增 commits、运行集成层验证后统一 push，再向用户报告完成。",
 	];
@@ -399,7 +458,7 @@ function workerInstructions(name: string): string {
 function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 	const manager = ctx.sessionManager as { getEntries?: () => unknown[] } | undefined;
 	const entries = manager?.getEntries?.() ?? [];
-	const pending = new Map<string, string>();
+	const pending = new Map<string, MasterEvent>();
 	const acked = new Set<string>();
 	for (const entry of entries) {
 		if (!entry || typeof entry !== "object") continue;
@@ -407,13 +466,25 @@ function unackedEvents(ctx: ExtensionContext): MasterEvent[] {
 		if (record.type !== "custom" || !record.data || typeof record.data !== "object") continue;
 		const data = record.data as Record<string, unknown>;
 		if (record.customType === PENDING_EVENT_TYPE) {
-			if (typeof data.id === "string" && typeof data.content === "string") pending.set(data.id, data.content);
+			if (typeof data.id === "string" && typeof data.content === "string")
+				pending.set(data.id, {
+					id: data.id,
+					content: data.content,
+					...(typeof data.worker === "string" ? { worker: data.worker } : {}),
+				});
 			continue;
 		}
 		if (record.customType === EVENT_ACK_TYPE && Array.isArray(data.ids))
 			for (const id of data.ids) if (typeof id === "string") acked.add(id);
 	}
-	return [...pending].filter(([id]) => !acked.has(id)).map(([id, content]) => ({ id, content }));
+	return [...pending.values()].filter((event) => !acked.has(event.id));
+}
+
+function dispositionReminderText(worker: string): string {
+	return [
+		`提醒：Worker ${worker} 已 idle，你上一回合收到了它的落定消息但未做任何处置。`,
+		"现在四选一：send 继续派活；review 补审把关；stop 收工休眠；hold 表示故意留着备用（在等用户决策也用 hold 并向用户说明）。此提醒只此一次。",
+	].join("\n");
 }
 
 function statusText(workers: WorkerRef[]): string {

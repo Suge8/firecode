@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrWorkers } from "../master/herdr.js";
@@ -713,6 +713,9 @@ test("a duplicate same-name start is rejected at enqueue instead of queueing unc
 	first.catch(() => {});
 	// 同名并发启动：第二个入队即拒，不会成为 stop 杀不掉的漏网之鱼。
 	await expect(pool.start(ctx, { name: "dup", prompt: "再做" })).rejects.toThrow("不能重复启动");
+	// 等第一个启动真正建出 shell 再停：断言的是"建出来后能收干净"，不靠微任务时序踩点。
+	while (!calls.some((args) => args[0] === "tab" && args[1] === "create"))
+		await new Promise((resolve) => setTimeout(resolve, 5));
 	await pool.stop("dup", true);
 	await expect(first).rejects.toThrow();
 	expect(calls.filter((args) => args[0] === "tab" && args[1] === "create").length).toBe(1);
@@ -913,7 +916,6 @@ test("a blocked Worker remains blocked and asks the Master for input", async () 
 test("non-success assistant stops are returned as failures", async () => {
 	for (const sample of [
 		{ stopReason: "error", errorMessage: "429 quota exhausted", expected: "429 quota exhausted" },
-		{ stopReason: "aborted", text: "partial", expected: "执行失败" },
 		{ stopReason: "length", text: "truncated", expected: "停止原因：length" },
 	]) {
 		const directory = await mkdtemp(join(tmpdir(), "firecode-worker-failure-"));
@@ -947,6 +949,131 @@ test("non-success assistant stops are returned as failures", async () => {
 		expect(await notice).toContain(sample.expected);
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+test("外部中止按中断回传：意图保留、中断时刻入档、续监挂起", async () => {
+	// 两种真实形态：pi 自身信号中止记 aborted；经其它层浮出的中止是 error + abort 字样（2026-08-16 实测）。
+	for (const sample of [
+		{ stopReason: "aborted", text: "partial" },
+		{ stopReason: "error", errorMessage: "The operation was aborted." },
+	]) {
+		const directory = await mkdtemp(join(tmpdir(), "firecode-worker-interrupt-"));
+		const sessionPath = join(directory, "worker.jsonl");
+		await writeFile(sessionPath, JSON.stringify({
+			type: "message",
+			id: "a1",
+			parentId: null,
+			message: {
+				role: "assistant",
+				content: sample.text ? [{ type: "text", text: sample.text }] : [],
+				stopReason: sample.stopReason,
+				...(sample.errorMessage ? { errorMessage: sample.errorMessage } : {}),
+			},
+		}) + "\n");
+		const store = createStore();
+		store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker(), sessionPath, reviewNeeded: true } });
+		const calls: string[][] = [];
+		let resolveNotice!: (value: string) => void;
+		const notice = new Promise<string>((resolve) => { resolveNotice = resolve; });
+		const pool = new HerdrWorkers({
+			pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+				calls.push(args);
+				// 续监的 --until working 等待在真实 herdr 里会挂住，直到接手或中止。
+				if (args[0] === "agent" && args[1] === "wait" && args.includes("working"))
+					return new Promise((_resolve, reject) => {
+						options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+					});
+				if (args[0] === "agent" && args[1] === "wait") return liveAgent("idle", sessionPath);
+				if (args[0] === "agent" && args[1] === "get") return liveAgent(undefined, sessionPath);
+				return response({});
+			} } as never,
+			store,
+			workspaceId: "w1",
+			notifyMaster: resolveNotice,
+		});
+		await pool.resume();
+		const text = await notice;
+		expect(text).toContain("被中断");
+		expect(text).not.toContain(`Worker worker-1 执行失败`);
+		expect(text).toContain("审查意图保留");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(store.state.workers[0]).toMatchObject({ status: "idle", reviewNeeded: true });
+		expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
+		expect(calls.some((args) => args[1] === "wait" && args.includes("working"))).toBe(true);
+		await pool.shutdown();
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("reload 后过期的中断计时立即触发自动续跑提醒并消耗中断时刻", async () => {
+	const store = createStore();
+	store.dispatch({
+		type: "UPSERT_WORKER",
+		worker: { ...worker("idle"), interruptedAt: Date.now() - 400_000 },
+	});
+	let resolveNotice!: (value: string) => void;
+	const notice = new Promise<string>((resolve) => { resolveNotice = resolve; });
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			if (args[0] === "agent" && args[1] === "wait")
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return liveAgent("idle");
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster: resolveNotice,
+	});
+	await pool.resume();
+	const text = await notice;
+	expect(text).toContain("判定为意外中断");
+	expect(text).toContain("无需与用户确认");
+	expect(store.state.workers[0]?.interruptedAt).toBeUndefined();
+	expect(store.state.workers[0]?.status).toBe("idle");
+	await pool.shutdown();
+});
+
+test("cwd 校验失败拒绝启动，合法 cwd 进 pane 与档案", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const checkout = await mkdtemp(join(tmpdir(), "firecode-worker-cwd-"));
+	const realCheckout = await realpath(checkout);
+	const store = createStore();
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "tab" && args[1] === "create")
+				return response({ result: { root_pane: { pane_id: "w1:p9" }, tab: { tab_id: "w1:t9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					if (options.signal?.aborted) return reject(new Error("start aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("start aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	// 静默回退 Master 目录会让工人在错误 checkout 真实动手：校验失败必须拒绝。
+	await expect(pool.start(ctx, { name: "cw", prompt: "做", cwd: "relative/path" })).rejects.toThrow("绝对路径");
+	await expect(pool.start(ctx, { name: "cw", prompt: "做", cwd: "/nonexistent-firecode-cwd" })).rejects.toThrow("不存在");
+	expect(store.state.workers).toEqual([]);
+	const started = pool.start(ctx, { name: "cw", prompt: "做", cwd: checkout });
+	started.catch(() => {});
+	while (!calls.some((args) => args[0] === "tab" && args[1] === "create"))
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	const create = calls.find((args) => args[0] === "tab" && args[1] === "create");
+	expect(create?.[create.indexOf("--cwd") + 1]).toBe(realCheckout);
+	expect(store.state.workers[0]?.cwd).toBe(realCheckout);
+	await pool.stop("cw", true);
+	await expect(started).rejects.toThrow();
+	await pool.shutdown();
+	await rm(checkout, { recursive: true, force: true });
 });
 
 test("a failed Herdr wait reattaches and still returns the result", async () => {

@@ -90,18 +90,25 @@ FAIL 输出契约以 `review/prompts/review.{zh,en}.md` 为唯一事实源：每
 ## Master
 
 Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
-`subagents` 是唯一接口：start / send / review / list / stop；工具名不带 herdr——名字里的 herdr 会把模型
+`subagents` 是唯一接口：start / send / review / hold / list / stop；工具名不带 herdr——名字里的 herdr 会把模型
 引向 CLI 逃生路径（实测夜跑事故根因），guidelines 另有硬禁令：禁止 bash herdr 管工人，脱管工人
 （在 herdr 里跑但不在池内）零回传，发现即收编（退出旧 pi → start 传 session 路径，ADR-0005）。
 提示词决定何时委派、模型选型（依据 config 选型表，首次派发前把分波计划和每票模型一次性列给用户确认）和委派文本；
-工具只负责 Worker 生命周期、审查发起和异步结果回传。`agent.start` 对 `agent_pane_busy` 退避重试 15s
+工具只负责 Worker 生命周期、审查发起和异步结果回传。start 的 `cwd` 参数指定工人工作目录（绝对路径、
+必须已存在，校验失败拒绝启动；目录随档案持久化，休眠恢复回到同一 checkout）——能力缺口会把模型逼上
+CLI 逃生路径（ADR-0005）；guidelines 不教 worktree，共享 checkout 仍是默认。`agent.start` 对 `agent_pane_busy` 退避重试 15s
 （herdr 进程快照高负载瞬态误判；shell 标记已匹配故 busy 必为瞬态），窗口用尽附 pane process-info 证据。
 结果用 custom follow-up message 投递，不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、
 投成写 ack（收件箱至少一次语义），crash/reload 后未 ack 差集在恢复激活时重投，重复投递无害；
 Master 回合进行中到达的结果暂存，agent_settled 后合并成一条再投（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
 Live Worker 可 stop 为保留上下文的 Dormant Worker；Herdr 报 `blocked` 时保持阻塞态并把 `state_labels` 中的问题通知
 Master，Master 用 send 回答后继续。`idle` 与未查看后台结果 `done` 都保留为可追问的 Live Worker，最终 assistant
-只有以 `stop` 结束才回传完成；`length`、`toolUse`、`error`、`aborted`、缺失回复均按失败回传。普通工作监听用
+只有以 `stop` 结束才回传完成；`length`、`toolUse`、非中断的 `error`、缺失回复均按失败回传。中断（`aborted`
+或 abort 字样的 `error`，即 esc 手动介入或连接异常）不按失败回传也不消耗审查意图：事件告知 Master 按兵不动，
+插件续监动静（用户接手则结果照常回流），五分钟无人接手再发自动续跑提醒让 Master 续派；中断时刻随档案持久化，
+reload 重挂续监与剩余计时（ADR-0006）。落定类事件（结果/中断/审查终态/续跑提醒）送达即要求处置：回合内无
+send/review/stop/hold 则下个回合边界注入一次可见提醒，提醒后仍不处置升级为用户通知收口；处置标记持久化，
+活性归代码、处置决策归模型。普通工作监听用
 无截止事件等待，连接失败后保持 `working` 并退避重挂。start 传 Dormant 名或 session path 即可恢复，forget 才删除引用。
 新 Worker 优先在当前 Worker tab 内 split（2×2 象限切，避免嵌套同向切把后来者挤成 1/8 宽），每 tab 最多 4 个，
 满或 split 失败才建 tab；单工人 tab 标签是其显示名，第二个工人加入后改组名 `workers`；不 rebalance，
@@ -124,7 +131,7 @@ pane 命名失败不影响启动只通知。
 `idle` / `done`，跳过 `blocked` 占用态；若结算时 outcome 仍是 in_progress（占用信号失效）则退避重挂直到终态，
 reload 按同样规则恢复；终态经 `review/outcome.ts` 读取并连同最终回复回传（passed / stopped=质量裁决终止，
 含 maxRounds 用尽 / failed=error·cancelled·timed_out 等审查未完成，不弱化成停止）。
-Worker Pool 状态 schema 只认 v4（无用户，不留旧版兼容），用 mode 0600 的单个文件原子覆盖，不向 Pi session 追加快照；reload 恢复观察，
+Worker Pool 状态 schema 只认 v5（无用户，不留旧版兼容），用 mode 0600 的单个文件原子覆盖，不向 Pi session 追加快照；reload 恢复观察，
 quit/new/resume/fork 和 `/fire-master off` 清理。本插件不依赖 planning skill；多个 Worker 可并行写共享 checkout，Master 负责最终集成与验证。
 仅当已有本次流程的 `.scratch/` Tracker 时，Master 才按 Ticket 阻塞边分波、并行首批调查、逐波集成验证并完成删票；
 路径重叠是阻塞边判据之一：同文件并行编辑在提交前就互毁，重叠票串行或合并，不得同波并发；

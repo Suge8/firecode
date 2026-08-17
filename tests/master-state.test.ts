@@ -53,19 +53,35 @@ const dormant = {
 };
 
 test("restore rejects malformed identities, duplicate Pi sessions and foreign versions", () => {
-	expect(restoreMasterState({ version: 3, workers: [dormant] })).toBeUndefined();
-	expect(restoreMasterState({ version: 4, workers: [{ ...dormant, status: "closed" }] })).toBeUndefined();
-	expect(restoreMasterState({ version: 4, workers: [{ ...dormant, thinking: "huge" }] })).toBeUndefined();
-	expect(restoreMasterState({ version: 4, workers: [dormant, dormant] })).toBeUndefined();
+	expect(restoreMasterState({ version: 4, workers: [dormant] })).toBeUndefined();
+	expect(restoreMasterState({ version: 5, workers: [{ ...dormant, status: "closed" }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 5, workers: [{ ...dormant, thinking: "huge" }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 5, workers: [dormant, dormant] })).toBeUndefined();
 	expect(restoreMasterState({
-		version: 4,
+		version: 5,
 		workers: [dormant, { ...dormant, name: "worker-2" }],
 	})).toBeUndefined();
-	expect(restoreMasterState({ version: 4, workers: [dormant] })).toEqual({ version: 4, workers: [dormant] });
+	expect(restoreMasterState({ version: 5, workers: [dormant] })).toEqual({ version: 5, workers: [dormant] });
 	const blocked = { ...dormant, status: "blocked", paneId: "w1:p2", tabId: "w1:t2" };
-	expect(restoreMasterState({ version: 4, workers: [blocked] })).toEqual({ version: 4, workers: [blocked] });
+	expect(restoreMasterState({ version: 5, workers: [blocked] })).toEqual({ version: 5, workers: [blocked] });
 	const reviewing = { ...blocked, status: "reviewing" };
-	expect(restoreMasterState({ version: 4, workers: [reviewing] })).toEqual({ version: 4, workers: [reviewing] });
+	expect(restoreMasterState({ version: 5, workers: [reviewing] })).toEqual({ version: 5, workers: [reviewing] });
+});
+
+test("v5 新字段（cwd/interruptedAt/disposition）类型错误拒绝，合法值保留", () => {
+	expect(restoreMasterState({ version: 5, workers: [{ ...dormant, cwd: "" }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 5, workers: [{ ...dormant, interruptedAt: -1 }] })).toBeUndefined();
+	expect(restoreMasterState({ version: 5, workers: [{ ...dormant, disposition: "nagged" }] })).toBeUndefined();
+	const interrupted = {
+		...dormant,
+		status: "idle",
+		paneId: "w1:p2",
+		tabId: "w1:t2",
+		cwd: "/tmp/checkout",
+		interruptedAt: 1700000000000,
+		disposition: "pending",
+	};
+	expect(restoreMasterState({ version: 5, workers: [interrupted] })).toEqual({ version: 5, workers: [interrupted] });
 });
 
 test("Worker Pool state atomically overwrites one file instead of appending session entries", async () => {
@@ -100,7 +116,7 @@ test("reducer records reviewing and removes forgotten Workers", () => {
 		type: "UPSERT_WORKER",
 		worker: { ...dormant, status: "reviewing", paneId: "w1:p2", tabId: "w1:t2" },
 	});
-	expect(state).toMatchObject({ version: 4, workers: [{ status: "reviewing" }] });
+	expect(state).toMatchObject({ version: 5, workers: [{ status: "reviewing" }] });
 	state = reduceMaster(state, { type: "REMOVE_WORKER", name: "worker-1" });
 	expect(state.workers).toEqual([]);
 });

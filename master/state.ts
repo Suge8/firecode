@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
 export type WorkerStatus = "starting" | "working" | "blocked" | "idle" | "reviewing" | "dormant";
+/** 处置状态：落定类事件送达置 pending，提醒送达置 reminded，任一处置动作清除（ADR-0006）。 */
+export type WorkerDisposition = "pending" | "reminded";
 
 export interface WorkerRef {
 	name: string;
@@ -14,6 +16,11 @@ export interface WorkerRef {
 	paneId?: string;
 	tabId?: string;
 	sessionPath?: string;
+	/** 工人 pane 的工作目录；仅显式指定时记录，休眠恢复沿用。 */
+	cwd?: string;
+	/** 中断时刻（epoch ms）：续监与五分钟自动续跑的依据，接手或续跑提醒后消耗。 */
+	interruptedAt?: number;
+	disposition?: WorkerDisposition;
 	/** review action 投递前观察到的 runId；null 表示当时没有审查。 */
 	reviewPreviousRunId?: string | null;
 	/** start 时声明的审查意图：完成后由机器自动发起对抗审查，一次性消耗。 */
@@ -21,7 +28,7 @@ export interface WorkerRef {
 }
 
 export interface MasterState {
-	version: 4;
+	version: 5;
 	workers: WorkerRef[];
 }
 
@@ -31,7 +38,7 @@ export type MasterEvent =
 	| { type: "CLEAR" };
 
 export function initialMasterState(): MasterState {
-	return { version: 4, workers: [] };
+	return { version: 5, workers: [] };
 }
 
 export function reduceMaster(state: MasterState, event: MasterEvent): MasterState {
@@ -50,13 +57,13 @@ export function reduceMaster(state: MasterState, event: MasterEvent): MasterStat
 export function restoreMasterState(data: unknown): MasterState | undefined {
 	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
 	const record = data as Record<string, unknown>;
-	if (record.version !== 4 || !Array.isArray(record.workers) || !record.workers.every(isWorker))
+	if (record.version !== 5 || !Array.isArray(record.workers) || !record.workers.every(isWorker))
 		return undefined;
 	const workers = record.workers as WorkerRef[];
 	if (new Set(workers.map((worker) => worker.name)).size !== workers.length) return undefined;
 	const sessions = workers.flatMap((worker) => worker.sessionPath ? [worker.sessionPath] : []);
 	if (new Set(sessions).size !== sessions.length) return undefined;
-	return { version: 4, workers };
+	return { version: 5, workers };
 }
 
 export function masterStatePath(sessionId: string): string {
@@ -149,6 +156,11 @@ function isWorker(value: unknown): value is WorkerRef {
 		typeof record.reviewPreviousRunId !== "string"
 	) return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
+	if (record.cwd !== undefined && (typeof record.cwd !== "string" || !record.cwd)) return false;
+	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
+		return false;
+	if (record.disposition !== undefined && record.disposition !== "pending" && record.disposition !== "reminded")
+		return false;
 	if (record.status === "dormant") return typeof record.sessionPath === "string" && !!record.sessionPath;
 	return typeof record.paneId === "string" && !!record.paneId && typeof record.tabId === "string" && !!record.tabId;
 }

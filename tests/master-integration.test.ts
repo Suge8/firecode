@@ -375,7 +375,7 @@ test("crash 后未 ack 的 Worker 结果在恢复时重投并补 ack", async () 
 	const statePath = masterStatePath(sessionId);
 	const { writeFileSync, rmSync } = await import("node:fs");
 	writeFileSync(statePath, JSON.stringify({
-		version: 4,
+		version: 5,
 		workers: [{ name: "worker-1", model: "p/m", thinking: "medium", status: "dormant", sessionPath: "/tmp/w.jsonl" }],
 	}));
 	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
@@ -418,6 +418,99 @@ test("crash 后未 ack 的 Worker 结果在恢复时重投并补 ack", async () 
 	} finally {
 		rmSync(statePath, { force: true });
 		for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
+	}
+});
+
+test("未处置的落定消息提醒一次、再不处置升级通知；hold 处置后不再打扰", async () => {
+	process.env.HERDR_ENV = "1";
+	process.env.HERDR_WORKSPACE_ID = "w1";
+	delete process.env.FIRECODE_MASTER_WORKER;
+	const module = (await loadFirecodeModule("master/index.js", {
+		replacements: { 'from "./herdr.js"': 'from "./herdr-stub.js"' },
+		extraFiles: {
+			"master/herdr-stub.ts": `
+				export class HerdrWorkers {
+					constructor(options) {
+						globalThis.__fcStore = options.store;
+						globalThis.__fcNotify = options.notifyMaster;
+					}
+					async resume() {}
+					shutdown() {}
+					async cleanup() { return []; }
+				}
+			`,
+		},
+	})) as { registerMaster: (pi: unknown) => void };
+	const { masterStatePath } = (await loadFirecodeModule("master/state.js")) as {
+		masterStatePath: (id: string) => string;
+	};
+	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+	const tools = new Map<string, { execute: (...args: unknown[]) => Promise<unknown> }>();
+	const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
+	const sent: string[] = [];
+	const notices: string[] = [];
+	let activeTools = ["read"];
+	const pi = {
+		registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => commands.set(name, command),
+		registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.set(tool.name, tool),
+		getActiveTools: () => [...activeTools],
+		setActiveTools: (next: string[]) => { activeTools = next; },
+		on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		events: { on() {}, emit() {} },
+		appendEntry() {},
+		sendMessage: (message: { content: string }) => sent.push(message.content),
+		sendUserMessage() {},
+		exec: async () => ({ code: 0, stdout: "{}", stderr: "", killed: false }),
+	};
+	const sessionId = crypto.randomUUID();
+	const ctx = {
+		...makeCtx(notices),
+		sessionManager: { getSessionId: () => sessionId, getBranch: () => [] },
+	};
+	const settle = async () => {
+		for (const handler of handlers.get("agent_settled") ?? []) await handler({}, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+	};
+	const { rmSync } = await import("node:fs");
+	module.registerMaster(pi);
+	try {
+		await commands.get("fire-master")?.handler("", ctx);
+		const store = (globalThis as { __fcStore?: { dispatch: (event: unknown) => void; state: { workers: Array<Record<string, unknown>> } } }).__fcStore;
+		const notify = (globalThis as { __fcNotify?: (content: string, worker?: string) => void }).__fcNotify;
+		store?.dispatch({ type: "UPSERT_WORKER", worker: {
+			name: "worker-1", paneId: "w1:p2", tabId: "w1:t2", sessionPath: "/tmp/w.jsonl",
+			model: "p/m", thinking: "medium", status: "idle",
+		} });
+		// 落定消息送达即置 pending。
+		notify?.("Worker worker-1 已停下", "worker-1");
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(sent).toHaveLength(1);
+		expect(store?.state.workers[0]?.disposition).toBe("pending");
+		// 回合结束未处置 → 提醒一次，送达后推进到 reminded。
+		await settle();
+		expect(sent).toHaveLength(2);
+		expect(sent[1]).toContain("提醒：Worker worker-1");
+		expect(store?.state.workers[0]?.disposition).toBe("reminded");
+		// 提醒回合仍不处置 → 升级用户通知并收口，不再追加。
+		await settle();
+		expect(sent).toHaveLength(2);
+		expect(notices.join()).toContain("仍未处置");
+		expect(store?.state.workers[0]?.disposition).toBeUndefined();
+		// hold 是合法处置：清标记，后续回合零打扰。
+		notify?.("Worker worker-1 已停下", "worker-1");
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(store?.state.workers[0]?.disposition).toBe("pending");
+		await tools.get("subagents")?.execute("call", { action: "hold", worker: "worker-1" }, undefined, undefined, ctx);
+		expect(store?.state.workers[0]?.disposition).toBeUndefined();
+		const before = sent.length;
+		await settle();
+		expect(sent).toHaveLength(before);
+	} finally {
+		rmSync(masterStatePath(sessionId), { force: true });
+		for (const shutdown of handlers.get("session_shutdown") ?? []) await shutdown({ reason: "reload" }, ctx);
+		delete (globalThis as { __fcStore?: unknown }).__fcStore;
+		delete (globalThis as { __fcNotify?: unknown }).__fcNotify;
 	}
 });
 
