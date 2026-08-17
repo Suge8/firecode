@@ -3,7 +3,8 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { isToolCallEventType, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MASTER_MODELS, loadConfig, type MasterModel } from "../config.js";
-import { MASTER_EVENT_TYPE, masterEventDetails, registerMasterEventRenderer } from "./event-card.js";
+import { registerMasterEventRenderer } from "./event-card.js";
+import { MASTER_EVENT_TYPE, masterEventDetails } from "./event-format.js";
 import { HerdrWorkers } from "./herdr.js";
 import {
 	MasterStore,

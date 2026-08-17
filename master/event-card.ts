@@ -1,45 +1,17 @@
 /**
  * Master 事件卡：默认紧凑（每事件一行标题行），ctrl+o 展开完整内容。
  * content 给模型（完整事实），details 给渲染——两者刻意不对齐（先例：review/card.ts）。
- * 旧会话无 details 的消息与校验失败一律降级完整内容；渲染器永不抛异常。
+ * 提取与校验的格式契约在 event-format.ts；旧会话无 details 的消息与校验失败一律降级
+ * 完整内容；渲染器永不抛异常。
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Text, TruncatedText } from "@earendil-works/pi-tui";
-
-export const MASTER_EVENT_TYPE = "firecode-master-event";
-const VERSION = 1;
-
-export interface MasterEventDetails {
-	version: typeof VERSION;
-	titles: string[];
-}
-
-/** 正文分节标记行：其后第一行即正文首句，作紧凑行预览。 */
-const BODY_MARKER = /^(?:回复|错误|问题|最终回复|中断前最后输出)：$/u;
-
-/** 每个事件一行：首行标题句 + 正文首句预览（渲染时按宽度截断）。 */
-export function masterEventDetails(contents: string[]): MasterEventDetails {
-	return { version: VERSION, titles: contents.map(compactLine) };
-}
-
-function compactLine(content: string): string {
-	const lines = content.split("\n");
-	const title = lines[0] ?? "";
-	const marker = lines.findIndex((line) => BODY_MARKER.test(line.trim()));
-	if (marker < 0) return title;
-	const preview = lines.slice(marker + 1).find((line) => line.trim());
-	return preview ? `${title} — ${preview.trim()}` : title;
-}
-
-function isValidDetails(value: unknown): value is MasterEventDetails {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	const record = value as Record<string, unknown>;
-	if (Object.keys(record).length !== 2 || record.version !== VERSION) return false;
-	return Array.isArray(record.titles) &&
-		record.titles.length > 0 &&
-		record.titles.every((title) => typeof title === "string");
-}
+import {
+	MASTER_EVENT_TYPE,
+	isValidMasterEventDetails,
+	type MasterEventDetails,
+} from "./event-format.js";
 
 export function registerMasterEventRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<MasterEventDetails>(
@@ -63,7 +35,9 @@ class MasterEventCard implements Component {
 		this.fallback = new Text(text, 0, 0);
 		let card: Component | undefined;
 		try {
-			card = !expanded && isValidDetails(details) ? compactCard(details, theme) : fullCard(text, theme);
+			card = !expanded && isValidMasterEventDetails(details)
+				? compactCard(details, theme)
+				: fullCard(text, theme);
 		} catch {
 			card = undefined;
 		}

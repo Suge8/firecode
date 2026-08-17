@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { REVIEW_OCCUPANCY_LABEL, readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
+import { sectionLine } from "./event-format.js";
 import {
 	liveWorkers,
 	requireWorker,
@@ -1213,7 +1214,7 @@ function workerInterruptedText(worker: WorkerRef, latest: LatestAssistant): stri
 	return [
 		`Worker ${worker.name} 被中断（回合被外部中止，非执行失败）`,
 		...(worker.reviewNeeded ? ["审查票：审查意图保留，正常完成后仍会自动补审。"] : []),
-		latest.text ? `中断前最后输出：\n${bounded(latest.text)}` : "中断前没有输出。",
+		latest.text ? `${sectionLine("lastOutput")}\n${bounded(latest.text)}` : "中断前没有输出。",
 		"多半是用户手动介入想插话或改方向，少数情况是连接异常。不要重发任务，用 hold 处置本条即可；插件持续盯着它：用户直接派活的话，完成后你照常收到结果；若五分钟无任何动静，你会另收到自动续跑提醒。",
 	].join("\n");
 }
@@ -1228,7 +1229,7 @@ function autoResumeText(worker: WorkerRef): string {
 function workerBlockedText(worker: WorkerRef, question?: string): string {
 	return [
 		`Worker ${worker.name} 等待输入`,
-		question ? `问题：\n${bounded(question)}` : "Worker 未提供具体问题，请检查对应 pane。",
+		question ? `${sectionLine("question")}\n${bounded(question)}` : "Worker 未提供具体问题，请检查对应 pane。",
 		"使用 subagents send 回答后继续。",
 	].join("\n");
 }
@@ -1236,7 +1237,7 @@ function workerBlockedText(worker: WorkerRef, question?: string): string {
 function reviewResultText(worker: WorkerRef, outcome: ReviewOutcome, latest: LatestAssistant | undefined): string {
 	return [
 		`Worker ${worker.name} 审查结束：${reviewOutcomeText(outcome)}`,
-		latest?.text ? `最终回复：\n${bounded(latest.text)}` : "最终回复为空。",
+		latest?.text ? `${sectionLine("finalReply")}\n${bounded(latest.text)}` : "最终回复为空。",
 	].join("\n");
 }
 
@@ -1269,7 +1270,7 @@ function workerFailureText(
 	return [
 		`Worker ${worker.name} 执行失败`,
 		...(review ? [review] : []),
-		`错误：\n${bounded(details)}`,
+		`${sectionLine("error")}\n${bounded(details)}`,
 	].join("\n");
 }
 
@@ -1278,7 +1279,7 @@ function workerResultText(worker: WorkerRef, latest: LatestAssistant, review?: s
 	return [
 		`Worker ${worker.name} 已停下`,
 		...(review ? [review] : []),
-		latest.text ? `回复：\n${bounded(latest.text)}` : "回复为空。",
+		latest.text ? `${sectionLine("reply")}\n${bounded(latest.text)}` : "回复为空。",
 	].join("\n");
 }
 

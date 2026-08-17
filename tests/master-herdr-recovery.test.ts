@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { appendFile, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { masterEventDetails } from "../master/event-format.js";
 import { HerdrWorkers } from "../master/herdr.js";
 import { MasterStore, type WorkerRef } from "../master/state.js";
 
@@ -946,7 +947,12 @@ test("non-success assistant stops are returned as failures", async () => {
 			notifyMaster: resolveNotice,
 		});
 		await pool.resume();
-		expect(await notice).toContain(sample.expected);
+		const text = await notice;
+		expect(text).toContain(sample.expected);
+		// 真实产文 → 紧凑行：标记词汇与产文共用 event-format 常量，改词两侧同步、此处当场红。
+		expect(masterEventDetails([text]).titles[0]).toBe(
+			`Worker worker-1 执行失败 — 停止原因：${sample.stopReason}`,
+		);
 		await rm(directory, { recursive: true, force: true });
 	}
 });
@@ -996,6 +1002,10 @@ test("外部中止按中断回传：意图保留、中断时刻入档、续监�
 		expect(text).toContain("被中断");
 		expect(text).not.toContain(`Worker worker-1 执行失败`);
 		expect(text).toContain("审查意图保留");
+		// 真实产文 → 紧凑行：有正文时预览取中断前输出首句，无正文退化纯标题。
+		expect(masterEventDetails([text]).titles[0]).toBe(sample.text
+			? "Worker worker-1 被中断（回合被外部中止，非执行失败） — partial"
+			: "Worker worker-1 被中断（回合被外部中止，非执行失败）");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(store.state.workers[0]).toMatchObject({ status: "idle", reviewNeeded: true });
 		expect(store.state.workers[0]?.interruptedAt).toBeGreaterThan(0);
@@ -1060,6 +1070,47 @@ test("中断的审查票可直接 send 续跑：门禁放行、中断态消耗�
 	await pool.send("worker-1", "继续刚才被中断的工作");
 	expect(store.state.workers[0]).toMatchObject({ status: "working", reviewNeeded: true });
 	expect(store.state.workers[0]?.interruptedAt).toBeUndefined();
+	await pool.shutdown();
+});
+
+test("Dormant 恢复与新建同布局：有同伴时 split 进 workers tab 而非新开 tab", async () => {
+	process.env.SHELL = "/bin/zsh";
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: worker("idle") });
+	store.dispatch({ type: "UPSERT_WORKER", worker: {
+		name: "resume-me", model: "p/m", thinking: "medium" as const,
+		status: "dormant" as const, sessionPath: "/tmp/resume.jsonl",
+	} });
+	const calls: string[][] = [];
+	const pool = new HerdrWorkers({
+		pi: { exec: async (_command: string, args: string[], options: { signal?: AbortSignal }) => {
+			calls.push(args);
+			if (args[0] === "pane" && args[1] === "split")
+				return response({ result: { pane: { pane_id: "w1:p9" } } });
+			if (args[0] === "pane" && args[1] === "wait-output")
+				return new Promise((_resolve, reject) => {
+					if (options.signal?.aborted) return reject(new Error("aborted"));
+					options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+				});
+			if (args[0] === "agent" && args[1] === "get") return missingAgent();
+			return response({});
+		} } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
+	const started = pool.start(ctx, { session: "resume-me", prompt: "继续" });
+	started.catch(() => {});
+	while (!calls.some((args) => args[0] === "pane" && args[1] === "split"))
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	const split = calls.find((args) => args[0] === "pane" && args[1] === "split");
+	// 目标是既有工人的 pane；恢复不再新开 tab（cwd 随 pane 各自携带）。
+	expect(split?.[2]).toBe("w1:p2");
+	expect(split).toContain("--cwd");
+	expect(calls.some((args) => args[0] === "tab" && args[1] === "create")).toBe(false);
+	await pool.stop("resume-me", true);
+	await expect(started).rejects.toThrow();
 	await pool.shutdown();
 });
 

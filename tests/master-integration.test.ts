@@ -529,28 +529,6 @@ test("未处置的落定消息提醒一次、再不处置升级通知；hold 处
 	}
 });
 
-test("紧凑行提取：标题+正文首句预览，无标记行退化纯标题", async () => {
-	// BODY_MARKER 与 herdr.ts 事件文案是跨文件隐式耦合：改文案措辞会让预览静默退化，这里锁住标记词汇。
-	const { masterEventDetails } = (await loadFirecodeModule("master/event-card.js")) as {
-		masterEventDetails: (contents: string[]) => { version: number; titles: string[] };
-	};
-	const details = masterEventDetails([
-		"Worker twin-g1 已停下\n回复：\nPR #603 就绪待你审合（首刀）。\n后续刀……",
-		"Worker x 审查结束：通过（2 轮）\n最终回复：\n\n**现场已恢复**",
-		"Worker y 执行失败\n错误：\n停止原因：length",
-		"提醒：Worker x 的落定消息未处置\nsend 继续派活；review 补审。",
-	]);
-	expect(details).toEqual({
-		version: 1,
-		titles: [
-			"Worker twin-g1 已停下 — PR #603 就绪待你审合（首刀）。",
-			"Worker x 审查结束：通过（2 轮） — **现场已恢复**",
-			"Worker y 执行失败 — 停止原因：length",
-			"提醒：Worker x 的落定消息未处置",
-		],
-	});
-});
-
 function makeCtx(notices: string[], cwd = "/tmp") {
 	return {
 		cwd,

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MASTER_MODELS, parseMasterConfig } from "../config.js";
+import { masterEventDetails } from "../master/event-format.js";
 import {
 	MasterStore,
 	initialMasterState,
@@ -42,6 +43,23 @@ test("master 节未知字段、模型重复与缺失 model 都报配置问题", 
 		"master.models[1].thinking 值无效",
 		"master.models 模型不能重复",
 	]);
+});
+
+test("紧凑行提取：标题+正文首句预览，无标记行退化纯标题", () => {
+	// 标记词汇的事实源在 event-format（herdr 产文与提取共用同一常量），此处只锁提取规则本身；
+	// 真实产文→提取的端到端断言见 master-herdr-recovery 的落定流用例。
+	expect(masterEventDetails([
+		"Worker t 已停下\n回复：\nPR #603 就绪。\n细节……",
+		"Worker x 审查结束：通过（2 轮）\n最终回复：\n\n**现场已恢复**",
+		"提醒：Worker x 的落定消息未处置\nsend 继续派活。",
+	])).toEqual({
+		version: 1,
+		titles: [
+			"Worker t 已停下 — PR #603 就绪。",
+			"Worker x 审查结束：通过（2 轮） — **现场已恢复**",
+			"提醒：Worker x 的落定消息未处置",
+		],
+	});
 });
 
 const dormant = {
