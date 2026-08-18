@@ -1255,8 +1255,9 @@ async function readWorkerTrace(path: string): Promise<string> {
 
 /** 倒取的停止边界：任何外部写入都算，子代理会话里的 custom_message 只有 fire-review 会发。 */
 function traceAnchor(entry: Record<string, unknown>): string | undefined {
+	// 正文走与普通消息同一条提取：宿主允许 content 是富内容数组，写死字符串会让锚点静默变空。
 	if (entry.type === "custom_message")
-		return `审查注入：${truncate(typeof entry.content === "string" ? entry.content : "", TRACE_ANCHOR_LIMIT)}`;
+		return `审查注入：${truncate(messageText(entry.content), TRACE_ANCHOR_LIMIT)}`;
 	const message = messageRecord(entry);
 	if (message?.role !== "user") return undefined;
 	return `上一条指令：${truncate(messageText(message.content), TRACE_ANCHOR_LIMIT)}`;

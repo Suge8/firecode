@@ -421,6 +421,19 @@ test("tail returns the trace since the last external input, error first", async 
 	expect(trace).not.toContain("不入近况");
 	store.dispatch({ type: "UPSERT_WORKER", worker: { name: "starting-1", model: "p/m", thinking: "medium", status: "starting", paneId: "starting", tabId: "starting" } });
 	await expect(pool.tail("starting-1")).rejects.toThrow("还没有会话可读");
+	// 审查注入同样是边界，且宿主允许其正文是富内容数组：锚点不得退化成空。
+	const reviewPath = join(directory, "under-review.jsonl");
+	await writeFile(reviewPath, [
+		{ type: "message", id: "r1", message: { role: "user", content: [{ type: "text", text: "最初的委派" }] } },
+		{ type: "custom_message", customType: "firecode-review-feedback", id: "r2", parentId: "r1", content: [{ type: "text", text: "本轮审查未通过" }] },
+		{ type: "message", id: "r3", parentId: "r2", message: { role: "assistant", content: [{ type: "text", text: "已修复" }], stopReason: "stop" } },
+	].map((entry) => JSON.stringify(entry)).join("\n"));
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("reviewing"), name: "worker-2", sessionPath: reviewPath } });
+	expect(await pool.tail("worker-2")).toBe([
+		"子代理 worker-2 近况（reviewing）",
+		"审查注入：本轮审查未通过",
+		"已修复",
+	].join("\n"));
 	await rm(directory, { recursive: true, force: true });
 });
 
