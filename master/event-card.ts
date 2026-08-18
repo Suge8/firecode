@@ -6,7 +6,8 @@
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Markdown, Text, TruncatedText } from "@earendil-works/pi-tui";
+import { Box, type Component, Markdown, Text } from "@earendil-works/pi-tui";
+import { clip, oneLine } from "../format.js";
 import {
 	MASTER_EVENT_TYPE,
 	isValidMasterEventDetails,
@@ -63,7 +64,22 @@ class MasterEventCard implements Component {
 }
 
 function compactCard(details: MasterEventDetails, theme: Theme): Component {
-	return card(theme, details.titles.map((title) => new TruncatedText(`◆ ${title}`, 0, 0)));
+	return card(theme, details.titles.map((title) => new CompactTitle(`◆ ${title}`)));
+}
+
+/**
+ * 单行截断：不用 pi-tui 的 TruncatedText——它的省略号带 `\x1b[0m` 全量重置，
+ * 会在截断点把外层 Box 的背景色掠断（行尾露底色、右缘参差）；
+ * clip 是纯文本截断，Box 补位后背景整行连续。
+ */
+class CompactTitle implements Component {
+	constructor(private readonly text: string) {}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return [clip(oneLine(this.text), Math.max(1, width))];
+	}
 }
 
 function fullCard(text: string, theme: Theme): Component {
