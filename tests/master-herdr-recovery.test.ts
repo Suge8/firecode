@@ -382,6 +382,48 @@ test("a failed renamed resume restores only the original Dormant identity", asyn
 	}]);
 });
 
+test("tail returns the trace since the last external input, error first", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-tail-"));
+	const sessionPath = join(directory, "worker.jsonl");
+	const delegation = `写文档：${"边界条件".repeat(80)}`;
+	await writeFile(sessionPath, [
+		{ type: "session", version: 3, id: "s" },
+		{ type: "session_info", id: "n0", parentId: null, name: "↳worker-1" },
+		{ type: "message", id: "n1", parentId: "n0", message: { role: "user", content: [{ type: "text", text: "上一轮的旧委派" }] } },
+		{ type: "message", id: "n2", parentId: "n1", message: { role: "assistant", content: [{ type: "text", text: "旧回复" }], stopReason: "stop" } },
+		{ type: "message", id: "n3", parentId: "n2", message: { role: "user", content: [{ type: "text", text: delegation }] } },
+		{ type: "custom", customType: "firecode-review-checkpoint", id: "n4", parentId: "n3", data: { phase: "queued" } },
+		{ type: "message", id: "n5", parentId: "n4", message: { role: "assistant", content: [
+			{ type: "thinking", thinking: "不入近况" },
+			{ type: "toolCall", name: "bash", arguments: { command: "ls docs/" } },
+		] } },
+		{ type: "message", id: "n6", parentId: "n5", message: { role: "toolResult", content: [{ type: "text", text: "landing.md" }] } },
+		{ type: "message", id: "n7", parentId: "n6", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "Codex error: usage limit" } },
+	].map((entry) => JSON.stringify(entry)).join("\n"));
+	const store = createStore();
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker("idle"), sessionPath } });
+	const pool = new HerdrWorkers({
+		pi: { exec: async () => { throw new Error("tail 不得调 herdr"); } } as never,
+		store,
+		workspaceId: "w1",
+		notifyMaster() {},
+	});
+	const trace = await pool.tail("worker-1");
+	expect(trace.split("\n").slice(0, 3)).toEqual([
+		"子代理 worker-1 近况（idle）",
+		"状态：error｜Codex error: usage limit",
+		`上一条指令：${delegation.slice(0, 250)}…`,
+	]);
+	expect(trace).toContain('→ bash {"command":"ls docs/"}');
+	expect(trace).toContain("← landing.md");
+	// 边界之前的旧回合与纯状态条目不得渗进来。
+	expect(trace).not.toContain("旧回复");
+	expect(trace).not.toContain("不入近况");
+	store.dispatch({ type: "UPSERT_WORKER", worker: { name: "starting-1", model: "p/m", thinking: "medium", status: "starting", paneId: "starting", tabId: "starting" } });
+	await expect(pool.tail("starting-1")).rejects.toThrow("还没有会话可读");
+	await rm(directory, { recursive: true, force: true });
+});
+
 test("review submits only the literal command and waits past blocked states", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-worker-review-"));
 	const sessionPath = join(directory, "worker.jsonl");

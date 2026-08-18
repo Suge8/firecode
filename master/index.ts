@@ -272,7 +272,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		name: MASTER_TOOL,
 		// 渲染字段长在自己的工具定义上，不改注册/激活语义（与"包装原生工具即强制激活"无关）。
 		label: "子代理",
-		description: "指挥官的并行子代理接口：start 启动或唤醒、send 发消息、interrupt 打断当前回合（会话保留）、review 审查、ack 将落定消息标为已处理、list 查看、sleep 休眠（可唤醒）、kill 移除（不可回）。结果异步回传。",
+		description: "指挥官的并行子代理接口：start 启动或唤醒、send 发消息、interrupt 打断当前回合（会话保留）、review 审查、tail 读近况轨迹、ack 将落定消息标为已处理、list 查看、sleep 休眠（可唤醒）、kill 移除（不可回）。结果异步回传。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
@@ -284,7 +284,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		},
 		promptGuidelines: masterGuidelines(roster),
 		parameters: Type.Object({
-			action: StringEnum(["list", "start", "send", "review", "interrupt", "ack", "sleep", "kill"] as const),
+			action: StringEnum(["list", "start", "send", "review", "tail", "interrupt", "ack", "sleep", "kill"] as const),
 			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标子代理" })),
 			prompt: Type.Optional(Type.String()),
 			model: Type.Optional(Type.String({ description: "start 新建子代理必填：从选型表挑一个 provider/model（唤醒休眠子代理时省略，沿用其档案）" })),
@@ -343,6 +343,12 @@ export function registerMaster(pi: ExtensionAPI): void {
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
 				}
 				return toolResult({ acked: true, worker: name });
+			}
+			if (params.action === "tail") {
+				// 只读快照：不动状态机、不消发落标记（看一眼就算处置是 ADR-0007 那类假成功）。
+				// 轨迹是多行文本，直接交原文；JSON 包一层只会把换行转义成噪声。
+				const trace = await active.herdr.tail(requiredString(params.worker, "worker"));
+				return { content: [{ type: "text" as const, text: trace }] };
 			}
 			if (params.action === "review") {
 				// 门禁：review 关闭时 Worker 会话没有 /fire-review 命令，投递会退化成普通模型输入；
@@ -517,6 +523,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	"轻重之分靠 review 参数，跟着任务走不跟渠道走（start 委派与 send 追加同用）：重要实现工作设 review:true，完成后机器自动发起对抗审查并回传终态（含轮数与顾问裁决），无需你记得或手动触发；轻量票、纯追问不设。凡有可测行为变更的实现票，委派文本默认以 `/skill:tdd ` 开头，并把 spec/Ticket 已定的接缝与验收写进委派文本（接缝在计划层已确认，子代理不再回头询问）；调查、文档、收口、纯重构票用普通自包含说明。`/skill:implement` 是用户 solo 技能（内含自审），Master 委派禁用。斜杠技能只在文本开头且后跟空格才展开，写错静默失效。",
 	"审查自动修复循环内不调用 start/send，等待 review 终态；整体收口交给专门的收口子代理，指挥官只派活、分析和决策，不直接改代码。",
 	"审查提示词具备并行改动与测试干扰的归因纪律，发起审查无需等其它子代理停笔；subagents 的 review action 可对任意 idle 子代理手动补审（如轻量票事后需要把关）。",
+	"tail 读子代理最近一次输入之后的执行轨迹（工具调用、结果、文本与异常停止原因，按预算截断），用来弄清它到底干了什么、卡在哪里；启动中以外的子代理都能读，含休眠。它是只读快照：不得拿它轮询进度或等子代理完工（等待靠结果事件），也不算发落——读完落定消息仍需 send/review/sleep/kill/ack。",
 	"子代理结果会以 custom follow-up message 回来。收到落定消息（结果/中断/审查终态/自动续跑提醒）必须当回合发落：send 继续、review 补审、sleep 休眠（关 pane 保上下文，start 传名字可唤醒）、kill 移除（不可再按名字唤醒）、ack 待命（只标记已处理，子代理保持原状；等用户决策也用 ack 并向用户说明）。子代理被中断时按事件指引发落，不要立即重发任务。",
 	"中途改方向：interrupt 打断 working 子代理的当前回合（发 esc，会话与 pane 保留，进行中的输出作废），中断事件回来后再 send 新指令。",
 	"生命周期：一波集成过审后就 sleep 该波子代理（休眠保上下文，不占屏）；走 CI/合并的项目 push 后保持休眠，红了唤醒对应子代理修，绿了再 kill；全流程结束用 /fire-master off 清场（退出会话也会自动清）。",
@@ -565,6 +572,7 @@ const ACTION_VERB: Record<string, string> = {
 	start: "启动",
 	send: "发送",
 	review: "审查",
+	tail: "近况",
 	interrupt: "中断",
 	ack: "待命",
 	list: "查看",

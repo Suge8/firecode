@@ -1,11 +1,11 @@
 # master：`/fire-master` 多 Agent 主控
 
-按需注入 `subagents` 工具，启动、发消息、中断、审查、休眠与移除 Herdr Worker。
+按需注入 `subagents` 工具，启动、发消息、中断、审查、读近况、休眠与移除 Herdr Worker。
 Master 默认休眠：普通 Pi 不带 `subagents`，`/fire-master` 后只追加这一个工具。没有 Goal、Task 或任务板。
 
 ## 接口与选型
 
-`subagents` 是唯一接口：start / send / interrupt / review / ack / list / sleep / kill（动作集来历见 ADR-0007）。
+`subagents` 是唯一接口：start / send / interrupt / review / tail / ack / list / sleep / kill（动作集来历见 ADR-0007）。
 工具名不带 herdr——名字里的 herdr 会把模型引向 CLI 逃生路径（实测夜跑事故根因）；guidelines 另有硬禁令：
 禁止 bash herdr 管子代理，脱管子代理（在 herdr 里跑但不在池内）零回传，发现即收编（退出旧 pi → start 传
 session 路径，ADR-0005）。
@@ -33,6 +33,13 @@ checkout 仍是默认。`agent.start` 对 `agent_pane_busy` 退避重试 15s（h
 不轮询、不拼进用户输入；投递前先以 pending entry 落 Master 会话、投成写 ack（收件箱至少一次语义），
 crash/reload 后未 ack 差集在恢复激活时重投，重复投递无害；Master 回合进行中到达的结果暂存，agent_settled
 后合并成一条再投（宿主 followUpMode 默认一回合一条，拆投会裂成多回合）。
+
+`tail` 读子代理近况：从会话叶子沿父链倒取，遇最近一次外部输入（user 消息或 fire-review 的 custom_message，
+后者是子代理会话里 custom_message 的唯一来源）或 4000 字符预算用尽即止，谁先到算谁；边界本身只带 250 字符
+做锚点（不知道它在回应什么就读不懂轨迹，但委派正文不该吃预算），单条工具调用与结果各 300 字符封顶（预算
+要买到步数而不是日志），异常停止原因提到最前。starting 之外全状态可读（休眠子代理的会话文件仍在磁盘上），
+working 时读到的是已跑完的部分——它是只读快照，提示词明禁拿它轮询进度；读也不消耗发落标记（看一眼
+就算处置是 ADR-0007 那类假成功）。
 
 落定类事件（结果/中断/审查终态/续跑提醒）送达即要求发落：回合内无 send/review/sleep/kill/ack 则下个回合
 边界注入一次可见提醒，提醒后仍不发落升级为用户通知收口；发落标记持久化，ack 对无待发落标记的非 idle

@@ -14,6 +14,12 @@ import {
 } from "./state.js";
 
 const RESULT_CONTEXT_LIMIT = 12_000;
+/** 近况总预算：够十几步轨迹回答“最后走到哪一步”，与结果回传的上限不同源——一个装最终回复，一个装轨迹。 */
+const TRACE_BUDGET = 4_000;
+/** 单条工具调用/结果的硬上限：一条长输出不得吃掉整个预算，预算要买到步数而不是日志。 */
+const TRACE_ENTRY_LIMIT = 300;
+/** 边界注入只做锚点：知道它在回应什么即可，委派正文不占预算大头。 */
+const TRACE_ANCHOR_LIMIT = 250;
 const MAX_RETRY_DELAY_MS = 30_000;
 /** agent.start 遭遇 agent_pane_busy 的重试窗口：shell 就绪标记已匹配，busy 必为
  * herdr 进程快照在高负载下的瞬态误判（实测：同机两个重载型 Worker 并行时四连败），
@@ -319,6 +325,17 @@ export class HerdrWorkers {
 			this.deliberateInterrupts.delete(worker.name);
 			throw error;
 		}
+	}
+
+	/**
+	 * 近况：最近一次外部输入之后的执行轨迹。只读快照——不改状态机、不消耗发落、不是进度接口。
+	 * starting 之外全状态可读（休眠子代理的会话文件仍在磁盘上）。
+	 */
+	async tail(workerName: string): Promise<string> {
+		const worker = requireWorker(this.store.state, workerName);
+		if (!worker.sessionPath) throw new Error(`${worker.name} 仍在启动，还没有会话可读`);
+		const trace = await readWorkerTrace(worker.sessionPath);
+		return `子代理 ${worker.name} 近况（${worker.status}）\n${trace}`;
 	}
 
 	async review(workerName: string): Promise<void> {
@@ -1177,6 +1194,114 @@ async function readLatestAssistant(path?: string): Promise<LatestAssistant | und
 		leaf = node.parentId;
 	}
 	return undefined;
+}
+
+/**
+ * 近况提取：从叶子沿父链倒取，遇到最近一次外部输入（user 消息或审查注入）或预算用尽即止，谁先到算谁。
+ * 停止原因提到最前（最短也最关键）；边界本身只带开头做锚点，否则读不懂轨迹在回应什么。
+ */
+async function readWorkerTrace(path: string): Promise<string> {
+	let text: string;
+	try {
+		text = await readFile(path, "utf8");
+	} catch (error) {
+		throw new Error(`读不到子代理会话文件（${path}）：${error instanceof Error ? error.message : String(error)}`);
+	}
+	const nodes = new Map<string, { parentId?: string; entry: Record<string, unknown> }>();
+	let leaf: string | undefined;
+	for (const line of text.split("\n")) {
+		let entry: Record<string, unknown>;
+		try {
+			entry = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+		if (typeof entry.id !== "string") continue;
+		nodes.set(entry.id, { ...(typeof entry.parentId === "string" ? { parentId: entry.parentId } : {}), entry });
+		leaf = entry.id;
+	}
+	const steps: string[] = [];
+	const visited = new Set<string>();
+	let budget = TRACE_BUDGET;
+	let cursor = leaf;
+	let status: string | undefined;
+	let anchor: string | undefined;
+	let exhausted = false;
+	while (cursor && !visited.has(cursor)) {
+		visited.add(cursor);
+		const node = nodes.get(cursor);
+		if (!node) break;
+		anchor = traceAnchor(node.entry);
+		if (anchor) break;
+		status ??= traceStatus(node.entry);
+		const step = traceStep(node.entry);
+		if (step) {
+			if (step.length > budget) {
+				steps.push(`${step.slice(0, budget)}…`);
+				exhausted = true;
+				break;
+			}
+			budget -= step.length;
+			steps.push(step);
+		}
+		cursor = node.parentId;
+	}
+	return [
+		...(status ? [status] : []),
+		anchor ?? (exhausted ? "…（更早内容已省略，预算用尽）" : "（会话开头）"),
+		...steps.reverse(),
+	].join("\n") + (steps.length ? "" : "\n（最近一次输入之后还没有任何输出）");
+}
+
+/** 倒取的停止边界：任何外部写入都算，子代理会话里的 custom_message 只有 fire-review 会发。 */
+function traceAnchor(entry: Record<string, unknown>): string | undefined {
+	if (entry.type === "custom_message")
+		return `审查注入：${truncate(typeof entry.content === "string" ? entry.content : "", TRACE_ANCHOR_LIMIT)}`;
+	const message = messageRecord(entry);
+	if (message?.role !== "user") return undefined;
+	return `上一条指令：${truncate(messageText(message.content), TRACE_ANCHOR_LIMIT)}`;
+}
+
+/** 最新一条 assistant 的异常结尾；正常 stop 不入近况（无信息量）。 */
+function traceStatus(entry: Record<string, unknown>): string | undefined {
+	const message = messageRecord(entry);
+	if (message?.role !== "assistant") return undefined;
+	const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+	const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
+	if (!errorMessage && (!stopReason || stopReason === "stop")) return undefined;
+	return `状态：${stopReason ?? "?"}${errorMessage ? `｜${errorMessage}` : ""}`;
+}
+
+/** 一条会话条目渲染成轨迹行；thinking 与纯状态条目（checkpoint 等）不入近况。 */
+function traceStep(entry: Record<string, unknown>): string | undefined {
+	const message = messageRecord(entry);
+	if (!message) return undefined;
+	if (message.role === "toolResult") {
+		const output = truncate(messageText(message.content), TRACE_ENTRY_LIMIT);
+		return output ? `← ${output}` : undefined;
+	}
+	if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
+	const lines = message.content.flatMap((part) => {
+		if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+		const record = part as Record<string, unknown>;
+		if (record.type === "text" && typeof record.text === "string") return record.text ? [record.text] : [];
+		if (record.type !== "toolCall") return [];
+		const name = typeof record.name === "string" ? record.name : "?";
+		return [`→ ${name} ${truncate(JSON.stringify(record.arguments ?? {}), TRACE_ENTRY_LIMIT)}`];
+	});
+	return lines.length ? lines.join("\n") : undefined;
+}
+
+function messageRecord(entry: Record<string, unknown>): Record<string, unknown> | undefined {
+	if (entry.type !== "message") return undefined;
+	const message = entry.message;
+	return message && typeof message === "object" && !Array.isArray(message)
+		? (message as Record<string, unknown>)
+		: undefined;
+}
+
+function truncate(value: string, limit: number): string {
+	return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
 function messageText(content: unknown): string {
