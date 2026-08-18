@@ -52,6 +52,57 @@ test("master mode is opt-in and only appends subagents", async () => {
 	expect(activeTools).toEqual(["read", "write", "edit", "bash"]);
 });
 
+test("list results render an inline pool snapshot on the tool line", async () => {
+	process.env.HERDR_ENV = "1";
+	process.env.HERDR_WORKSPACE_ID = "w1";
+	delete process.env.FIRECODE_MASTER_WORKER;
+	const module = (await loadFirecodeModule("master/index.js")) as { registerMaster: (pi: unknown) => void };
+	type Renderable = {
+		renderCall: (args: Record<string, unknown>, theme: unknown, context: unknown) => { render(width: number): string[] };
+		renderResult: (
+			result: { content: Array<{ type: string; text: string }>; details?: unknown },
+			options: { expanded: boolean },
+			theme: unknown,
+			context: unknown,
+		) => unknown;
+	};
+	const tools = new Map<string, Renderable>();
+	const pi = {
+		registerMessageRenderer() {},
+		registerCommand() {},
+		registerTool: (tool: { name: string } & Renderable) => tools.set(tool.name, tool),
+		getActiveTools: () => [],
+		setActiveTools() {},
+		on() {},
+		events: { on() {}, emit() {} },
+	};
+	module.registerMaster(pi);
+	const tool = tools.get("subagents");
+	if (!tool) throw new Error("subagents 未注册");
+	const theme = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+	const makeContext = (isError = false) => ({
+		state: {}, cwd: "/tmp", toolCallId: crypto.randomUUID(), isPartial: false, isError, expanded: false,
+	});
+
+	const empty = makeContext();
+	tool.renderResult({ content: [{ type: "text", text: "{}" }], details: { workers: [] } }, { expanded: false }, theme, empty);
+	expect(tool.renderCall({ action: "list" }, theme, empty).render(76)[0]).toContain("子代理 查看 — 空");
+
+	const populated = makeContext();
+	const workers = [
+		{ name: "parser-sonnet", status: "working", model: "anthropic/claude", thinking: "medium" },
+		{ name: "wiki-core", status: "dormant", model: "anthropic/claude", thinking: "medium" },
+	];
+	tool.renderResult({ content: [{ type: "text", text: "{}" }], details: { workers } }, { expanded: false }, theme, populated);
+	expect(tool.renderCall({ action: "list" }, theme, populated).render(76)[0])
+		.toContain("子代理 查看 — parser-sonnet 工作 · wiki-core 休眠");
+
+	// 错误结果不回写快照：行尾保留给错误摘要。
+	const failed = makeContext(true);
+	tool.renderResult({ content: [{ type: "text", text: "boom" }], details: { workers } }, { expanded: false }, theme, failed);
+	expect(tool.renderCall({ action: "list" }, theme, failed).render(76)[0]).not.toContain("—");
+});
+
 test("a failed recovery rolls activation back so the next attempt retries", async () => {
 	process.env.HERDR_ENV = "1";
 	process.env.HERDR_WORKSPACE_ID = "w1";
@@ -108,9 +159,9 @@ test("Worker results return as follow-up custom messages", async () => {
 				export class HerdrWorkers {
 					constructor(options) { this.notify = options.notifyMaster; }
 					async resume() {}
-					async start() {
+					async start(ctx, options) {
 						this.notify("子代理 worker-1 已停下\\n回复：完成");
-						return { name: "worker-1", model: "p/m", thinking: "medium", status: "idle" };
+						return { name: "worker-1", model: options.model, thinking: options.thinking, status: "idle" };
 					}
 					shutdown() {}
 					async cleanup() { return []; }
@@ -138,7 +189,16 @@ test("Worker results return as follow-up custom messages", async () => {
 	const ctx = makeCtx([]);
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
-	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
+	// 选型门禁：省略与表外 model 都在投递前拒绝——静默继承指挥官模型会拿最贵的一档真实发起子代理。
+	await expect(tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx))
+		.rejects.toThrow("必须显式指定 model");
+	await expect(tools.get("subagents")?.execute("call", { action: "start", prompt: "做", model: "vendor/not-in-roster" }, undefined, undefined, ctx))
+		.rejects.toThrow("不在选型表");
+	// thinking 同样必填：档位直接决定花销，继承指挥官的思考等级也是静默花钱。
+	await expect(tools.get("subagents")?.execute("call", { action: "start", prompt: "做", model: "openai-codex/gpt-5.6-sol" }, undefined, undefined, ctx))
+		.rejects.toThrow("必须显式指定 thinking");
+	const started = await tools.get("subagents")?.execute("call", { action: "start", prompt: "做", model: "openai-codex/gpt-5.6-sol", thinking: "high" }, undefined, undefined, ctx) as { details: { worker: { model: string; thinking: string } } };
+	expect(started.details.worker).toMatchObject({ model: "openai-codex/gpt-5.6-sol", thinking: "high" });
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	expect(messages).toEqual([{
 		message: {
@@ -202,11 +262,12 @@ test("review action exposes reviewing in Master status without accepting prompt 
 		ui: {
 			notify: (message: string) => notices.push(message),
 			setStatus: (_key: string, value?: string) => statuses.push(value),
+			theme: { fg: (_color: string, text: string) => text },
 		},
 	};
 	module.registerMaster(pi);
 	await commands.get("fire-master")?.handler("", ctx);
-	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做" }, undefined, undefined, ctx);
+	await tools.get("subagents")?.execute("call", { action: "start", prompt: "做", model: "openai-codex/gpt-5.6-sol", thinking: "medium" }, undefined, undefined, ctx);
 	const result = await tools.get("subagents")?.execute(
 		"call",
 		{ action: "review", worker: "worker-1", prompt: "malicious override" },
@@ -609,6 +670,10 @@ function makeCtx(notices: string[], cwd = "/tmp") {
 		model: { provider: "openai-codex", id: "gpt-5.6-sol" },
 		thinkingLevel: "medium",
 		sessionManager: { getSessionId: () => crypto.randomUUID(), getBranch: () => [] },
-		ui: { notify: (message: string) => notices.push(message), setStatus() {} },
+		ui: {
+			notify: (message: string) => notices.push(message),
+			setStatus() {},
+			theme: { fg: (_color: string, text: string) => text },
+		},
 	};
 }

@@ -11,12 +11,12 @@ import { HerdrWorkers } from "./herdr.js";
 import {
 	MasterStore,
 	THINKING_LEVELS,
-	liveWorkers,
 	loadMasterState,
 	masterStatePath,
 	requireWorker,
 	type MasterState,
 	type WorkerRef,
+	type WorkerStatus,
 } from "./state.js";
 
 const MASTER_TOOL = "subagents";
@@ -59,6 +59,7 @@ type Runtime = MasterRuntime | WorkerRuntime;
 export function registerMaster(pi: ExtensionAPI): void {
 	let runtime: Runtime | undefined;
 	const masterModels = loadMasterModels();
+	const roster = "error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models;
 	const reviewGate = reviewGateError();
 	// 渲染器无条件注册（与 review 结果卡同策略）：live 与 reload 同一外观。
 	registerMasterEventRenderer(pi);
@@ -72,17 +73,25 @@ export function registerMaster(pi: ExtensionAPI): void {
 
 	const renderStatus = () => {
 		if (!runtime) return;
+		const { theme } = runtime.ctx.ui;
 		if (runtime.role === "worker") {
-			runtime.ctx.ui.setStatus("master", `↳ ${runtime.name}`);
+			runtime.ctx.ui.setStatus("master", theme.fg("dim", `↳ ${runtime.name}`));
 			return;
 		}
-		const live = liveWorkers(runtime.store.state).length;
-		const dormant = runtime.store.state.workers.length - live;
-		const reviewing = runtime.store.state.workers.filter((worker) => worker.status === "reviewing").length;
-		const total = runtime.store.state.workers.length;
-		runtime.ctx.ui.setStatus("master", total === 0
-			? "◆ 无子代理"
-			: `◆ ${live}${reviewing ? ` · 审${reviewing}` : ""}${dormant ? ` · 眠${dormant}` : ""}`);
+		const counts = new Map<WorkerStatus, number>();
+		for (const worker of runtime.store.state.workers)
+			counts.set(worker.status, (counts.get(worker.status) ?? 0) + 1);
+		// 等 = blocked，唯一需要指挥官出手的状态，warning 高亮；零计数不显示。
+		const part = (label: string, count: number, color: "dim" | "warning" = "dim") =>
+			count ? theme.fg(color, `/${label}${count}`) : "";
+		runtime.ctx.ui.setStatus("master", [
+			theme.fg("dim", "👑 指挥官"),
+			part("工作", (counts.get("starting") ?? 0) + (counts.get("working") ?? 0)),
+			part("等", counts.get("blocked") ?? 0, "warning"),
+			part("审", counts.get("reviewing") ?? 0),
+			part("闲", counts.get("idle") ?? 0),
+			part("眠", counts.get("dormant") ?? 0),
+		].join(""));
 	};
 
 	const flushMasterEvents = (active: MasterRuntime) => {
@@ -267,14 +276,19 @@ export function registerMaster(pi: ExtensionAPI): void {
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
-		renderResult: makeResultRenderer(false),
-		promptGuidelines: masterGuidelines("error" in masterModels ? DEFAULT_MASTER_MODELS : masterModels.models),
+		renderResult: (result, options, theme, context) => {
+			// 查看的结果回写行内后缀（与 edit ±diff 同一通道）：空池显“空”，否则列出各子代理名与状态。
+			const details = result.details as { workers?: unknown } | undefined;
+			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
+			return renderSubagentsResult(result, options, theme, context);
+		},
+		promptGuidelines: masterGuidelines(roster),
 		parameters: Type.Object({
 			action: StringEnum(["list", "start", "send", "review", "interrupt", "ack", "sleep", "kill"] as const),
 			worker: Type.Optional(Type.String({ description: "start 必填简短任务词（如 fix-outcome）；其余 action 指定目标子代理" })),
 			prompt: Type.Optional(Type.String()),
-			model: Type.Optional(Type.String({ description: "可选 provider/model；省略则继承当前模型" })),
-			thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
+			model: Type.Optional(Type.String({ description: "start 新建子代理必填：从选型表挑一个 provider/model（唤醒休眠子代理时省略，沿用其档案）" })),
+			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "start 新建子代理必填：以选型表默认档为基准按任务深浅确认（唤醒休眠子代理时省略）" })),
 			session: Type.Optional(Type.String({ description: "可选：休眠子代理名或 Pi session path" })),
 			cwd: Type.Optional(Type.String({ description: "start 可选：子代理工作目录（绝对路径，必须已存在）；默认当前目录" })),
 			review: Type.Optional(Type.Boolean({ description: "start/send 可选：委派或追加新实现任务的重要票设 true——完成后自动发起对抗审查并回传终态；唤醒待命、纯追问不设" })),
@@ -286,12 +300,12 @@ export function registerMaster(pi: ExtensionAPI): void {
 			if (params.action === "start") {
 				// 审查票在派发时即验可用性：review 不可用就拒绝，不让意图落地后才发现审不了。
 				if (params.review === true && reviewGate) throw new Error(reviewGate);
+				const selection = resolveSelection(roster, active.store.state, params);
 				const worker = await active.herdr.start(ctx, {
 					prompt: requiredString(params.prompt, "prompt"),
 					...(params.review === true ? { review: true } : {}),
 					...(optionalString(params.worker) ? { name: optionalString(params.worker) } : {}),
-					...(optionalString(params.model) ? { model: optionalString(params.model) } : {}),
-					...(optionalString(params.thinking) ? { thinking: optionalString(params.thinking) } : {}),
+					...selection,
 					...(optionalString(params.session) ? { session: optionalString(params.session) } : {}),
 					...(optionalString(params.cwd) ? { cwd: optionalString(params.cwd) } : {}),
 				});
@@ -455,13 +469,45 @@ function reviewGateError(): string | undefined {
 	return undefined;
 }
 
+/**
+ * 新建子代理的选型门禁：省略 model 曾静默继承指挥官的模型（常是最贵的一档），
+ * 提示词层的“显式传”打不过参数层的“可省略”，因此在代码里堵死这条路。
+ * thinking 同理必填：档位直接决定花销，继承指挥官的思考等级同样是静默花钱。
+ * 唤醒池内休眠子代理不受约束——身份跟档案走；收编外部 session 没有档案，仍需显式选型。
+ */
+function resolveSelection(
+	models: MasterModel[],
+	state: MasterState,
+	params: Record<string, unknown>,
+): { model?: string; thinking?: string } {
+	const model = optionalString(params.model);
+	const thinking = optionalString(params.thinking);
+	const target = optionalString(params.worker);
+	const session = optionalString(params.session);
+	const dormant = state.workers.some(
+		(worker) => worker.status === "dormant"
+			&& (worker.name === target || worker.name === session || worker.sessionPath === session),
+	);
+	if (dormant) return { ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) };
+	const entry = models.find((candidate) => candidate.model === model);
+	if (!entry)
+		throw new Error(
+			`${model ? `model 不在选型表：${model}` : "start 必须显式指定 model"}。按任务从选型表挑一个：${rosterText(models)}。表外模型需用户先改 firecode/config.jsonc 的 master.models。`,
+		);
+	if (!thinking)
+		throw new Error(`start 必须显式指定 thinking：${entry.model} 在选型表的默认档是 ${entry.thinking}，按任务深浅确认后再传。`);
+	return { model: entry.model, thinking };
+}
+
+function rosterText(models: MasterModel[]): string {
+	return models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；");
+}
+
 function masterGuidelines(models: MasterModel[]): string[] {
-	const roster = models
-		.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`)
-		.join("；");
+	const roster = rosterText(models);
 	return [
 	"subagents 激活时，你是唯一的指挥官（Master），负责是否委派、如何分派和最终验收；普通问题直接回答，不必开子代理。",
-	`指挥官拥有的子代理（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。start 时显式传选型表里的 model 与 thinking，用户显式指定则优先。`,
+	`指挥官拥有的子代理（Worker）的全部生命周期只经 subagents 工具控制。选型表：${roster}。新建子代理必须按任务性质从表中挑 model、以表内默认档为基准定 thinking，两个参数都显式传给 start（工具会拒绝省略与表外模型，不存在继承当前会话这一路）；用户显式指定则优先。`,
 	"硬约束：禁止用 bash 调 herdr CLI 起子代理、给子代理发消息或管子代理生命周期——CLI 起的子代理是脱管子代理，收不到任何完成/阻塞回传、不会自动审查，你会对它们全盲。需要让子代理在其它已存在目录工作时，用 start 的 cwd 参数指定绝对路径（目录本身可先用 bash 准备）。委派文本以 /skill: 或 /skills: 开头时只放行 /skill:tdd，其余会被工具直接拒绝（implement 内含自审、与自动对抗审查冲突；调查/文档/收口票用普通文本）。用户技能文本里的『后台代理』在你的语境即经 subagents 工具管理的子代理，不得用 bash/CLI 另起任何代理进程。start 失败会自动重试；仍失败就把错误报告给用户等待决策，不自行绕道。",
 	"发现脱管子代理（在 herdr 里跑但不在 subagents list 中）时收编：等它空闲后让其 pi 退出（会话文件保留），再用 start 传 session 路径拉回池内，上下文无损、回传恢复。",
 	"start 的 worker 名用简短任务词（如 fix-outcome、scan-dups）；pane/tab/Pi 会话显示名会自动附加模型名，不要把模型写进 worker 名。",
@@ -556,6 +602,31 @@ function dispositionReminderText(worker: string): string {
 		`提醒：子代理 ${worker} 已交活，等你发落`,
 		"send 继续派活；review 补审；sleep 休眠；kill 移除；ack 待命（子代理保持原状；等用户决策也用 ack 并向用户说明）。此提醒只此一次。",
 	].join("\n");
+}
+
+const renderSubagentsResult = makeResultRenderer(false);
+
+// satisfies 绑定：WorkerStatus 增删值不同步这张表会编译失败，不会静默退化成英文原词。
+const STATUS_WORD = {
+	starting: "启动",
+	working: "工作",
+	blocked: "提问",
+	idle: "空闲",
+	reviewing: "审查",
+	dormant: "休眠",
+} satisfies Record<WorkerStatus, string>;
+
+/** list 结果的行内摘要：查看时刻的池快照随工具行留在会话记录里。 */
+function listMeta(workers: unknown[]): Part[] {
+	if (workers.length === 0) return [{ text: " — 空", color: "muted" }];
+	const text = workers
+		.map((entry) => {
+			const record = entry as Record<string, unknown>;
+			const status = typeof record.status === "string" ? STATUS_WORD[record.status as WorkerStatus] ?? record.status : "?";
+			return `${typeof record.name === "string" ? record.name : "?"} ${status}`;
+		})
+		.join(" · ");
+	return [{ text: ` — ${text}`, color: "muted" }];
 }
 
 function statusText(workers: WorkerRef[]): string {

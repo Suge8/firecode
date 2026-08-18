@@ -208,9 +208,9 @@ test("new Workers fill the current tab to four panes before opening another", as
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
 	for (let serial = 1; serial <= 5; serial += 1)
-		await pool.start(ctx, { name: `worker-${serial}`, prompt: "做" });
+		await pool.start(ctx, { name: `worker-${serial}`, model: "p/m", thinking: "medium", prompt: "做" });
 	await pool.stop("worker-2", true);
-	await pool.start(ctx, { name: "worker-6", prompt: "做" });
+	await pool.start(ctx, { name: "worker-6", model: "p/m", thinking: "medium", prompt: "做" });
 
 	const layout = calls.filter((args) =>
 		(args[0] === "tab" && args[1] === "create") || (args[0] === "pane" && args[1] === "split")
@@ -270,6 +270,8 @@ test("a failed split falls back to a new tab", async () => {
 	});
 	await pool.start({ cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never, {
 		name: "worker-2",
+		model: "p/m",
+		thinking: "medium",
 		prompt: "做",
 	});
 	expect(calls.filter((args) =>
@@ -302,6 +304,8 @@ test("startup failure closes only the shell shape it created", async () => {
 		});
 		await expect(pool.start({ cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never, {
 			name: "worker-2",
+			model: "p/m",
+			thinking: "medium",
 			prompt: "做",
 		})).rejects.toThrow("start failed");
 		expect(calls).toContainEqual(shape === "pane"
@@ -470,7 +474,7 @@ test("stopping a Worker mid-startup aborts the start and leaves no orphan", asyn
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const starting = pool.start(ctx, { name: "hang", prompt: "做" });
+	const starting = pool.start(ctx, { name: "hang", model: "p/m", thinking: "medium", prompt: "做" });
 	starting.catch(() => {});
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	await pool.stop("hang", true);
@@ -503,9 +507,9 @@ test("a queued start can be stopped before it runs", async () => {
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const first = pool.start(ctx, { name: "hang", prompt: "做" });
+	const first = pool.start(ctx, { name: "hang", model: "p/m", thinking: "medium", prompt: "做" });
 	first.catch(() => {});
-	const second = pool.start(ctx, { name: "queued", prompt: "做" });
+	const second = pool.start(ctx, { name: "queued", model: "p/m", thinking: "medium", prompt: "做" });
 	second.catch(() => {});
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	// 同批并行工具调用可达：排队中的启动必须能被 stop 命中，不报“Worker 不存在”。
@@ -634,9 +638,9 @@ test("workers launch in parallel once layout allocation hands off", async () => 
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const slow = pool.start(ctx, { name: "slow", prompt: "做" });
+	const slow = pool.start(ctx, { name: "slow", model: "p/m", thinking: "medium", prompt: "做" });
 	slow.catch(() => {});
-	const fast = pool.start(ctx, { name: "fast", prompt: "做" });
+	const fast = pool.start(ctx, { name: "fast", model: "p/m", thinking: "medium", prompt: "做" });
 	// 并行启动：首个工人还在 shell 握手，后续工人已完成启动——不被全局串行化堵住。
 	const started = await fast;
 	expect(started.status).toBe("working");
@@ -676,7 +680,7 @@ test("reload shutdown waits out in-flight starts and leaves state and shells unt
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", prompt: "继续" });
+	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", model: "p/m", thinking: "medium", prompt: "继续" });
 	resume.catch(() => {});
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	// reload 路径：shutdown 必须等在飞启动退出，且不关 shell、不改状态——现场留给下个运行时 reconcile。
@@ -710,10 +714,10 @@ test("a duplicate same-name start is rejected at enqueue instead of queueing unc
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const first = pool.start(ctx, { name: "dup", prompt: "做" });
+	const first = pool.start(ctx, { name: "dup", model: "p/m", thinking: "medium", prompt: "做" });
 	first.catch(() => {});
 	// 同名并发启动：第二个入队即拒，不会成为 stop 杀不掉的漏网之鱼。
-	await expect(pool.start(ctx, { name: "dup", prompt: "再做" })).rejects.toThrow("不能重复启动");
+	await expect(pool.start(ctx, { name: "dup", model: "p/m", thinking: "medium", prompt: "再做" })).rejects.toThrow("不能重复启动");
 	// 等第一个启动真正建出 shell 再停：断言的是"建出来后能收干净"，不靠微任务时序踩点。
 	while (!calls.some((args) => args[0] === "tab" && args[1] === "create"))
 		await new Promise((resolve) => setTimeout(resolve, 5));
@@ -749,10 +753,10 @@ test("a queued dormant resume can be stopped through the dormant branch", async 
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	const first = pool.start(ctx, { name: "hang", prompt: "做" });
+	const first = pool.start(ctx, { name: "hang", model: "p/m", thinking: "medium", prompt: "做" });
 	first.catch(() => {});
 	// 仅凭 session 恢复休眠工人：入队时必须从引用反查出名字并登记取消控制器。
-	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", prompt: "继续" });
+	const resume = pool.start(ctx, { session: "/tmp/worker.jsonl", model: "p/m", thinking: "medium", prompt: "继续" });
 	resume.catch(() => {});
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	// stop 走休眠分支：也必须中止排队中的恢复，不能只处理状态。
@@ -1215,10 +1219,10 @@ test("cwd 校验失败拒绝启动，合法 cwd 进 pane 与档案", async () =>
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
 	// 静默回退 Master 目录会让工人在错误 checkout 真实动手：校验失败必须拒绝。
-	await expect(pool.start(ctx, { name: "cw", prompt: "做", cwd: "relative/path" })).rejects.toThrow("绝对路径");
-	await expect(pool.start(ctx, { name: "cw", prompt: "做", cwd: "/nonexistent-firecode-cwd" })).rejects.toThrow("不存在");
+	await expect(pool.start(ctx, { name: "cw", model: "p/m", thinking: "medium", prompt: "做", cwd: "relative/path" })).rejects.toThrow("绝对路径");
+	await expect(pool.start(ctx, { name: "cw", model: "p/m", thinking: "medium", prompt: "做", cwd: "/nonexistent-firecode-cwd" })).rejects.toThrow("不存在");
 	expect(store.state.workers).toEqual([]);
-	const started = pool.start(ctx, { name: "cw", prompt: "做", cwd: checkout });
+	const started = pool.start(ctx, { name: "cw", model: "p/m", thinking: "medium", prompt: "做", cwd: checkout });
 	started.catch(() => {});
 	while (!calls.some((args) => args[0] === "tab" && args[1] === "create"))
 		await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1241,11 +1245,11 @@ test("委派技能白名单：非 tdd 技能前缀（含拼错）在投递前被
 		notifyMaster() {},
 	});
 	const ctx = { cwd: "/tmp", model: { provider: "p", id: "m" }, thinkingLevel: "medium" } as never;
-	await expect(pool.start(ctx, { name: "a", prompt: "/skill:implement 执行工单 #1" })).rejects.toThrow("只允许 /skill:tdd");
-	await expect(pool.start(ctx, { name: "a", prompt: "/skills:implement 拼错的前缀" })).rejects.toThrow("只允许 /skill:tdd");
+	await expect(pool.start(ctx, { name: "a", model: "p/m", thinking: "medium", prompt: "/skill:implement 执行工单 #1" })).rejects.toThrow("只允许 /skill:tdd");
+	await expect(pool.start(ctx, { name: "a", model: "p/m", thinking: "medium", prompt: "/skills:implement 拼错的前缀" })).rejects.toThrow("只允许 /skill:tdd");
 	expect(store.state.workers).toEqual([]);
 	// tdd 放行：穿过白名单到达 shell 阶段（非 zsh 环境报的是握手错误，不是白名单拒绝）。
-	await expect(pool.start(ctx, { name: "a", prompt: "/skill:tdd 按 spec 实现" })).rejects.toThrow("zsh");
+	await expect(pool.start(ctx, { name: "a", model: "p/m", thinking: "medium", prompt: "/skill:tdd 按 spec 实现" })).rejects.toThrow("zsh");
 	store.dispatch({ type: "UPSERT_WORKER", worker: worker("blocked") });
 	await expect(pool.send("worker-1", "/skill:implement 继续")).rejects.toThrow("只允许 /skill:tdd");
 	await pool.shutdown();

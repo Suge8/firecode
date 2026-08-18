@@ -172,8 +172,11 @@ export class HerdrWorkers {
 		validateWorkerName(name);
 		const existing = this.store.state.workers.find((worker) => worker.name === name);
 		if (existing && existing !== dormant) throw new Error(`子代理已存在：${name}`);
-		const model = options.model?.trim() || dormant?.model || currentModel(ctx);
-		const thinking = parseThinking(options.thinking) ?? dormant?.thinking ?? parseThinking(ctx.thinkingLevel) ?? "medium";
+		// 选型由工具层的选型门禁负责；这里只兜住休眠档案，缺失即报错——任何默认值都是替调用方静默花钱。
+		const model = options.model?.trim() || dormant?.model;
+		if (!model) throw new Error("start 需要 model：从选型表挑一个，或传休眠子代理名/session 沿用其档案");
+		const thinking = parseThinking(options.thinking) ?? dormant?.thinking;
+		if (!thinking) throw new Error("start 需要 thinking：按任务深浅显式定档，或传休眠子代理名/session 沿用其档案");
 		const sessionPath = dormant?.sessionPath ?? options.session?.trim();
 		// cwd 校验失败即拒绝：静默回退 Master 目录会让子代理在错误的 checkout 真实动手。
 		const cwd = await resolveWorkerCwd(options.cwd ?? dormant?.cwd);
@@ -1012,11 +1015,6 @@ function workerShellEnv(
 
 function hasPaneLocation(worker: WorkerRef): worker is PositionedWorker {
 	return !!worker.paneId && worker.paneId !== "starting" && !!worker.tabId && worker.tabId !== "starting";
-}
-
-function currentModel(ctx: ExtensionContext): string {
-	if (!ctx.model) throw new Error("当前会话没有可继承的模型");
-	return `${ctx.model.provider}/${ctx.model.id}`;
 }
 
 function parseThinking(value?: string): WorkerThinking | undefined {
