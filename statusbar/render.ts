@@ -125,8 +125,14 @@ export function fitMetadataLine(
 	title: string,
 	width: number,
 	separator: string,
+	badge = "",
 ): string {
 	if (width <= 0) return "";
+	// badge（如指挥官态）整段取舍：放不下就丢，不截半个，再走会话名截断阶梯。
+	if (badge) {
+		const full = [location, title, badge].filter(Boolean).join(separator);
+		if (visibleWidth(full) <= width) return full;
+	}
 	if (!title) return clip(location, width, "end", visibleWidth(location) > width ? "…" : "");
 	const full = `${location}${separator}${title}`;
 	if (visibleWidth(full) <= width) return full;

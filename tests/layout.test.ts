@@ -96,6 +96,20 @@ describe("two-line footer layout", () => {
 			fitMetadataLine("📍.pi · 🌿 main", "", 80, separator),
 		).toBe("📍.pi · 🌿 main");
 	});
+
+	test("appends the master badge after the title and drops it whole when narrow", () => {
+		const location = "📍firecode · 🌿 main";
+		const title = "💬 脚标";
+		const badge = "👑 指挥官/工作1/等1/审1";
+		const full = joined(location, title, badge);
+		expect(fitMetadataLine(location, title, full.length, separator, badge)).toBe(full);
+		// 宽度不够：整段丢 badge，不出半截残渣。
+		expect(fitMetadataLine(location, title, full.length - 1, separator, badge)).toBe(
+			joined(location, title),
+		);
+		// 无会话名时 badge 直接跟在位置后。
+		expect(fitMetadataLine(location, "", 80, separator, badge)).toBe(joined(location, badge));
+	});
 });
 
 test("adds Flow state on the right without shrinking the existing line", () => {

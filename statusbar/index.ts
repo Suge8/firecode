@@ -96,7 +96,11 @@ export function registerStatusBar(pi: ExtensionAPI): void {
 						separator,
 					);
 					return [
-						alignRight(fitMetadataLine(location, title, width, separator), review, width),
+						alignRight(
+							fitMetadataLine(location, title, width, separator, statuses.get("master") ?? ""),
+							review,
+							width,
+						),
 						statusLine,
 					];
 				},
