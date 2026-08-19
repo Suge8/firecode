@@ -120,6 +120,21 @@ test("Worker Pool state atomically overwrites one file instead of appending sess
 	await rm(directory, { recursive: true, force: true });
 });
 
+test("store 变更后通知消费者，无变化的 dispatch 不通知", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-master-onchange-"));
+	const path = join(directory, "state.json");
+	let notified = 0;
+	const store = new MasterStore(path, undefined, () => { notified += 1; });
+	store.dispatch({ type: "UPSERT_WORKER", worker: dormant });
+	expect(notified).toBe(1);
+	// reducer 短路的无变化事件：不落盘、不通知。
+	store.dispatch({ type: "REMOVE_WORKER", name: "no-such-worker" });
+	expect(notified).toBe(1);
+	store.dispatch({ type: "UPSERT_WORKER", worker: { ...dormant, status: "idle", paneId: "w1:p2", tabId: "w1:t2" } });
+	expect(notified).toBe(2);
+	await rm(directory, { recursive: true, force: true });
+});
+
 test("a corrupt current state fails closed instead of reviving an older snapshot", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-master-corrupt-"));
 	const path = join(directory, "state.json");

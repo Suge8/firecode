@@ -111,3 +111,7 @@ fire-review + Master diff 检查 + git 回滚。`tool_call` 仍把 edit/write �
 
 Worker Pool 状态 schema 只认 v5（无用户，不留旧版兼容），用 mode 0600 的单个文件原子覆盖，不向 Pi session
 追加快照；reload 恢复观察，quit/new/resume/fork 和 `/fire-master off` 清理。
+
+状态栏指挥官行由 store 变更驱动（MasterStore onChange，落盘后通知），UI 是状态的纯投影；禁止在动作调用点
+手动补重绘——散落调用点必漏异步转态（send 后卡「闲」、自动补审不显「审」是真实事故）。唯一例外是
+激活末尾的首绘（resume 期间 runtime 未就位，onChange 早退）。

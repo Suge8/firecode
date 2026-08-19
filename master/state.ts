@@ -94,10 +94,12 @@ export function loadMasterState(path: string): MasterState | undefined {
 export class MasterStore {
 	private stateValue: MasterState;
 	private readonly path: string;
+	private readonly onChange?: () => void;
 
-	constructor(path: string, restored?: MasterState) {
+	constructor(path: string, restored?: MasterState, onChange?: () => void) {
 		this.path = path;
 		this.stateValue = restored ?? loadMasterState(path) ?? initialMasterState();
+		this.onChange = onChange;
 	}
 
 	get state(): MasterState {
@@ -110,6 +112,8 @@ export class MasterStore {
 		if (event.type === "CLEAR") rmSync(this.path, { force: true });
 		else writeState(this.path, next);
 		this.stateValue = next;
+		// 落盘成功后通知唯一消费者（状态栏投影）：UI 永远只反映已持久化的事实。
+		this.onChange?.();
 		return next;
 	}
 }

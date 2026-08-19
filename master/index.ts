@@ -71,27 +71,12 @@ export function registerMaster(pi: ExtensionAPI): void {
 		else pi.setActiveTools(without);
 	};
 
+	// 状态栏由状态变更驱动（store onChange）：任何 dispatch 落盘即重绘，调用点不需要记得刷。
+	// 读全局 runtime 而非闭包状态：旧 store 的迟到通知要么早退、要么画出当前事实，天然无害。
 	const renderStatus = () => {
-		if (!runtime) return;
-		const { theme } = runtime.ctx.ui;
-		if (runtime.role === "worker") {
-			runtime.ctx.ui.setStatus("master", theme.fg("dim", `↳ ${runtime.name}`));
-			return;
-		}
-		const counts = new Map<WorkerStatus, number>();
-		for (const worker of runtime.store.state.workers)
-			counts.set(worker.status, (counts.get(worker.status) ?? 0) + 1);
-		// 等 = blocked，唯一需要指挥官出手的状态，warning 高亮；零计数不显示。
-		const part = (label: string, count: number, color: "dim" | "warning" = "dim") =>
-			count ? theme.fg(color, `/${label}${count}`) : "";
-		runtime.ctx.ui.setStatus("master", [
-			theme.fg("dim", "👑 指挥官"),
-			part("工作", (counts.get("starting") ?? 0) + (counts.get("working") ?? 0)),
-			part("等", counts.get("blocked") ?? 0, "warning"),
-			part("审", counts.get("reviewing") ?? 0),
-			part("闲", counts.get("idle") ?? 0),
-			part("眠", counts.get("dormant") ?? 0),
-		].join(""));
+		if (runtime?.role !== "master") return;
+		const { ui } = runtime.ctx;
+		ui.setStatus("master", masterStatusLine(runtime.store.state.workers, ui.theme));
 	};
 
 	const flushMasterEvents = (active: MasterRuntime) => {
@@ -137,7 +122,6 @@ export function registerMaster(pi: ExtensionAPI): void {
 				worker: { ...target, disposition: event.remind ? "reminded" : "pending" },
 			});
 		}
-		renderStatus();
 	};
 
 	/** 回合结束时的发落检查：未发落先提醒一次，提醒后仍不发落升级为用户通知，到此为止。 */
@@ -190,7 +174,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		}
 		if (runtime?.role === "worker") throw new Error("子代理不能提升为指挥官");
 		const path = masterStatePath(ctx.sessionManager.getSessionId());
-		const store = new MasterStore(path, restored);
+		const store = new MasterStore(path, restored, renderStatus);
 		const activationEvents: Array<{ content: string; worker?: string }> = [];
 		let deliverMasterEvent = (content: string, worker?: string): void => {
 			activationEvents.push({ content, ...(worker ? { worker } : {}) });
@@ -212,6 +196,7 @@ export function registerMaster(pi: ExtensionAPI): void {
 		deliverMasterEvent = notifyMaster;
 		setTools("master");
 		for (const event of activationEvents) notifyMaster(event.content, event.worker);
+		// 首绘：resume() 期间 runtime 尚未就位，onChange 早退，激活完成后补一次对齐。
 		renderStatus();
 		return candidate;
 	};
@@ -309,7 +294,6 @@ export function registerMaster(pi: ExtensionAPI): void {
 					...(optionalString(params.session) ? { session: optionalString(params.session) } : {}),
 					...(optionalString(params.cwd) ? { cwd: optionalString(params.cwd) } : {}),
 				});
-				renderStatus();
 				return toolResult({ started: true, worker: compactWorker(worker) });
 			}
 			if (params.action === "send") {
@@ -355,13 +339,11 @@ export function registerMaster(pi: ExtensionAPI): void {
 				// 配置有错时命令存在但拒绝启动，只会延迟报“审查未启动”。两种都在投递前拦住。
 				if (reviewGate) throw new Error(reviewGate);
 				await active.herdr.review(requiredString(params.worker, "worker"));
-				renderStatus();
 				return toolResult({ reviewing: true });
 			}
 			if (params.action === "sleep" || params.action === "kill") {
 				// 两者共享同一条中止+关 pane 路径，只差结局：sleep 留休眠引用可唤醒，kill 除名不可回。
 				await active.herdr.stop(requiredString(params.worker, "worker"), params.action === "kill");
-				renderStatus();
 				return toolResult(params.action === "kill" ? { killed: true } : { sleeping: true });
 			}
 			throw new Error(`未知 subagents action：${String(params.action)}`);
@@ -374,7 +356,8 @@ export function registerMaster(pi: ExtensionAPI): void {
 		if (workerName) {
 			runtime = { role: "worker", ctx, name: workerName };
 			setTools("worker");
-			renderStatus();
+			// Worker 行是会话级常量，写一次即可，不走状态驱动。
+			ctx.ui.setStatus("master", ctx.ui.theme.fg("dim", `↳ ${workerName}`));
 			return;
 		}
 		try {
@@ -613,6 +596,22 @@ function dispositionReminderText(worker: string): string {
 }
 
 const renderSubagentsResult = makeResultRenderer(false);
+
+/** 状态栏指挥官行：池状态的纯投影。等 = blocked，唯一需要指挥官出手的状态，warning 高亮；零计数不显示。 */
+function masterStatusLine(workers: WorkerRef[], theme: ExtensionContext["ui"]["theme"]): string {
+	const counts = new Map<WorkerStatus, number>();
+	for (const worker of workers) counts.set(worker.status, (counts.get(worker.status) ?? 0) + 1);
+	const part = (label: string, count: number, color: "dim" | "warning" = "dim") =>
+		count ? theme.fg(color, `/${label}${count}`) : "";
+	return [
+		theme.fg("dim", "👑 指挥官"),
+		part("工作", (counts.get("starting") ?? 0) + (counts.get("working") ?? 0)),
+		part("等", counts.get("blocked") ?? 0, "warning"),
+		part("审", counts.get("reviewing") ?? 0),
+		part("闲", counts.get("idle") ?? 0),
+		part("眠", counts.get("dormant") ?? 0),
+	].join("");
+}
 
 // satisfies 绑定：WorkerStatus 增删值不同步这张表会编译失败，不会静默退化成英文原词。
 const STATUS_WORD = {
