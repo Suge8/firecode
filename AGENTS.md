@@ -22,7 +22,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
-| `config.ts` | 只读本目录 config.jsonc | |
+| `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |
 
 改 `review/` 或 `master/` 前先读对应细则页：两者的状态机、持久化与投递契约都有事故换来的硬约束。
 
@@ -35,9 +35,13 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 
 ## 配置
 
-只有 `firecode/config.jsonc`，用法写在 jsonc 注释里。不要新建 keys.json，也不要读项目级配置。快捷键启动时
-绑定，改完需重启；`ctrl+f` 只改 `openai` 节，其它注释保留。未知字段、嵌套未知字段与类型错误都报配置问题；
-`review` 与 `master` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型真实发起调用。
+唯一运行配置是 Pi Agent 目录（由官方 `getAgentDir()` 解析，含 `PI_CODING_AGENT_DIR` 覆写）下的
+`extensions/firecode/config.jsonc`；安装流程当场生成完整私人配置。发行内容只带可解析的 `config.example.jsonc`，
+它是起始模板，不参与运行时读取。缺失运行配置时关闭可选功能，并在当前会话最多警告一次。
+
+不要新建 keys.json，也不要读项目级配置。快捷键启动时绑定，改完需重启；`ctrl+f` 只改 `openai` 节，其它注释
+保留。未知字段、嵌套未知字段与类型错误都报配置问题；`review` 与 `master` 节有问题时对应功能拒绝启动而不是
+回退默认——静默回退会拿用户没配的模型真实发起调用。
 
 ## 测试
 

@@ -47,7 +47,10 @@ export default function firecode(pi: ExtensionAPI): void {
 	registerReview(pi, reviewEnabled, problems.includes("features 必须是对象"));
 
 	if (problems.length === 0) return;
+	let notified = false;
 	pi.on("session_start", (_event, ctx) => {
+		if (notified) return;
+		notified = true;
 		for (const problem of problems) ctx.ui.notify(`FireCode 配置：${problem}`, "warning");
 	});
 }

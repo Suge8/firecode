@@ -2,7 +2,7 @@
  * 在测试里加载 FireCode 模块：扩展运行时由 pi 注入 `@earendil-works/*`，
  * 测试环境没有这层注入，因此把整个插件目录复制到临时目录并把包名改写到 pi 源码。
  */
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -37,12 +37,12 @@ async function rewriteImports(directory: string): Promise<void> {
 
 /**
  * 加载插件内某个模块，例如 `tools/index.ts`、`session/presets.ts`。
- * `configJsonc` 可覆写副本里的 config.jsonc，用于验证配置错误下的行为。
+ * `configJsonc` 可覆写或移除测试 Agent 目录里的运行配置，用于验证配置边界。
  */
 export async function loadFirecodeModule(
 	entry: string,
 	options: {
-		configJsonc?: string;
+		configJsonc?: string | null;
 		replacements?: Record<string, string>;
 		extraFiles?: Record<string, string>;
 	} = {},
@@ -51,13 +51,27 @@ export async function loadFirecodeModule(
 	created.push(directory);
 	await cp(SOURCE_DIR, directory, { recursive: true });
 	await rm(join(directory, "tests"), { recursive: true, force: true });
-	if (options.configJsonc !== undefined)
-		await writeFile(join(directory, "config.jsonc"), options.configJsonc);
+	const agentDir = join(directory, "agent");
+	const configDir = join(agentDir, "extensions", "firecode");
+	await mkdir(configDir, { recursive: true });
+	if (options.configJsonc !== null) {
+		const configJsonc =
+			options.configJsonc ?? (await readFile(join(SOURCE_DIR, "config.example.jsonc"), "utf8"));
+		await writeFile(join(configDir, "config.jsonc"), configJsonc);
+	}
 	for (const [path, content] of Object.entries(options.extraFiles ?? {})) {
 		const destination = join(directory, path);
 		await writeFile(destination, content);
 	}
 	await rewriteImports(directory);
+	const configModule = join(directory, "config.ts");
+	const getAgentDirImport = `import { getAgentDir } from ${JSON.stringify(PI_CODING_AGENT)};`;
+	const configSource = await readFile(configModule, "utf8");
+	if (!configSource.includes(getAgentDirImport)) throw new Error("FireCode config path seam changed");
+	await writeFile(
+		configModule,
+		configSource.replace(getAgentDirImport, `const getAgentDir = () => ${JSON.stringify(agentDir)};`),
+	);
 	for (const [oldText, newText] of Object.entries(options.replacements ?? {})) {
 		const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
 		const path = join(directory, sourceEntry);
