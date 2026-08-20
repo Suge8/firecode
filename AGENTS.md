@@ -47,8 +47,8 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 ## 测试
 
 ```bash
-bun test agent/extensions/firecode/tests
+bun test
 ```
 
-`tests/loader.ts` 把插件目录复制到临时目录并把 `@earendil-works/*` 改写到本地 pi 源码，供需要运行时值导入的
-用例（tools、presets、review）使用。
+`tests/loader.ts` 从 `PATH` 中的开发版 `pi` 定位 pi-mono；非开发版安装通过 `PI_PACKAGES_DIR` 指向其
+`packages/`。loader 把当前仓库复制到临时目录并改写宿主包导入，供需要运行时值的用例使用。
