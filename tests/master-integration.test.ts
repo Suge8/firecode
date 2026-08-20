@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupFirecodeModules, loadFirecodeModule as loadModule } from "./loader.ts";
+import { cleanupFirecodeModules, loadFirecodeModule as loadModule, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const TEST_MASTER_MODELS = [
 	{ model: "test/worker", thinking: "medium", use: "测试" },
@@ -15,7 +15,11 @@ function loadFirecodeModule(entry: string, options: LoadOptions = {}) {
 		: { features: { review: false, master: true } };
 	return loadModule(entry, {
 		...options,
-		configJsonc: JSON.stringify({ ...config, master: { models: TEST_MASTER_MODELS } }),
+		configJsonc: JSON.stringify({
+			...config,
+			review: TEST_REVIEW_CONFIG,
+			master: { models: TEST_MASTER_MODELS },
+		}),
 	});
 }
 

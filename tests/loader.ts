@@ -32,6 +32,35 @@ const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
 const created: string[] = [];
 const NON_RUNTIME_ROOTS = new Set([".git", "docs", "tests"]);
+export const TEST_REVIEW_CONFIG = {
+	advisor: { model: "test/advisor", thinking: "high" },
+	reviewers: [{ model: "test/reviewer", thinking: "high" }],
+	maxRounds: 3,
+	advisorAfterFailures: 2,
+	timeoutMinutes: 1,
+	tools: ["read", "bash"],
+	background: { command: "pi" },
+	language: "zh",
+};
+const TEST_CONFIG_JSONC = JSON.stringify({
+	features: {
+		header: true,
+		statusbar: true,
+		tools: true,
+		presets: true,
+		rename: true,
+		stats: true,
+		claudeSub: false,
+		openaiNative: false,
+		workingFlame: true,
+		bark: false,
+		review: true,
+		master: false,
+	},
+	keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u", fast: "ctrl+f" },
+	presets: { deep: { thinkingLevel: "high", key: "alt+1" } },
+	review: TEST_REVIEW_CONFIG,
+});
 
 export async function copyFirecodeSource(destination: string): Promise<void> {
 	await cp(SOURCE_DIR, destination, {
@@ -81,8 +110,7 @@ export async function loadFirecodeModule(
 	const configDir = join(agentDir, "extensions", "firecode");
 	await mkdir(configDir, { recursive: true });
 	if (options.configJsonc !== null) {
-		const configJsonc =
-			options.configJsonc ?? (await readFile(join(SOURCE_DIR, "config.example.jsonc"), "utf8"));
+		const configJsonc = options.configJsonc ?? TEST_CONFIG_JSONC;
 		await writeFile(join(configDir, "config.jsonc"), configJsonc);
 	}
 	for (const [path, content] of Object.entries(options.extraFiles ?? {})) {
