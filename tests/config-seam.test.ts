@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 
@@ -15,6 +15,17 @@ test("portable loader copies runtime sources without repository metadata or deve
 		expect(existsSync(join(directory, ".git"))).toBeFalse();
 		expect(existsSync(join(directory, "docs"))).toBeFalse();
 		expect(existsSync(join(directory, "tests"))).toBeFalse();
+		expect(
+			(await readdir(directory, { recursive: true }))
+				.filter((path) => /\.mdx?$/.test(path))
+				.map((path) => path.split(sep).join("/"))
+				.sort(),
+		).toEqual([
+			"review/prompts/advisor.en.md",
+			"review/prompts/advisor.zh.md",
+			"review/prompts/review.en.md",
+			"review/prompts/review.zh.md",
+		]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

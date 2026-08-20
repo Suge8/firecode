@@ -4,7 +4,7 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, join, relative, sep } from "node:path";
+import { delimiter, dirname, extname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -37,8 +37,11 @@ export async function copyFirecodeSource(destination: string): Promise<void> {
 	await cp(SOURCE_DIR, destination, {
 		recursive: true,
 		filter: (source) => {
-			const [root] = relative(SOURCE_DIR, source).split(sep);
-			return !NON_RUNTIME_ROOTS.has(root);
+			const path = relative(SOURCE_DIR, source);
+			const [root] = path.split(sep);
+			if (NON_RUNTIME_ROOTS.has(root)) return false;
+			if (![".md", ".mdx"].includes(extname(path))) return true;
+			return path.startsWith(`review${sep}prompts${sep}`);
 		},
 	});
 }
