@@ -4,7 +4,7 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -31,6 +31,17 @@ const PI_AI = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
 const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
 const created: string[] = [];
+const NON_RUNTIME_ROOTS = new Set([".git", "docs", "tests"]);
+
+export async function copyFirecodeSource(destination: string): Promise<void> {
+	await cp(SOURCE_DIR, destination, {
+		recursive: true,
+		filter: (source) => {
+			const [root] = relative(SOURCE_DIR, source).split(sep);
+			return !NON_RUNTIME_ROOTS.has(root);
+		},
+	});
+}
 
 async function rewriteImports(directory: string): Promise<void> {
 	for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -62,8 +73,7 @@ export async function loadFirecodeModule(
 ): Promise<Record<string, unknown>> {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-test-"));
 	created.push(directory);
-	await cp(SOURCE_DIR, directory, { recursive: true });
-	await rm(join(directory, "tests"), { recursive: true, force: true });
+	await copyFirecodeSource(directory);
 	const agentDir = join(directory, "agent");
 	const configDir = join(agentDir, "extensions", "firecode");
 	await mkdir(configDir, { recursive: true });

@@ -1,9 +1,24 @@
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
+import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
+
+test("portable loader copies runtime sources without repository metadata or development docs", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-copy-"));
+	try {
+		await copyFirecodeSource(directory);
+		expect(existsSync(join(directory, "index.ts"))).toBeTrue();
+		expect(existsSync(join(directory, ".git"))).toBeFalse();
+		expect(existsSync(join(directory, "docs"))).toBeFalse();
+		expect(existsSync(join(directory, "tests"))).toBeFalse();
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });

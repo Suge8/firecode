@@ -58,13 +58,6 @@ export interface MasterConfig {
 	models: MasterModel[];
 }
 
-export const DEFAULT_MASTER_MODELS: MasterModel[] = [
-	{ model: "openai-codex/gpt-5.6-sol", thinking: "medium", use: "调研与实现/调试，调研完就在原 Worker 会话继续实现" },
-	{ model: "openai-codex/gpt-5.6-luna", thinking: "medium", use: "大规模并行快任务：整库扫冗余、批量审查、跨语言迁移，成批开多个" },
-	{ model: "anthropic/claude-fable-5", thinking: "medium", use: "架构" },
-	{ model: "kimi-coding/k3-256k", thinking: "medium", use: "设计师" },
-];
-
 export const FEATURES = [
 	"header",
 	"statusbar",
@@ -353,10 +346,10 @@ function reviewBackground(value: unknown, problems: string[]): string {
 export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
 	for (const key of Object.keys(raw))
 		if (key !== "models") problems.push(`未知字段 master.${key}`);
-	if (raw.models === undefined) return { models: [...DEFAULT_MASTER_MODELS] };
+	if (raw.models === undefined) return { models: [] };
 	if (!Array.isArray(raw.models) || raw.models.length === 0 || raw.models.length > 8) {
 		problems.push("master.models 必须包含 1–8 个模型");
-		return { models: [...DEFAULT_MASTER_MODELS] };
+		return { models: [] };
 	}
 	const models = raw.models.map((item, index) => masterModel(item, `master.models[${index}]`, problems));
 	if (new Set(models.map((entry) => entry.model)).size !== models.length)
