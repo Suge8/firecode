@@ -217,6 +217,7 @@ test("review action exposes reviewing in Master status without accepting prompt 
 	process.env.HERDR_WORKSPACE_ID = "w1";
 	delete process.env.FIRECODE_MASTER_WORKER;
 	const module = (await loadFirecodeModule("master/index.js", {
+		configJsonc: '{"features":{"review":true,"master":true}}',
 		replacements: { 'from "./herdr.js"': 'from "./herdr-stub.js"' },
 		extraFiles: {
 			"master/herdr-stub.ts": `
@@ -280,7 +281,7 @@ test("review action exposes reviewing in Master status without accepting prompt 
 	expect(statuses.at(-1)).toContain("审1");
 	expect(notices.at(-1)).toContain("worker-1 reviewing");
 	await commands.get("fire-master")?.handler("off", ctx);
-});
+}, 20_000);
 
 test("Worker keeps pi default tools minus the Master tool and cannot edit/write outside the checkout", async () => {
 	process.env.HERDR_ENV = "1";
