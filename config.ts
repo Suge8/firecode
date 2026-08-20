@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseJsonc } from "./jsonc.js";
 
-export { parseJsonc } from "./jsonc.js";
-
 export type Language = "zh" | "en";
 export type ThinkingLevelValue =
 	| "off"

@@ -5,7 +5,7 @@ import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule } from "./load
 
 afterEach(cleanupFirecodeModules);
 
-test("missing runtime config keeps optional behavior disabled", async () => {
+test("missing runtime config disables optional behavior and warns each session", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
 	const commands: string[] = [];
 	const shortcuts: string[] = [];
@@ -31,7 +31,10 @@ test("missing runtime config keeps optional behavior disabled", async () => {
 	for (let occurrence = 0; occurrence < 2; occurrence++)
 		for (const handler of events.get("session_start") ?? [])
 			handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
-	expect(warnings).toEqual(["FireCode 配置：config.jsonc 不存在，已关闭可选功能"]);
+	expect(warnings).toEqual([
+		"FireCode 配置：config.jsonc 不存在，已关闭可选功能",
+		"FireCode 配置：config.jsonc 不存在，已关闭可选功能",
+	]);
 });
 
 test("runtime config enables only its declared behavior", async () => {
