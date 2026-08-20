@@ -37,7 +37,8 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 
 唯一运行配置是 Pi Agent 目录（由官方 `getAgentDir()` 解析，含 `PI_CODING_AGENT_DIR` 覆写）下的
 `extensions/firecode/config.jsonc`；安装流程当场生成完整私人配置。发行内容只带可解析的 `config.example.jsonc`，
-它是起始模板，不参与运行时读取。缺失运行配置时关闭可选功能，并在每次 `session_start` 警告一次。
+它是起始模板，不参与运行时读取。缺失运行配置时关闭可选功能，并在每次 `session_start` 警告一次；运行中补上
+配置也需重启 Pi 才生效。
 
 不要新建 keys.json，也不要读项目级配置。快捷键启动时绑定，改完需重启；`ctrl+f` 只改 `openai` 节，其它注释
 保留。未知字段、嵌套未知字段与类型错误都报配置问题；`review` 与 `master` 节有问题时对应功能拒绝启动而不是

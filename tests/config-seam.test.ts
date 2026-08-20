@@ -5,7 +5,7 @@ import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule } from "./load
 
 afterEach(cleanupFirecodeModules);
 
-test("missing runtime config disables optional behavior and warns each session", async () => {
+test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
 	const commands: string[] = [];
 	const shortcuts: string[] = [];
