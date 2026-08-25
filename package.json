@@ -37,7 +37,9 @@
     "review/prompts/*.md",
     "session/*.ts",
     "statusbar/*.ts",
-    "tools/*.ts"
+    "tools/*.ts",
+    "watcher/*.ts",
+    "watcher/prompts/*.md"
   ],
   "scripts": {
     "test": "bun test"

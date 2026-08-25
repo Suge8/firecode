@@ -60,6 +60,17 @@ export interface MasterConfig {
 	autoActivate: boolean;
 }
 
+/** 观察员喂给观察会话的增量粒度：minimal 省略 reasoning 与 diff 正文。 */
+export type WatcherContext = "minimal" | "full";
+
+/** Watcher 观察员配置：模型与 thinking 必须显式配置，绝不回退默认模型。 */
+export interface WatcherConfig {
+	enabled: boolean;
+	model: string;
+	thinking: ThinkingLevelValue;
+	context: WatcherContext;
+}
+
 export const FEATURES = [
 	"header",
 	"statusbar",
@@ -73,6 +84,7 @@ export const FEATURES = [
 	"bark",
 	"review",
 	"master",
+	"watcher",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
@@ -95,6 +107,7 @@ export interface FireCodeConfig {
 	presets: Record<string, Preset>;
 	review: ReviewConfig;
 	master: MasterConfig;
+	watcher: WatcherConfig;
 }
 
 export type LoadedConfig = {
@@ -206,8 +219,14 @@ export function loadConfig(): LoadedConfig {
 	if (raw.master !== undefined && !isPlainObject(raw.master))
 		problems.push("master 必须是对象");
 	const master = parseMasterConfig(asRecord(raw.master), problems);
+	// watcher 同理：缺节或模型有误时功能拒绝启动，静默回退会拿用户没配的模型真实发起观察。
+	const watcherProblems: string[] = [];
+	if (raw.watcher !== undefined && !isPlainObject(raw.watcher))
+		watcherProblems.push("watcher 必须是对象");
+	const watcher = parseWatcherConfig(asRecord(raw.watcher), watcherProblems);
+	if (raw.watcher !== undefined || features.watcher !== false) problems.push(...watcherProblems);
 
-	cached = { config: { features, keys, presets, review, master }, problems };
+	cached = { config: { features, keys, presets, review, master, watcher }, problems };
 	return cached;
 }
 
@@ -395,6 +414,31 @@ function masterModel(value: unknown, field: string, problems: string[]): MasterM
 		else problems.push(`${field}.use 必须是非空字符串`);
 	}
 	return { model, thinking, use };
+}
+
+// ---- watcher 节 ----
+
+const WATCHER_KEYS = ["enabled", "model", "thinking", "context"] as const;
+const WATCHER_CONTEXTS = new Set<WatcherContext>(["minimal", "full"]);
+
+/** 导出供测试：model/thinking 必填，enabled 默认 true、context 默认 minimal。 */
+export function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
+	rejectUnknownKeys(raw, WATCHER_KEYS, "watcher", problems);
+	const enabled = booleanValue(raw.enabled, "watcher.enabled", true, problems);
+	const model = typeof raw.model === "string" && raw.model ? raw.model : "";
+	if (!model) problems.push("watcher.model 必须显式配置为非空字符串");
+	let thinking: ThinkingLevelValue | undefined;
+	if (raw.thinking === undefined) problems.push("watcher.thinking 必须显式配置");
+	else if (typeof raw.thinking === "string" && THINKING_LEVELS.has(raw.thinking as ThinkingLevelValue))
+		thinking = raw.thinking as ThinkingLevelValue;
+	else problems.push("watcher.thinking 值无效");
+	let context: WatcherContext = "minimal";
+	if (raw.context !== undefined) {
+		if (typeof raw.context === "string" && WATCHER_CONTEXTS.has(raw.context as WatcherContext))
+			context = raw.context as WatcherContext;
+		else problems.push("watcher.context 必须是 minimal 或 full");
+	}
+	return { enabled, model, thinking: thinking ?? "low", context };
 }
 
 function reviewLanguage(value: unknown, problems: string[]): Language {

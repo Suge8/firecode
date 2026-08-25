@@ -4,7 +4,8 @@
 
 ## 运行时
 
-所有子会话只经 `spawn.ts` 创建：它封装 Pi SDK 会话、模型、工具、扩展、系统提示、上下文文件与持久化。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
+所有子会话只经 `spawn.ts` 创建（Worker 与观察员共用）：它封装 Pi SDK 会话、模型、工具（含只属于该子
+会话的自定义工具）、扩展、系统提示、上下文文件与持久化。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
 
 Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记；`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
 
