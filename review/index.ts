@@ -266,21 +266,12 @@ async function handleCommand(
 	// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
-		ctx.ui.notify(loaded.error, "error");
+		if (ctx.hasUI) ctx.ui.notify(loaded.error, "error");
 		return;
 	}
 	const config = loaded.config;
-	if (!ctx.hasUI) {
-		ctx.ui.notify(
-			config.language === "en"
-				? "Adversarial review requires the TUI."
-				: "对抗性审查需要交互式界面。",
-			"info",
-		);
-		return;
-	}
 	if (controller && isActive(controller.state)) {
-		ctx.ui.notify(
+		if (ctx.hasUI) ctx.ui.notify(
 			config.language === "en"
 				? "A review is already running."
 				: "已有审查在进行中。",
@@ -293,7 +284,7 @@ async function handleCommand(
 	clearWatchdog();
 	const command = parseCommand(args, config.language);
 	if ("error" in command) {
-		ctx.ui.notify(command.error, "error");
+		if (ctx.hasUI) ctx.ui.notify(command.error, "error");
 		return;
 	}
 	controller = {
@@ -594,12 +585,13 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 			controller.persistedStamp = undefined;
 			controller.signal.abort();
 			controller.actionController?.abort();
-			controller.ctx.ui.notify(
-				controller.config.language === "en"
-					? "fire-review checkpoint conflict; review stopped."
-					: "fire-review checkpoint 冲突，已停止审查。",
-				"warning",
-			);
+			if (controller.ctx.hasUI)
+				controller.ctx.ui.notify(
+					controller.config.language === "en"
+						? "fire-review checkpoint conflict; review stopped."
+						: "fire-review checkpoint 冲突，已停止审查。",
+					"warning",
+				);
 			void dispatch(pi, { type: "CANCEL", reason: "shutdown" });
 			return false;
 		}
@@ -1130,7 +1122,7 @@ function sendCard(pi: ExtensionAPI, card: CardData) {
 	if (!controller) return;
 	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
 	if (card.kind === "cancel") {
-		if (card.reason === "user")
+		if (card.reason === "user" && controller.ctx.hasUI)
 			controller.ctx.ui.notify(
 				controller.config.language === "en"
 					? "⏸ Review cancelled\nStopped by user"
