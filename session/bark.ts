@@ -3,8 +3,7 @@
  * 把最后一条回复推送到 iPhone 的 Bark App。
  *
  * - Worker 进程静默：通知全部由指挥官会话发出（判据同 herdr-display.ts）。
- * - 子代理池里有待拍板的子代理（Herdr blocked 态）时升 timeSensitive 并带副标题，
- *   可穿透专注模式；平时为默认 active。
+ * - 子代理池里有待发落消息时升 timeSensitive 并带副标题，可穿透专注模式；平时为默认 active。
  * - 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知，通知栏每会话只留最新一条。
  * - 推送地址在 ~/.pi/agent/bark-key（整行即 https://api.day.app/<key>/），
  *   缺失时静默停用；~/.pi/agent/bark-crypto.json 存在时走 AES-256-GCM 端到端加密。
@@ -51,9 +50,9 @@ export function buildBarkPayload(input: {
 }
 
 /** 只读旁路判定：状态文件损坏由 Master 自己报告与恢复，通知不放大故障，一律按无待拍板降级。 */
-export function hasBlockedWorker(statePath: string): boolean {
+export function hasPendingDisposition(statePath: string): boolean {
 	try {
-		return loadMasterState(statePath)?.workers.some((worker) => worker.status === "blocked") ?? false;
+		return loadMasterState(statePath)?.workers.some((worker) => worker.disposition !== undefined) ?? false;
 	} catch {
 		return false;
 	}
@@ -82,7 +81,7 @@ export function registerBark(pi: ExtensionAPI): void {
 				body: cleanMarkdown(lastAssistantText).slice(0, MAX_BODY_LENGTH),
 				group: dirName,
 				sessionId,
-				awaitingDecision: hasBlockedWorker(masterStatePath(sessionId)),
+				awaitingDecision: hasPendingDisposition(masterStatePath(sessionId)),
 			}),
 		);
 	});

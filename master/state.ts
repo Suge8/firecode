@@ -48,6 +48,16 @@ export function reduceMaster(state: MasterState, event: MasterEvent): MasterStat
 	}
 }
 
+export function recoverMasterState(state: MasterState, interruptedAt = Date.now()): MasterState {
+	let changed = false;
+	const workers = state.workers.map((worker) => {
+		if (worker.status === "idle") return worker;
+		changed = true;
+		return { ...worker, status: "idle" as const, interruptedAt };
+	});
+	return changed ? { ...state, workers } : state;
+}
+
 export function restoreMasterState(data: unknown): MasterState | undefined {
 	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
 	const record = data as Record<string, unknown>;

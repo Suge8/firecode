@@ -7,6 +7,7 @@ import {
 	MasterStore,
 	initialMasterState,
 	loadMasterState,
+	recoverMasterState,
 	reduceMaster,
 	restoreMasterState,
 	type WorkerRef,
@@ -52,6 +53,23 @@ test("状态归约保留并按发落动作消除中断、审查义务与发落�
 	expect(state.workers[0]).toEqual({ ...worker, status: "reviewing", reviewNeeded: true });
 	state = reduceMaster(state, { type: "REMOVE_WORKER", name: worker.name });
 	expect(state.workers).toEqual([]);
+});
+
+test("恢复时在飞状态转为带中断标记的冷 idle，已落定状态不变", () => {
+	const state = {
+		version: 7 as const,
+		workers: [
+			worker,
+			{ ...worker, name: "review", sessionPath: "/tmp/subagents/review.jsonl", status: "reviewing" as const, reviewNeeded: true },
+			{ ...worker, name: "idle", sessionPath: "/tmp/subagents/idle.jsonl", status: "idle" as const },
+		],
+	};
+	const recovered = recoverMasterState(state, 1234);
+	expect(recovered.workers).toEqual([
+		{ ...worker, status: "idle", interruptedAt: 1234 },
+		{ ...worker, name: "review", sessionPath: "/tmp/subagents/review.jsonl", status: "idle", reviewNeeded: true, interruptedAt: 1234 },
+		{ ...worker, name: "idle", sessionPath: "/tmp/subagents/idle.jsonl", status: "idle" },
+	]);
 });
 
 test("重名身份漂移与重复 sessionPath 均拒绝", () => {

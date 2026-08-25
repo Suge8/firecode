@@ -36,8 +36,12 @@ export interface SpawnedSession {
 }
 
 interface HeldSession {
+	key: string;
 	session: AgentSession;
+	sessionPath?: string;
 	timer?: NodeJS.Timeout;
+	unsubscribe?: () => void;
+	disposed: boolean;
 }
 
 const SESSION_WRITERS = new Set<string>();
@@ -47,7 +51,11 @@ let environmentQueue = Promise.resolve();
 export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
 
-	constructor(private readonly environment: { agentDir?: string; modelRuntime?: ModelRuntime } = {}) {}
+	constructor(private readonly environment: {
+		agentDir?: string;
+		modelRuntime?: ModelRuntime;
+		idleTimeoutMs?: number;
+	} = {}) {}
 
 	async spawn(options: SpawnSessionOptions): Promise<SpawnedSession> {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
@@ -96,57 +104,63 @@ export class InProcessSessionPool {
 		}
 
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
-		const held: HeldSession = { session: created };
+		const held: HeldSession = { key, session: created, sessionPath, disposed: false };
 		this.held.set(key, held);
-		const unsubscribe = created.subscribe((event) => {
+		held.unsubscribe = created.subscribe((event) => {
 			if (event.type === "agent_start") this.clearTimer(held);
-			if (event.type === "agent_settled") this.armIdleDisposal(key, held);
+			if (event.type === "agent_settled") this.armIdleDisposal(held);
 		});
-		let disposed = false;
-		const dispose = () => {
-			if (disposed) return;
-			disposed = true;
-			unsubscribe();
-			this.clearTimer(held);
-			created.dispose();
-			if (this.held.get(key) === held) this.held.delete(key);
-			if (sessionPath) SESSION_WRITERS.delete(sessionPath);
+		return {
+			session: created,
+			sessionPath,
+			prompt: (text) => created.prompt(text),
+			dispose: () => this.release(held),
 		};
-		return { session: created, sessionPath, prompt: (text) => created.prompt(text), dispose };
 	}
 
 	has(sessionPath: string): boolean {
 		return this.held.has(sessionPath);
 	}
 
+	getSession(sessionPath: string): AgentSession | undefined {
+		const held = this.held.get(sessionPath);
+		if (!held) return undefined;
+		this.clearTimer(held);
+		return held.session;
+	}
+
+	markIdle(sessionPath: string): void {
+		const held = this.held.get(sessionPath);
+		if (held) this.armIdleDisposal(held);
+	}
+
 	dispose(sessionPath: string): boolean {
 		const held = this.held.get(sessionPath);
 		if (!held) return false;
-		this.clearTimer(held);
-		held.session.dispose();
-		this.held.delete(sessionPath);
-		SESSION_WRITERS.delete(sessionPath);
+		this.release(held);
 		return true;
 	}
 
 	disposeAll(): void {
-		for (const [key, held] of this.held) {
-			this.clearTimer(held);
-			held.session.dispose();
-			this.held.delete(key);
-			if (!key.startsWith("memory:")) SESSION_WRITERS.delete(key);
-		}
+		for (const held of [...this.held.values()]) this.release(held);
 	}
 
-	private armIdleDisposal(key: string, held: HeldSession): void {
+	private armIdleDisposal(held: HeldSession): void {
 		this.clearTimer(held);
 		held.timer = setTimeout(() => {
-			if (held.session.isStreaming || this.held.get(key) !== held) return;
-			held.session.dispose();
-			this.held.delete(key);
-			if (!key.startsWith("memory:")) SESSION_WRITERS.delete(key);
-		}, IDLE_SESSION_TIMEOUT_MS);
+			if (!held.session.isStreaming) this.release(held);
+		}, this.environment.idleTimeoutMs ?? IDLE_SESSION_TIMEOUT_MS);
 		held.timer.unref?.();
+	}
+
+	private release(held: HeldSession): void {
+		if (held.disposed) return;
+		held.disposed = true;
+		held.unsubscribe?.();
+		this.clearTimer(held);
+		held.session.dispose();
+		if (this.held.get(held.key) === held) this.held.delete(held.key);
+		if (held.sessionPath) SESSION_WRITERS.delete(held.sessionPath);
 	}
 
 	private clearTimer(held: HeldSession): void {

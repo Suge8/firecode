@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
@@ -10,6 +10,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type MasterModel } from "../config.js";
+import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
@@ -18,6 +19,7 @@ import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
 	MasterStore,
 	THINKING_LEVELS,
+	recoverMasterState,
 	loadMasterState,
 	masterStatePath,
 	requireWorker,
@@ -28,16 +30,29 @@ import {
 
 const MASTER_TOOL = "subagents";
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
+const PENDING_EVENT_TYPE = "firecode-master-pending-event";
+const EVENT_ACK_TYPE = "firecode-master-event-ack";
+const EVENT_RETRY_MS = 5_000;
+
+interface PendingMasterEvent {
+	id: string;
+	content: string;
+	worker?: string;
+}
 
 interface MasterDependencies {
 	resolveModel?: (id: string) => Promise<Model<any>>;
 	pool?: InProcessSessionPool;
+	interruptResumeMs?: number;
 }
 
 interface MasterRuntime {
 	ctx: ExtensionContext;
 	store: MasterStore;
 	pool: InProcessSessionPool;
+	events: PendingMasterEvent[];
+	flushTimer?: NodeJS.Timeout;
+	turnActive: boolean;
 }
 
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
@@ -46,7 +61,11 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	const loaded = loadMasterConfiguration();
 	const roster = "error" in loaded ? [] : loaded.models;
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
+	const reviewGate = reviewGateError();
 	const pool = dependencies.pool ?? new InProcessSessionPool();
+	const interruptedRuns = new Set<string>();
+	const startingNames = new Set<string>();
+	const interruptTimers = new Map<string, NodeJS.Timeout>();
 	registerMasterEventRenderer(pi);
 
 	const setTools = (active: boolean) => {
@@ -64,7 +83,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			return runtime;
 		}
 		const store = new MasterStore(masterStatePath(ctx.sessionManager.getSessionId()), restored, renderStatus);
-		runtime = { ctx, store, pool };
+		runtime = { ctx, store, pool, events: [], turnActive: false };
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；原有子代理已脱管，请手动清理`, "warning");
@@ -75,8 +94,111 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		const active = runtime;
 		runtime = undefined;
 		pool.disposeAll();
+		for (const timer of interruptTimers.values()) clearTimeout(timer);
+		interruptTimers.clear();
+		if (active?.flushTimer) clearTimeout(active.flushTimer);
 		active?.ctx.ui.setStatus("master", undefined);
 		setTools(false);
+	};
+	const flushEvents = (active: MasterRuntime) => {
+		active.flushTimer = undefined;
+		if (runtime !== active || !active.events.length) return;
+		const batch = active.events.splice(0);
+		const content = batch.map((event) => event.content).join("\n\n");
+		try {
+			pi.sendMessage(
+				{ customType: MASTER_EVENT_TYPE, content, display: true, details: masterEventDetails(batch.map((event) => event.content)) },
+				{ deliverAs: "steer", triggerTurn: !active.turnActive && active.ctx.isIdle?.() === true },
+			);
+		} catch (error) {
+			active.events.unshift(...batch);
+			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
+			active.flushTimer = setTimeout(() => flushEvents(active), EVENT_RETRY_MS);
+			active.flushTimer.unref?.();
+			return;
+		}
+		try {
+			pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
+		} catch (error) {
+			active.ctx.ui.notify(`子代理结果确认写入失败，reload 后可能重复投递：${String(error)}`, "warning");
+		}
+		for (const event of batch) {
+			if (!event.worker) continue;
+			const worker = active.store.state.workers.find((candidate) => candidate.name === event.worker);
+			if (worker?.status === "idle")
+				active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
+		}
+	};
+	const enqueueEvent = (
+		active: MasterRuntime,
+		content: string,
+		worker?: string,
+		persist = true,
+		id = crypto.randomUUID(),
+	) => {
+		const event: PendingMasterEvent = { id, content, ...(worker ? { worker } : {}) };
+		if (persist) {
+			try {
+				pi.appendEntry(PENDING_EVENT_TYPE, event);
+			} catch (error) {
+				active.ctx.ui.notify(`子代理结果持久化失败，crash 时可能丢失：${String(error)}`, "warning");
+			}
+		}
+		active.events.push(event);
+		if (!active.flushTimer) {
+			active.flushTimer = setTimeout(() => flushEvents(active), 0);
+			active.flushTimer.unref?.();
+		}
+	};
+	const clearInterruptTimer = (name: string) => {
+		const timer = interruptTimers.get(name);
+		if (timer) clearTimeout(timer);
+		interruptTimers.delete(name);
+	};
+	const armInterruptReminder = (active: MasterRuntime, worker: WorkerRef) => {
+		clearInterruptTimer(worker.name);
+		const duration = dependencies.interruptResumeMs ?? 5 * 60_000;
+		const delay = Math.max(0, (worker.interruptedAt ?? Date.now()) + duration - Date.now());
+		const timer = setTimeout(() => {
+			interruptTimers.delete(worker.name);
+			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
+			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
+			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name);
+		}, delay);
+		timer.unref?.();
+		interruptTimers.set(worker.name, timer);
+	};
+	const openWorkerSession = async (worker: WorkerRef) => {
+		const hot = pool.getSession(worker.sessionPath);
+		if (hot) return hot;
+		const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(worker.model);
+		const spawned = await pool.spawn({
+			cwd: worker.cwd ?? process.cwd(),
+			model,
+			thinking: worker.thinking,
+			tools: WORKER_TOOLS,
+			excludeExtensions: exclusions,
+			systemPrompt: { mode: "append", text: workerInstructions(worker.name) },
+			contextFiles: true,
+			persistence: { type: "file", sessionPath: worker.sessionPath, resume: true },
+		});
+		return spawned.session;
+	};
+	const runWorker = (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
+		const settled = (error?: unknown) => {
+			if (interruptedRuns.delete(worker.sessionPath)) {
+				const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
+				if (!current || current.sessionPath !== worker.sessionPath) return;
+				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
+				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
+				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
+				armInterruptReminder(active, interrupted);
+				return;
+			}
+			const content = settleWorker(active, worker, session.messages, error);
+			if (content) enqueueEvent(active, content, worker.name);
+		};
+		void session.prompt(prompt).then(() => settled(), settled);
 	};
 
 	pi.registerCommand("fire-master", {
@@ -108,7 +230,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	pi.registerTool({
 		name: MASTER_TOOL,
 		label: "子代理",
-		description: "指挥官的子代理接口。T2 只实现 start、list、kill；其余动作将在 T3 实现。",
+		description: "指挥官的子代理接口：start、send、interrupt、review、tail、ack、list、kill。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
@@ -133,53 +255,160 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			if (params.action === "list") return toolResult({ workers: active.store.state.workers.map(compactWorker) });
 			if (params.action === "kill") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				clearInterruptTimer(target.name);
+				interruptedRuns.delete(target.sessionPath);
 				active.pool.dispose(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
 				return toolResult({ killed: true });
 			}
-			if (params.action !== "start") throw new Error(`T3 未实现：${String(params.action)}`);
+			if (params.action === "tail") {
+				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				return { content: [{ type: "text" as const, text: await readWorkerTrace(target) }] };
+			}
+			if (params.action === "ack") {
+				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				if (target.reviewNeeded) throw new Error(`${target.name} 此票有审查义务，完成 review 后才能 ack`);
+				if (target.status !== "idle") throw new Error(`${target.name} 正在 ${target.status}，不能 ack`);
+				if (target.disposition) {
+					const { disposition: _disposition, ...rest } = target;
+					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+				}
+				return toolResult({ acked: true });
+			}
+			if (params.action === "review") {
+				if (reviewGate) throw new Error(reviewGate);
+				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				if (target.status !== "idle") throw new Error(`${target.name} 正在 ${target.status}，不能 review`);
+				const session = await openWorkerSession(target);
+				await session.waitForIdle();
+				const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
+				const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = target;
+				clearInterruptTimer(target.name);
+				const reviewing: WorkerRef = { ...rest, status: "reviewing" };
+				active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
+				void monitorReview(session, target.sessionPath, previousRunId).then(
+					(outcome) => {
+						const current = active.store.state.workers.find((worker) => worker.name === target.name);
+						if (!current || current.sessionPath !== target.sessionPath || current.status !== "reviewing") return;
+						const { reviewNeeded: _needed, ...fulfilled } = current;
+						const worker = outcome.status === "passed" || outcome.status === "stopped"
+							? fulfilled
+							: current;
+						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
+						active.pool.markIdle(target.sessionPath);
+						enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
+					},
+					(error) => {
+						const current = active.store.state.workers.find((worker) => worker.name === target.name);
+						if (!current || current.status !== "reviewing") return;
+						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
+						active.pool.markIdle(target.sessionPath);
+						enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
+					},
+				);
+				return toolResult({ reviewing: true });
+			}
+			if (params.action === "interrupt") {
+				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				if (target.status !== "working") throw new Error(`${target.name} 当前是 ${target.status}，不能 interrupt`);
+				const session = active.pool.getSession(target.sessionPath);
+				if (!session) throw new Error(`${target.name} 的进程内会话已释放，无法 interrupt`);
+				interruptedRuns.add(target.sessionPath);
+				await session.abort();
+				return toolResult({ interrupted: true });
+			}
+			if (params.action === "send") {
+				if (params.review === true && reviewGate) throw new Error(reviewGate);
+				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+				if (target.status !== "idle")
+					throw new Error(`${target.name} 正在 ${target.status}；急件先 interrupt 再 send`);
+				const requestedModel = optionalString(params.model);
+				if (requestedModel && !roster.some((entry) => entry.model === requestedModel))
+					throw new Error(`model 不在选型表：${requestedModel}`);
+				const requestedThinking = optionalString(params.thinking);
+				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
+					throw new Error(`thinking 值无效：${requestedThinking}`);
+				const nextModel = requestedModel
+					? await (dependencies.resolveModel ?? resolveConfiguredModel)(requestedModel)
+					: undefined;
+				const session = await openWorkerSession(target);
+				await session.waitForIdle();
+				let model = target.model;
+				let thinking = target.thinking;
+				if (requestedModel && nextModel) {
+					await session.setModel(nextModel);
+					model = requestedModel;
+				}
+				if (requestedThinking) {
+					session.setThinkingLevel(requestedThinking as WorkerRef["thinking"]);
+					thinking = requestedThinking as WorkerRef["thinking"];
+				}
+				const prompt = requiredString(params.prompt, "prompt");
+				validateDelegationText(prompt);
+				const { disposition: _disposition, interruptedAt, ...rest } = target;
+				const activeWorker: WorkerRef = {
+					...rest,
+					model,
+					thinking,
+					status: "working",
+					...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
+				};
+				clearInterruptTimer(target.name);
+				active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
+				const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
+				runWorker(active, activeWorker, session, text);
+				return toolResult({ sent: true });
+			}
+			if (params.action !== "start") throw new Error(`未知 subagents action：${String(params.action)}`);
+			if (params.review === true && reviewGate) throw new Error(reviewGate);
 			const name = requiredString(params.worker, "worker");
 			validateWorkerName(name);
-			if (active.store.state.workers.some((worker) => worker.name === name)) throw new Error(`子代理已存在：${name}`);
+			if (active.store.state.workers.some((worker) => worker.name === name) || startingNames.has(name))
+				throw new Error(`子代理已存在：${name}`);
+			const inFlight = active.store.state.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing");
+			if (inFlight.length + startingNames.size >= 15)
+				throw new Error(`Worker 并发上限 15，当前在飞：${[...inFlight.map((worker) => worker.name), ...startingNames].join("、")}`);
 			const prompt = requiredString(params.prompt, "prompt");
 			validateDelegationText(prompt);
 			const selection = resolveSelection(roster, params);
-			const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
-			const mainSessionPath = ctx.sessionManager.getSessionFile?.();
-			if (!mainSessionPath) throw new Error("主会话尚未落盘，无法创建子代理会话目录");
-			const sessionPath = preallocateWorkerSession(mainSessionPath, cwd);
-			const worker: WorkerRef = {
-				name,
-				model: selection.model,
-				thinking: selection.thinking,
-				status: "working",
-				sessionPath,
-				cwd,
-				...(params.review === true ? { reviewNeeded: true } : {}),
-			};
-			active.store.dispatch({ type: "UPSERT_WORKER", worker });
-			let spawned;
+			startingNames.add(name);
 			try {
-				const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
-				spawned = await active.pool.spawn({
-					cwd,
-					model,
+				const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
+				const mainSessionPath = ctx.sessionManager.getSessionFile?.();
+				if (!mainSessionPath) throw new Error("主会话尚未落盘，无法创建子代理会话目录");
+				const sessionPath = preallocateWorkerSession(mainSessionPath, cwd);
+				const worker: WorkerRef = {
+					name,
+					model: selection.model,
 					thinking: selection.thinking,
-					tools: WORKER_TOOLS,
-					excludeExtensions: exclusions,
-					systemPrompt: { mode: "append", text: workerInstructions(name) },
-					contextFiles: true,
-					persistence: { type: "file", sessionPath },
-				});
-			} catch (error) {
-				active.store.dispatch({ type: "REMOVE_WORKER", name });
-				throw error;
+					status: "working",
+					sessionPath,
+					cwd,
+					...(params.review === true ? { reviewNeeded: true } : {}),
+				};
+				active.store.dispatch({ type: "UPSERT_WORKER", worker });
+				startingNames.delete(name);
+				try {
+					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
+					const spawned = await active.pool.spawn({
+						cwd,
+						model,
+						thinking: selection.thinking,
+						tools: WORKER_TOOLS,
+						excludeExtensions: exclusions,
+						systemPrompt: { mode: "append", text: workerInstructions(name) },
+						contextFiles: true,
+						persistence: { type: "file", sessionPath },
+					});
+					runWorker(active, worker, spawned.session, prompt);
+					return toolResult({ started: true, worker: compactWorker(worker) });
+				} catch (error) {
+					active.store.dispatch({ type: "REMOVE_WORKER", name });
+					throw error;
+				}
+			} finally {
+				startingNames.delete(name);
 			}
-			void spawned.prompt(prompt).then(
-				() => settleWorker(active, worker, spawned.session.messages, pi),
-				(error) => settleWorker(active, worker, spawned.session.messages, pi, error),
-			);
-			return toolResult({ started: true, worker: compactWorker(worker) });
 		},
 	});
 
@@ -195,12 +424,33 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				activate(ctx);
 				return;
 			}
-			if (restored?.workers.length) activate(ctx, restored);
+			const unacked = unackedEvents(ctx);
+			if (restored?.workers.length || unacked.length) {
+				const active = activate(ctx, restored);
+				if (restored) {
+					const recovered = recoverMasterState(restored);
+					for (const worker of recovered.workers) {
+						if (worker !== restored.workers.find((candidate) => candidate.name === worker.name))
+							active.store.dispatch({ type: "UPSERT_WORKER", worker });
+						if (worker.interruptedAt) armInterruptReminder(active, worker);
+					}
+				}
+				for (const event of unacked)
+					enqueueEvent(active, event.content, event.worker, false, event.id);
+			}
 		} catch (error) {
 			ctx.ui.notify(`指挥官模式恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
 		}
 	});
 
+	pi.on("agent_start", () => {
+		if (runtime) runtime.turnActive = true;
+	});
+	pi.on("agent_settled", (_event, ctx) => {
+		if (!runtime) return;
+		runtime.ctx = ctx;
+		runtime.turnActive = false;
+	});
 	pi.on("tool_call", async (event, ctx) => {
 		if (!workerSession) return;
 		if (!isToolCallEventType("edit", event) && !isToolCallEventType("write", event)) return;
@@ -210,23 +460,84 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	pi.on("session_shutdown", () => deactivate());
 }
 
-async function settleWorker(
+function settleWorker(
 	active: MasterRuntime,
 	identity: WorkerRef,
 	messages: Array<{ role: string; content?: unknown }>,
-	pi: ExtensionAPI,
 	error?: unknown,
-): Promise<void> {
+): string | undefined {
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
-	if (!current || current.sessionPath !== identity.sessionPath) return;
+	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
-	const content = error
-		? `子代理 ${identity.name} 已停下\n错误：${error instanceof Error ? error.message : String(error)}`
-		: `子代理 ${identity.name} 已停下\n回复：\n${latestAssistantText(messages) || "（无回复）"}`;
-	pi.sendMessage(
-		{ customType: MASTER_EVENT_TYPE, content, display: true, details: masterEventDetails([content]) },
-		{ deliverAs: "steer", triggerTurn: false },
-	);
+	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
+	return error
+		? `子代理 ${identity.name} 已停下\n错误：${error instanceof Error ? error.message : String(error)}${obligation}`
+		: `子代理 ${identity.name} 已停下\n回复：\n${latestAssistantText(messages) || "（无回复）"}${obligation}`;
+}
+
+function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
+	const entries = ctx.sessionManager.getEntries?.() ?? [];
+	const pending = new Map<string, PendingMasterEvent>();
+	const acked = new Set<string>();
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
+		if (record.type !== "custom" || !record.data || typeof record.data !== "object") continue;
+		const data = record.data as Record<string, unknown>;
+		if (record.customType === PENDING_EVENT_TYPE && typeof data.id === "string" && typeof data.content === "string")
+			pending.set(data.id, { id: data.id, content: data.content, ...(typeof data.worker === "string" ? { worker: data.worker } : {}) });
+		if (record.customType === EVENT_ACK_TYPE && Array.isArray(data.ids))
+			for (const id of data.ids) if (typeof id === "string") acked.add(id);
+	}
+	return [...pending.values()].filter((event) => !acked.has(event.id));
+}
+
+function monitorReview(
+	session: { subscribe: (listener: (event: { type: string }) => void) => () => void; prompt: (text: string) => Promise<void> },
+	sessionPath: string,
+	previousRunId?: string,
+): Promise<ReviewOutcome> {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const finish = (outcome: ReviewOutcome) => {
+			if (settled) return;
+			const runId = reviewRunId(outcome);
+			if (outcome.status !== "error"
+				&& (!runId || runId === previousRunId || outcome.status === "in_progress" || outcome.status === "none")) return;
+			settled = true;
+			unsubscribe();
+			resolve(outcome);
+		};
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "entry_appended") finish(readReviewOutcome(sessionPath));
+		});
+		void session.prompt("/fire-review").then(
+			() => finish(readReviewOutcome(sessionPath)),
+			(error) => {
+				if (settled) return;
+				settled = true;
+				unsubscribe();
+				reject(error);
+			},
+		);
+	});
+}
+
+function reviewRunId(outcome: ReviewOutcome): string | undefined {
+	return "runId" in outcome ? outcome.runId : undefined;
+}
+
+function reviewOutcomeText(
+	name: string,
+	outcome: ReviewOutcome,
+	messages: Array<{ role: string; content?: unknown }>,
+): string {
+	const reply = latestAssistantText(messages) || "（无回复）";
+	if (outcome.status === "passed") return `子代理 ${name} 审查通过（${outcome.rounds} 轮）\n最终回复：\n${reply}`;
+	if (outcome.status === "stopped") return `子代理 ${name} 审查停止（${outcome.rounds} 轮）${outcome.advisorAdvice ? `：${outcome.advisorAdvice}` : ""}\n最终回复：\n${reply}`;
+	if (outcome.status === "failed") return `子代理 ${name} 审查未完成：${outcome.reason}\n最终回复：\n${reply}`;
+	if (outcome.status === "error") return `子代理 ${name} 审查读取失败：${outcome.message}`;
+	return `子代理 ${name} 审查未完成`;
 }
 
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
@@ -249,6 +560,14 @@ async function resolveConfiguredModel(id: string): Promise<Model<any>> {
 	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
 	if (!model) throw new Error(`找不到模型：${id}`);
 	return model;
+}
+
+function reviewGateError(): string | undefined {
+	const loaded = loadConfig();
+	if (loaded.config.features.review === false) return "fire-review 已关闭，不能挂审查义务或发起审查";
+	const problems = loaded.problems.filter((problem) =>
+		problem.startsWith("review") || problem.startsWith("未知字段 review.") || problem.startsWith("config.jsonc"));
+	return problems.length ? `fire-review 配置有问题：${problems.join("；")}` : undefined;
 }
 
 function loadMasterConfiguration() {
@@ -278,8 +597,11 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
 		`选型表：${models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；")}。start 必须显式传 model 与 thinking。`,
-		"T2 仅可使用 start、list、kill；send、interrupt、review、tail、ack 将在 T3 实现。",
 	];
+}
+
+function resumeCheckPrompt(): string {
+	return "上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。";
 }
 
 function workerInstructions(name: string): string {
@@ -316,7 +638,49 @@ function statusText(workers: WorkerRef[]): string {
 	return workers.length ? workers.map((worker) => `${worker.name} ${worker.status} ${worker.model}`).join(" · ") : "没有子代理";
 }
 function compactWorker(worker: WorkerRef) {
-	return { name: worker.name, status: worker.status, model: worker.model, thinking: worker.thinking, session: worker.sessionPath };
+	return {
+		name: worker.name,
+		status: worker.status,
+		model: worker.model,
+		thinking: worker.thinking,
+		session: worker.sessionPath,
+		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
+		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
+		...(worker.disposition ? { disposition: worker.disposition } : {}),
+	};
+}
+
+async function readWorkerTrace(worker: WorkerRef): Promise<string> {
+	let raw: string;
+	try {
+		raw = await readFile(worker.sessionPath, "utf8");
+	} catch (error) {
+		throw new Error(`无法读取子代理 ${worker.name} 会话：${error instanceof Error ? error.message : String(error)}`);
+	}
+	const lines: string[] = [];
+	for (const line of raw.split(/\r?\n/u)) {
+		if (!line) continue;
+		try {
+			const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+			if (entry.type !== "message" || !entry.message?.role) continue;
+			const text = messageText(entry.message.content);
+			if (text) lines.push(`${entry.message.role}: ${text}`);
+		} catch {
+			// 正在追加的尾行可暂时不完整；近况保留此前完整记录。
+		}
+	}
+	return `子代理 ${worker.name} 近况（${worker.status}）\n${lines.join("\n").slice(-4_000)}`;
+}
+
+function messageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } =>
+			!!part && typeof part === "object" && (part as { type?: unknown }).type === "text"
+			&& typeof (part as { text?: unknown }).text === "string")
+		.map((part) => part.text)
+		.join("\n");
 }
 function toolResult(value: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
