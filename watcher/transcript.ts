@@ -2,21 +2,12 @@
  * 主会话回合的增量渲染：喂给观察会话的唯一素材，纯函数。
  * minimal 省略 reasoning 与 diff 展开正文——观察员要的是「在做什么」，正文可以自己去读。
  */
+import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import type { WatcherContext } from "../config.js";
 
 const RESULT_BUDGET = 400;
 
-interface TurnMessage {
-	content?: unknown;
-}
-
-export interface TurnIncrement {
-	turnIndex: number;
-	message: TurnMessage;
-	toolResults: Array<{ toolName?: string; output?: unknown; isError?: boolean }>;
-}
-
-export function renderTurn(turn: TurnIncrement, context: WatcherContext): string {
+export function renderTurn(turn: TurnEndEvent, context: WatcherContext): string {
 	const lines: string[] = [];
 	for (const part of blocks(turn.message.content)) {
 		if (part.type === "text" && typeof part.text === "string" && part.text.trim())
@@ -26,8 +17,8 @@ export function renderTurn(turn: TurnIncrement, context: WatcherContext): string
 		if (part.type === "toolCall") lines.push(toolCallLine(part, context));
 	}
 	for (const result of turn.toolResults) {
-		const text = clipText(plainText(result.output), RESULT_BUDGET);
-		if (text) lines.push(`${result.isError ? "✗" : "→"} ${result.toolName ?? "工具"}：${text}`);
+		const text = clipText(plainText(result.content), RESULT_BUDGET);
+		lines.push(`${result.isError ? "✗" : "→"} ${result.toolName}：${text || "（无输出）"}`);
 	}
 	return `<turn index="${turn.turnIndex}">\n${lines.join("\n")}\n</turn>`;
 }

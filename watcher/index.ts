@@ -22,7 +22,7 @@ import {
 	type WatcherCard,
 } from "./card.js";
 import { createObserver, type Advice, type Observer } from "./observer.js";
-import { renderTurn, type TurnIncrement } from "./transcript.js";
+import { renderTurn } from "./transcript.js";
 
 /** review 模块发布的占用频道；观察员只订阅，不参与审查状态机。 */
 const REVIEW_OCCUPANCY_CHANNEL = "herdr:blocked";
@@ -64,9 +64,12 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	const spawnObserver = dependencies.createObserver ?? createObserver;
 	let runtime: WatcherRuntime | undefined;
 	let reviewActive = false;
+	/** 重新入场计数：在途评估看的是旧现场，它的结果与故障都不再算数。 */
+	let era = 0;
 
 	const resetObserver = () => {
 		if (!runtime) return;
+		era += 1;
 		runtime.observer?.dispose();
 		runtime.observer = undefined;
 		runtime.pending = [];
@@ -109,8 +112,10 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	};
 	const evaluate = async (active: WatcherRuntime) => {
 		active.evaluating = true;
+		let current = era;
 		try {
 			while (runtime === active && active.pending.length && !reviewActive) {
+				current = era;
 				// 合并跳最新：评估期间到达的回合并进下一批，不排队补评估。
 				const increment = active.pending.splice(0).join("\n");
 				const turnIndex = active.lastTurnIndex;
@@ -121,13 +126,17 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 					pool,
 				});
 				const advice = await active.observer.evaluate(increment);
+				if (current !== era) continue;
 				if (advice && runtime === active) deliver(active, advice, turnIndex);
 				// 自身上下文快满时也重新入场：观察员只需要当下，不需要完整历史。
 				if ((active.observer?.contextPercent() ?? 0) >= CONTEXT_RESET_PERCENT) resetObserver();
 			}
 		} catch (error) {
-			active.ctx.ui.notify(`观察员已停止：${error instanceof Error ? error.message : String(error)}`, "warning");
-			deactivate();
+			// 被重新入场中断的评估不算故障：下一批增量会开一个新观察会话。
+			if (current === era) {
+				active.ctx.ui.notify(`观察员已停止：${error instanceof Error ? error.message : String(error)}`, "warning");
+				deactivate();
+			}
 		} finally {
 			active.evaluating = false;
 		}
@@ -161,7 +170,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 		const active = runtime;
 		if (!active) return;
 		active.ctx = ctx;
-		active.pending.push(renderTurn(event as unknown as TurnIncrement, config.context));
+		active.pending.push(renderTurn(event, config.context));
 		active.lastTurnIndex = event.turnIndex;
 		if (!active.evaluating && !reviewActive) void evaluate(active);
 	});
@@ -193,8 +202,11 @@ function loadWatcherConfiguration(): WatcherConfig | { error: string } {
 	} catch (error) {
 		return { error: `观察员配置读取失败：${error instanceof Error ? error.message : String(error)}` };
 	}
+	// features 也算阻断集：开关写成字符串 "false" 时 `!== false` 仍会注册，
+	// 而启用观察员意味着每个回合都对模型发起真实调用。
 	const problems = loaded.problems.filter((problem) =>
-		problem.startsWith("watcher") || problem.startsWith("未知字段 watcher.") || problem.startsWith("config.jsonc"));
+		problem.startsWith("watcher") || problem.startsWith("未知字段 watcher.")
+		|| problem.startsWith("config.jsonc") || problem.startsWith("features"));
 	if (problems.length) return { error: `观察员配置有问题，已停止：${problems.join("；")}` };
 	return loaded.config.watcher;
 }

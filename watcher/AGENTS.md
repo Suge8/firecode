@@ -18,11 +18,13 @@ read/grep/find/ls、系统提示整体替换、注入 contextFiles。`prompts/wa
 
 `turn_end` 把渲染好的增量推进待评估缓冲，评估在后台跑。评估期间到达的回合合并进下一批——只有缓冲，
 没有积压队列，落后时天然跳到最新。喂给会话的增量始终是 append-only 的新内容，已评估过的回合留在前缀里
-不重发，前缀缓存因此有效；`minimal` 渲染省略 reasoning 与 diff 正文（`context: "full"` 才带上）。
+不重发，前缀缓存因此有效。增量含回复文本、工具调用与工具结果（含失败）；`minimal` 只省 reasoning 与
+写入类参数的正文（只留字符数），`context: "full"` 才带上。渲染直接吃宙主的 `TurnEndEvent` 类型，不得改回
+手写结构型：字段名对不上时增量会静默变空。
 
 fire-review 活跃期（订阅 review 发布的 `herdr:blocked` 频道）零评估，增量留到审查结束合并处理。主会话
 compaction、会话切换或观察会话自身上下文超过阈值时，丢弃观察会话与未评估增量，从当前尾部重新入场，
-不回放历史。
+不回放历史。重新入场带计数：在途评估看的是旧现场，它的建议被丢弃，它的故障也不会关掉观察员。
 
 ## 投递路由
 
@@ -38,8 +40,9 @@ compaction、会话切换或观察会话自身上下文超过阈值时，丢弃�
 ## 配置
 
 `watcher` 节：`enabled`（默认 true，新会话自动激活）、`model` 与 `thinking`（必须显式配置）、`context`
-（默认 `minimal`）。节缺失、字段缺失、未知字段或类型错误都算配置问题：观察员拒绝启动并在 `session_start`
-警告一次，绝不回退默认模型。模型必须能在内置 provider 解析——扩展注册的 provider（如 antigravity）在
+（默认 `minimal`）。节缺失、字段缺失、未知字段、类型错误，以及 `features.watcher` 开关本身写错（字符串
+`"false"` 会因 `!== false` 静默启用）都算配置问题：观察员拒绝启动并在 `session_start` 警告一次，
+绝不回退默认模型。模型必须能在内置 provider 解析——扩展注册的 provider（如 antigravity）在
 子会话里不可解析，解析失败时报错引导改用内置 provider 模型。
 
 `/fire-watch [on|off]` 只切换当前会话，不写回配置。状态栏观察员段显示当前模型。

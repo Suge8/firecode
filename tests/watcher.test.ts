@@ -187,6 +187,61 @@ test("watcher 节缺失时拒绝启动并说明原因，不拿默认模型代替
 	expect(harness.notices.join("\n")).toContain("watcher.model 必须显式配置");
 });
 
+test("增量带上工具调用与工具结果，minimal 只省推理与正文", async () => {
+	const harness = await setup();
+	let increment = "";
+	let seen!: () => void;
+	const evaluated = new Promise<void>((resolve) => { seen = resolve; });
+	faux.appendResponses([
+		(context: any) => {
+			increment = latestUserText(context);
+			seen();
+			return fauxAssistantMessage("无需建议");
+		},
+	]);
+	await harness.turnEnd(1, "先看一眼", [
+		{
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "bash",
+			content: [{ type: "text", text: "3 files changed" }],
+			isError: false,
+			timestamp: 0,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "call-2",
+			toolName: "write",
+			content: [{ type: "text", text: "permission denied" }],
+			isError: true,
+			timestamp: 0,
+		},
+	], [
+		{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "git status" } },
+		{ type: "toolCall", id: "call-2", name: "write", arguments: { path: "a.ts", content: "x".repeat(50) } },
+	]);
+	await evaluated;
+
+	expect(increment).toContain("→ bash：3 files changed");
+	expect(increment).toContain("✗ write：permission denied");
+	expect(increment).toContain("command=git status");
+	// minimal 只省推理与 diff 正文：写入动作还在，正文只留长度。
+	expect(increment).toContain("content=<50 字符>");
+	expect(increment).not.toContain("xxxxx");
+});
+
+test("features.watcher 写成非布尔值时拒绝启动，不静默启用", async () => {
+	const harness = await setup({ features: { watcher: "false" } });
+	advise("nit", "不应该被看到");
+	await harness.turnEnd(1, "回合");
+	await Bun.sleep(20);
+	expect(faux.getPendingResponseCount()).toBe(2);
+	expect(harness.cards).toEqual([]);
+
+	await harness.command("on");
+	expect(harness.notices.join("\n")).toContain("features.watcher 必须是 true 或 false");
+});
+
 test("主会话压缩后从当前尾部重新入场，不回放旧增量", async () => {
 	const harness = await setup();
 	advise("nit", "压缩前");
@@ -210,6 +265,31 @@ test("主会话压缩后从当前尾部重新入场，不回放旧增量", async
 	expect(harness.cards.at(-1)).toEqual({ severity: "nit", note: "压缩后", turnIndex: 2 });
 });
 
+test("评估途中发生压缩时丢弃过期建议，观察员不被拖坐", async () => {
+	const harness = await setup();
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	faux.appendResponses([
+		async () => {
+			await gate;
+			return fauxAssistantMessage([fauxToolCall("advise", { severity: "nit", note: "压缩前的现场" })], { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("已提交"),
+	]);
+	await harness.turnEnd(1, "压缩前的回合");
+	await harness.emit("session_compact", { type: "session_compact" });
+	release();
+	await Bun.sleep(20);
+	expect(harness.cards).toEqual([]);
+	expect(harness.notices).toEqual([]);
+
+	advise("nit", "压缩后的建议");
+	const delivered = harness.next();
+	await harness.turnEnd(2, "压缩后的回合");
+	await delivered;
+	expect(harness.cards).toEqual([{ severity: "nit", note: "压缩后的建议", turnIndex: 2 }]);
+});
+
 test("Worker 会话内不注册观察员", async () => {
 	const harness = await setup({ worker: true });
 	expect(harness.registeredCommands).toEqual([]);
@@ -230,7 +310,11 @@ function advise(severity: string, note: string) {
 	]);
 }
 
-async function setup(options: { watcher?: Record<string, unknown> | null; worker?: boolean } = {}) {
+async function setup(options: {
+	watcher?: Record<string, unknown> | null;
+	worker?: boolean;
+	features?: Record<string, unknown>;
+} = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-watcher-"));
 	const cwd = join(directory, "project");
 	const agentDir = join(directory, "agent");
@@ -267,7 +351,7 @@ async function setup(options: { watcher?: Record<string, unknown> | null; worker
 	const watcher = options.watcher === undefined ? WATCHER_CONFIG : options.watcher;
 	const module = await loadFirecodeModule("watcher/index.js", {
 		configJsonc: JSON.stringify({
-			features: { watcher: true, review: false, master: false },
+			features: { watcher: true, review: false, master: false, ...options.features },
 			review: TEST_REVIEW_CONFIG,
 			...(watcher === null ? {} : { watcher }),
 		}),
@@ -334,11 +418,11 @@ async function setup(options: { watcher?: Record<string, unknown> | null; worker
 		set idle(value: boolean) { idle = value; },
 		next: () => new Promise<void>((resolve) => { waiter = () => { waiter = undefined; resolve(); }; }),
 		command: (args: string) => commands.get("fire-watch").handler(args, ctx),
-		turnEnd: (turnIndex: number, text: string, toolResults: any[] = []) =>
+		turnEnd: (turnIndex: number, text: string, toolResults: any[] = [], toolCalls: any[] = []) =>
 			emit("turn_end", {
 				type: "turn_end",
 				turnIndex,
-				message: { role: "assistant", content: [{ type: "text", text }] },
+				message: { role: "assistant", content: [{ type: "text", text }, ...toolCalls] },
 				toolResults,
 			}),
 	};

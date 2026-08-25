@@ -41,7 +41,7 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 	const spawned = await options.pool.spawn({
 		cwd: options.cwd,
 		model: options.model,
-		thinking: options.thinking as never,
+		thinking: options.thinking,
 		tools: OBSERVER_TOOLS,
 		customTools: [adviseTool(() => advice, (next) => { advice = next; })],
 		systemPrompt: { mode: "replace", text: readFileSync(PROMPT_PATH, "utf8") },
