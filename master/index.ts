@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -6,10 +7,13 @@ import {
 	getAgentDir,
 	isToolCallEventType,
 	ModelRuntime,
+	type AgentSession,
+	type AgentSessionEvent,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type MasterModel } from "../config.js";
+import { formatDuration } from "../format.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
@@ -46,11 +50,32 @@ interface MasterDependencies {
 	interruptResumeMs?: number;
 }
 
+interface CurrentTool {
+	tool: string;
+	startedAt: number;
+}
+
+interface ReviewProgress {
+	kind: "review";
+	round: number;
+	settled: number;
+	total: number;
+}
+
+interface ObservedSession {
+	session: AgentSession;
+	unsubscribe: () => void;
+}
+
 interface MasterRuntime {
 	ctx: ExtensionContext;
 	store: MasterStore;
 	pool: InProcessSessionPool;
 	events: PendingMasterEvent[];
+	currentTools: Map<string, Map<string, CurrentTool>>;
+	idleSince: Map<string, number>;
+	reviewProgress: Map<string, ReviewProgress>;
+	observedSessions: Map<string, ObservedSession>;
 	flushTimer?: NodeJS.Timeout;
 	turnActive: boolean;
 }
@@ -93,10 +118,21 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			return runtime;
 		}
 		const store = new MasterStore(masterStatePath(ctx.sessionManager.getSessionId()), restored, renderStatus);
-		runtime = { ctx, store, pool, events: [], turnActive: false };
+		runtime = {
+			ctx,
+			store,
+			pool,
+			events: [],
+			currentTools: new Map(),
+			idleSince: new Map(),
+			reviewProgress: new Map(),
+			observedSessions: new Map(),
+			turnActive: false,
+		};
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；旧运行时进程不会纳入新池，请手动清理`, "warning");
+		// store 创建时 runtime 尚未就位，激活完成后只补这一次首绘。
 		renderStatus();
 		return runtime;
 	};
@@ -109,6 +145,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		activeRuns.clear();
 		interruptedRuns.clear();
 		if (active?.flushTimer) clearTimeout(active.flushTimer);
+		for (const observed of active?.observedSessions.values() ?? []) observed.unsubscribe();
 		active?.ctx.ui.setStatus("master", undefined);
 		setTools(false);
 	};
@@ -224,7 +261,30 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		});
 		return spawned.session;
 	};
+	const observeWorker = (active: MasterRuntime, sessionPath: string, session: AgentSession) => {
+		const previous = active.observedSessions.get(sessionPath);
+		if (previous?.session === session) return;
+		previous?.unsubscribe();
+		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+			if (event.type === "tool_execution_start") {
+				const tools = active.currentTools.get(sessionPath) ?? new Map<string, CurrentTool>();
+				tools.set(event.toolCallId, { tool: event.toolName, startedAt: Date.now() });
+				active.currentTools.set(sessionPath, tools);
+			}
+			if (event.type === "tool_execution_end") {
+				const tools = active.currentTools.get(sessionPath);
+				tools?.delete(event.toolCallId);
+				if (!tools?.size) active.currentTools.delete(sessionPath);
+			}
+			if (event.type === "entry_appended") {
+				const progress = reviewProgressFromEntry(event.entry);
+				if (progress) active.reviewProgress.set(sessionPath, progress);
+			}
+		});
+		active.observedSessions.set(sessionPath, { session, unsubscribe });
+	};
 	const runWorker = (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
+		observeWorker(active, worker.sessionPath, session);
 		const run = Symbol(worker.name);
 		activeRuns.set(worker.sessionPath, run);
 		const settled = (error?: unknown) => {
@@ -236,6 +296,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				if (!current || current.sessionPath !== worker.sessionPath) return;
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
+				active.currentTools.delete(worker.sessionPath);
+				active.idleSince.set(worker.sessionPath, Date.now());
 				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
@@ -282,6 +344,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		renderResult: (result, options, theme, context) => {
 			const details = result.details as { workers?: unknown } | undefined;
 			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
+			if (options.expanded && Array.isArray(details?.workers))
+				return expandedWorkerList(details.workers, theme, context);
 			return renderSubagentsResult(result, options, theme, context);
 		},
 		promptGuidelines: masterGuidelines(roster),
@@ -297,12 +361,28 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
 			if (!active) throw new Error("subagents 只在 Master 中可用");
-			if (params.action === "list") return toolResult({ workers: active.store.state.workers.map(compactWorker) });
+			if (params.action === "list") {
+				const workers = active.store.state.workers.map(compactWorker);
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
+					details: {
+						workers: workers.map((worker) => ({
+							...worker,
+							currentAction: currentWorkerAction(active, worker),
+						})),
+					},
+				};
+			}
 			if (params.action === "kill") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 				clearInterruptTimer(target.name);
 				activeRuns.delete(target.sessionPath);
 				interruptedRuns.delete(target.sessionPath);
+				active.currentTools.delete(target.sessionPath);
+				active.idleSince.delete(target.sessionPath);
+				active.reviewProgress.delete(target.sessionPath);
+				active.observedSessions.get(target.sessionPath)?.unsubscribe();
+				active.observedSessions.delete(target.sessionPath);
 				active.pool.dispose(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
 				return toolResult({ killed: true });
@@ -330,11 +410,13 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				try {
 					const session = await openWorkerSession(target);
 					await session.waitForIdle();
+					observeWorker(active, target.sessionPath, session);
 					const current = currentWorker(active, target);
 					const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 					const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = current;
 					clearInterruptTimer(target.name);
 					const reviewing: WorkerRef = { ...rest, status: "reviewing" };
+					active.idleSince.delete(target.sessionPath);
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
 					void monitorReview(session, target.sessionPath, previousRunId).then(
 						(outcome) => {
@@ -345,6 +427,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 								? fulfilled
 								: current;
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
+							active.reviewProgress.delete(target.sessionPath);
+							active.idleSince.set(target.sessionPath, Date.now());
 							active.pool.markIdle(target.sessionPath);
 							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
 						},
@@ -352,6 +436,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 							const current = active.store.state.workers.find((worker) => worker.name === target.name);
 							if (!current || current.status !== "reviewing") return;
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
+							active.reviewProgress.delete(target.sessionPath);
+							active.idleSince.set(target.sessionPath, Date.now());
 							active.pool.markIdle(target.sessionPath);
 							enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
 						},
@@ -417,6 +503,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 						...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
 					};
 					clearInterruptTimer(target.name);
+					active.idleSince.delete(target.sessionPath);
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
 					const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
 					runWorker(active, activeWorker, session, text);
@@ -508,6 +595,8 @@ function settleWorker(
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
+	active.currentTools.delete(identity.sessionPath);
+	active.idleSince.set(identity.sessionPath, Date.now());
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
 	const failure = error instanceof Error ? error.message : error === undefined ? latestAssistantError(messages) : String(error);
 	return failure
@@ -681,14 +770,101 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 
 const renderSubagentsResult = makeResultRenderer(false);
 const STATUS_WORD = { working: "工作", idle: "空闲", reviewing: "审查" } satisfies Record<WorkerStatus, string>;
+
+function reviewProgressFromEntry(entry: unknown): ReviewProgress | undefined {
+	if (!entry || typeof entry !== "object") return undefined;
+	const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
+	if (record.type !== "custom" || record.customType !== "firecode-review-checkpoint") return undefined;
+	if (!record.data || typeof record.data !== "object") return undefined;
+	const active = (record.data as { active?: unknown }).active;
+	if (!active || typeof active !== "object") return undefined;
+	const progress = active as { round?: unknown; settledCount?: unknown; reviewers?: unknown };
+	if (
+		typeof progress.round !== "number"
+		|| typeof progress.settledCount !== "number"
+		|| !Array.isArray(progress.reviewers)
+	) return undefined;
+	return {
+		kind: "review",
+		round: progress.round,
+		settled: progress.settledCount,
+		total: progress.reviewers.length,
+	};
+}
+
+function currentWorkerAction(active: MasterRuntime, worker: ReturnType<typeof compactWorker>) {
+	if (worker.status === "reviewing") return active.reviewProgress.get(worker.session);
+	if (worker.status === "idle") {
+		let since = active.idleSince.get(worker.session);
+		try {
+			since ??= statSync(worker.session).mtimeMs;
+		} catch {
+			// 缺失档案仍可 list；真正恢复时由 send 明确报错。
+		}
+		return { kind: "idle" as const, ...(since ? { since } : {}) };
+	}
+	const current = [...(active.currentTools.get(worker.session)?.values() ?? [])].at(-1);
+	return current ? { kind: "tool" as const, ...current } : undefined;
+}
+
+function expandedWorkerList(
+	workers: unknown[],
+	theme: ExtensionContext["ui"]["theme"],
+	context: Parameters<typeof renderSubagentsResult>[3],
+) {
+	return {
+		invalidate() {},
+		render(width: number): string[] {
+			return ["", ...workers.flatMap((value) => {
+				const worker = value as Record<string, unknown>;
+				const action = worker.currentAction as {
+					kind?: string;
+					tool?: string;
+					startedAt?: number;
+					since?: number;
+					round?: number;
+					settled?: number;
+					total?: number;
+				} | undefined;
+				const actionParts: Part[] = action?.kind === "tool" && action.tool && action.startedAt
+					? [{
+						text: ` · ${action.tool} · 已 ${formatDuration(Math.max(0, Date.now() - action.startedAt))}`,
+						color: "accent",
+					}]
+					: action?.kind === "idle"
+						? [{
+							text: action.since ? ` · 落定 ${formatDuration(Date.now() - action.since)}前` : " · 已落定",
+							color: "muted",
+						}]
+						: action?.kind === "review"
+							? [{ text: ` · 第 ${action.round} 轮 · 审查者 ${action.settled}/${action.total}`, color: "accent" }]
+							: [];
+				return new ToolLine({
+					label: String(worker.name),
+					value: [
+						{ text: `${String(worker.model).split("/").pop()}/${String(worker.thinking)}`, color: "muted" },
+						{ text: ` · ${STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status)}`, color: "accent" },
+						...actionParts,
+					],
+					clip: "end",
+					theme,
+					ctx: { ...context, state: {}, expanded: false },
+				}).render(width);
+			})];
+		},
+	};
+}
 function listMeta(workers: unknown[]): Part[] {
-	if (!workers.length) return [{ text: " — 空", color: "muted" }];
-	return [{ text: ` — ${workers.map((value) => {
+	if (!workers.length) return [{ text: " — 池 0", color: "muted" }];
+	return [{ text: ` — 池 ${workers.length}：${workers.map((value) => {
 		const worker = value as Record<string, unknown>;
 		return `${String(worker.name)} ${STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status)}`;
 	}).join(" · ")}`, color: "muted" }];
 }
-function masterStatusLine(workers: WorkerRef[], theme: ExtensionContext["ui"]["theme"]): string {
+export function masterStatusLine(
+	workers: ReadonlyArray<Pick<WorkerRef, "status">>,
+	theme: Pick<ExtensionContext["ui"]["theme"], "fg">,
+): string {
 	const count = (status: WorkerStatus) => workers.filter((worker) => worker.status === status).length;
 	return `${theme.fg("dim", "👑 指挥官")}${count("working") ? theme.fg("dim", `/工作${count("working")}`) : ""}${count("reviewing") ? theme.fg("dim", `/审${count("reviewing")}`) : ""}${count("idle") ? theme.fg("dim", `/闲${count("idle")}`) : ""}`;
 }
