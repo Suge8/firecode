@@ -41,6 +41,7 @@ interface MasterRuntime {
 }
 
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
+	const workerSession = Boolean(process.env.FIRECODE_MASTER_WORKER);
 	let runtime: MasterRuntime | undefined;
 	const loaded = loadMasterConfiguration();
 	const roster = "error" in loaded ? [] : loaded.models;
@@ -201,7 +202,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!process.env.FIRECODE_MASTER_WORKER) return;
+		if (!workerSession) return;
 		if (!isToolCallEventType("edit", event) && !isToolCallEventType("write", event)) return;
 		const reason = await outsideCheckoutReason(event.input.path, ctx.cwd);
 		if (reason) return { block: true, reason };

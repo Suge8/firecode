@@ -104,6 +104,43 @@ test("v6 状态由所有者丢弃并产生脱管告知", async () => {
 	}
 });
 
+test("Worker checkout 守卫绑定子会话身份，不受进程级环境标记后续变化影响", async () => {
+	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
+	const cwd = join(directory, "checkout");
+	await mkdir(cwd);
+	const module = await loadFirecodeModule("master/index.js", {
+		configJsonc: JSON.stringify({
+			features: { master: true, review: false },
+			review: TEST_REVIEW_CONFIG,
+			master: { models: [TEST_MODEL] },
+		}),
+	}) as any;
+	const register = () => {
+		const handlers = new Map<string, any[]>();
+		module.registerMaster({
+			registerMessageRenderer() {}, registerCommand() {}, registerTool() {},
+			getActiveTools: () => [], setActiveTools() {},
+			on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+			events: { on() {}, emit() {} },
+		});
+		return handlers.get("tool_call")?.[0];
+	};
+
+	process.env.FIRECODE_MASTER_WORKER = "guarded";
+	const workerGuard = register();
+	delete process.env.FIRECODE_MASTER_WORKER;
+	const ctx = { cwd };
+	expect(await workerGuard({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toEqual({
+		block: true,
+		reason: "子代理只能修改当前 checkout：../outside.ts",
+	});
+	expect(await workerGuard({ toolName: "edit", input: { path: "inside.ts" } }, ctx)).toBeUndefined();
+
+	const masterGuard = register();
+	process.env.FIRECODE_MASTER_WORKER = "another-worker-is-loading";
+	expect(await masterGuard({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toBeUndefined();
+});
+
 test("T3 动作在集成分支显式拒绝", async () => {
 	const harness = await setup();
 	for (const action of ["send", "interrupt", "review", "tail", "ack"])
