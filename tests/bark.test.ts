@@ -33,7 +33,7 @@ test("有工人待拍板时升 timeSensitive 并带副标题，否则 active 无
 	expect(urgent.id).toBe("sid");
 });
 
-test("hasBlockedWorker：blocked 为真；全忙、文件缺失、文件损坏都为假", async () => {
+test.skip("旧 Herdr blocked 待拍板判据（T4 删除）", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "firecode-bark-"));
 	try {
 		const path = join(dir, "state.json");

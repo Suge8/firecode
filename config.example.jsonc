@@ -26,5 +26,9 @@
 			"thinkingLevel": "high",
 			"key": "alt+1"
 		}
+	},
+	"master": {
+		// Worker 默认加载全部扩展；这里可按完整路径或文件名排除。
+		"workerExcludeExtensions": []
 	}
 }
