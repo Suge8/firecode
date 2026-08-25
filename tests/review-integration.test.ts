@@ -81,6 +81,15 @@ function makeCtx(sessionManager: MockSessionManager, busy = false) {
 	};
 }
 
+function makeHeadlessCtx(sessionManager: MockSessionManager) {
+	const ctx = makeCtx(sessionManager);
+	ctx.hasUI = false;
+	ctx.ui = new Proxy(ctx.ui, {
+		get: () => { throw new Error("headless review dereferenced ctx.ui"); },
+	});
+	return ctx;
+}
+
 function makePi(sessionManager: MockSessionManager) {
 	const registered: {
 		renderers: Map<string, unknown>;
@@ -144,7 +153,10 @@ async function loadReviewWithVerdict(verdict: string, maxRounds?: number) {
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 		readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
 	};
-	return { ...review, ...checkpoint, script };
+	const outcome = (await loadFirecodeModule("review/outcome.js")) as {
+		readReviewOutcome: (sessionPath: string) => { status: string; rounds?: number };
+	};
+	return { ...review, ...checkpoint, ...outcome, script };
 }
 
 const FAIL_VERDICT = [
@@ -425,6 +437,72 @@ describe("registerReview wiring", () => {
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
+
+	test("headless review runs to a readable terminal verdict without UI access", async () => {
+		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint, readReviewOutcome, script } = await loadReviewWithVerdict(verdict);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeHeadlessCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
+		for (let wait = 0; wait < 200; wait += 1) {
+			if (readCheckpoint({ sessionManager })?.phase === "summarizing") break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
+		for (const handler of registered.events.get("agent_start") ?? []) await handler({}, ctx);
+		for (const handler of registered.events.get("agent_end") ?? [])
+			await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await flush();
+		const sessionPath = `${script}.jsonl`;
+		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "passed", rounds: 1 });
+		await rm(script, { force: true });
+		await rm(sessionPath, { force: true });
+	}, 20_000);
+
+	test("headless session shutdown cancels the review and kills its subprocess", async () => {
+		const marker = join(tmpdir(), `fire-review-headless-${Date.now()}-${Math.random()}`);
+		const script = `${marker}.sh`;
+		await writeFile(script, `#!/bin/sh\necho $$ > '${marker}'\nwhile :; do sleep 1; done\n`, { mode: 0o755 });
+		const module = (await loadFirecodeModule("review/index.js", {
+			configJsonc: reviewConfig({
+				reviewers: [{ model: "p/one", thinking: "low" }],
+				background: { command: script },
+			}),
+		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
+		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
+			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
+		};
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		module.registerReview(pi);
+		const ctx = makeHeadlessCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
+		for (let wait = 0; wait < 80 && !existsSync(marker); wait += 1)
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(existsSync(marker)).toBe(true);
+		const pid = Number(await Bun.file(marker).text());
+		const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
+			event: { reason: "quit" },
+			ctx: unknown,
+		) => Promise<void>;
+		await shutdown({ reason: "quit" }, ctx);
+		await module.__reviewFlushForTests();
+		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(() => process.kill(pid, 0)).toThrow();
+		await rm(script, { force: true });
+		await rm(marker, { force: true });
+	}, 10_000);
 
 	test("installs the activity bar and locks editor when review starts", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
@@ -784,7 +862,7 @@ describe("reload preserves recoverable state", () => {
 		expect(registered2.emitted).toEqual([OCCUPIED, RELEASED]);
 	});
 
-	test("reload immediately settles a Review Run whose persisted overall deadline elapsed", async () => {
+	test("headless reload immediately settles a Review Run whose persisted overall deadline elapsed", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -799,7 +877,7 @@ describe("reload preserves recoverable state", () => {
 			event: unknown,
 			ctx: unknown,
 		) => Promise<void>;
-		await start({}, makeCtx(sessionManager));
+		await start({}, makeHeadlessCtx(sessionManager));
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
