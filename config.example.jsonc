@@ -14,7 +14,8 @@
 		"workingFlame": true,
 		"bark": false,
 		"review": false,
-		"master": false
+		"master": false,
+		"watcher": false
 	},
 	"keys": {
 		"rename": "ctrl+r",
@@ -27,6 +28,14 @@
 			"key": "alt+1"
 		}
 	},
+	// Turning on features.watcher requires this section: model and thinking are mandatory
+	// and must resolve in a built-in provider (extension providers do not load in subsessions).
+	// "watcher": {
+	// 	"enabled": true,      // auto-start in new sessions; /fire-watch off is session-only
+	// 	"model": "anthropic/claude-haiku-4-5",
+	// 	"thinking": "low",
+	// 	"context": "minimal"  // minimal drops reasoning and diff bodies from the increment
+	// },
 	"master": {
 		// 新会话默认注入 subagents；/fire-master off 只关闭当前会话。
 		"autoActivate": true,

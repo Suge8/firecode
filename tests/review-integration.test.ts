@@ -121,6 +121,9 @@ function makePi(sessionManager: MockSessionManager) {
 		registerMessageRenderer: (customType: string, renderer: unknown) => {
 			registered.renderers.set(customType, renderer);
 		},
+		registerEntryRenderer: (customType: string, renderer: unknown) => {
+			registered.renderers.set(customType, renderer);
+		},
 		registerCommand: (name: string, options: unknown) => {
 			registered.commands.set(name, options);
 		},

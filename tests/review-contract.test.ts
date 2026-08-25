@@ -557,7 +557,7 @@ describe("feature switch types", () => {
 
 	test("boolean switches are valid and review does not constrain Master", async () => {
 		const module = (await loadFirecodeModule("config.js", {
-			configJsonc: `{ "features": { "review": false } }`,
+			configJsonc: `{ "features": { "review": false, "watcher": false } }`,
 		})) as { loadConfig: () => { problems: string[] } };
 		expect(module.loadConfig().problems).toEqual([]);
 	});

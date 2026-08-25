@@ -8,6 +8,7 @@ import {
 	ModelRuntime,
 	SessionManager,
 	type AgentSession,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { WorkerThinking } from "./state.js";
 
@@ -22,6 +23,8 @@ export interface SpawnSessionOptions {
 	model: Model<any>;
 	thinking: WorkerThinking;
 	tools: string[];
+	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
+	customTools?: ToolDefinition[];
 	excludeExtensions?: string[];
 	systemPrompt: { mode: "append" | "replace"; text: string };
 	contextFiles: boolean;
@@ -92,6 +95,7 @@ export class InProcessSessionPool {
 					model: options.model,
 					thinkingLevel: options.thinking,
 					tools: options.tools,
+					...(options.customTools ? { customTools: options.customTools } : {}),
 					resourceLoader: loader,
 					sessionManager,
 				});

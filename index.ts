@@ -17,6 +17,7 @@ import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
 import { registerReview } from "./review/index.js";
 import { registerMaster } from "./master/index.js";
+import { registerWatcher } from "./watcher/index.js";
 
 const REGISTRARS: Record<Exclude<Feature, "review" | "master">, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
@@ -29,6 +30,7 @@ const REGISTRARS: Record<Exclude<Feature, "review" | "master">, (pi: ExtensionAP
 	openaiNative: registerOpenAINative,
 	workingFlame: registerWorkingFlame,
 	bark: registerBark,
+	watcher: registerWatcher,
 };
 
 export default function firecode(pi: ExtensionAPI): void {

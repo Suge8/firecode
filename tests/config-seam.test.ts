@@ -25,6 +25,7 @@ test("portable loader copies runtime sources without repository metadata or deve
 			"review/prompts/advisor.zh.md",
 			"review/prompts/review.en.md",
 			"review/prompts/review.zh.md",
+			"watcher/prompts/watch.zh.md",
 		]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
