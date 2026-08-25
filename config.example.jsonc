@@ -26,5 +26,11 @@
 			"thinkingLevel": "high",
 			"key": "alt+1"
 		}
+	},
+	"master": {
+		// 新会话默认注入 subagents；/fire-master off 只关闭当前会话。
+		"autoActivate": true,
+		// Worker 默认加载全部扩展；这里可按完整路径或文件名排除。
+		"workerExcludeExtensions": []
 	}
 }

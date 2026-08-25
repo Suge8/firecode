@@ -1,6 +1,6 @@
 # FireCode
 
-FireCode 是一个模块化 Pi Package，提供终端状态与工具渲染、会话预设、`/fire-review` 对抗审查和按需 `/fire-master` 子代理委派。各模块由功能开关独立注册；关闭任一模块不会改变其余模块。
+FireCode 是一个模块化 Pi Package，提供终端状态与工具渲染、会话预设、`/fire-review` 对抗审查和 `/fire-master` 进程内子代理委派。Master 功能启用后默认随会话激活；各模块由功能开关独立注册，关闭任一模块不会改变其余模块。
 
 ## 安装
 

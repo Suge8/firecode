@@ -1,7 +1,7 @@
 # FireCode
 
 pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Anthropic OAuth 归因、`/fire-review`
-对抗性审查与按需 `/fire-master` 多 Agent 主控。
+对抗性审查与默认激活的 `/fire-master` 多 Agent 主控。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
 状态，关掉任何一个不影响其余；跨模块接缝只有三条：Master 只读调 `review/outcome.ts`，bark 只读调
@@ -16,7 +16,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `tools/` | 接管默认 4 工具（read/bash/edit/write）的渲染，含连续行轨道；不包装 grep/find/ls——原版 pi 注册即激活，包装即强制打开 | |
 | `session/` | 预设、`/rename`、`/tokens`、Bark 通知、herdr 身份投影、工作火焰 | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 | [review/AGENTS.md](review/AGENTS.md) |
-| `master/` | `/fire-master`：按需注入 `subagents` 工具，管理 Herdr Worker 生命周期 | [master/AGENTS.md](master/AGENTS.md) |
+| `master/` | `/fire-master`：进程内 Worker 池、八动作、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |

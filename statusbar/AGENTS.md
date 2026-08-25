@@ -2,8 +2,6 @@
 
 第一行位置/会话名/指挥官徽标（扩展状态 `master` 键，窄屏整段丢弃），第二行模型/额度/上下文/缓存/速度。
 
-`render.ts` 与 `layout` 相关函数是纯函数，测试覆盖在 `tests/layout.test.ts`。
-
 ## 额度
 
 🔋 显示订阅额度余量，支持 openai-codex、anthropic、xai（后两者需 OAuth 登录，xai 读 `~/.grok/auth.json`

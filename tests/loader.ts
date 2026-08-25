@@ -27,7 +27,9 @@ function piPackagesDirectory(): string {
 const PI_PACKAGES = piPackagesDirectory();
 export const PI_CODING_AGENT_URL = pathToFileURL(join(PI_PACKAGES, "coding-agent/src/index.ts")).href;
 const PI_CODING_AGENT = PI_CODING_AGENT_URL;
-const PI_AI = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
+export const PI_AI_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
+export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.ts")).href;
+const PI_AI = PI_AI_URL;
 const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
 const created: string[] = [];

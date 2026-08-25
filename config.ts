@@ -56,6 +56,8 @@ export interface MasterModel {
 
 export interface MasterConfig {
 	models: MasterModel[];
+	workerExcludeExtensions: string[];
+	autoActivate: boolean;
 }
 
 export const FEATURES = [
@@ -345,16 +347,35 @@ function reviewBackground(value: unknown, problems: string[]): string {
 /** 导出供测试：与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
 export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
 	for (const key of Object.keys(raw))
-		if (key !== "models") problems.push(`未知字段 master.${key}`);
-	if (raw.models === undefined) return { models: [] };
+		if (key !== "models" && key !== "workerExcludeExtensions" && key !== "autoActivate")
+			problems.push(`未知字段 master.${key}`);
+	const exclusions = stringArray(raw.workerExcludeExtensions, "master.workerExcludeExtensions", problems);
+	const autoActivate = booleanValue(raw.autoActivate, "master.autoActivate", true, problems);
+	if (raw.models === undefined) return { models: [], workerExcludeExtensions: exclusions, autoActivate };
 	if (!Array.isArray(raw.models) || raw.models.length === 0 || raw.models.length > 8) {
 		problems.push("master.models 必须包含 1–8 个模型");
-		return { models: [] };
+		return { models: [], workerExcludeExtensions: exclusions, autoActivate };
 	}
 	const models = raw.models.map((item, index) => masterModel(item, `master.models[${index}]`, problems));
 	if (new Set(models.map((entry) => entry.model)).size !== models.length)
 		problems.push("master.models 模型不能重复");
-	return { models };
+	return { models, workerExcludeExtensions: exclusions, autoActivate };
+}
+
+function booleanValue(value: unknown, field: string, fallback: boolean, problems: string[]): boolean {
+	if (value === undefined) return fallback;
+	if (typeof value === "boolean") return value;
+	problems.push(`${field} 必须是 true 或 false`);
+	return fallback;
+}
+
+function stringArray(value: unknown, field: string, problems: string[]): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item)) {
+		problems.push(`${field} 必须是非空字符串数组`);
+		return [];
+	}
+	return [...new Set(value)];
 }
 
 function masterModel(value: unknown, field: string, problems: string[]): MasterModel {
