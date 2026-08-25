@@ -2,7 +2,7 @@
  * Bark 通知：每轮任务彻底落定（agent_settled 且不再自动续跑）时，
  * 把最后一条回复推送到 iPhone 的 Bark App。
  *
- * - Worker 进程静默：通知全部由指挥官会话发出（判据同 herdr-display.ts）。
+ * - 子代理会话不发通知，通知统一由指挥官会话发出。
  * - 子代理池里有待发落消息时升 timeSensitive 并带副标题，可穿透专注模式；平时为默认 active。
  * - 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知，通知栏每会话只留最新一条。
  * - 推送地址在 ~/.pi/agent/bark-key（整行即 https://api.day.app/<key>/），

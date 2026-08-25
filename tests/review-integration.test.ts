@@ -45,6 +45,17 @@ async function loadAll() {
 
 afterEach(cleanupFirecodeModules);
 
+function inCommanderSession(run: () => void): void {
+	const saved = process.env.FIRECODE_MASTER_WORKER;
+	delete process.env.FIRECODE_MASTER_WORKER;
+	try {
+		run();
+	} finally {
+		if (saved === undefined) delete process.env.FIRECODE_MASTER_WORKER;
+		else process.env.FIRECODE_MASTER_WORKER = saved;
+	}
+}
+
 function makeSessionManager() {
 	const entries: unknown[] = [];
 	return {
@@ -630,13 +641,13 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		entry.default({
+		inCommanderSession(() => entry.default({
 			...pi,
 			events: { ...pi.events, on() {} },
 			registerTool() {},
 			getActiveTools: () => [],
 			setActiveTools() {},
-		});
+		}));
 		expect(registered.commands.has("fire-review")).toBe(false);
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
@@ -660,13 +671,13 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		entry.default({
+		inCommanderSession(() => entry.default({
 			...pi,
 			events: { ...pi.events, on() {} },
 			registerTool() {},
 			getActiveTools: () => [],
 			setActiveTools() {},
-		});
+		}));
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
 

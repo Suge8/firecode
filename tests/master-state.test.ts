@@ -86,7 +86,7 @@ test("重名身份漂移与重复 sessionPath 均拒绝", () => {
 	expect(restoreMasterState({ version: 7, workers: [worker, { ...worker, name: "worker-2" }] })).toBeUndefined();
 });
 
-test("v6 只读报旧版错误，状态所有者丢弃并记录脱管告知依据", async () => {
+test("v6 只读报旧版错误，状态所有者丢弃并记录清理告知依据", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-master-v7-"));
 	const path = join(directory, "state.json");
 	await writeFile(path, JSON.stringify({ version: 6, workers: [worker] }));

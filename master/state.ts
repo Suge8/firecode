@@ -73,7 +73,7 @@ export class LegacyMasterStateError extends Error {
 	constructor(readonly version: number) {
 		super(
 			`Master Worker Pool 状态是旧版 v${version}（当前 v${STATE_VERSION}），不再读取；`
-			+ "重新启动指挥官模式会从空池重建，原有子代理已脱管，需要手动清理",
+			+ "重新启动指挥官模式会从空池重建，旧运行时进程不会纳入新池，需要手动清理",
 		);
 	}
 }
@@ -144,11 +144,6 @@ export class MasterStore {
 			return { state: initialMasterState(), discardedLegacyVersion: error.version };
 		}
 	}
-}
-
-/** T4 删除旧 Herdr 运行层前的只读兼容导出；v7 全部档案均属在线池。 */
-export function liveWorkers(state: MasterState): WorkerRef[] {
-	return state.workers;
 }
 
 export function requireWorker(state: MasterState, name: string): WorkerRef {

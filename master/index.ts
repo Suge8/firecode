@@ -14,7 +14,7 @@ import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
-import { MASTER_EVENT_TYPE, masterEventDetails } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEventDetails, sectionLine } from "./event-format.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
 	MasterStore,
@@ -56,11 +56,19 @@ interface MasterRuntime {
 }
 
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
-	const workerSession = Boolean(process.env.FIRECODE_MASTER_WORKER);
+	if (process.env.FIRECODE_MASTER_WORKER) {
+		pi.on("tool_call", async (event, ctx) => {
+			if (!isToolCallEventType("edit", event) && !isToolCallEventType("write", event)) return;
+			const reason = await outsideCheckoutReason(event.input.path, ctx.cwd);
+			if (reason) return { block: true, reason };
+		});
+		return;
+	}
 	let runtime: MasterRuntime | undefined;
 	const loaded = loadMasterConfiguration();
 	const roster = "error" in loaded ? [] : loaded.models;
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
+	const autoActivate = "error" in loaded ? false : loaded.autoActivate;
 	const reviewGate = reviewGateError();
 	const pool = dependencies.pool ?? new InProcessSessionPool();
 	const activeRuns = new Map<string, symbol>();
@@ -88,7 +96,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		runtime = { ctx, store, pool, events: [], turnActive: false };
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
-			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；原有子代理已脱管，请手动清理`, "warning");
+			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；旧运行时进程不会纳入新池，请手动清理`, "warning");
 		renderStatus();
 		return runtime;
 	};
@@ -173,6 +181,27 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
 	};
+	const activateSession = (ctx: ExtensionContext): MasterRuntime => {
+		if (runtime) return activate(ctx);
+		let restored: MasterState | undefined;
+		try {
+			restored = loadMasterState(masterStatePath(ctx.sessionManager.getSessionId()));
+		} catch {
+			return activate(ctx);
+		}
+		const active = activate(ctx, restored);
+		if (restored) {
+			const recovered = recoverMasterState(restored);
+			for (const worker of recovered.workers) {
+				if (worker !== restored.workers.find((candidate) => candidate.name === worker.name))
+					active.store.dispatch({ type: "UPSERT_WORKER", worker });
+				if (worker.interruptedAt) armInterruptReminder(active, worker);
+			}
+		}
+		for (const event of unackedEvents(ctx))
+			enqueueEvent(active, event.content, event.worker, false, event.id);
+		return active;
+	};
 	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
 		const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 		if (current?.sessionPath === identity.sessionPath) return current;
@@ -235,7 +264,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				return;
 			}
 			try {
-				activate(ctx);
+				activateSession(ctx);
 				ctx.ui.notify("指挥官模式已启动", "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -451,30 +480,9 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 	pi.on("session_start", (_event, ctx) => {
 		deactivate();
+		if (!autoActivate) return;
 		try {
-			const path = masterStatePath(ctx.sessionManager.getSessionId());
-			let restored: MasterState | undefined;
-			try {
-				restored = loadMasterState(path);
-			} catch {
-				// MasterStore 是旧版状态的唯一所有者，激活时由它丢弃并保留告知依据。
-				activate(ctx);
-				return;
-			}
-			const unacked = unackedEvents(ctx);
-			if (restored?.workers.length || unacked.length) {
-				const active = activate(ctx, restored);
-				if (restored) {
-					const recovered = recoverMasterState(restored);
-					for (const worker of recovered.workers) {
-						if (worker !== restored.workers.find((candidate) => candidate.name === worker.name))
-							active.store.dispatch({ type: "UPSERT_WORKER", worker });
-						if (worker.interruptedAt) armInterruptReminder(active, worker);
-					}
-				}
-				for (const event of unacked)
-					enqueueEvent(active, event.content, event.worker, false, event.id);
-			}
+			activateSession(ctx);
 		} catch (error) {
 			ctx.ui.notify(`指挥官模式恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
 		}
@@ -488,28 +496,23 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		runtime.ctx = ctx;
 		runtime.turnActive = false;
 	});
-	pi.on("tool_call", async (event, ctx) => {
-		if (!workerSession) return;
-		if (!isToolCallEventType("edit", event) && !isToolCallEventType("write", event)) return;
-		const reason = await outsideCheckoutReason(event.input.path, ctx.cwd);
-		if (reason) return { block: true, reason };
-	});
 	pi.on("session_shutdown", () => deactivate());
 }
 
 function settleWorker(
 	active: MasterRuntime,
 	identity: WorkerRef,
-	messages: Array<{ role: string; content?: unknown }>,
+	messages: Array<{ role: string; content?: unknown; stopReason?: string; errorMessage?: string }>,
 	error?: unknown,
 ): string | undefined {
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
-	return error
-		? `子代理 ${identity.name} 已停下\n错误：${error instanceof Error ? error.message : String(error)}${obligation}`
-		: `子代理 ${identity.name} 已停下\n回复：\n${latestAssistantText(messages) || "（无回复）"}${obligation}`;
+	const failure = error instanceof Error ? error.message : error === undefined ? latestAssistantError(messages) : String(error);
+	return failure
+		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
+		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${latestAssistantText(messages) || "（无回复）"}${obligation}`;
 }
 
 function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
@@ -578,11 +581,18 @@ function reviewOutcomeText(
 	messages: Array<{ role: string; content?: unknown }>,
 ): string {
 	const reply = latestAssistantText(messages) || "（无回复）";
-	if (outcome.status === "passed") return `子代理 ${name} 审查通过（${outcome.rounds} 轮）\n最终回复：\n${reply}`;
-	if (outcome.status === "stopped") return `子代理 ${name} 审查停止（${outcome.rounds} 轮）${outcome.advisorAdvice ? `：${outcome.advisorAdvice}` : ""}\n最终回复：\n${reply}`;
-	if (outcome.status === "failed") return `子代理 ${name} 审查未完成：${outcome.reason}\n最终回复：\n${reply}`;
+	if (outcome.status === "passed") return `子代理 ${name} 审查通过（${outcome.rounds} 轮）\n${sectionLine("finalReply")}\n${reply}`;
+	if (outcome.status === "stopped") return `子代理 ${name} 审查停止（${outcome.rounds} 轮）${outcome.advisorAdvice ? `：${outcome.advisorAdvice}` : ""}\n${sectionLine("finalReply")}\n${reply}`;
+	if (outcome.status === "failed") return `子代理 ${name} 审查未完成：${outcome.reason}\n${sectionLine("finalReply")}\n${reply}`;
 	if (outcome.status === "error") return `子代理 ${name} 审查读取失败：${outcome.message}`;
 	return `子代理 ${name} 审查未完成`;
+}
+
+function latestAssistantError(
+	messages: Array<{ role: string; stopReason?: string; errorMessage?: string }>,
+): string | undefined {
+	const message = messages.findLast((candidate) => candidate.role === "assistant");
+	return message?.stopReason === "error" ? message.errorMessage || "未知错误" : undefined;
 }
 
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
@@ -642,6 +652,9 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
 		`选型表：${models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；")}。start 必须显式传 model 与 thinking。`,
+		"哨兵纪律：CI watch、部署观察、长测试等会占住回合的等待类任务，派最便宜模型的哨兵票盯守，结果会自动送达。",
+		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
+		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
 	];
 }
 
@@ -650,7 +663,7 @@ function resumeCheckPrompt(): string {
 }
 
 function workerInstructions(name: string): string {
-	return `<firecode_worker name="${name}">\n你是指挥官委派的子代理，只完成工作说明。必须自测并报告证据；禁止 herdr、子 Agent、git push、新增依赖和写 checkout 外路径。提交只带自己改动的路径。\n</firecode_worker>`;
+	return `<firecode_worker name="${name}">\n你是指挥官委派的子代理，只完成工作说明。使用现有工具在当前 checkout 内工作，必须自测并报告证据；不得启动子 Agent、git push 或新增依赖。提交只带自己改动的路径。\n</firecode_worker>`;
 }
 
 const ACTION_VERB: Record<string, string> = { start: "启动", list: "查看", kill: "移除", send: "发送", interrupt: "中断", review: "审查", tail: "近况", ack: "待命" };

@@ -13,7 +13,7 @@ const worker = (disposition?: "pending" | "reminded") => ({
 	...(disposition ? { disposition } : {}),
 });
 
-test("有工人待拍板时升 timeSensitive 并带副标题，否则 active 无副标题", () => {
+test("有待拍板事件时升 timeSensitive 并带副标题，否则 active 无副标题", () => {
 	const base = { title: "s", body: "b", group: "g", sessionId: "sid" };
 	const urgent = buildBarkPayload({ ...base, awaitingDecision: true });
 	expect(urgent.level).toBe("timeSensitive");

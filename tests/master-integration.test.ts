@@ -32,6 +32,40 @@ afterEach(async () => {
 	await cleanupFirecodeModules();
 });
 
+test("新会话默认激活 subagents", async () => {
+	const harness = await setup(false);
+	await harness.emit("session_start", {});
+	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+});
+
+test("autoActivate false 的新会话不注入，仍可手动启动", async () => {
+	const harness = await setup(false, { autoActivate: false });
+	await harness.emit("session_start", {});
+	await expect(harness.execute({ action: "list" })).rejects.toThrow("只在 Master 中可用");
+	await harness.command("");
+	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+});
+
+test("fire-master off 只关闭当前会话", async () => {
+	const harness = await setup(false);
+	await harness.emit("session_start", {});
+	await harness.command("off");
+	await expect(harness.execute({ action: "list" })).rejects.toThrow("只在 Master 中可用");
+	await harness.emit("session_start", {});
+	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+});
+
+test("subagents guidelines 注入哨兵、收割与计划维护纪律", async () => {
+	const harness = await setup();
+	const guidelines = harness.guidelines.join("\n");
+	expect(guidelines).toContain("哨兵");
+	expect(guidelines).toContain("等待类任务");
+	expect(guidelines).toContain("最便宜模型");
+	expect(guidelines).toContain("调查/哨兵票收割要点后立即 kill");
+	expect(guidelines).toContain("实现票保留待收口");
+	expect(guidelines).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
+});
+
 test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文件隐藏在嵌套目录", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
@@ -67,6 +101,18 @@ test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文
 	await harness.execute({ action: "kill", worker: "trace" });
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
 	expect(existsSync(sessionPath)).toBe(true);
+});
+
+test("失败落定事件使用统一分节格式并生成紧凑正文预览", async () => {
+	const harness = await setup();
+	faux.setResponses([async () => { throw new Error("quota exhausted"); }]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "failed", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	await delivered;
+	expect(harness.messages[0].message.content).toBe("子代理 failed 已停下\n错误：\nquota exhausted");
+	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
 test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失文件明确失败", async () => {
@@ -383,7 +429,7 @@ test("send 对冷 Worker 透明复活、省略模型沿用、显式模型与 thi
 	expect(sessionText).toContain('"type":"thinking_level_change"');
 });
 
-test("v6 状态由所有者丢弃并产生脱管告知", async () => {
+test("v6 状态由所有者丢弃并告知旧进程不纳入新池", async () => {
 	const harness = await setup(false);
 	const state = await loadFirecodeModule("master/state.js") as any;
 	const path = state.masterStatePath(harness.sessionId);
@@ -392,14 +438,14 @@ test("v6 状态由所有者丢弃并产生脱管告知", async () => {
 	try {
 		await harness.command("");
 		expect(harness.notices.join("\n")).toContain("旧版 v6 子代理池已丢弃");
-		expect(harness.notices.join("\n")).toContain("已脱管");
+		expect(harness.notices.join("\n")).toContain("旧运行时进程不会纳入新池");
 		expect(await readdir(dirname(path))).not.toContain(path.split("/").pop());
 	} finally {
 		await rm(path, { force: true });
 	}
 });
 
-test("Worker checkout 守卫绑定子会话身份，不受进程级环境标记后续变化影响", async () => {
+test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
 	await mkdir(cwd);
@@ -412,28 +458,37 @@ test("Worker checkout 守卫绑定子会话身份，不受进程级环境标记�
 	}) as any;
 	const register = () => {
 		const handlers = new Map<string, any[]>();
+		const commands = new Map<string, any>();
+		const tools = new Map<string, any>();
 		module.registerMaster({
-			registerMessageRenderer() {}, registerCommand() {}, registerTool() {},
+			registerMessageRenderer() {},
+			registerCommand: (name: string, command: any) => commands.set(name, command),
+			registerTool: (tool: any) => tools.set(tool.name, tool),
 			getActiveTools: () => [], setActiveTools() {},
 			on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
 			events: { on() {}, emit() {} },
 		});
-		return handlers.get("tool_call")?.[0];
+		return { handlers, commands, tools };
 	};
 
 	process.env.FIRECODE_MASTER_WORKER = "guarded";
-	const workerGuard = register();
+	const workerRegistration = register();
 	delete process.env.FIRECODE_MASTER_WORKER;
 	const ctx = { cwd };
+	expect(workerRegistration.commands.size).toBe(0);
+	expect(workerRegistration.tools.size).toBe(0);
+	expect(workerRegistration.handlers.has("session_start")).toBe(false);
+	const workerGuard = workerRegistration.handlers.get("tool_call")?.[0];
 	expect(await workerGuard({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toEqual({
 		block: true,
 		reason: "子代理只能修改当前 checkout：../outside.ts",
 	});
 	expect(await workerGuard({ toolName: "edit", input: { path: "inside.ts" } }, ctx)).toBeUndefined();
 
-	const masterGuard = register();
-	process.env.FIRECODE_MASTER_WORKER = "another-worker-is-loading";
-	expect(await masterGuard({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toBeUndefined();
+	const masterRegistration = register();
+	expect(masterRegistration.commands.has("fire-master")).toBe(true);
+	expect(masterRegistration.tools.has("subagents")).toBe(true);
+	expect(masterRegistration.handlers.get("tool_call")).toBeUndefined();
 });
 
 async function setup(activate = true, options: {
@@ -441,6 +496,7 @@ async function setup(activate = true, options: {
 	interruptResumeMs?: number;
 	review?: boolean;
 	mockReview?: boolean;
+	autoActivate?: boolean;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -489,7 +545,11 @@ async function setup(activate = true, options: {
 		configJsonc: JSON.stringify({
 			features: { master: true, review: options.review === true },
 			review: TEST_REVIEW_CONFIG,
-			master: { models: [TEST_MODEL, TEST_MODEL_2], workerExcludeExtensions: [] },
+			master: {
+				models: [TEST_MODEL, TEST_MODEL_2],
+				workerExcludeExtensions: [],
+				...(options.autoActivate === undefined ? {} : { autoActivate: options.autoActivate }),
+			},
 		}),
 	}) as any;
 	const commands = new Map<string, any>();
@@ -553,6 +613,7 @@ async function setup(activate = true, options: {
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 		},
+		guidelines: tools.get("subagents").promptGuidelines as string[],
 		execute: (params: Record<string, unknown>) => tools.get("subagents").execute("call", params, undefined, undefined, ctx),
 	};
 }
