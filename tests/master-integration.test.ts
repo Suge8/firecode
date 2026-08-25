@@ -153,6 +153,8 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(harness.messages.at(-1).message.content).toContain("已中断");
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(harness.messages.at(-1).message.content).toContain("自动续跑提醒");
+	const reminded = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	expect(reminded.disposition).toBe("reminded");
 
 	faux.setResponses([(context: any) => {
 		resumedPrompt = context.messages.filter((message: any) => message.role === "user")
@@ -167,6 +169,30 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(resumedPrompt).toContain("git status");
 	const listed = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
 	expect(listed.interruptedAt).toBeUndefined();
+});
+
+test("失败的 interrupt 不会把本回合或下一回合误记为中断", async () => {
+	const harness = await setup();
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	faux.setResponses([async () => {
+		await gate;
+		return fauxAssistantMessage("自然完成");
+	}]);
+	const started = await harness.execute({
+		action: "start", worker: "abort-race", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	session.abort = async () => { throw new Error("abort failed"); };
+	await expect(harness.execute({ action: "interrupt", worker: "abort-race" })).rejects.toThrow("abort failed");
+
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	release();
+	await delivered;
+	expect(harness.messages.at(-1).message.content).toContain("自然完成");
+	expect(harness.messages.at(-1).message.content).not.toContain("已中断");
+	const worker = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	expect(worker.interruptedAt).toBeUndefined();
 });
 
 test("同一空闲 Worker 的并发 send 只接收一票，另一票按在飞拒绝", async () => {
@@ -197,6 +223,33 @@ test("同一空闲 Worker 的并发 send 只接收一票，另一票按在飞拒
 	release();
 	await delivered;
 	expect(harness.messages.at(-1).message.content).toContain("唯一结果");
+});
+
+test("kill 赢过正在准备的 send/review，异步写回不会复活已删档案", async () => {
+	const harness = await setup(true, { review: true, mockReview: true });
+	faux.setResponses([fauxAssistantMessage("初始完成"), fauxAssistantMessage("待审完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "kill-send", prompt: "初始化", model: "test/worker", thinking: "medium",
+	});
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "kill-review", prompt: "初始化", model: "test/worker", thinking: "medium", review: true,
+	});
+	await delivered;
+
+	faux.setResponses([fauxAssistantMessage("不应执行")]);
+	const sending = harness.execute({
+		action: "send", worker: "kill-send", prompt: "新任务", model: "test/worker-2",
+	});
+	await harness.execute({ action: "kill", worker: "kill-send" });
+	await expect(sending).rejects.toThrow("已被 kill");
+	const reviewing = harness.execute({ action: "review", worker: "kill-review" });
+	await harness.execute({ action: "kill", worker: "kill-review" });
+	await expect(reviewing).rejects.toThrow("已被 kill");
+	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect(harness.messages).toHaveLength(2);
 });
 
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
@@ -260,6 +313,26 @@ test("审查义务只能经显式 review 履行，未履行拒绝 ack，kill 随
 	await harness.execute({ action: "kill", worker: "discard-obligation" });
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers)
 		.not.toContainEqual(expect.objectContaining({ name: "discard-obligation" }));
+});
+
+test("review 命令未启动时明确失败结算并保留审查义务", async () => {
+	const harness = await setup(true, { review: true });
+	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("未启动审查")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "review-missing", prompt: "实现", model: "test/worker", thinking: "medium", review: true,
+	});
+	await delivered;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "review-missing" });
+	await Promise.race([
+		delivered,
+		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("审查失败未回传")), 100)),
+	]);
+	expect(harness.messages.at(-1).message.content).toContain("审查未启动");
+	const worker = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
 });
 
 test("crash 恢复只重投 pending 减 ack 的差集", async () => {

@@ -63,7 +63,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
 	const reviewGate = reviewGateError();
 	const pool = dependencies.pool ?? new InProcessSessionPool();
-	const interruptedRuns = new Set<string>();
+	const activeRuns = new Map<string, symbol>();
+	const interruptedRuns = new Map<string, symbol>();
 	const startingNames = new Set<string>();
 	const transitioningNames = new Set<string>();
 	const interruptTimers = new Map<string, NodeJS.Timeout>();
@@ -97,6 +98,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		pool.disposeAll();
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
+		activeRuns.clear();
+		interruptedRuns.clear();
 		if (active?.flushTimer) clearTimeout(active.flushTimer);
 		active?.ctx.ui.setStatus("master", undefined);
 		setTools(false);
@@ -126,7 +129,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		for (const event of batch) {
 			if (!event.worker) continue;
 			const worker = active.store.state.workers.find((candidate) => candidate.name === event.worker);
-			if (worker?.status === "idle")
+			if (worker?.status === "idle" && worker.disposition !== "reminded")
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
 		}
 	};
@@ -164,10 +167,17 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			interruptTimers.delete(worker.name);
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
+			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
 			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name);
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
+	};
+	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
+		const current = active.store.state.workers.find((worker) => worker.name === identity.name);
+		if (current?.sessionPath === identity.sessionPath) return current;
+		active.pool.dispose(identity.sessionPath);
+		throw new Error(`${identity.name} 已被 kill，取消本次动作`);
 	};
 	const openWorkerSession = async (worker: WorkerRef) => {
 		const hot = pool.getSession(worker.sessionPath);
@@ -186,8 +196,13 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		return spawned.session;
 	};
 	const runWorker = (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
+		const run = Symbol(worker.name);
+		activeRuns.set(worker.sessionPath, run);
 		const settled = (error?: unknown) => {
-			if (interruptedRuns.delete(worker.sessionPath)) {
+			if (activeRuns.get(worker.sessionPath) !== run) return;
+			activeRuns.delete(worker.sessionPath);
+			if (interruptedRuns.get(worker.sessionPath) === run) {
+				interruptedRuns.delete(worker.sessionPath);
 				const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 				if (!current || current.sessionPath !== worker.sessionPath) return;
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
@@ -257,6 +272,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			if (params.action === "kill") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 				clearInterruptTimer(target.name);
+				activeRuns.delete(target.sessionPath);
 				interruptedRuns.delete(target.sessionPath);
 				active.pool.dispose(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
@@ -285,8 +301,9 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				try {
 					const session = await openWorkerSession(target);
 					await session.waitForIdle();
+					const current = currentWorker(active, target);
 					const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-					const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = target;
+					const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = current;
 					clearInterruptTimer(target.name);
 					const reviewing: WorkerRef = { ...rest, status: "reviewing" };
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
@@ -320,9 +337,16 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				if (target.status !== "working") throw new Error(`${target.name} 当前是 ${target.status}，不能 interrupt`);
 				const session = active.pool.getSession(target.sessionPath);
 				if (!session) throw new Error(`${target.name} 的进程内会话已释放，无法 interrupt`);
-				interruptedRuns.add(target.sessionPath);
-				await session.abort();
-				return toolResult({ interrupted: true });
+				const run = activeRuns.get(target.sessionPath);
+				if (!run) throw new Error(`${target.name} 当前没有可中断的回合`);
+				interruptedRuns.set(target.sessionPath, run);
+				try {
+					await session.abort();
+					return toolResult({ interrupted: true });
+				} catch (error) {
+					if (interruptedRuns.get(target.sessionPath) === run) interruptedRuns.delete(target.sessionPath);
+					throw error;
+				}
 			}
 			if (params.action === "send") {
 				if (params.review === true && reviewGate) throw new Error(reviewGate);
@@ -354,7 +378,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 						session.setThinkingLevel(requestedThinking as WorkerRef["thinking"]);
 						thinking = requestedThinking as WorkerRef["thinking"];
 					}
-					const { disposition: _disposition, interruptedAt, ...rest } = target;
+					const current = currentWorker(active, target);
+					const { disposition: _disposition, interruptedAt, ...rest } = current;
 					const activeWorker: WorkerRef = {
 						...rest,
 						model,
@@ -523,14 +548,22 @@ function monitorReview(
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "entry_appended") finish(readReviewOutcome(sessionPath));
 		});
+		const fail = (error: unknown) => {
+			if (settled) return;
+			settled = true;
+			unsubscribe();
+			reject(error);
+		};
 		void session.prompt("/fire-review").then(
-			() => finish(readReviewOutcome(sessionPath)),
-			(error) => {
-				if (settled) return;
-				settled = true;
-				unsubscribe();
-				reject(error);
+			() => {
+				const outcome = readReviewOutcome(sessionPath);
+				const runId = reviewRunId(outcome);
+				if (outcome.status === "error") return finish(outcome);
+				if (!runId || runId === previousRunId)
+					return fail(new Error("fire-review 审查未启动"));
+				finish(outcome);
 			},
+			fail,
 		);
 	});
 }
