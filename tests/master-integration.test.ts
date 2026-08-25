@@ -11,7 +11,7 @@ import {
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
 
-const { fauxAssistantMessage, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const TEST_MODEL = { model: "test/worker", thinking: "medium", use: "测试" };
 const TEST_MODEL_2 = { model: "test/worker-2", thinking: "high", use: "切换测试" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -66,6 +66,66 @@ test("subagents guidelines 注入哨兵、收割与计划维护纪律", async ()
 	expect(guidelines).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
 });
 
+test("list 展开投影 working 的当前工具，但模型正文不含动作", async () => {
+	const harness = await setup();
+	let releaseResponse!: () => void;
+	const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+	let releaseTool!: () => void;
+	const toolGate = new Promise<void>((resolve) => { releaseTool = resolve; });
+	faux.setResponses([
+		async () => {
+			await responseGate;
+			return fauxAssistantMessage(fauxToolCall("read", { path: "AGENTS.md" }), { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("完成"),
+	]);
+	const started = await harness.execute({
+		action: "start", worker: "observed", prompt: "读取约束", model: "test/worker", thinking: "medium",
+	});
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	const toolStarted = new Promise<void>((resolve) => session.subscribe(async (event: any) => {
+		if (event.type !== "tool_execution_start") return;
+		resolve();
+		await toolGate;
+	}));
+	const toolEventBefore = Date.now();
+	releaseResponse();
+	await toolStarted;
+	const toolEventAfter = Date.now();
+
+	const listed = await harness.execute({ action: "list" });
+	expect(JSON.parse(listed.content[0].text)).toEqual({ workers: [expect.objectContaining({ name: "observed", status: "working" })] });
+	expect(listed.content[0].text).not.toContain("currentAction");
+	const workingAction = (listed.details as any).workers[0].currentAction;
+	expect(workingAction).toMatchObject({ kind: "tool", tool: "read" });
+	expect(typeof workingAction.startedAt).toBe("number");
+	expect(workingAction.startedAt >= toolEventBefore).toBe(true);
+	expect(workingAction.startedAt <= toolEventAfter).toBe(true);
+	const collapsed = harness.renderListLine(listed);
+	expect(collapsed).toHaveLength(1);
+	expect(collapsed[0]).toContain("池 1");
+	(listed.details as any).workers[0].currentAction.startedAt = Date.now() - 300;
+	const expanded = harness.renderResult(listed, true).join("\n");
+	expect(expanded).toContain("observed");
+	expect(expanded).toMatch(/read · 已 0\.[34]s/u);
+
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const settledBefore = Date.now();
+	releaseTool();
+	await delivered;
+	const settledAfter = Date.now();
+	const idle = await harness.execute({ action: "list" });
+	const idleAction = (idle.details as any).workers[0].currentAction;
+	expect(idleAction).toMatchObject({ kind: "idle" });
+	expect(typeof idleAction.since).toBe("number");
+	expect(idleAction.since >= settledBefore).toBe(true);
+	expect(idleAction.since <= settledAfter).toBe(true);
+	expect((idle.details as any).workers[0].currentAction).not.toHaveProperty("tool");
+	(idle.details as any).workers[0].currentAction.since = Date.now() - 65_000;
+	const idleLine = harness.renderResult(idle, true).join("\n");
+	expect(idleLine).toContain("落定 1m5s前");
+});
+
 test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文件隐藏在嵌套目录", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
@@ -84,7 +144,10 @@ test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文
 	await settled;
 
 	const listed = await harness.execute({ action: "list" });
-	expect((listed.details as any).workers).toEqual([{ ...worker, status: "idle", disposition: "pending" }]);
+	expect(JSON.parse(listed.content[0].text).workers).toEqual([{ ...worker, status: "idle", disposition: "pending" }]);
+	expect((listed.details as any).workers).toEqual([
+		{ ...worker, status: "idle", disposition: "pending", currentAction: expect.objectContaining({ kind: "idle" }) },
+	]);
 	expect(harness.messages[0]).toMatchObject({
 		message: { content: "子代理 trace 已停下\n回复：\n确定性完成" },
 		options: { deliverAs: "steer", triggerTurn: false },
@@ -332,6 +395,26 @@ test("fire-review 不可用时拒绝 start/send 挂审查义务", async () => {
 		.rejects.toThrow("fire-review 已关闭");
 });
 
+test("list 展开投影 reviewing 的轮次与审查者进度", async () => {
+	const harness = await setup(true, { review: true, mockReview: true, reviewProgressOnly: true });
+	faux.setResponses([fauxAssistantMessage("实现完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "under-review", prompt: "实现", model: "test/worker", thinking: "medium", review: true,
+	});
+	await delivered;
+	await harness.execute({ action: "review", worker: "under-review" });
+
+	const listed = await harness.execute({ action: "list" });
+	expect(listed.content[0].text).not.toContain("currentAction");
+	expect((listed.details as any).workers[0].currentAction).toEqual({
+		kind: "review", round: 1, settled: 0, total: 1,
+	});
+	const expanded = harness.renderResult(listed, true).join("\n");
+	expect(expanded).toContain("第 1 轮");
+	expect(expanded).toContain("审查者 0/1");
+});
+
 test("审查义务只能经显式 review 履行，未履行拒绝 ack，kill 随票删除", async () => {
 	const harness = await setup(true, { review: true, mockReview: true });
 	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("待删除")]);
@@ -496,6 +579,7 @@ async function setup(activate = true, options: {
 	interruptResumeMs?: number;
 	review?: boolean;
 	mockReview?: boolean;
+	reviewProgressOnly?: boolean;
 	autoActivate?: boolean;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
@@ -506,7 +590,7 @@ async function setup(activate = true, options: {
 	if (options.mockReview) {
 		const extensions = join(agentDir, "extensions");
 		await mkdir(extensions);
-		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension());
+		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension(options.reviewProgressOnly === true));
 	}
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -589,7 +673,11 @@ async function setup(activate = true, options: {
 		ui: {
 			notify: (message: string) => notices.push(message),
 			setStatus() {},
-			theme: { fg: (_color: string, text: string) => text },
+			theme: {
+				fg: (_color: string, text: string) => text,
+				bg: (_color: string, text: string) => text,
+				bold: (text: string) => text,
+			},
 		},
 	};
 	module.registerMaster(pi, {
@@ -614,11 +702,22 @@ async function setup(activate = true, options: {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 		},
 		guidelines: tools.get("subagents").promptGuidelines as string[],
+		renderResult: (result: any, expanded: boolean) => tools.get("subagents").renderResult(
+			result,
+			{ expanded },
+			ctx.ui.theme,
+			{ state: {}, cwd, toolCallId: "list", isPartial: false, isError: false, expanded },
+		).render(120),
+		renderListLine: (result: any) => {
+			const context = { state: {}, cwd, toolCallId: "list", isPartial: false, isError: false, expanded: false };
+			tools.get("subagents").renderResult(result, { expanded: false }, ctx.ui.theme, context);
+			return tools.get("subagents").renderCall({ action: "list" }, ctx.ui.theme, context).render(120);
+		},
 		execute: (params: Record<string, unknown>) => tools.get("subagents").execute("call", params, undefined, undefined, ctx),
 	};
 }
 
-function mockReviewExtension(): string {
+function mockReviewExtension(progressOnly = false): string {
 	const base = {
 		version: 5, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
 		consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
@@ -639,7 +738,7 @@ function mockReviewExtension(): string {
 			description: "mock review",
 			handler: () => {
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
-				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});
+				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});`}
 			},
 		});
 	}`;

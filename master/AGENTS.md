@@ -21,7 +21,7 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 - `review`：只对 idle Worker 显式发起 fire-review。
 - `tail`：读取最近外部输入后的预算式轨迹快照，不改变状态。
 - `ack`：消除待发落标记；审查义务未履行时拒绝。
-- `list`：返回池快照；折叠工具行只显示名称与三态。
+- `list`：模型结果只返回池快照；折叠工具行显示池计数，展开后每个 Worker 一行投影当前工具与耗时、审查轮次进度或落定相对时间。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
 
 同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回。
@@ -38,4 +38,4 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 
 Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout；bash 仍是可信能力，最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
-Master 只跨模块读取 `review/outcome.ts`，bark 只读取 v7 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
+Master 只跨模块读取 `review/outcome.ts`，并订阅 Worker 会话里的 review checkpoint 事件投影审查进度；bark 只读取 v7 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
