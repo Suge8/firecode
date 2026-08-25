@@ -169,6 +169,36 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(listed.interruptedAt).toBeUndefined();
 });
 
+test("同一空闲 Worker 的并发 send 只接收一票，另一票按在飞拒绝", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("初始完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "single-flight", prompt: "初始化", model: "test/worker", thinking: "medium",
+	});
+	await delivered;
+
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	faux.setResponses([async () => {
+		await gate;
+		return fauxAssistantMessage("唯一结果");
+	}]);
+	const sends = await Promise.allSettled([
+		harness.execute({ action: "send", worker: "single-flight", prompt: "第一票" }),
+		harness.execute({ action: "send", worker: "single-flight", prompt: "第二票" }),
+	]);
+	expect(sends.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+	const rejected = sends.find((result) => result.status === "rejected") as PromiseRejectedResult;
+	expect(String(rejected.reason)).toContain("急件先 interrupt 再 send");
+	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0].status).toBe("working");
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	release();
+	await delivered;
+	expect(harness.messages.at(-1).message.content).toContain("唯一结果");
+});
+
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
 	const harness = await setup();
 	let release!: () => void;

@@ -65,6 +65,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	const pool = dependencies.pool ?? new InProcessSessionPool();
 	const interruptedRuns = new Set<string>();
 	const startingNames = new Set<string>();
+	const transitioningNames = new Set<string>();
 	const interruptTimers = new Map<string, NodeJS.Timeout>();
 	registerMasterEventRenderer(pi);
 
@@ -278,35 +279,41 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			if (params.action === "review") {
 				if (reviewGate) throw new Error(reviewGate);
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-				if (target.status !== "idle") throw new Error(`${target.name} 正在 ${target.status}，不能 review`);
-				const session = await openWorkerSession(target);
-				await session.waitForIdle();
-				const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-				const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = target;
-				clearInterruptTimer(target.name);
-				const reviewing: WorkerRef = { ...rest, status: "reviewing" };
-				active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
-				void monitorReview(session, target.sessionPath, previousRunId).then(
-					(outcome) => {
-						const current = active.store.state.workers.find((worker) => worker.name === target.name);
-						if (!current || current.sessionPath !== target.sessionPath || current.status !== "reviewing") return;
-						const { reviewNeeded: _needed, ...fulfilled } = current;
-						const worker = outcome.status === "passed" || outcome.status === "stopped"
-							? fulfilled
-							: current;
-						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
-						active.pool.markIdle(target.sessionPath);
-						enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
-					},
-					(error) => {
-						const current = active.store.state.workers.find((worker) => worker.name === target.name);
-						if (!current || current.status !== "reviewing") return;
-						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
-						active.pool.markIdle(target.sessionPath);
-						enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
-					},
-				);
-				return toolResult({ reviewing: true });
+				if (target.status !== "idle" || transitioningNames.has(target.name))
+					throw new Error(`${target.name} 正在处理其他动作，不能 review`);
+				transitioningNames.add(target.name);
+				try {
+					const session = await openWorkerSession(target);
+					await session.waitForIdle();
+					const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
+					const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = target;
+					clearInterruptTimer(target.name);
+					const reviewing: WorkerRef = { ...rest, status: "reviewing" };
+					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
+					void monitorReview(session, target.sessionPath, previousRunId).then(
+						(outcome) => {
+							const current = active.store.state.workers.find((worker) => worker.name === target.name);
+							if (!current || current.sessionPath !== target.sessionPath || current.status !== "reviewing") return;
+							const { reviewNeeded: _needed, ...fulfilled } = current;
+							const worker = outcome.status === "passed" || outcome.status === "stopped"
+								? fulfilled
+								: current;
+							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
+							active.pool.markIdle(target.sessionPath);
+							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
+						},
+						(error) => {
+							const current = active.store.state.workers.find((worker) => worker.name === target.name);
+							if (!current || current.status !== "reviewing") return;
+							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
+							active.pool.markIdle(target.sessionPath);
+							enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
+						},
+					);
+					return toolResult({ reviewing: true });
+				} finally {
+					transitioningNames.delete(target.name);
+				}
 			}
 			if (params.action === "interrupt") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
@@ -320,44 +327,49 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			if (params.action === "send") {
 				if (params.review === true && reviewGate) throw new Error(reviewGate);
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-				if (target.status !== "idle")
-					throw new Error(`${target.name} 正在 ${target.status}；急件先 interrupt 再 send`);
+				if (target.status !== "idle" || transitioningNames.has(target.name))
+					throw new Error(`${target.name} 正在处理其他动作；急件先 interrupt 再 send`);
 				const requestedModel = optionalString(params.model);
 				if (requestedModel && !roster.some((entry) => entry.model === requestedModel))
 					throw new Error(`model 不在选型表：${requestedModel}`);
 				const requestedThinking = optionalString(params.thinking);
 				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
 					throw new Error(`thinking 值无效：${requestedThinking}`);
-				const nextModel = requestedModel
-					? await (dependencies.resolveModel ?? resolveConfiguredModel)(requestedModel)
-					: undefined;
-				const session = await openWorkerSession(target);
-				await session.waitForIdle();
-				let model = target.model;
-				let thinking = target.thinking;
-				if (requestedModel && nextModel) {
-					await session.setModel(nextModel);
-					model = requestedModel;
-				}
-				if (requestedThinking) {
-					session.setThinkingLevel(requestedThinking as WorkerRef["thinking"]);
-					thinking = requestedThinking as WorkerRef["thinking"];
-				}
 				const prompt = requiredString(params.prompt, "prompt");
 				validateDelegationText(prompt);
-				const { disposition: _disposition, interruptedAt, ...rest } = target;
-				const activeWorker: WorkerRef = {
-					...rest,
-					model,
-					thinking,
-					status: "working",
-					...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
-				};
-				clearInterruptTimer(target.name);
-				active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
-				const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
-				runWorker(active, activeWorker, session, text);
-				return toolResult({ sent: true });
+				transitioningNames.add(target.name);
+				try {
+					const nextModel = requestedModel
+						? await (dependencies.resolveModel ?? resolveConfiguredModel)(requestedModel)
+						: undefined;
+					const session = await openWorkerSession(target);
+					await session.waitForIdle();
+					let model = target.model;
+					let thinking = target.thinking;
+					if (requestedModel && nextModel) {
+						await session.setModel(nextModel);
+						model = requestedModel;
+					}
+					if (requestedThinking) {
+						session.setThinkingLevel(requestedThinking as WorkerRef["thinking"]);
+						thinking = requestedThinking as WorkerRef["thinking"];
+					}
+					const { disposition: _disposition, interruptedAt, ...rest } = target;
+					const activeWorker: WorkerRef = {
+						...rest,
+						model,
+						thinking,
+						status: "working",
+						...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
+					};
+					clearInterruptTimer(target.name);
+					active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
+					const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
+					runWorker(active, activeWorker, session, text);
+					return toolResult({ sent: true });
+				} finally {
+					transitioningNames.delete(target.name);
+				}
 			}
 			if (params.action !== "start") throw new Error(`未知 subagents action：${String(params.action)}`);
 			if (params.review === true && reviewGate) throw new Error(reviewGate);
