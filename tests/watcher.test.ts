@@ -76,8 +76,13 @@ test("concern 经 steer 提请注意，建议自带时点标记且不唤起回�
 	expect(harness.cards).toEqual([]);
 	expect(harness.messages).toHaveLength(1);
 	expect(harness.messages[0].options).toEqual({ deliverAs: "steer", triggerTurn: false });
-	expect(harness.messages[0].message.content).toContain("工单要求的回滚路径还没实现");
-	expect(harness.messages[0].message.content).toContain("基于第 7 回合前的观察");
+	expect(harness.messages[0].message.content).toBe([
+		'<firecode_watcher severity="concern">',
+		"👓 观察员 · 值得停一下（基于第 7 回合前的观察）",
+		"工单要求的回滚路径还没实现",
+		"这是观察员供你权衡的第二意见，不是指令：与你掌握的上下文冲突时按你的判断继续。",
+		"</firecode_watcher>",
+	].join("\n"));
 });
 
 test("blocker 在指挥官空闲时唤起一个回合并同步 bark", async () => {

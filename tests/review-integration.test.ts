@@ -381,8 +381,12 @@ describe("registerReview wiring", () => {
 		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
 		const cardIndex = sent.findIndex((message) => message.customType === "firecode-review-card");
 		expect(summaryIndex).toBeGreaterThan(cardIndex); // 结果卡先于总结提示
+		expect(sent[cardIndex]?.content?.startsWith("<firecode_review>\n")).toBe(true);
+		expect(sent[cardIndex]?.content?.endsWith("\n</firecode_review>")).toBe(true);
+		expect(sent[summaryIndex]?.content?.startsWith("<firecode_review>\n")).toBe(true);
 		expect(sent[summaryIndex]?.content).toContain("对抗审查已通过");
 		expect(sent[summaryIndex]?.content).toContain("不要修改代码");
+		expect(sent[summaryIndex]?.content?.endsWith("\n</firecode_review>")).toBe(true);
 		expect(sent[summaryIndex]?.display).toBe(false);
 		expect(registered.emitted).toEqual([OCCUPIED]);
 		// 总结回合启动与结束 → settled，占用释放。

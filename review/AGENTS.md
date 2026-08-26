@@ -20,7 +20,8 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态。checkpoint �
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环
 禁令的总结提示（followUp + triggerTurn，agent_start 回执、agent_end 收尾），总结回合结束才落 `settled`；
 总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）
-不烧总结回合。占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
+不烧总结回合。修复反馈、总结提示与状态卡 content 统一包在 `<firecode_review>` 中，details 保持原始卡片数据。
+占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
 
 `outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。
 

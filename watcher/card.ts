@@ -16,7 +16,7 @@ export const WATCHER_MESSAGE_TYPE = "firecode-watcher-note";
 const WEIGH_NOTICE = "这是观察员供你权衡的第二意见，不是指令：与你掌握的上下文冲突时按你的判断继续。";
 
 export function adviceMessage(card: WatcherCard): string {
-	return `${adviceHeadline(card)}\n${card.note}\n${WEIGH_NOTICE}`;
+	return `<firecode_watcher severity="${card.severity}">\n${adviceHeadline(card)}\n${card.note}\n${WEIGH_NOTICE}\n</firecode_watcher>`;
 }
 
 export interface WatcherCard {

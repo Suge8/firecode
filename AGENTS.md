@@ -17,7 +17,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `tools/` | 接管默认 4 工具（read/bash/edit/write）的渲染，含连续行轨道；不包装 grep/find/ls——原版 pi 注册即激活，包装即强制打开 | |
 | `session/` | 预设、`/rename`、`/tokens`、Bark 通知、herdr 身份投影、工作火焰 | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 | [review/AGENTS.md](review/AGENTS.md) |
-| `master/` | `/fire-master`：进程内 Worker 池、八动作、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
+| `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与 nit/concern/blocker 三档投递 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
