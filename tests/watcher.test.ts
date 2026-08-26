@@ -41,12 +41,14 @@ test("观察员卡片收起只显示正文首行，展开显示完整建议", as
 	const card = { severity: "concern", note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
 	const theme = { fg: (_color: string, text: string) => text };
 
-	const collapsed = render({ data: card }, { expanded: false }, theme).render(24).join("\n");
+	const collapsedLines = render({ data: card }, { expanded: false }, theme).render(60);
+	expect(collapsedLines.length).toBe(1);
+	const collapsed = collapsedLines.join("\n");
 	expect(collapsed).toContain("第一行建议");
 	expect(collapsed).not.toContain("第二行");
-	expect(collapsed.split("\n").every((line: string) => visibleWidth(line) <= 24)).toBeTrue();
+	expect(collapsedLines.every((line: string) => visibleWidth(line) <= 60)).toBeTrue();
 
-	const expanded = render({ data: card }, { expanded: true }, theme).render(24).join("\n");
+	const expanded = render({ data: card }, { expanded: true }, theme).render(60).join("\n");
 	expect(expanded.replaceAll("\n", "")).toContain("第一行建议很长，需要按宽截断");
 	expect(expanded.replaceAll("\n", "")).toContain("第二行必须只在展开时出现");
 });

@@ -526,7 +526,9 @@ export function registerMaster(
 			}
 			if (params.action !== "start") throw new Error(`未知 subagents action：${String(params.action)}`);
 			if (params.review === true && reviewGate) throw new Error(reviewGate);
-			const name = requiredString(params.worker, "worker");
+			if (typeof params.worker !== "string" || !params.worker.trim())
+				throw new Error("start 需要 worker：给子代理起个简短任务名（如 fix-auth、repo-scan）");
+			const name = params.worker.trim();
 			validateWorkerName(name);
 			if (active.store.state.workers.some((worker) => worker.name === name) || startingNames.has(name))
 				throw new Error(`子代理已存在：${name}`);
@@ -765,6 +767,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
 		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
 		"投递纪律：子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节。",
+		'调用样板：start {"worker":"fix-auth","model":"provider/model","thinking":"medium","prompt":"自包含工作说明"}。',
 	];
 }
 

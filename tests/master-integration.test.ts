@@ -76,8 +76,16 @@ test("自定义系统提示仍注入选型表与四项调度纪律", async () =>
 	expect(systemPrompt).toContain("实现票保留待收口");
 	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
 	expect(systemPrompt).toContain("子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节");
+	expect(systemPrompt).toContain('调用样板：start {"worker":"fix-auth"');
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
+});
+
+test("start 缺 worker 时报教学错误", async () => {
+	const harness = await setup();
+	await expect(harness.execute({
+		action: "start", prompt: "执行", model: "test/worker", thinking: "medium",
+	})).rejects.toThrow("start 需要 worker：给子代理起个简短任务名");
 });
 
 test("模型选择拒绝错误回带完整选型表", async () => {
