@@ -11,6 +11,7 @@ import {
 	fitMetadataLine,
 	fitStatusLine,
 	reviewStatus,
+	statusBadges,
 	latestCacheHitPercent,
 	renderCache,
 	renderContext,
@@ -98,7 +99,7 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 					);
 					return [
 						alignRight(
-							fitMetadataLine(location, title, width, separator, statuses.get("master") ?? ""),
+							fitMetadataLine(location, title, width, separator, statusBadges(statuses, separator)),
 							review,
 							width,
 						),

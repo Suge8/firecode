@@ -8,9 +8,11 @@ import {
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
+	PI_TUI_URL,
 } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth: (text: string) => number };
 const WATCHER_CONFIG = { model: "test/watcher", thinking: "low" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -25,6 +27,28 @@ afterEach(async () => {
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
 	await cleanupFirecodeModules();
+});
+
+test("观察员卡片收起只显示正文首行，展开显示完整建议", async () => {
+	const { registerWatcherCardRenderer, WATCHER_CARD_TYPE } = await loadFirecodeModule("watcher/card.js") as any;
+	let render: any;
+	registerWatcherCardRenderer({
+		registerEntryRenderer: (type: string, renderer: any) => {
+			if (type === WATCHER_CARD_TYPE) render = renderer;
+		},
+		registerMessageRenderer() {},
+	});
+	const card = { severity: "concern", note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
+	const theme = { fg: (_color: string, text: string) => text };
+
+	const collapsed = render({ data: card }, { expanded: false }, theme).render(24).join("\n");
+	expect(collapsed).toContain("第一行建议");
+	expect(collapsed).not.toContain("第二行");
+	expect(collapsed.split("\n").every((line: string) => visibleWidth(line) <= 24)).toBeTrue();
+
+	const expanded = render({ data: card }, { expanded: true }, theme).render(24).join("\n");
+	expect(expanded.replaceAll("\n", "")).toContain("第一行建议很长，需要按宽截断");
+	expect(expanded.replaceAll("\n", "")).toContain("第二行必须只在展开时出现");
 });
 
 test("nit 建议只出事件卡，不进入模型上下文", async () => {
@@ -158,20 +182,26 @@ test("一次评估只接受一条 advise，多余的当场拒绝", async () => {
 	expect(harness.cards).toEqual([{ severity: "nit", note: "第一条", turnIndex: 5 }]);
 });
 
-test("/fire-watch off 后零调用，重新 on 恢复观察", async () => {
+test("裸 /fire-watch 来回翻转当前会话并拒绝旧参数", async () => {
 	const harness = await setup();
 	advise("nit", "重新开启后的建议");
-	await harness.command("off");
+	expect(harness.statuses.get("watcher")).toBe("👁 watcher");
+	await harness.command("");
+	expect(harness.statuses.has("watcher")).toBeFalse();
 	await harness.turnEnd(1, "关闭期间的回合");
 	await Bun.sleep(20);
 	expect(faux.getPendingResponseCount()).toBe(2);
 	expect(harness.cards).toEqual([]);
 
 	const delivered = harness.next();
-	await harness.command("on");
+	await harness.command("");
+	expect(harness.statuses.get("watcher")).toBe("👁 watcher");
 	await harness.turnEnd(2, "重新开启后的回合");
 	await delivered;
 	expect(harness.cards).toEqual([{ severity: "nit", note: "重新开启后的建议", turnIndex: 2 }]);
+
+	await harness.command("on");
+	expect(harness.notices.at(-1)).toContain("不接受参数");
 });
 
 test("watcher 节缺失时拒绝启动并说明原因，不拿默认模型代替", async () => {
@@ -180,7 +210,7 @@ test("watcher 节缺失时拒绝启动并说明原因，不拿默认模型代替
 	await Bun.sleep(20);
 	expect(faux.getPendingResponseCount()).toBe(0);
 
-	await harness.command("on");
+	await harness.command("");
 	expect(harness.notices.join("\n")).toContain("watcher.model 必须显式配置");
 });
 
@@ -235,7 +265,7 @@ test("features.watcher 写成非布尔值时拒绝启动，不静默启用", asy
 	expect(faux.getPendingResponseCount()).toBe(2);
 	expect(harness.cards).toEqual([]);
 
-	await harness.command("on");
+	await harness.command("");
 	expect(harness.notices.join("\n")).toContain("features.watcher 必须是 true 或 false");
 });
 
@@ -360,6 +390,7 @@ async function setup(options: {
 	const messages: any[] = [];
 	const notices: string[] = [];
 	const barks: string[] = [];
+	const statuses = new Map<string, string>();
 	let waiter: (() => void) | undefined;
 	let idle = true;
 	const settle = () => waiter?.();
@@ -387,7 +418,10 @@ async function setup(options: {
 		},
 		ui: {
 			notify: (message: string) => notices.push(message),
-			setStatus() {},
+			setStatus: (key: string, value: string | undefined) => {
+				if (value === undefined) statuses.delete(key);
+				else statuses.set(key, value);
+			},
 			theme: { fg: (_color: string, text: string) => text },
 		},
 	};
@@ -405,6 +439,7 @@ async function setup(options: {
 		cards,
 		messages,
 		notices,
+		statuses,
 		registeredCommands: [...commands.keys()],
 		registeredEvents: [...handlers.keys()],
 		pi,

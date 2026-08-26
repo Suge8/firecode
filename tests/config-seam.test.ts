@@ -96,9 +96,14 @@ test("runtime config enables only its declared behavior", async () => {
 	expect(shortcuts).toEqual(["alt+r"]);
 });
 
-test("public config template is accepted by the runtime parser", async () => {
+test("公共配置模板可解析且认证相关功能安全关闭", async () => {
 	const configJsonc = await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8");
 	const { loadConfig } = await loadFirecodeModule("config.ts", { configJsonc });
+	const loaded = (loadConfig as () => { config: any; problems: string[] })();
 
-	expect((loadConfig as () => { problems: string[] })().problems).toEqual([]);
+	expect(loaded.problems).toEqual([]);
+	for (const feature of ["review", "master", "watcher", "bark"])
+		expect(loaded.config.features[feature]).toBeFalse();
+	expect(configJsonc).toContain("换成你有认证的模型");
+	expect(configJsonc).toContain("功能开关");
 });

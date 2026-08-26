@@ -40,18 +40,24 @@ export function timeMark(turnIndex: number): string {
 }
 
 export function registerWatcherCardRenderer(pi: ExtensionAPI): void {
-	pi.registerEntryRenderer<WatcherCard>(WATCHER_CARD_TYPE, (entry, _options, theme) => {
+	pi.registerEntryRenderer<WatcherCard>(WATCHER_CARD_TYPE, (entry, options, theme) => {
 		const card = entry.data;
-		return isValidCard(card) ? new AdviceLine(card, theme) : undefined;
+		return isValidCard(card) ? new AdviceLine(card, options.expanded, theme) : undefined;
 	});
-	pi.registerMessageRenderer<WatcherCard>(WATCHER_MESSAGE_TYPE, (message, _options, theme) =>
-		isValidCard(message.details) ? new AdviceLine(message.details, theme) : new Text(String(message.content), 0, 0));
+	pi.registerMessageRenderer<WatcherCard>(WATCHER_MESSAGE_TYPE, (message, options, theme) =>
+		isValidCard(message.details)
+			? new AdviceLine(message.details, options.expanded, theme)
+			: new Text(String(message.content), 0, 0));
 }
 
 class AdviceLine implements Component {
 	private readonly fallback: Component;
 
-	constructor(private readonly card: WatcherCard, private readonly theme: Theme) {
+	constructor(
+		private readonly card: WatcherCard,
+		private readonly expanded: boolean,
+		private readonly theme: Theme,
+	) {
 		this.fallback = new Text(`${adviceHeadline(card)} ${card.note}`, 0, 0);
 	}
 
@@ -59,9 +65,15 @@ class AdviceLine implements Component {
 		const columns = Math.max(1, width);
 		try {
 			const style = SEVERITY_STYLE[this.card.severity];
+			const headline = this.theme.fg(style.color, clip(oneLine(adviceHeadline(this.card)), columns));
+			if (this.expanded) {
+				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);
+				return [headline, ...body.render(columns)];
+			}
+			const firstLine = this.card.note.split(/\r?\n/u, 1)[0];
 			return [
-				this.theme.fg(style.color, clip(oneLine(adviceHeadline(this.card)), columns)),
-				this.theme.fg("dim", clip(oneLine(`  ${this.card.note}（供权衡，勿盲从）`), columns)),
+				headline,
+				this.theme.fg("dim", clip(`  ${firstLine}（供权衡，勿盲从）`, columns)),
 			];
 		} catch {
 			return this.fallback.render(columns);

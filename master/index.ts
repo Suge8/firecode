@@ -315,20 +315,20 @@ export function registerMaster(
 	};
 
 	pi.registerCommand("fire-master", {
-		description: "启动指挥官模式（子代理池）：/fire-master [status|off]",
+		description: "翻转当前会话的指挥官模式；status 查看状态",
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
 				ctx.ui.notify(runtime ? statusText(runtime.store.state.workers) : "指挥官模式未启动", "info");
 				return;
 			}
-			if (input === "off") {
-				deactivate();
-				ctx.ui.notify("指挥官模式已关闭", "info");
+			if (input) {
+				ctx.ui.notify("/fire-master 只接受 status；裸命令翻转开关", "error");
 				return;
 			}
-			if (input) {
-				ctx.ui.notify("/fire-master 只接受 status 或 off；启用后直接描述需求", "error");
+			if (runtime) {
+				deactivate();
+				ctx.ui.notify("指挥官模式已关闭", "info");
 				return;
 			}
 			try {
@@ -764,6 +764,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		"哨兵纪律：CI watch、部署观察、长测试等会占住回合的等待类任务，派最便宜模型的哨兵票盯守，结果会自动送达。",
 		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
 		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
+		"投递纪律：子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节。",
 	];
 }
 
@@ -888,8 +889,10 @@ export function masterStatusLine(
 	const count = (status: WorkerStatus) => workers.filter((worker) => worker.status === status).length;
 	return `${theme.fg("dim", "👑 指挥官")}${count("working") ? theme.fg("dim", `/工作${count("working")}`) : ""}${count("reviewing") ? theme.fg("dim", `/审${count("reviewing")}`) : ""}${count("idle") ? theme.fg("dim", `/闲${count("idle")}`) : ""}`;
 }
-function statusText(workers: WorkerRef[]): string {
-	return workers.length ? workers.map((worker) => `${worker.name} ${worker.status} ${worker.model}`).join(" · ") : "没有子代理";
+export function statusText(workers: WorkerRef[]): string {
+	return workers.length
+		? workers.map((worker) => `${worker.name} ${STATUS_WORD[worker.status]} ${worker.model.split("/").pop()}`).join("\n")
+		: "没有子代理";
 }
 function compactWorker(worker: WorkerRef) {
 	return {
