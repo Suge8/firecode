@@ -32,15 +32,15 @@ afterEach(async () => {
 test("新会话默认激活 subagents", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("autoActivate false 的新会话不注入，仍可手动启动", async () => {
 	const harness = await setup(false, { autoActivate: false });
 	await harness.emit("session_start", {});
-	await expect(harness.execute({ action: "list" })).rejects.toThrow("只在 Master 中可用");
+	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 	await harness.command("");
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("status 每个子代理一行显示中文状态与模型短名", async () => {
@@ -56,11 +56,11 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
 	await harness.command("");
-	await expect(harness.execute({ action: "list" })).rejects.toThrow("只在 Master 中可用");
+	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 	await harness.command("status");
 	expect(harness.notices.at(-1)).toBe("指挥官模式未启动");
 	await harness.command("");
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 	await harness.command("off");
 	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
@@ -81,11 +81,48 @@ test("自定义系统提示仍注入选型表与四项调度纪律", async () =>
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
 });
 
-test("start 缺 worker 时报教学错误", async () => {
+test("真 SDK 在执行前拒绝缺 worker 与旧 list 动作", async () => {
 	const harness = await setup();
-	await expect(harness.execute({
-		action: "start", prompt: "执行", model: "test/worker", thinking: "medium",
-	})).rejects.toThrow("start 需要 worker：给子代理起个简短任务名");
+	const { createAgentSession, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	let executions = 0;
+	const commandTool = {
+		...harness.commandTool,
+		execute: async (...args: any[]) => {
+			executions += 1;
+			return harness.commandTool.execute(...args);
+		},
+	};
+	const { session } = await createAgentSession({
+		cwd: harness.cwd,
+		agentDir: harness.agentDir,
+		model: harness.model,
+		modelRuntime: harness.modelRuntime,
+		tools: ["subagents"],
+		customTools: [commandTool],
+		sessionManager: SessionManager.inMemory(harness.cwd),
+	});
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("subagents", {
+			action: "start", prompt: "执行", model: "test/worker", thinking: "medium",
+		}), { stopReason: "toolUse" }),
+		fauxAssistantMessage("已拒绝"),
+	]);
+	await session.prompt("调用 start，但不要传 worker");
+	let result = session.messages.find((message: any) => message.role === "toolResult");
+	expect(result?.isError).toBe(true);
+	expect(JSON.stringify(result?.content)).toContain("worker");
+	expect(executions).toBe(0);
+
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("subagents", { action: "list", worker: "pool" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("已拒绝"),
+	]);
+	await session.prompt("调用旧 list 动作");
+	result = session.messages.findLast((message: any) => message.role === "toolResult");
+	expect(result?.isError).toBe(true);
+	expect(JSON.stringify(result?.content)).toContain("action");
+	expect(executions).toBe(0);
+	session.dispose();
 });
 
 test("模型选择拒绝错误回带完整选型表", async () => {
@@ -109,16 +146,26 @@ test("模型选择拒绝错误回带完整选型表", async () => {
 	})).rejects.toThrow(roster);
 });
 
-test("subagents schema 教学八动作与切换、审查语义", async () => {
+test("subagents 是 worker 必填的七命令，池快照是独立零参查询", async () => {
 	const harness = await setup();
-	expect(harness.toolDescription).toContain("八动作");
+	expect(harness.toolDescription).toContain("七动作");
 	expect(harness.toolDescription).toContain("无 sleep/session");
+	expect(harness.commandTool.parameters.type).toBe("object");
+	expect(harness.commandTool.parameters.required).toEqual(["action", "worker"]);
+	expect(harness.commandTool.parameters.properties.action.anyOf?.map((item: any) => item.const)
+		?? harness.commandTool.parameters.properties.action.enum).not.toContain("list");
+	expect(harness.parameterDescriptions.worker).toBe("start 起简短任务名；其余动作填目标 Worker。");
+	expect(harness.parameterDescriptions.worker).not.toContain("必填");
 	for (const name of ["action", "worker", "prompt", "model", "thinking", "cwd", "review"])
 		expect(harness.parameterDescriptions[name]).not.toBeEmpty();
 	expect(harness.parameterDescriptions.model).toContain("start 必填");
 	expect(harness.parameterDescriptions.model).toContain("send");
 	expect(harness.parameterDescriptions.model).toContain("切换");
 	expect(harness.parameterDescriptions.review).toContain("显式发起 review");
+	expect(harness.listTool.description).toBe("查看子代理池快照");
+	expect(harness.listTool.parameters.required ?? []).toEqual([]);
+	expect(Object.keys(harness.listTool.parameters.properties)).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("list 展开投影 working 的当前工具，但模型正文不含动作", async () => {
@@ -148,7 +195,7 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	await toolStarted;
 	const toolEventAfter = Date.now();
 
-	const listed = await harness.execute({ action: "list" });
+	const listed = await harness.list();
 	expect(JSON.parse(listed.content[0].text)).toEqual({ workers: [expect.objectContaining({ name: "observed", status: "working" })] });
 	expect(listed.content[0].text).not.toContain("currentAction");
 	const workingAction = (listed.details as any).workers[0].currentAction;
@@ -169,7 +216,7 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	releaseTool();
 	await delivered;
 	const settledAfter = Date.now();
-	const idle = await harness.execute({ action: "list" });
+	const idle = await harness.list();
 	const idleAction = (idle.details as any).workers[0].currentAction;
 	expect(idleAction).toMatchObject({ kind: "idle" });
 	expect(typeof idleAction.since).toBe("number");
@@ -198,13 +245,13 @@ test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文
 	expect(worker.status).toBe("working");
 	await settled;
 
-	const listed = await harness.execute({ action: "list" });
+	const listed = await harness.list();
 	expect(JSON.parse(listed.content[0].text).workers).toEqual([{ ...worker, status: "idle", disposition: "pending" }]);
 	expect((listed.details as any).workers).toEqual([
 		{ ...worker, status: "idle", disposition: "pending", currentAction: expect.objectContaining({ kind: "idle" }) },
 	]);
 	expect(harness.messages[0]).toMatchObject({
-		message: { content: "子代理 trace 已停下\n回复：\n确定性完成" },
+		message: { content: "<firecode_master_event>\n子代理 trace 已停下\n回复：\n确定性完成\n</firecode_master_event>" },
 		options: { deliverAs: "steer", triggerTurn: false },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
@@ -217,7 +264,7 @@ test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文
 	expect(visible.some((session: any) => session.path === sessionPath)).toBe(false);
 
 	await harness.execute({ action: "kill", worker: "trace" });
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
@@ -229,7 +276,7 @@ test("失败落定事件使用统一分节格式并生成紧凑正文预览", as
 		action: "start", worker: "failed", prompt: "执行", model: "test/worker", thinking: "medium",
 	});
 	await delivered;
-	expect(harness.messages[0].message.content).toBe("子代理 failed 已停下\n错误：\nquota exhausted");
+	expect(harness.messages[0].message.content).toBe("<firecode_master_event>\n子代理 failed 已停下\n错误：\nquota exhausted\n</firecode_master_event>");
 	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
@@ -317,7 +364,7 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(harness.messages.at(-1).message.content).toContain("已中断");
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(harness.messages.at(-1).message.content).toContain("自动续跑提醒");
-	const reminded = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(reminded.disposition).toBe("reminded");
 
 	faux.setResponses([(context: any) => {
@@ -329,9 +376,11 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "send", worker: "interrupted", prompt: "继续" });
 	await delivered;
+	expect(resumedPrompt).toContain("<firecode_master_event>");
 	expect(resumedPrompt).toContain("上次被外部中断");
 	expect(resumedPrompt).toContain("git status");
-	const listed = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	expect(resumedPrompt).toContain("</firecode_master_event>");
+	const listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed.interruptedAt).toBeUndefined();
 });
 
@@ -355,7 +404,7 @@ test("失败的 interrupt 不会把本回合或下一回合误记为中断", asy
 	await delivered;
 	expect(harness.messages.at(-1).message.content).toContain("自然完成");
 	expect(harness.messages.at(-1).message.content).not.toContain("已中断");
-	const worker = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker.interruptedAt).toBeUndefined();
 });
 
@@ -381,7 +430,7 @@ test("同一空闲 Worker 的并发 send 只接收一票，另一票按在飞拒
 	expect(sends.filter((result) => result.status === "fulfilled")).toHaveLength(1);
 	const rejected = sends.find((result) => result.status === "rejected") as PromiseRejectedResult;
 	expect(String(rejected.reason)).toContain("急件先 interrupt 再 send");
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0].status).toBe("working");
+	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("working");
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	release();
@@ -412,7 +461,7 @@ test("kill 赢过正在准备的 send/review，异步写回不会复活已删档
 	const reviewing = harness.execute({ action: "review", worker: "kill-review" });
 	await harness.execute({ action: "kill", worker: "kill-review" });
 	await expect(reviewing).rejects.toThrow("已被 kill");
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 	expect(harness.messages).toHaveLength(2);
 });
 
@@ -460,7 +509,7 @@ test("list 展开投影 reviewing 的轮次与审查者进度", async () => {
 	await delivered;
 	await harness.execute({ action: "review", worker: "under-review" });
 
-	const listed = await harness.execute({ action: "list" });
+	const listed = await harness.list();
 	expect(listed.content[0].text).not.toContain("currentAction");
 	expect((listed.details as any).workers[0].currentAction).toEqual({
 		kind: "review", round: 1, settled: 0, total: 1,
@@ -495,7 +544,7 @@ test("审查义务只能经显式 review 履行，未履行拒绝 ack，kill 随
 	});
 	await delivered;
 	await harness.execute({ action: "kill", worker: "discard-obligation" });
-	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers)
+	expect((await harness.list().then((result) => result.details as any)).workers)
 		.not.toContainEqual(expect.objectContaining({ name: "discard-obligation" }));
 });
 
@@ -515,7 +564,7 @@ test("review 命令未启动时明确失败结算并保留审查义务", async (
 		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("审查失败未回传")), 100)),
 	]);
 	expect(harness.messages.at(-1).message.content).toContain("审查未启动");
-	const worker = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
 });
 
@@ -529,7 +578,9 @@ test("crash 恢复只重投 pending 减 ack 的差集", async () => {
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.emit("session_start", {});
 	await delivered;
-	expect(harness.messages.map((entry) => entry.message.content)).toEqual(["未确认结果"]);
+	expect(harness.messages.map((entry) => entry.message.content)).toEqual([
+		"<firecode_master_event>\n未确认结果\n</firecode_master_event>",
+	]);
 	expect(harness.appended).toEqual([["firecode-master-event-ack", { ids: ["e1"] }]]);
 });
 
@@ -552,7 +603,7 @@ test("send 对冷 Worker 透明复活、省略模型沿用、显式模型与 thi
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "send", worker: "revive", prompt: "沿用" });
 	await delivered;
-	let listed = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	let listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed).toMatchObject({ status: "idle", model: "test/worker", thinking: "medium" });
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -560,7 +611,7 @@ test("send 对冷 Worker 透明复活、省略模型沿用、显式模型与 thi
 		action: "send", worker: "revive", prompt: "切换", model: "test/worker-2", thinking: "high",
 	});
 	await delivered;
-	listed = (await harness.execute({ action: "list" }).then((result) => result.details as any)).workers[0];
+	listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed).toMatchObject({ status: "idle", model: "test/worker-2", thinking: "high" });
 	const sessionText = await Bun.file(sessionPath).text();
 	expect(sessionText).toContain('"type":"model_change"');
@@ -788,6 +839,11 @@ async function setup(activate = true, options: {
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 		},
+		agentDir,
+		model: fauxModel,
+		modelRuntime,
+		commandTool: tools.get("subagents"),
+		listTool: tools.get("subagents_list"),
 		toolDescription: tools.get("subagents").description as string,
 		parameterDescriptions: Object.fromEntries(Object.entries(tools.get("subagents").parameters.properties)
 			.map(([name, schema]: [string, any]) => [name, schema.description])) as Record<string, string>,
@@ -799,7 +855,7 @@ async function setup(activate = true, options: {
 			}
 			return event.systemPrompt;
 		},
-		renderResult: (result: any, expanded: boolean) => tools.get("subagents").renderResult(
+		renderResult: (result: any, expanded: boolean) => tools.get("subagents_list").renderResult(
 			result,
 			{ expanded },
 			ctx.ui.theme,
@@ -807,9 +863,10 @@ async function setup(activate = true, options: {
 		).render(120),
 		renderListLine: (result: any) => {
 			const context = { state: {}, cwd, toolCallId: "list", isPartial: false, isError: false, expanded: false };
-			tools.get("subagents").renderResult(result, { expanded: false }, ctx.ui.theme, context);
-			return tools.get("subagents").renderCall({ action: "list" }, ctx.ui.theme, context).render(120);
+			tools.get("subagents_list").renderResult(result, { expanded: false }, ctx.ui.theme, context);
+			return tools.get("subagents_list").renderCall({}, ctx.ui.theme, context).render(120);
 		},
+		list: () => tools.get("subagents_list").execute("list", {}, undefined, undefined, ctx),
 		execute: (params: Record<string, unknown>) => tools.get("subagents").execute("call", params, undefined, undefined, ctx),
 	};
 }

@@ -44,7 +44,7 @@ import {
 	unlockEditor,
 } from "./ui.js";
 import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
-import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
+import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt, reviewEnvelope } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
@@ -1196,7 +1196,7 @@ function sendCardNow(pi: ExtensionAPI, card: CardData): void {
 	const built = buildCard(card, controller.config.language);
 	pi.sendMessage({
 		customType: CARD_TYPE,
-		content: built.content,
+		content: reviewEnvelope(built.content),
 		display: true,
 		details: built.details,
 	});

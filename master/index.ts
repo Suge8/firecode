@@ -33,6 +33,8 @@ import {
 } from "./state.js";
 
 const MASTER_TOOL = "subagents";
+const MASTER_LIST_TOOL = "subagents_list";
+const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
@@ -109,8 +111,8 @@ export function registerMaster(
 	registerMasterEventRenderer(pi);
 
 	const setTools = (active: boolean) => {
-		const tools = pi.getActiveTools().filter((name) => name !== MASTER_TOOL);
-		pi.setActiveTools(active ? [...tools, MASTER_TOOL] : tools);
+		const tools = pi.getActiveTools().filter((name) => !MASTER_TOOLS.includes(name));
+		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
 	const renderStatus = () => {
 		if (!runtime) return;
@@ -161,7 +163,7 @@ export function registerMaster(
 		const content = batch.map((event) => event.content).join("\n\n");
 		try {
 			pi.sendMessage(
-				{ customType: MASTER_EVENT_TYPE, content, display: true, details: masterEventDetails(batch.map((event) => event.content)) },
+				{ customType: MASTER_EVENT_TYPE, content: masterEventEnvelope(content), display: true, details: masterEventDetails(batch.map((event) => event.content)) },
 				{ deliverAs: "steer", triggerTurn: !active.turnActive && active.ctx.isIdle?.() === true },
 			);
 		} catch (error) {
@@ -346,12 +348,12 @@ export function registerMaster(
 	});
 
 	pi.registerTool({
-		name: MASTER_TOOL,
+		name: MASTER_LIST_TOOL,
 		label: "子代理",
-		description: "指挥官的八动作子代理接口：start 新建，send 续派或切换模型，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，list 查看池，kill 收口移除；无 sleep/session。",
+		description: "查看子代理池快照",
 		renderShell: "self",
-		renderCall: (args, theme, ctx) =>
-			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+		renderCall: (_args, theme, ctx) =>
+			new ToolLine({ label: "子代理", value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx }),
 		renderResult: (result, options, theme, context) => {
 			const details = result.details as { workers?: unknown } | undefined;
 			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
@@ -359,11 +361,36 @@ export function registerMaster(
 				return expandedWorkerList(details.workers, theme, context);
 			return renderSubagentsResult(result, options, theme, context);
 		},
+		parameters: Type.Object({}),
+		async execute() {
+			const active = runtime;
+			if (!active) throw new Error("subagents_list 只在 Master 中可用");
+			const workers = active.store.state.workers.map(compactWorker);
+			return {
+				content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
+				details: {
+					workers: workers.map((worker) => ({
+						...worker,
+						currentAction: currentWorkerAction(active, worker),
+					})),
+				},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: MASTER_TOOL,
+		label: "子代理",
+		description: "指挥官的七动作子代理接口：start 新建，send 续派或切换模型，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，kill 收口移除；无 sleep/session。",
+		renderShell: "self",
+		renderCall: (args, theme, ctx) =>
+			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+		renderResult: renderSubagentsResult,
 		parameters: Type.Object({
-			action: StringEnum(["list", "start", "send", "interrupt", "review", "tail", "ack", "kill"] as const, {
-				description: "八动作之一；等待状态变化，不要用 sleep 轮询。",
+			action: StringEnum(["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const, {
+				description: "七动作之一；等待状态变化，不要用 sleep 轮询。",
 			}),
-			worker: Type.Optional(Type.String({ description: "start 必填简短任务名；send/interrupt/review/tail/ack/kill 必填目标 Worker。" })),
+			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
 			model: Type.Optional(Type.String({ description: "start 必填：从选型表选 provider/model；send 可传以原地切换，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "start 必填；send 可传以原地切换思考档，省略则沿用。" })),
@@ -373,18 +400,6 @@ export function registerMaster(
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
 			if (!active) throw new Error("subagents 只在 Master 中可用");
-			if (params.action === "list") {
-				const workers = active.store.state.workers.map(compactWorker);
-				return {
-					content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
-					details: {
-						workers: workers.map((worker) => ({
-							...worker,
-							currentAction: currentWorkerAction(active, worker),
-						})),
-					},
-				};
-			}
 			if (params.action === "kill") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 				clearInterruptTimer(target.name);
@@ -771,8 +786,12 @@ function masterGuidelines(models: MasterModel[]): string[] {
 	];
 }
 
+function masterEventEnvelope(content: string): string {
+	return `<firecode_master_event>\n${content}\n</firecode_master_event>`;
+}
+
 function resumeCheckPrompt(): string {
-	return "上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。";
+	return masterEventEnvelope("上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。");
 }
 
 function workerInstructions(name: string): string {

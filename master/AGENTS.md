@@ -1,6 +1,6 @@
 # master：进程内多 Agent 主控
 
-新会话按 `master.autoActivate` 注入 `subagents`；默认开启。裸 `/fire-master` 翻转当前会话，`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或选型表有误时拒绝激活，不用默认模型代替。
+新会话按 `master.autoActivate` 注入七命令工具 `subagents` 与池快照查询 `subagents_list`；默认开启。裸 `/fire-master` 翻转当前会话，`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或选型表有误时拒绝激活，不用默认模型代替。
 
 ## 运行时
 
@@ -13,7 +13,7 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 
 ## 工具契约
 
-`subagents` 只有八个动作：
+`subagents` 只有七个命令动作，结构上都要求 Worker：
 
 - `start`：显式指定选型表内的 model、thinking 和短名；可带 cwd、review。
 - `send`：只投空闲 Worker；省略 model/thinking 时沿用，显式传入时原地切换。对在飞 Worker 拒绝并提示先 `interrupt`。
@@ -21,14 +21,15 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 - `review`：只对 idle Worker 显式发起 fire-review。
 - `tail`：读取最近外部输入后的预算式轨迹快照，不改变状态。
 - `ack`：消除待发落标记；审查义务未履行时拒绝。
-- `list`：模型结果只返回池快照；折叠工具行显示池计数，展开后每个 Worker 一行投影当前工具与耗时、审查轮次进度或落定相对时间。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
+
+`subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数，展开后每个 Worker 一行投影当前工具与耗时、审查轮次进度或落定相对时间。
 
 同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回。
 
 ## 投递与义务
 
-落定事件先以 pending entry 写入主会话，再经 `sendMessage` 的 `deliverAs: "steer"` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，主回合进行中即时送达，主回合空闲时触发新 turn。事件正文与紧凑卡共用分节格式，错误、回复和审查终态都能预览正文首句。
+落定事件先以 pending entry 写入主会话，再经 `sendMessage` 的 `deliverAs: "steer"` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，主回合进行中即时送达，主回合空闲时触发新 turn。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
 
 `review:true` 只把审查义务持久化到票上，不自动开审。义务在 reload、中断和失败后保留；通过或质量裁决停止后消除，`ack` 不能绕过，`kill` 随整票删除。审查时机由指挥官判断，义务存续由代码保证。
 
