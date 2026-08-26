@@ -3,18 +3,22 @@
  *
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
- *   本文件是唯一执行器，只做副作用（起子进程、投递反馈、发卡、持久化、状态栏），
- *   子进程结果一律回灌成事件交给 reducer。模块级只有一个 controller。
+ *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、状态栏），
+ *   会话结果一律回灌成事件交给 reducer。模块级只有一个 controller。
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
 import { randomUUID } from "node:crypto";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
+import type { Model } from "@earendil-works/pi-ai";
+import {
+	getAgentDir,
+	ModelRuntime,
+	type ExtensionAPI,
+	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type Language, type ReviewConfig } from "../config.js";
 import { formatDuration } from "../format.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
+import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, decisionText, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
@@ -27,7 +31,7 @@ import {
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import {
-	applyProcessEvent,
+	applySessionEvent,
 	initialProgress,
 	type ReviewerProgress,
 	settleProgress,
@@ -43,6 +47,7 @@ import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
+import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
 import {
 	type AdvisorResult,
 	type CardData,
@@ -99,14 +104,15 @@ interface Controller {
 	persistedStamp: CheckpointStamp | null | undefined;
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
 	pendingCards: CardData[];
-	/** 本运行时已启动的阶段；reload 后新 controller 会重新启动被中断的子进程。 */
+	/** 本运行时已启动的阶段；reload 后新 controller 会重启被中断的审查会话。 */
 	runningAction?: string;
 	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
 	actionPromise?: Promise<void>;
+	runSession: ReviewSessionRunner;
 	actionController?: AbortController;
 	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
-	/** 子进程实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
+	/** 审查会话实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
 	progress: readonly ReviewerProgress[];
 	/** 当前 progress 属于审查者还是顾问：修复相据此决定是否展示裁决摘要。 */
 	progressKind?: "reviewers" | "advisor";
@@ -122,9 +128,24 @@ interface Controller {
 let controller: Controller | undefined;
 let dispatchQueue: Promise<void> = Promise.resolve();
 
-export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = false): void {
+interface ReviewDependencies {
+	pool?: InProcessSessionPool;
+	resolveModel?: (id: string) => Promise<Model<any>>;
+	runSession?: ReviewSessionRunner;
+}
+
+export function registerReview(
+	pi: ExtensionAPI,
+	enabled = true,
+	configBroken = false,
+	dependencies: ReviewDependencies = {},
+): void {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
+	const runSession = dependencies.runSession ?? createReviewSessionRunner(
+		dependencies.pool ?? new InProcessSessionPool(),
+		dependencies.resolveModel ?? resolveConfiguredModel,
+	);
 	if (!enabled) {
 		// 只有用户明确关闭才封存活动 checkpoint（防重新启用后恢复幽灵审查）；
 		// features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。
@@ -133,9 +154,9 @@ export function registerReview(pi: ExtensionAPI, enabled = true, configBroken = 
 	}
 	pi.registerCommand("fire-review", {
 		description: "对抗性审查：审这个会话到目前为止做完的事",
-		handler: (args, ctx) => handleCommand(pi, args, ctx),
+		handler: (args, ctx) => handleCommand(pi, args, ctx, runSession),
 	});
-	pi.on("session_start", (_event, ctx) => handleSessionStart(pi, ctx));
+	pi.on("session_start", (_event, ctx) => handleSessionStart(pi, ctx, runSession));
 	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
 	pi.on("resources_discover", (_event, ctx) => requestAdvance(pi, ctx));
 	pi.on("agent_start", () => handleAgentStart(pi));
@@ -186,7 +207,7 @@ function dispatch(pi: ExtensionAPI, event: ReviewEvent): Promise<void> {
 		);
 		if (state !== controller.state) {
 			controller.state = state;
-			// 持久化失败不能当成功继续：否则会拿不一致的状态去起子进程、投反馈，
+			// 持久化失败不能当成功继续：否则会拿不一致的状态去起会话、投反馈，
 			// 重启后又从旧 checkpoint 恢复，重现幽灵审查与重复反馈。
 			const persisted = persist(pi, state);
 			if (!persisted) return;
@@ -228,7 +249,6 @@ function loadReviewConfig(): { config: ReviewConfig } | { error: string } {
 			error: `fire-review 配置读取失败：${error instanceof Error ? error.message : String(error)}`,
 		};
 	}
-	// 两类都必须阻断：文件整体解析不了（此时 review 节根本没被读到），以及 review 节自身有错。
 	// 三类都必须阻断：文件整体解析不了、review 节自身有错、
 	// 以及 features.review 开关类型错（字符串 "false" 会因 `!== false` 静默启用付费审查）。
 	const problems = loaded.problems.filter(
@@ -262,6 +282,7 @@ async function handleCommand(
 	pi: ExtensionAPI,
 	args: string,
 	ctx: ExtensionContext,
+	runSession: ReviewSessionRunner,
 ) {
 	// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 	const loaded = loadReviewConfig();
@@ -296,6 +317,7 @@ async function handleCommand(
 		watchdog: undefined,
 		persistedStamp: null,
 		pendingCards: [],
+		runSession,
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
@@ -311,7 +333,11 @@ async function handleCommand(
 /** 重启 / 会话恢复：从 checkpoint 重建 controller 并续跑未完成的环节。
  * reload / new / resume / fork 是运行时替换（新 pi），先清掉旧 controller，
  * 再按新会话的 checkpoint 恢复；quit 之外不 settle，审查能在重启后继续。 */
-function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> | void {
+function handleSessionStart(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	runSession: ReviewSessionRunner,
+): Promise<void> | void {
 	if (controller && controller.pi !== pi) {
 		setOccupancy(controller, false);
 		controller = undefined;
@@ -324,8 +350,7 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<vo
 	if (controller && isActive(controller.state)) return;
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
-		if (ctx.hasUI) ctx.ui.notify(loaded.error, "error");
-		// 配置问题只阻止本次恢复；保留活动 checkpoint，修好配置并重启后可继续。
+		// session_start 的配置告警由入口统一聚合；这里只保留活动 checkpoint，修好后继续。
 		return;
 	}
 	const config = loaded.config;
@@ -339,6 +364,7 @@ function handleSessionStart(pi: ExtensionAPI, ctx: ExtensionContext): Promise<vo
 		watchdog: undefined,
 		persistedStamp: readStamp(ctx),
 		pendingCards: [],
+		runSession,
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
@@ -369,7 +395,7 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 		return;
 	}
 	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
-	// 宿主会 await 本 handler，因此先 abort 并等所有审查子进程真正退出，再允许模型 turn_start。
+	// 宿主会 await 本 handler，因此先 abort 并等所有审查会话真正退出，再允许模型 turn_start。
 	if (!active.actionPromise) return;
 	active.actionController?.abort();
 	await active.actionPromise;
@@ -479,7 +505,7 @@ function startAction(
 			if (controller !== active || active.actionController?.signal.aborted) return;
 			await dispatch(active.pi, {
 				type: "INFRASTRUCTURE_ERROR",
-				details: processErrorText(kind, active.config.language, error),
+				details: sessionErrorText(kind, active.config.language, error),
 			});
 		})
 		.finally(() => {
@@ -500,7 +526,7 @@ async function handleShutdown(
 	if (!active) return;
 	// 会话离开当前运行时就立即释放；reload 恢复会由新 controller 重新配对喊占用。
 	setOccupancy(active, false);
-	// 无论何种终止都先杀子进程并等 close；旧进程不得泄漏到新运行时。
+	// 无论何种终止都先取消并等待当前审查会话；旧动作不得泄漏到新运行时。
 	active.signal.abort();
 	active.actionController?.abort();
 	clearWatchdog();
@@ -624,7 +650,7 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		} catch {
 			sealed = false;
 		}
-		// 内存态也必须释放：只停子进程但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
+		// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
 		clearWatchdog();
 		clearStatusTimer(controller);
@@ -716,7 +742,7 @@ function setOccupancy(active: Controller, held: boolean): void {
 			...(held ? { label: OCCUPANCY_LABEL } : {}),
 		});
 	} catch (error) {
-		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或子进程生命周期。
+		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或会话生命周期。
 		try {
 			if (active.ctx.hasUI)
 				active.ctx.ui.notify(`fire-review 无法同步 Herdr 占用状态：${errorText(error)}`, "warning");
@@ -854,11 +880,21 @@ async function runEffects(effects: ReviewEffect[]) {
 	}
 }
 
-function reviewerModelConfig(model: { model: string; thinking: string }, config: ReviewConfig): ReviewModelConfig {
+async function resolveConfiguredModel(id: string): Promise<Model<any>> {
+	const runtime = await ModelRuntime.create({
+		authPath: `${getAgentDir()}/auth.json`,
+		modelsPath: `${getAgentDir()}/models.json`,
+	});
+	const slash = id.indexOf("/");
+	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
+	if (!model) throw new Error(`找不到模型：${id}；审查会话只能使用内置 provider 的模型`);
+	return model;
+}
+
+function reviewerModelConfig(model: ReviewConfig["advisor"], config: ReviewConfig): ReviewModelConfig {
 	return {
 		model: model.model,
 		thinking: model.thinking,
-		command: config.background.command,
 		tools: config.tools,
 		timeoutMs: config.timeoutMinutes * 60_000,
 	};
@@ -908,9 +944,10 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 					cwd: active.ctx.cwd,
 					language: config.language,
 					signal: actionSignal,
+					runSession: active.runSession,
 					onEvent: (event) => {
 						if (controller !== active) return;
-						active.progress = applyProcessEvent(
+						active.progress = applySessionEvent(
 							active.progress,
 							reviewer.index,
 							event,
@@ -940,7 +977,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						thinking: reviewer.thinking,
 						status: "error",
 						summary: "",
-						details: processErrorText("reviewer", active.config.language, error),
+						details: sessionErrorText("reviewer", active.config.language, error),
 					},
 				});
 			}
@@ -972,9 +1009,10 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 			cwd: active.ctx.cwd,
 			language: config.language,
 			signal: actionSignal,
+			runSession: active.runSession,
 			onEvent: (event) => {
 				if (controller !== active) return;
-				active.progress = applyProcessEvent(active.progress, 0, event, config.language);
+				active.progress = applySessionEvent(active.progress, 0, event, config.language);
 			},
 		});
 		if (controller === active)
@@ -992,7 +1030,7 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 		if (actionSignal.aborted) return;
 		await dispatch(pi, {
 			type: "INFRASTRUCTURE_ERROR",
-			details: processErrorText("advisor", active.config.language, error),
+			details: sessionErrorText("advisor", active.config.language, error),
 		});
 	}
 }
@@ -1022,11 +1060,11 @@ function stripBold(text: string) {
 	return text.replace(/\*\*([^*]+)\*\*/gu, "$1");
 }
 
-function processErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
+function sessionErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
 	const message = error instanceof Error ? error.message : String(error);
 	if (kind === "reviewer")
-		return language === "en" ? `reviewer subprocess error: ${message}` : `审查子进程异常：${message}`;
-	return language === "en" ? `advisor subprocess error: ${message}` : `顾问子进程异常：${message}`;
+		return language === "en" ? `reviewer session error: ${message}` : `审查会话异常：${message}`;
+	return language === "en" ? `advisor session error: ${message}` : `顾问会话异常：${message}`;
 }
 
 function deliverFeedbackNow(

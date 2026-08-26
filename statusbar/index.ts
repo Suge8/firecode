@@ -20,8 +20,8 @@ import {
 } from "./render.js";
 import { type TpsStatus, registerTps } from "./tps.js";
 
-export function registerStatusBar(pi: ExtensionAPI): void {
-	if (process.env.FIRECODE_MASTER_WORKER) return;
+export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
+	if (subsession) return;
 	let quota: QuotaStatus | undefined;
 	let tpsStatus: TpsStatus | undefined;
 	let requestRender = () => {};

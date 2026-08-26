@@ -41,7 +41,6 @@ export const TEST_REVIEW_CONFIG = {
 	advisorAfterFailures: 2,
 	timeoutMinutes: 1,
 	tools: ["read", "bash"],
-	background: { command: "pi" },
 	language: "zh",
 };
 const TEST_CONFIG_JSONC = JSON.stringify({

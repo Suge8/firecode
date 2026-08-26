@@ -13,7 +13,6 @@ import {
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const WATCHER_CONFIG = { model: "test/watcher", thinking: "low" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-const savedWorkerMarker = process.env.FIRECODE_MASTER_WORKER;
 
 let faux: any;
 let directory: string | undefined;
@@ -25,8 +24,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	if (savedWorkerMarker === undefined) delete process.env.FIRECODE_MASTER_WORKER;
-	else process.env.FIRECODE_MASTER_WORKER = savedWorkerMarker;
 	await cleanupFirecodeModules();
 });
 
@@ -322,7 +319,6 @@ async function setup(options: {
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	delete process.env.FIRECODE_MASTER_WORKER;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("master/spawn.js") as any;
@@ -395,13 +391,11 @@ async function setup(options: {
 			theme: { fg: (_color: string, text: string) => text },
 		},
 	};
-	if (options.worker) process.env.FIRECODE_MASTER_WORKER = "1";
 	module.registerWatcher(pi, {
 		pool,
 		resolveModel: async () => fauxModel,
 		pushBark: (input: { body: string }) => { barks.push(input.body); },
-	});
-	delete process.env.FIRECODE_MASTER_WORKER;
+	}, options.worker === true);
 	const emit = async (name: string, event: any) => {
 		for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 	};

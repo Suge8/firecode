@@ -10,6 +10,7 @@ import {
 	type AgentSession,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { withSubsessionRole, type SubsessionRole } from "./role.js";
 import type { WorkerThinking } from "./state.js";
 
 export const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
@@ -21,6 +22,7 @@ export type SessionPersistence =
 export interface SpawnSessionOptions {
 	cwd: string;
 	model: Model<any>;
+	role: SubsessionRole;
 	thinking: WorkerThinking;
 	tools: string[];
 	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
@@ -29,6 +31,8 @@ export interface SpawnSessionOptions {
 	systemPrompt: { mode: "append" | "replace"; text: string };
 	contextFiles: boolean;
 	persistence: SessionPersistence;
+	/** 审查会话关闭自动扩展、Skill 与模板，保持评判政策不受被审项目改写。 */
+	isolated?: boolean;
 }
 
 export interface SpawnedSession {
@@ -48,7 +52,6 @@ interface HeldSession {
 }
 
 const SESSION_WRITERS = new Set<string>();
-let environmentQueue = Promise.resolve();
 
 /** 全插件唯一的进程内子会话入口；池同时是 JSONL 单写者登记。 */
 export class InProcessSessionPool {
@@ -70,38 +73,39 @@ export class InProcessSessionPool {
 
 		let created: AgentSession;
 		try {
-			created = await this.withWorkerEnvironment(async () => {
-				const loader = new DefaultResourceLoader({
-					cwd: options.cwd,
-					agentDir: this.environment.agentDir ?? getAgentDir(),
-					noContextFiles: !options.contextFiles,
-					...(options.systemPrompt.mode === "replace"
-						? { systemPrompt: options.systemPrompt.text }
-						: { appendSystemPrompt: [options.systemPrompt.text] }),
-					extensionsOverride: (base) => ({
-						...base,
-						extensions: base.extensions.filter((extension) =>
-							!matchesExtension(extension.path, options.excludeExtensions ?? [])),
-					}),
-				});
-				await loader.reload();
-				if (loader.getExtensions().errors.length)
-					throw new Error(`子会话扩展加载失败：${JSON.stringify(loader.getExtensions().errors)}`);
-				const sessionManager = makeSessionManager(options.persistence, options.cwd);
-				const result = await createAgentSession({
-					cwd: options.cwd,
-					agentDir: this.environment.agentDir,
-					modelRuntime: this.environment.modelRuntime,
-					model: options.model,
-					thinkingLevel: options.thinking,
-					tools: options.tools,
-					...(options.customTools ? { customTools: options.customTools } : {}),
-					resourceLoader: loader,
-					sessionManager,
-				});
-				await result.session.bindExtensions({ mode: "print" });
-				return result.session;
+			const loader = new DefaultResourceLoader({
+				cwd: options.cwd,
+				agentDir: this.environment.agentDir ?? getAgentDir(),
+				noContextFiles: !options.contextFiles,
+				noExtensions: options.isolated,
+				noSkills: options.isolated,
+				noPromptTemplates: options.isolated,
+				...(options.systemPrompt.mode === "replace"
+					? { systemPrompt: options.systemPrompt.text }
+					: { appendSystemPrompt: [options.systemPrompt.text] }),
+				extensionsOverride: (base) => ({
+					...base,
+					extensions: base.extensions.filter((extension) =>
+						!matchesExtension(extension.path, options.excludeExtensions ?? [])),
+				}),
 			});
+			await withSubsessionRole(options.role, () => loader.reload());
+			if (loader.getExtensions().errors.length)
+				throw new Error(`子会话扩展加载失败：${JSON.stringify(loader.getExtensions().errors)}`);
+			const sessionManager = makeSessionManager(options.persistence, options.cwd);
+			const result = await createAgentSession({
+				cwd: options.cwd,
+				agentDir: this.environment.agentDir,
+				modelRuntime: this.environment.modelRuntime,
+				model: options.model,
+				thinkingLevel: options.thinking,
+				tools: options.tools,
+				...(options.customTools ? { customTools: options.customTools } : {}),
+				resourceLoader: loader,
+				sessionManager,
+			});
+			await result.session.bindExtensions({ mode: "print" });
+			created = result.session;
 		} catch (error) {
 			if (sessionPath) SESSION_WRITERS.delete(sessionPath);
 			throw error;
@@ -170,22 +174,6 @@ export class InProcessSessionPool {
 	private clearTimer(held: HeldSession): void {
 		if (held.timer) clearTimeout(held.timer);
 		held.timer = undefined;
-	}
-
-	private async withWorkerEnvironment<T>(run: () => Promise<T>): Promise<T> {
-		const previous = environmentQueue;
-		let release!: () => void;
-		environmentQueue = new Promise<void>((resolve) => { release = resolve; });
-		await previous;
-		const saved = process.env.FIRECODE_MASTER_WORKER;
-		process.env.FIRECODE_MASTER_WORKER = "1";
-		try {
-			return await run();
-		} finally {
-			if (saved === undefined) delete process.env.FIRECODE_MASTER_WORKER;
-			else process.env.FIRECODE_MASTER_WORKER = saved;
-			release();
-		}
 	}
 }
 

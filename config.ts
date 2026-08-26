@@ -37,11 +37,10 @@ export interface ReviewConfig {
 	maxRounds: number;
 	/** 连续几轮失败触发顾问仲裁。 */
 	advisorAfterFailures: number;
-	/** 单个审查者 / 顾问子进程超时（分钟）。 */
+	/** 单个审查者 / 顾问会话超时（分钟）。 */
 	timeoutMinutes: number;
 	/** 审查者只读工具白名单。 */
 	tools: string[];
-	background: { command: string };
 	language: Language;
 }
 
@@ -239,7 +238,6 @@ const REVIEW_KEYS = new Set([
 	"advisorAfterFailures",
 	"timeoutMinutes",
 	"tools",
-	"background",
 	"language",
 ]);
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls", "bash"];
@@ -257,8 +255,12 @@ const LANGUAGES = new Set<Language>(["zh", "en"]);
 
 /** 导出供测试：严格拒绝未知字段（含嵌套），类型错误一律记录而非静默回退。 */
 export function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): ReviewConfig {
-	for (const key of Object.keys(raw))
-		if (!REVIEW_KEYS.has(key)) problems.push(`未知字段 review.${key}`);
+	for (const key of Object.keys(raw)) {
+		if (REVIEW_KEYS.has(key)) continue;
+		problems.push(key === "background"
+			? "review.background 已随审查子进程层删除，请直接移除该键"
+			: `未知字段 review.${key}`);
+	}
 	for (const key of REVIEW_KEYS)
 		if (!(key in raw)) problems.push(`review.${key} 必须显式配置`);
 	const advisor = reviewModel(raw.advisor, "review.advisor", EMPTY_REVIEW_MODEL, problems);
@@ -270,7 +272,6 @@ export function parseReviewConfig(raw: Record<string, unknown>, problems: string
 		advisorAfterFailures: reviewInt(raw.advisorAfterFailures, "review.advisorAfterFailures", 2, 1, 5, problems),
 		timeoutMinutes: reviewInt(raw.timeoutMinutes, "review.timeoutMinutes", 20, 1, 60, problems),
 		tools: reviewTools(raw.tools, problems),
-		background: { command: reviewBackground(raw.background, problems) },
 		language: reviewLanguage(raw.language, problems),
 	};
 }
@@ -343,22 +344,6 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 	if (tools.length !== value.length || tools.length === 0)
 		problems.push("review.tools 必须是非空字符串数组");
 	return tools.length > 0 ? tools : [...DEFAULT_TOOLS];
-}
-
-function reviewBackground(value: unknown, problems: string[]): string {
-	if (value === undefined) return "pi";
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		problems.push("review.background 必须是对象");
-		return "pi";
-	}
-	const record = asRecord(value);
-	rejectUnknownKeys(record, ["command"], "review.background", problems);
-	const command = record.command;
-	if (typeof command !== "string" || command.length === 0) {
-		problems.push("review.background.command 必须是非空字符串");
-		return "pi";
-	}
-	return command;
 }
 
 // ---- master 节 ----

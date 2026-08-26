@@ -46,9 +46,13 @@ interface WatcherRuntime {
 	observer?: Observer;
 }
 
-export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependencies = {}): void {
-	// Worker 会话不带观察员：级联抑制是代码规则，不靠配置。
-	if (process.env.FIRECODE_MASTER_WORKER) return;
+export function registerWatcher(
+	pi: ExtensionAPI,
+	dependencies: WatcherDependencies = {},
+	subsession = false,
+): void {
+	// 子会话不带观察员：级联抑制是代码规则，不靠进程环境。
+	if (subsession) return;
 	registerWatcherCardRenderer(pi);
 	const loaded = loadWatcherConfiguration();
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
