@@ -7,10 +7,10 @@ test("状态栏观察员段随模块状态出现和消失", async () => {
 	const { statusBadges } = await loadFirecodeModule("statusbar/render.js") as any;
 	const statuses = new Map([
 		["master", "👑 指挥官"],
-		["watcher", "👁 flash"],
+		["watcher", "👓 flash/low"],
 	]);
 
-	expect(statusBadges(statuses, " ｜ ")).toBe("👑 指挥官 ｜ 👁 flash");
+	expect(statusBadges(statuses, " ｜ ")).toBe("👑 指挥官 ｜ 👓 flash/low");
 	statuses.delete("watcher");
 	expect(statusBadges(statuses, " ｜ ")).toBe("👑 指挥官");
 });

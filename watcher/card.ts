@@ -31,7 +31,7 @@ const SEVERITY_STYLE: Record<Severity, { label: string; color: ThemeColor }> = {
 };
 
 export function adviceHeadline(card: WatcherCard): string {
-	return `👁 观察员 · ${SEVERITY_STYLE[card.severity].label}（${timeMark(card.turnIndex)}）`;
+	return `👓 观察员 · ${SEVERITY_STYLE[card.severity].label}（${timeMark(card.turnIndex)}）`;
 }
 
 /** 建议自带时点标记：投递时主会话可能已经走远，读的人要知道它看的是哪一刻。 */
