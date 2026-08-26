@@ -52,15 +52,51 @@ test("fire-master off 只关闭当前会话", async () => {
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
 });
 
-test("subagents guidelines 注入哨兵、收割与计划维护纪律", async () => {
+test("自定义系统提示仍注入选型表与三项调度纪律", async () => {
 	const harness = await setup();
-	const guidelines = harness.guidelines.join("\n");
-	expect(guidelines).toContain("哨兵");
-	expect(guidelines).toContain("等待类任务");
-	expect(guidelines).toContain("最便宜模型");
-	expect(guidelines).toContain("调查/哨兵票收割要点后立即 kill");
-	expect(guidelines).toContain("实现票保留待收口");
-	expect(guidelines).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
+	const systemPrompt = await harness.systemPrompt("自定义系统提示");
+	expect(systemPrompt.startsWith("自定义系统提示\n\n")).toBe(true);
+	expect(systemPrompt).toContain("选型表：test/worker（测试，thinking medium）");
+	expect(systemPrompt).toContain("等待类任务");
+	expect(systemPrompt).toContain("最便宜模型");
+	expect(systemPrompt).toContain("调查/哨兵票收割要点后立即 kill");
+	expect(systemPrompt).toContain("实现票保留待收口");
+	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
+	await harness.command("off");
+	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
+});
+
+test("模型选择拒绝错误回带完整选型表", async () => {
+	const harness = await setup();
+	const roster = "test/worker（测试，thinking medium）；test/worker-2（切换测试，thinking high）";
+	await expect(harness.execute({
+		action: "start", worker: "missing-model", prompt: "执行", thinking: "medium",
+	})).rejects.toThrow(roster);
+	await expect(harness.execute({
+		action: "start", worker: "outside-roster", prompt: "执行", model: "test/unknown", thinking: "medium",
+	})).rejects.toThrow(roster);
+
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "switch-model", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	await settled;
+	await expect(harness.execute({
+		action: "send", worker: "switch-model", prompt: "继续", model: "test/unknown",
+	})).rejects.toThrow(roster);
+});
+
+test("subagents schema 教学八动作与切换、审查语义", async () => {
+	const harness = await setup();
+	expect(harness.toolDescription).toContain("八动作");
+	expect(harness.toolDescription).toContain("无 sleep/session");
+	for (const name of ["action", "worker", "prompt", "model", "thinking", "cwd", "review"])
+		expect(harness.parameterDescriptions[name]).not.toBeEmpty();
+	expect(harness.parameterDescriptions.model).toContain("start 必填");
+	expect(harness.parameterDescriptions.model).toContain("send");
+	expect(harness.parameterDescriptions.model).toContain("切换");
+	expect(harness.parameterDescriptions.review).toContain("显式发起 review");
 });
 
 test("list 展开投影 working 的当前工具，但模型正文不含动作", async () => {
@@ -730,7 +766,17 @@ async function setup(activate = true, options: {
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
 		},
-		guidelines: tools.get("subagents").promptGuidelines as string[],
+		toolDescription: tools.get("subagents").description as string,
+		parameterDescriptions: Object.fromEntries(Object.entries(tools.get("subagents").parameters.properties)
+			.map(([name, schema]: [string, any]) => [name, schema.description])) as Record<string, string>,
+		systemPrompt: async (initial: string) => {
+			let event = { systemPrompt: initial };
+			for (const handler of handlers.get("before_agent_start") ?? []) {
+				const result = await handler(event, ctx);
+				if (result?.systemPrompt) event = { systemPrompt: result.systemPrompt };
+			}
+			return event.systemPrompt;
+		},
 		renderResult: (result: any, expanded: boolean) => tools.get("subagents").renderResult(
 			result,
 			{ expanded },
