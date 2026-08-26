@@ -6,6 +6,7 @@ import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-
 import { Text, type Component } from "@earendil-works/pi-tui";
 
 import { clip, oneLine } from "../format.js";
+import { RAIL, paintBgLine } from "../tools/line.js";
 import { SEVERITIES, type Severity } from "./observer.js";
 
 export const WATCHER_CARD_TYPE = "firecode-watcher-advice";
@@ -24,10 +25,10 @@ export interface WatcherCard {
 	turnIndex: number;
 }
 
-const SEVERITY_STYLE: Record<Severity, { label: string; color: ThemeColor }> = {
-	nit: { label: "顺手记", color: "muted" },
-	concern: { label: "值得停一下", color: "warning" },
-	blocker: { label: "再走就出事", color: "error" },
+const SEVERITY_STYLE: Record<Severity, { label: string; color: ThemeColor; bg: ThemeColor }> = {
+	nit: { label: "顺手记", color: "muted", bg: "toolSuccessBg" },
+	concern: { label: "值得停一下", color: "warning", bg: "toolPendingBg" },
+	blocker: { label: "再走就出事", color: "error", bg: "toolErrorBg" },
 };
 
 export function adviceHeadline(card: WatcherCard): string {
@@ -65,16 +66,19 @@ class AdviceLine implements Component {
 		const columns = Math.max(1, width);
 		try {
 			const style = SEVERITY_STYLE[this.card.severity];
-			const headline = this.theme.fg(style.color, clip(oneLine(adviceHeadline(this.card)), columns));
+			const bgFn = typeof this.theme.bg === "function" ? (text: string) => this.theme.bg(style.bg, text) : undefined;
 			if (this.expanded) {
+				const headline = this.theme.fg(style.color, clip(oneLine(adviceHeadline(this.card)), columns));
 				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);
-				return [headline, ...body.render(columns)];
+				return [paintBgLine(headline, columns, bgFn), ...body.render(columns)];
 			}
-			const firstLine = this.card.note.split(/\r?\n/u, 1)[0];
-			return [
-				headline,
-				this.theme.fg("dim", clip(`  ${firstLine}（供权衡，勿盲从）`, columns)),
-			];
+			// 收起与工具行同构：单行 + 背景条；时点标记只在展开态显示。
+			const firstLine = oneLine(this.card.note.split(/\r?\n/u, 1)[0] ?? "");
+			const line = clip(
+				`${this.theme.fg("dim", RAIL)}${this.theme.fg(style.color, `👓 观察员 · ${style.label}`)}${this.theme.fg("dim", ` — ${firstLine}`)}`,
+				columns,
+			);
+			return [paintBgLine(line, columns, bgFn)];
 		} catch {
 			return this.fallback.render(columns);
 		}
