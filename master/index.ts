@@ -79,7 +79,6 @@ interface MasterRuntime {
 	reviewProgress: Map<string, ReviewProgress>;
 	observedSessions: Map<string, ObservedSession>;
 	flushTimer?: NodeJS.Timeout;
-	turnActive: boolean;
 }
 
 export function registerMaster(
@@ -134,7 +133,6 @@ export function registerMaster(
 			idleSince: new Map(),
 			reviewProgress: new Map(),
 			observedSessions: new Map(),
-			turnActive: false,
 		};
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
@@ -164,7 +162,7 @@ export function registerMaster(
 		try {
 			pi.sendMessage(
 				{ customType: MASTER_EVENT_TYPE, content: masterEventEnvelope(content), display: true, details: masterEventDetails(batch.map((event) => event.content)) },
-				{ deliverAs: "steer", triggerTurn: !active.turnActive && active.ctx.isIdle?.() === true },
+				{ deliverAs: "steer", triggerTurn: true },
 			);
 		} catch (error) {
 			active.events.unshift(...batch);
@@ -605,14 +603,6 @@ export function registerMaster(
 		}
 	});
 
-	pi.on("agent_start", () => {
-		if (runtime) runtime.turnActive = true;
-	});
-	pi.on("agent_settled", (_event, ctx) => {
-		if (!runtime) return;
-		runtime.ctx = ctx;
-		runtime.turnActive = false;
-	});
 	pi.on("session_shutdown", () => deactivate());
 }
 

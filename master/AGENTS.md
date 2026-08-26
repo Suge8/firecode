@@ -29,7 +29,7 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 
 ## 投递与义务
 
-落定事件先以 pending entry 写入主会话，再经 `sendMessage` 的 `deliverAs: "steer"` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，主回合进行中即时送达，主回合空闲时触发新 turn。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
+落定事件先以 pending entry 写入主会话，再经 `sendMessage` 的 `deliverAs: "steer"` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，主回合进行中经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达，主回合空闲时触发新 turn。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
 
 `review:true` 只把审查义务持久化到票上，不自动开审。义务在 reload、中断和失败后保留；通过或质量裁决停止后消除，`ack` 不能绕过，`kill` 随整票删除。审查时机由指挥官判断，义务存续由代码保证。
 
