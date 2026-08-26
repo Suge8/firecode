@@ -767,8 +767,11 @@ function rosterText(models: MasterModel[]): string {
 function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
-		`选型表：${rosterText(models)}。start 必须显式传 model 与 thinking。`,
-		"哨兵纪律：CI watch、部署观察、长测试等会占住回合的等待类任务，派最便宜模型的哨兵票盯守，结果会自动送达。",
+		`选型表：${rosterText(models)}。start 必须显式传 model 与 thinking；thinking 取表内默认档，仅用户显式指示时偏离。`,
+		"哨兵纪律：以等待为主的盯守（CI、部署、长测试）派最便宜档哨兵票。",
+		"动手边界：指挥官亲手只做三类事——读取与收割、数条命令内可得决定性证据的快速取证、终审 diff 与交付裁决；其余执行与验证一律派票，模型按选型表就任务所需能力选档；dogfood 亦然——执行派票，裁决亲手。",
+		"并行纪律：相互无阻塞边的工作默认并行派发；共享 checkout 时按路径划界，工作说明写明各自触碰的目录。",
+		"工单纪律：项目存在工单库时，派工前按其约定认领，新工单由指挥官决策开立；无工单库则以用户验收为交付边界。",
 		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
 		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
 		"投递纪律：子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节。",
