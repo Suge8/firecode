@@ -43,13 +43,17 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
 });
 
-test("fire-master off 只关闭当前会话", async () => {
+test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
-	await harness.command("off");
+	await harness.command("");
 	await expect(harness.execute({ action: "list" })).rejects.toThrow("只在 Master 中可用");
-	await harness.emit("session_start", {});
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toBe("指挥官模式未启动");
+	await harness.command("");
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
+	await harness.command("off");
+	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
 test("自定义系统提示仍注入选型表与三项调度纪律", async () => {
@@ -62,7 +66,7 @@ test("自定义系统提示仍注入选型表与三项调度纪律", async () =>
 	expect(systemPrompt).toContain("调查/哨兵票收割要点后立即 kill");
 	expect(systemPrompt).toContain("实现票保留待收口");
 	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
-	await harness.command("off");
+	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
 });
 

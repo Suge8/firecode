@@ -1,6 +1,6 @@
 # master：进程内多 Agent 主控
 
-新会话按 `master.autoActivate` 注入 `subagents`；默认开启。`/fire-master off` 只关闭当前会话，下一次会话仍按配置决定；配置或选型表有误时拒绝激活，不用默认模型代替。
+新会话按 `master.autoActivate` 注入 `subagents`；默认开启。裸 `/fire-master` 翻转当前会话，`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或选型表有误时拒绝激活，不用默认模型代替。
 
 ## 运行时
 

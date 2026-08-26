@@ -58,8 +58,8 @@ export function registerWatcher(
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
 	if ("error" in loaded) {
 		pi.registerCommand("fire-watch", {
-			description: "观察员开关：/fire-watch [on|off]",
-			handler: async (_args, ctx) => ctx.ui.notify(loaded.error, "error"),
+			description: "翻转当前会话的观察员开关",
+			handler: async (args, ctx) => ctx.ui.notify(args.trim() ? "/fire-watch 不接受参数" : loaded.error, "error"),
 		});
 		return;
 	}
@@ -89,7 +89,7 @@ export function registerWatcher(
 			return runtime;
 		}
 		runtime = { ctx, pending: [], lastTurnIndex: 0, evaluating: false, interrupted: false };
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👁 观察员/${formatModelName(config.model)}`));
+		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👁 ${formatModelName(config.model)}`));
 		return runtime;
 	};
 	const deliver = (active: WatcherRuntime, advice: Advice, turnIndex: number) => {
@@ -147,16 +147,15 @@ export function registerWatcher(
 	};
 
 	pi.registerCommand("fire-watch", {
-		description: "观察员开关：/fire-watch [on|off]",
+		description: "翻转当前会话的观察员开关",
 		handler: async (args, ctx) => {
-			const input = args.trim();
-			if (input === "off") {
-				deactivate();
-				ctx.ui.notify("观察员已关闭", "info");
+			if (args.trim()) {
+				ctx.ui.notify("/fire-watch 不接受参数", "error");
 				return;
 			}
-			if (input && input !== "on") {
-				ctx.ui.notify("/fire-watch 只接受 on 或 off", "error");
+			if (runtime) {
+				deactivate();
+				ctx.ui.notify("观察员已关闭", "info");
 				return;
 			}
 			activate(ctx);

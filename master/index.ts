@@ -315,20 +315,20 @@ export function registerMaster(
 	};
 
 	pi.registerCommand("fire-master", {
-		description: "启动指挥官模式（子代理池）：/fire-master [status|off]",
+		description: "翻转当前会话的指挥官模式；status 查看状态",
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
 				ctx.ui.notify(runtime ? statusText(runtime.store.state.workers) : "指挥官模式未启动", "info");
 				return;
 			}
-			if (input === "off") {
-				deactivate();
-				ctx.ui.notify("指挥官模式已关闭", "info");
+			if (input) {
+				ctx.ui.notify("/fire-master 只接受 status；裸命令翻转开关", "error");
 				return;
 			}
-			if (input) {
-				ctx.ui.notify("/fire-master 只接受 status 或 off；启用后直接描述需求", "error");
+			if (runtime) {
+				deactivate();
+				ctx.ui.notify("指挥官模式已关闭", "info");
 				return;
 			}
 			try {
