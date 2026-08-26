@@ -89,7 +89,7 @@ export function registerWatcher(
 			return runtime;
 		}
 		runtime = { ctx, pending: [], lastTurnIndex: 0, evaluating: false, interrupted: false };
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👁 ${formatModelName(config.model)}`));
+		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👓 ${formatModelName(config.model)}/${config.thinking}`));
 		return runtime;
 	};
 	const deliver = (active: WatcherRuntime, advice: Advice, turnIndex: number) => {
@@ -108,7 +108,7 @@ export function registerWatcher(
 		);
 		if (!wake) return;
 		(dependencies.pushBark ?? pushBark)({
-			title: `👁 观察员·${pi.getSessionName?.() || basename(active.ctx.cwd)}`,
+			title: `👓 观察员·${pi.getSessionName?.() || basename(active.ctx.cwd)}`,
 			body: card.note,
 			group: basename(active.ctx.cwd),
 			sessionId: active.ctx.sessionManager.getSessionId(),
