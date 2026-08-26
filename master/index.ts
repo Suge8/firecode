@@ -888,8 +888,10 @@ export function masterStatusLine(
 	const count = (status: WorkerStatus) => workers.filter((worker) => worker.status === status).length;
 	return `${theme.fg("dim", "👑 指挥官")}${count("working") ? theme.fg("dim", `/工作${count("working")}`) : ""}${count("reviewing") ? theme.fg("dim", `/审${count("reviewing")}`) : ""}${count("idle") ? theme.fg("dim", `/闲${count("idle")}`) : ""}`;
 }
-function statusText(workers: WorkerRef[]): string {
-	return workers.length ? workers.map((worker) => `${worker.name} ${worker.status} ${worker.model}`).join(" · ") : "没有子代理";
+export function statusText(workers: WorkerRef[]): string {
+	return workers.length
+		? workers.map((worker) => `${worker.name} ${STATUS_WORD[worker.status]} ${worker.model.split("/").pop()}`).join("\n")
+		: "没有子代理";
 }
 function compactWorker(worker: WorkerRef) {
 	return {

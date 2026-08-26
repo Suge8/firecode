@@ -43,6 +43,15 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect((await harness.execute({ action: "list" }).then((result) => result.details as any)).workers).toEqual([]);
 });
 
+test("status 每个子代理一行显示中文状态与模型短名", async () => {
+	const { statusText } = await loadFirecodeModule("master/index.js") as any;
+
+	expect(statusText([
+		{ name: "侦察", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
+		{ name: "验收", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
+	])).toBe("侦察 工作 gpt-5.1-codex-mini\n验收 审查 claude-sonnet-4-5");
+});
+
 test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});

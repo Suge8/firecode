@@ -8,9 +8,11 @@ import {
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
+	PI_TUI_URL,
 } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth: (text: string) => number };
 const WATCHER_CONFIG = { model: "test/watcher", thinking: "low" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -42,7 +44,7 @@ test("观察员卡片收起只显示正文首行，展开显示完整建议", as
 	const collapsed = render({ data: card }, { expanded: false }, theme).render(24).join("\n");
 	expect(collapsed).toContain("第一行建议");
 	expect(collapsed).not.toContain("第二行");
-	expect(collapsed.split("\n").every((line: string) => line.length <= 24)).toBeTrue();
+	expect(collapsed.split("\n").every((line: string) => visibleWidth(line) <= 24)).toBeTrue();
 
 	const expanded = render({ data: card }, { expanded: true }, theme).render(24).join("\n");
 	expect(expanded.replaceAll("\n", "")).toContain("第一行建议很长，需要按宽截断");
