@@ -228,7 +228,7 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	expect(idleLine).toContain("落定 1m5s前");
 });
 
-test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文件隐藏在嵌套目录", async () => {
+test("主回合忙碌时，subagents 以队列语义完成 start→事件落定→list→kill", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
 	faux.setResponses([fauxAssistantMessage("确定性完成")]);
@@ -252,7 +252,7 @@ test("subagents 以真 SDK 会话完成 start→事件落定→list→kill，文
 	]);
 	expect(harness.messages[0]).toMatchObject({
 		message: { content: "<firecode_master_event>\n子代理 trace 已停下\n回复：\n确定性完成\n</firecode_master_event>" },
-		options: { deliverAs: "steer", triggerTurn: false },
+		options: { deliverAs: "steer", triggerTurn: true },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
 	expect(trace.content[0].text).toContain("assistant: 确定性完成");
@@ -318,7 +318,7 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
-test("并发落定合并为一条 steer，投递前写 pending、成功后写 ack", async () => {
+test("主回合空闲时，并发落定合并为一条 steer，投递前写 pending、成功后写 ack", async () => {
 	const harness = await setup();
 	let release!: () => void;
 	const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -782,7 +782,6 @@ async function setup(activate = true, options: {
 	const appended: Array<[string, any]> = [];
 	const entries: any[] = [];
 	let onMessage: (() => void) | undefined;
-	let idle = true;
 	let activeTools = ["read", "bash", "edit", "write"];
 	const pi = {
 		registerMessageRenderer() {},
@@ -802,7 +801,6 @@ async function setup(activate = true, options: {
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
 		cwd,
-		isIdle: () => idle,
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getSessionFile: () => main.getSessionFile(),
@@ -833,7 +831,6 @@ async function setup(activate = true, options: {
 		appended,
 		entries,
 		pool,
-		set idle(value: boolean) { idle = value; },
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		command,
 		emit: async (name: string, event: any) => {
