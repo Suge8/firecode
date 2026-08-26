@@ -15,7 +15,6 @@ const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await impor
 const TEST_MODEL = { model: "test/worker", thinking: "medium", use: "测试" };
 const TEST_MODEL_2 = { model: "test/worker-2", thinking: "high", use: "切换测试" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-const savedWorkerMarker = process.env.FIRECODE_MASTER_WORKER;
 
 let faux: any;
 let directory: string | undefined;
@@ -27,8 +26,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	if (savedWorkerMarker === undefined) delete process.env.FIRECODE_MASTER_WORKER;
-	else process.env.FIRECODE_MASTER_WORKER = savedWorkerMarker;
 	await cleanupFirecodeModules();
 });
 
@@ -528,6 +525,41 @@ test("v6 状态由所有者丢弃并告知旧进程不纳入新池", async () =>
 	}
 });
 
+test("显式 observer 角色不注册 Master 工具面", async () => {
+	const harness = await loadFirecodeModule("role-harness.js", {
+		configJsonc: JSON.stringify({
+			features: {
+				header: false, statusbar: false, tools: false, presets: false, rename: false,
+				stats: false, claudeSub: false, openaiNative: false, workingFlame: false,
+				bark: false, review: false, master: true, watcher: false,
+			},
+			review: TEST_REVIEW_CONFIG,
+			master: { models: [TEST_MODEL], workerExcludeExtensions: [], autoActivate: true },
+		}),
+		extraFiles: {
+			"role-harness.ts": [
+				'import firecode from "./index.js";',
+				'import { withSubsessionRole } from "./master/role.js";',
+				'export const register = (pi: unknown) => withSubsessionRole("observer", async () => firecode(pi as never));',
+			].join("\n"),
+		},
+	}) as { register: (pi: unknown) => Promise<void> };
+	const commands = new Map<string, unknown>();
+	const tools = new Map<string, unknown>();
+	const handlers = new Map<string, unknown[]>();
+	await harness.register({
+		registerMessageRenderer() {}, registerEntryRenderer() {}, registerShortcut() {},
+		registerCommand: (name: string, command: unknown) => commands.set(name, command),
+		registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
+		getActiveTools: () => [], setActiveTools() {},
+		on: (name: string, handler: unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		events: { on() {}, emit() {} },
+	});
+	expect(commands.has("fire-master")).toBe(false);
+	expect(tools.has("subagents")).toBe(false);
+	expect(handlers.has("tool_call")).toBe(true);
+});
+
 test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
@@ -539,7 +571,7 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 			master: { models: [TEST_MODEL, TEST_MODEL_2] },
 		}),
 	}) as any;
-	const register = () => {
+	const register = (worker = false) => {
 		const handlers = new Map<string, any[]>();
 		const commands = new Map<string, any>();
 		const tools = new Map<string, any>();
@@ -550,13 +582,11 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 			getActiveTools: () => [], setActiveTools() {},
 			on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
 			events: { on() {}, emit() {} },
-		});
+		}, {}, worker);
 		return { handlers, commands, tools };
 	};
 
-	process.env.FIRECODE_MASTER_WORKER = "guarded";
-	const workerRegistration = register();
-	delete process.env.FIRECODE_MASTER_WORKER;
+	const workerRegistration = register(true);
 	const ctx = { cwd };
 	expect(workerRegistration.commands.size).toBe(0);
 	expect(workerRegistration.tools.size).toBe(0);
@@ -594,7 +624,6 @@ async function setup(activate = true, options: {
 	}
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	delete process.env.FIRECODE_MASTER_WORKER;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("master/spawn.js");

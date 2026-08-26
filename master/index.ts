@@ -80,8 +80,12 @@ interface MasterRuntime {
 	turnActive: boolean;
 }
 
-export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
-	if (process.env.FIRECODE_MASTER_WORKER) {
+export function registerMaster(
+	pi: ExtensionAPI,
+	dependencies: MasterDependencies = {},
+	worker = false,
+): void {
+	if (worker) {
 		pi.on("tool_call", async (event, ctx) => {
 			if (!isToolCallEventType("edit", event) && !isToolCallEventType("write", event)) return;
 			const reason = await outsideCheckoutReason(event.input.path, ctx.cwd);
@@ -251,6 +255,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(worker.model);
 		const spawned = await pool.spawn({
 			cwd: worker.cwd ?? process.cwd(),
+			role: "worker",
 			model,
 			thinking: worker.thinking,
 			tools: WORKER_TOOLS,
@@ -545,6 +550,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
 					const spawned = await active.pool.spawn({
 						cwd,
+						role: "worker",
 						model,
 						thinking: selection.thinking,
 						tools: WORKER_TOOLS,
@@ -567,7 +573,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 	pi.on("session_start", (_event, ctx) => {
 		deactivate();
-		if (!autoActivate) return;
+		if (!autoActivate || "error" in loaded) return;
 		try {
 			activateSession(ctx);
 		} catch (error) {
@@ -711,7 +717,7 @@ function reviewGateError(): string | undefined {
 	if (loaded.config.features.review === false) return "fire-review 已关闭，不能挂审查义务或发起审查";
 	const problems = loaded.problems.filter((problem) =>
 		problem.startsWith("review") || problem.startsWith("未知字段 review.") || problem.startsWith("config.jsonc"));
-	return problems.length ? `fire-review 配置有问题：${problems.join("；")}` : undefined;
+	return problems.length ? `fire-review 配置有问题，已停止：${problems.join("；")}` : undefined;
 }
 
 function loadMasterConfiguration() {

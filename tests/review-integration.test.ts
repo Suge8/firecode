@@ -46,14 +46,7 @@ async function loadAll() {
 afterEach(cleanupFirecodeModules);
 
 function inCommanderSession(run: () => void): void {
-	const saved = process.env.FIRECODE_MASTER_WORKER;
-	delete process.env.FIRECODE_MASTER_WORKER;
-	try {
-		run();
-	} finally {
-		if (saved === undefined) delete process.env.FIRECODE_MASTER_WORKER;
-		else process.env.FIRECODE_MASTER_WORKER = saved;
-	}
+	run();
 }
 
 function makeSessionManager() {
@@ -151,26 +144,27 @@ function reviewer(index: number, status: ReviewerResult["status"], details: stri
 }
 
 async function loadReviewWithVerdict(verdict: string, maxRounds?: number) {
-	const script = join(tmpdir(), `fake-pi-${Date.now()}-${Math.random()}.sh`);
-	const event = JSON.stringify({
-		type: "message_end",
-		message: { role: "assistant", content: [{ type: "text", text: verdict }] },
-	});
-	await writeFile(script, `#!/bin/bash\nprintf '%s\\n' '${event}'\n`, { mode: 0o755 });
+	const script = join(tmpdir(), `fake-review-${Date.now()}-${Math.random()}`);
 	const review = (await loadFirecodeModule("review/index.js", {
 		configJsonc: reviewConfig({
 			reviewers: [{ model: "p/one", thinking: "low" }],
 			...(maxRounds === undefined ? {} : { maxRounds }),
-			background: { command: script },
 		}),
-	})) as { registerReview: (pi: unknown) => void };
+	})) as { registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void };
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 		readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
 	};
 	const outcome = (await loadFirecodeModule("review/outcome.js")) as {
 		readReviewOutcome: (sessionPath: string) => { status: string; rounds?: number };
 	};
-	return { ...review, ...checkpoint, ...outcome, script };
+	return {
+		...checkpoint,
+		...outcome,
+		script,
+		registerReview: (pi: unknown) => review.registerReview(pi, true, false, {
+			runSession: async () => ({ kind: "output", text: verdict }),
+		}),
+	};
 }
 
 const FAIL_VERDICT = [
@@ -480,32 +474,32 @@ describe("registerReview wiring", () => {
 		await rm(sessionPath, { force: true });
 	}, 20_000);
 
-	test("headless session shutdown cancels the review and kills its subprocess", async () => {
-		const marker = join(tmpdir(), `fire-review-headless-${Date.now()}-${Math.random()}`);
-		const script = `${marker}.sh`;
-		await writeFile(script, `#!/bin/sh\necho $$ > '${marker}'\nwhile :; do sleep 1; done\n`, { mode: 0o755 });
+	test("headless session shutdown cancels the active review session", async () => {
+		let started!: () => void;
+		const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
 		const module = (await loadFirecodeModule("review/index.js", {
-			configJsonc: reviewConfig({
-				reviewers: [{ model: "p/one", thinking: "low" }],
-				background: { command: script },
-			}),
-		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
+			configJsonc: reviewConfig({ reviewers: [{ model: "p/one", thinking: "low" }] }),
+		})) as {
+			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void;
+			__reviewFlushForTests: () => Promise<void>;
+		};
 		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
 		};
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi);
+		module.registerReview(pi, true, false, {
+			runSession: ({ signal }: { signal?: AbortSignal }) => new Promise((resolve) => {
+				started();
+				signal?.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true });
+			}),
+		});
 		const ctx = makeHeadlessCtx(sessionManager);
-		ctx.cwd = tmpdir();
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 80 && !existsSync(marker); wait += 1)
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		expect(existsSync(marker)).toBe(true);
-		const pid = Number(await Bun.file(marker).text());
+		await sessionStarted;
 		const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
 			event: { reason: "quit" },
 			ctx: unknown,
@@ -513,14 +507,11 @@ describe("registerReview wiring", () => {
 		await shutdown({ reason: "quit" }, ctx);
 		await module.__reviewFlushForTests();
 		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
-		expect(() => process.kill(pid, 0)).toThrow();
-		await rm(script, { force: true });
-		await rm(marker, { force: true });
 	}, 10_000);
 
 	test("installs the activity bar and locks editor when review starts", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
-			configJsonc: reviewConfig({ background: { command: "/usr/bin/true" } }),
+			configJsonc: reviewConfig(),
 		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -617,6 +608,7 @@ describe("registerReview wiring", () => {
 					openaiNative: false,
 					review: false,
 					master: false,
+					watcher: false,
 				},
 			}),
 		})) as { default: (pi: unknown) => void };
@@ -1016,7 +1008,8 @@ describe("review config is rejected at every entry point", () => {
 			ctx: unknown,
 		) => Promise<void>;
 		await handler({ type: "session_start", reason: "startup" }, ctx);
-		expect(notices.join()).toContain("配置有问题");
+		// 启动告警由 FireCode 入口统一聚合，review 只负责保留可恢复 checkpoint。
+		expect(notices).toEqual([]);
 		expect(readCheckpoint({ sessionManager })).toMatchObject({
 			runId: "g",
 			phase: "reviewing",
@@ -1031,14 +1024,12 @@ describe("reload recovery actually resumes the loop", () => {
 	test("restored reviewers wait for the post-session event after later async handlers", async () => {
 		await loadAll();
 		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
-		const script = join(tmpdir(), `fire-review-resume-${Date.now()}.sh`);
-		await writeFile(script, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
 		const module = (await loadFirecodeModule("review/index.js", {
-			configJsonc: reviewConfig({
-				reviewers: [{ model: "p/one", thinking: "low" }],
-				background: { command: script },
-			}),
-		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
+			configJsonc: reviewConfig({ reviewers: [{ model: "p/one", thinking: "low" }] }),
+		})) as {
+			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void;
+			__reviewFlushForTests: () => Promise<void>;
+		};
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		let resolveReview!: () => void;
@@ -1061,7 +1052,12 @@ describe("reload recovery actually resumes the loop", () => {
 			roundStartedAt: Date.now(),
 			updatedAt: Date.now(),
 		});
-		module.registerReview(pi);
+		module.registerReview(pi, true, false, {
+			runSession: async () => {
+				await writeFile(marker, "started");
+				return { kind: "empty" };
+			},
+		});
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
 		const sessionStart = (registered.events.get("session_start") ?? [])[0] as (event: unknown, ctx: unknown) => Promise<void>;
@@ -1079,7 +1075,6 @@ describe("reload recovery actually resumes the loop", () => {
 		for (const handler of registered.events.get("agent_settled") ?? []) await handler({}, ctx);
 		await reviewSettled;
 		expect(existsSync(marker)).toBe(true);
-		await rm(script, { force: true });
 		await rm(marker, { force: true });
 	});
 
@@ -1119,8 +1114,7 @@ describe("reload recovery actually resumes the loop", () => {
 
 	test("a queued review resumes on session_start when the session is idle", async () => {
 		const { registerReview } = (await loadFirecodeModule("review/index.js", {
-			// 子进程立即退出：只验证循环是否真的被推进，不依赖模型
-			configJsonc: reviewConfig({ background: { command: "/usr/bin/true" } }),
+			configJsonc: reviewConfig(),
 		})) as { registerReview: (pi: unknown) => void };
 		const checkpointModule = (await loadFirecodeModule("review/checkpoint.js")) as {
 			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
@@ -1261,7 +1255,7 @@ describe("the loop survives failing side effects", () => {
 		await rm(script, { force: true });
 	}, 20_000);
 
-	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起子进程、投反馈。
+	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起审查会话、投反馈。
 	test("a checkpoint write failure stops the review instead of pressing on", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();

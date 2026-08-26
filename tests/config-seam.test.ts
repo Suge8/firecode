@@ -59,8 +59,8 @@ test("missing runtime config disables optional behavior and warns on each sessio
 		for (const handler of events.get("session_start") ?? [])
 			handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
 	expect(warnings).toEqual([
-		"FireCode 配置：config.jsonc 不存在，已关闭可选功能",
-		"FireCode 配置：config.jsonc 不存在，已关闭可选功能",
+		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
+		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
 	]);
 });
 
@@ -78,6 +78,7 @@ test("runtime config enables only its declared behavior", async () => {
 			"bark",
 			"review",
 			"master",
+			"watcher",
 		].map((feature) => [feature, false]).concat([["rename", true]])),
 		keys: { rename: "alt+r" },
 	});

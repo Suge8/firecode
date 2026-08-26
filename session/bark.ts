@@ -63,9 +63,9 @@ export function pushBark(input: { title: string; body: string; group: string; se
 	void sendBark(buildBarkPayload({ ...input, awaitingDecision: false }));
 }
 
-export function registerBark(pi: ExtensionAPI): void {
-	// Worker 也加载本插件；通知只归指挥官会话。
-	if (process.env.FIRECODE_MASTER_WORKER) return;
+export function registerBark(pi: ExtensionAPI, subsession = false): void {
+	// 通知只归指挥官会话。
+	if (subsession) return;
 
 	let lastAssistantText = "";
 

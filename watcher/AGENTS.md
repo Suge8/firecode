@@ -1,8 +1,7 @@
 # watcher：观察员
 
 主会话每个 turn 结束后异步评估增量，按 nit / concern / blocker 三档投递建议。独立于 Master 与
-fire-review 注册，关掉不影响其余；Worker 会话（`FIRECODE_MASTER_WORKER`）里不注册，审查子进程带
-`--no-extensions` 天然没有。
+fire-review 注册，关掉不影响其余；spawn 通过显式会话角色阻止 Worker、观察员与审查会话级联注册。
 
 ## 观察会话
 

@@ -80,7 +80,7 @@ _避免使用_：自动重发、心跳
 _避免使用_：Master Review Gate、Worker Validator
 
 **审查者（Reviewer）**：
-每轮并行挑错的独立 pi 子进程，首行输出 PASS/FAIL；全部 PASS 才算过。
+每轮并行挑错的独立进程内会话，首行输出 PASS/FAIL；全部 PASS 才算过。
 _避免使用_：质检员、子代理
 
 **顾问（Advisor）**：
