@@ -70,8 +70,8 @@ test("自定义系统提示仍注入选型表与四项调度纪律", async () =>
 	const systemPrompt = await harness.systemPrompt("自定义系统提示");
 	expect(systemPrompt.startsWith("自定义系统提示\n\n")).toBe(true);
 	expect(systemPrompt).toContain("选型表：test/worker（测试，thinking medium）");
-	expect(systemPrompt).toContain("等待类任务");
-	expect(systemPrompt).toContain("最便宜模型");
+	expect(systemPrompt).toContain("哨兵纪律");
+	expect(systemPrompt).toContain("动手边界");
 	expect(systemPrompt).toContain("调查/哨兵票收割要点后立即 kill");
 	expect(systemPrompt).toContain("实现票保留待收口");
 	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
