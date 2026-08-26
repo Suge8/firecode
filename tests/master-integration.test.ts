@@ -65,7 +65,7 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
-test("自定义系统提示仍注入选型表与三项调度纪律", async () => {
+test("自定义系统提示仍注入选型表与四项调度纪律", async () => {
 	const harness = await setup();
 	const systemPrompt = await harness.systemPrompt("自定义系统提示");
 	expect(systemPrompt.startsWith("自定义系统提示\n\n")).toBe(true);
@@ -75,6 +75,7 @@ test("自定义系统提示仍注入选型表与三项调度纪律", async () =>
 	expect(systemPrompt).toContain("调查/哨兵票收割要点后立即 kill");
 	expect(systemPrompt).toContain("实现票保留待收口");
 	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
+	expect(systemPrompt).toContain("子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节");
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
 });
