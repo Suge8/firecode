@@ -408,7 +408,7 @@ describe("review config strictness", () => {
 		);
 		expect(problems).toContain("未知字段 review.advisor.thinkig");
 		expect(problems).toContain("未知字段 review.reviewers[0].extra");
-		expect(problems).toContain("未知字段 review.background");
+		expect(problems).toContain("review.background 已随审查子进程层删除，请直接移除该键");
 		expect(problems).toContain("review.tools 必须是字符串数组");
 	});
 

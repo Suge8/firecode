@@ -249,7 +249,6 @@ function loadReviewConfig(): { config: ReviewConfig } | { error: string } {
 			error: `fire-review 配置读取失败：${error instanceof Error ? error.message : String(error)}`,
 		};
 	}
-	// 两类都必须阻断：文件整体解析不了（此时 review 节根本没被读到），以及 review 节自身有错。
 	// 三类都必须阻断：文件整体解析不了、review 节自身有错、
 	// 以及 features.review 开关类型错（字符串 "false" 会因 `!== false` 静默启用付费审查）。
 	const problems = loaded.problems.filter(

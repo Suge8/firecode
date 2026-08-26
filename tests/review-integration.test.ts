@@ -45,10 +45,6 @@ async function loadAll() {
 
 afterEach(cleanupFirecodeModules);
 
-function inCommanderSession(run: () => void): void {
-	run();
-}
-
 function makeSessionManager() {
 	const entries: unknown[] = [];
 	return {
@@ -636,13 +632,13 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		inCommanderSession(() => entry.default({
+		entry.default({
 			...pi,
 			events: { ...pi.events, on() {} },
 			registerTool() {},
 			getActiveTools: () => [],
 			setActiveTools() {},
-		}));
+		});
 		expect(registered.commands.has("fire-review")).toBe(false);
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
@@ -666,13 +662,13 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		inCommanderSession(() => entry.default({
+		entry.default({
 			...pi,
 			events: { ...pi.events, on() {} },
 			registerTool() {},
 			getActiveTools: () => [],
 			setActiveTools() {},
-		}));
+		});
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
 

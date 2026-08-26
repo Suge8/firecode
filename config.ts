@@ -255,8 +255,12 @@ const LANGUAGES = new Set<Language>(["zh", "en"]);
 
 /** 导出供测试：严格拒绝未知字段（含嵌套），类型错误一律记录而非静默回退。 */
 export function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): ReviewConfig {
-	for (const key of Object.keys(raw))
-		if (!REVIEW_KEYS.has(key)) problems.push(`未知字段 review.${key}`);
+	for (const key of Object.keys(raw)) {
+		if (REVIEW_KEYS.has(key)) continue;
+		problems.push(key === "background"
+			? "review.background 已随审查子进程层删除，请直接移除该键"
+			: `未知字段 review.${key}`);
+	}
 	for (const key of REVIEW_KEYS)
 		if (!(key in raw)) problems.push(`review.${key} 必须显式配置`);
 	const advisor = reviewModel(raw.advisor, "review.advisor", EMPTY_REVIEW_MODEL, problems);
