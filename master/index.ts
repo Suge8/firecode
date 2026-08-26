@@ -96,6 +96,7 @@ export function registerMaster(
 	let runtime: MasterRuntime | undefined;
 	const loaded = loadMasterConfiguration();
 	const roster = "error" in loaded ? [] : loaded.models;
+	const guidelines = masterGuidelines(roster).join("\n");
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
 	const autoActivate = "error" in loaded ? false : loaded.autoActivate;
 	const reviewGate = reviewGateError();
@@ -339,10 +340,15 @@ export function registerMaster(
 		},
 	});
 
+	pi.on("before_agent_start", async (event) => {
+		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
+		return { systemPrompt: `${event.systemPrompt}\n\n${guidelines}` };
+	});
+
 	pi.registerTool({
 		name: MASTER_TOOL,
 		label: "子代理",
-		description: "指挥官的子代理接口：start、send、interrupt、review、tail、ack、list、kill。",
+		description: "指挥官的八动作子代理接口：start 新建，send 续派或切换模型，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，list 查看池，kill 收口移除；无 sleep/session。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
@@ -353,15 +359,16 @@ export function registerMaster(
 				return expandedWorkerList(details.workers, theme, context);
 			return renderSubagentsResult(result, options, theme, context);
 		},
-		promptGuidelines: masterGuidelines(roster),
 		parameters: Type.Object({
-			action: StringEnum(["list", "start", "send", "interrupt", "review", "tail", "ack", "kill"] as const),
-			worker: Type.Optional(Type.String()),
-			prompt: Type.Optional(Type.String()),
-			model: Type.Optional(Type.String()),
-			thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
-			cwd: Type.Optional(Type.String()),
-			review: Type.Optional(Type.Boolean()),
+			action: StringEnum(["list", "start", "send", "interrupt", "review", "tail", "ack", "kill"] as const, {
+				description: "八动作之一；等待状态变化，不要用 sleep 轮询。",
+			}),
+			worker: Type.Optional(Type.String({ description: "start 必填简短任务名；send/interrupt/review/tail/ack/kill 必填目标 Worker。" })),
+			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
+			model: Type.Optional(Type.String({ description: "start 必填：从选型表选 provider/model；send 可传以原地切换，省略则沿用。" })),
+			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "start 必填；send 可传以原地切换思考档，省略则沿用。" })),
+			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
+			review: Type.Optional(Type.Boolean({ description: "start/send 的重要实现票设 true 以记录审查义务；完成后必须显式发起 review。" })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
@@ -475,7 +482,7 @@ export function registerMaster(
 					throw new Error(`${target.name} 正在处理其他动作；急件先 interrupt 再 send`);
 				const requestedModel = optionalString(params.model);
 				if (requestedModel && !roster.some((entry) => entry.model === requestedModel))
-					throw new Error(`model 不在选型表：${requestedModel}`);
+					throw new Error(`model 不在选型表：${requestedModel}。选型表：${rosterText(roster)}`);
 				const requestedThinking = optionalString(params.thinking);
 				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
 					throw new Error(`thinking 值无效：${requestedThinking}`);
@@ -736,17 +743,24 @@ function loadMasterConfiguration() {
 function resolveSelection(models: MasterModel[], params: Record<string, unknown>) {
 	const model = optionalString(params.model);
 	const entry = models.find((candidate) => candidate.model === model);
-	if (!entry) throw new Error(model ? `model 不在选型表：${model}` : "start 必须显式指定 model");
+	if (!entry) {
+		const reason = model ? `model 不在选型表：${model}` : "start 必须显式指定 model";
+		throw new Error(`${reason}。选型表：${rosterText(models)}`);
+	}
 	const thinking = optionalString(params.thinking);
 	if (!thinking) throw new Error(`start 必须显式指定 thinking：${entry.model} 默认档是 ${entry.thinking}`);
 	if (!THINKING_LEVELS.includes(thinking as WorkerRef["thinking"])) throw new Error(`thinking 值无效：${thinking}`);
 	return { model: entry.model, thinking: thinking as WorkerRef["thinking"] };
 }
 
+function rosterText(models: MasterModel[]): string {
+	return models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；");
+}
+
 function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
-		`选型表：${models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；")}。start 必须显式传 model 与 thinking。`,
+		`选型表：${rosterText(models)}。start 必须显式传 model 与 thinking。`,
 		"哨兵纪律：CI watch、部署观察、长测试等会占住回合的等待类任务，派最便宜模型的哨兵票盯守，结果会自动送达。",
 		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
 		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
