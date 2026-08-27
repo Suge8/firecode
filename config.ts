@@ -50,14 +50,17 @@ export interface MasterModelAtom {
 	thinking: ThinkingLevelValue;
 }
 
+export const MASTER_ROLES = ["调研员", "工程师", "全栈", "架构师", "设计师", "哨兵"] as const;
+export type MasterRoleName = (typeof MASTER_ROLES)[number];
+
 export interface MasterRole extends MasterModelAtom {
-	role: string;
+	role: MasterRoleName;
 	use: string;
 	fallback: MasterModelAtom[];
 }
 
 export interface MasterConfig {
-	models: MasterRole[];
+	roles: MasterRole[];
 	workerExcludeExtensions: string[];
 	autoActivate: boolean;
 }
@@ -354,19 +357,25 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 /** 导出供测试：与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
 export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
 	for (const key of Object.keys(raw))
-		if (key !== "models" && key !== "workerExcludeExtensions" && key !== "autoActivate")
+		if (key !== "roles" && key !== "workerExcludeExtensions" && key !== "autoActivate")
 			problems.push(`未知字段 master.${key}`);
 	const exclusions = stringArray(raw.workerExcludeExtensions, "master.workerExcludeExtensions", problems);
 	const autoActivate = booleanValue(raw.autoActivate, "master.autoActivate", true, problems);
-	if (raw.models === undefined) return { models: [], workerExcludeExtensions: exclusions, autoActivate };
-	if (!Array.isArray(raw.models) || raw.models.length === 0 || raw.models.length > 8) {
-		problems.push("master.models 必须包含 1–8 个角色");
-		return { models: [], workerExcludeExtensions: exclusions, autoActivate };
+	if (raw.roles === undefined)
+		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
+	if (!isPlainObject(raw.roles) || Object.keys(raw.roles).length === 0) {
+		problems.push("master.roles 必须是至少包含一个固定角色的对象");
+		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
 	}
-	const models = raw.models.map((item, index) => masterRole(item, `master.models[${index}]`, problems));
-	if (new Set(models.map((entry) => entry.role)).size !== models.length)
-		problems.push("master.models 角色名不能重复");
-	return { models, workerExcludeExtensions: exclusions, autoActivate };
+	const configured = raw.roles;
+	for (const role of Object.keys(configured))
+		if (!MASTER_ROLES.includes(role as MasterRoleName))
+			problems.push(`未知角色 master.roles.${role}，可用：${MASTER_ROLES.join(" / ")}`);
+	const roles = MASTER_ROLES.flatMap((role) =>
+		Object.hasOwn(configured, role)
+			? [masterRole(configured[role], `master.roles.${role}`, role, problems)]
+			: []);
+	return { roles, workerExcludeExtensions: exclusions, autoActivate };
 }
 
 function booleanValue(value: unknown, field: string, fallback: boolean, problems: string[]): boolean {
@@ -385,11 +394,14 @@ function stringArray(value: unknown, field: string, problems: string[]): string[
 	return [...new Set(value)];
 }
 
-function masterRole(value: unknown, field: string, problems: string[]): MasterRole {
+function masterRole(
+	value: unknown,
+	field: string,
+	role: MasterRoleName,
+	problems: string[],
+): MasterRole {
 	const record = asRecord(value);
-	rejectUnknownKeys(record, ["role", "model", "use", "fallback"], field, problems);
-	const role = typeof record.role === "string" && record.role ? record.role : "";
-	if (!role) problems.push(`${field}.role 必须是非空字符串`);
+	rejectUnknownKeys(record, ["model", "use", "fallback"], field, problems);
 	const atom = masterModelAtom(record.model, `${field}.model`, problems);
 	const use = typeof record.use === "string" && record.use ? record.use : "";
 	if (!use) problems.push(`${field}.use 必须是非空字符串`);

@@ -12,8 +12,10 @@ import {
 } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
-const TEST_MODEL = { role: "工程师", model: "test/worker/medium", use: "测试" };
-const TEST_MODEL_2 = { role: "架构师", model: "test/worker-2/high", use: "切换测试" };
+const TEST_ROLES = {
+	工程师: { model: "test/worker/medium", use: "测试" },
+	架构师: { model: "test/worker-2/high", use: "切换测试" },
+};
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 let faux: any;
@@ -165,38 +167,41 @@ test("真 SDK 在执行前拒绝缺 worker 与旧 list 动作", async () => {
 
 test("角色表、原子与 fallback 配置错误时拒绝启动", async () => {
 	const harness = await setup(true, {
-		models: [{
-			role: "工程师",
-			model: "invalid/high",
-			thinking: "medium",
-			use: "旧写法",
-			fallback: ["test/a/low", "test/b/low", "test/c/low"],
-		} as any],
+		roles: {
+			工程师: {
+				model: "invalid/high",
+				thinking: "medium",
+				use: "旧写法",
+				fallback: ["test/a/low", "test/b/low", "test/c/low"],
+			} as any,
+		},
 	});
 	expect(harness.notices.join("\n")).toContain("Master 配置有问题，已停止");
-	expect(harness.notices.join("\n")).toContain("未知字段 master.models[0].thinking");
-	expect(harness.notices.join("\n")).toContain("master.models[0].model 模型无效");
-	expect(harness.notices.join("\n")).toContain("master.models[0].fallback 必须是至多 2 项的数组");
+	expect(harness.notices.join("\n")).toContain("未知字段 master.roles.工程师.thinking");
+	expect(harness.notices.join("\n")).toContain("master.roles.工程师.model 模型无效");
+	expect(harness.notices.join("\n")).toContain("master.roles.工程师.fallback 必须是至多 2 项的数组");
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 });
 
-test("角色选择拒绝错误回带完整角色表", async () => {
-	const harness = await setup();
-	const roster = "工程师：test/worker/medium（测试）；架构师：test/worker-2/high（切换测试）";
+test("角色表提示词只注入已配置角色，缺失角色拒绝派发并列出已配置项", async () => {
+	const harness = await setup(true, { roles: { 工程师: TEST_ROLES.工程师 } });
+	const prompt = await harness.systemPrompt("主提示词");
+	expect(prompt).toContain("角色表：工程师：test/worker/medium（测试）");
+	expect(prompt).not.toContain("架构师：");
 	await expect(harness.execute({
 		action: "start", worker: "missing-role", prompt: "执行",
 	})).rejects.toThrow("start 必须指定 role");
 	await expect(harness.execute({
-		action: "start", worker: "outside-roster", prompt: "执行", role: "未知角色",
-	})).rejects.toThrow(roster);
+		action: "start", worker: "outside-roster", prompt: "执行", role: "架构师",
+	})).rejects.toThrow("角色未配置：架构师。已配置角色：工程师");
 
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "start", worker: "switch-role", prompt: "执行", role: "工程师" });
 	await settled;
 	await expect(harness.execute({
-		action: "send", worker: "switch-role", prompt: "继续", role: "未知角色",
-	})).rejects.toThrow(roster);
+		action: "send", worker: "switch-role", prompt: "继续", role: "架构师",
+	})).rejects.toThrow("角色未配置：架构师。已配置角色：工程师");
 });
 
 test("subagents 是 worker 必填的七命令，池快照是独立零参查询", async () => {
@@ -215,6 +220,10 @@ test("subagents 是 worker 必填的七命令，池快照是独立零参查询",
 	expect(harness.parameterDescriptions.role).toContain("start 必填");
 	expect(harness.parameterDescriptions.role).toContain("send");
 	expect(harness.parameterDescriptions.role).toContain("切换");
+	expect(harness.commandTool.parameters.properties.role.anyOf?.map((item: any) => item.const)
+		?? harness.commandTool.parameters.properties.role.enum).toEqual([
+		"调研员", "工程师", "全栈", "架构师", "设计师", "哨兵",
+	]);
 	expect(harness.parameterDescriptions.review).toContain("审查纪律");
 	expect(harness.parameterDescriptions.review).toContain("true 不自动开审");
 	expect(harness.listTool.description).toBe("查看子代理池快照");
@@ -338,7 +347,10 @@ test("供应商故障在无 fallback 时明确报告链已用尽", async () => {
 
 test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定", async () => {
 	const harness = await setup(true, {
-		models: [{ ...TEST_MODEL, fallback: ["test/worker-2/high"] }, TEST_MODEL_2],
+		roles: {
+			...TEST_ROLES,
+			工程师: { ...TEST_ROLES.工程师, fallback: ["test/worker-2/high"] },
+		},
 	});
 	faux.setResponses([fauxAssistantMessage("已启动")]);
 	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -366,7 +378,10 @@ test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定"
 
 test("供应商故障按角色 fallback 在同一会话续跑并更新实际模型", async () => {
 	const harness = await setup(true, {
-		models: [{ ...TEST_MODEL, fallback: ["test/worker-2/high"] }, TEST_MODEL_2],
+		roles: {
+			...TEST_ROLES,
+			工程师: { ...TEST_ROLES.工程师, fallback: ["test/worker-2/high"] },
+		},
 	});
 	faux.setResponses([
 		fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" }),
@@ -872,7 +887,7 @@ test("显式 observer 角色不注册 Master 工具面", async () => {
 				bark: false, review: false, master: true, watcher: false,
 			},
 			review: TEST_REVIEW_CONFIG,
-			master: { models: [TEST_MODEL], workerExcludeExtensions: [], autoActivate: true },
+			master: { roles: { 工程师: TEST_ROLES.工程师 }, workerExcludeExtensions: [], autoActivate: true },
 		}),
 		extraFiles: {
 			"role-harness.ts": [
@@ -906,7 +921,7 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 		configJsonc: JSON.stringify({
 			features: { master: true, review: false },
 			review: TEST_REVIEW_CONFIG,
-			master: { models: [TEST_MODEL, TEST_MODEL_2] },
+			master: { roles: TEST_ROLES },
 		}),
 	}) as any;
 	const register = (worker = false) => {
@@ -951,7 +966,7 @@ async function setup(activate = true, options: {
 	autoActivate?: boolean;
 	deferUserMessage?: boolean;
 	promptFiles?: Record<string, string>;
-	models?: Array<{ role: string; model: string; use: string; fallback?: string[] }>;
+	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -1001,7 +1016,7 @@ async function setup(activate = true, options: {
 			features: { master: true, review: options.review === true },
 			review: TEST_REVIEW_CONFIG,
 			master: {
-				models: options.models ?? [TEST_MODEL, TEST_MODEL_2],
+				roles: options.roles ?? TEST_ROLES,
 				workerExcludeExtensions: [],
 				...(options.autoActivate === undefined ? {} : { autoActivate: options.autoActivate }),
 			},

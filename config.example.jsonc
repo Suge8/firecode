@@ -44,40 +44,34 @@
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
-		"models": [
-			{
-				"role": "调研员",
+		"roles": {
+			"调研员": {
 				"model": "openai-codex/gpt-5.6-luna/xhigh",
 				"use": "大规模并行调研，便宜，不承担实现"
 			},
-			{
-				"role": "工程师",
+			"工程师": {
 				"model": "openai-codex/gpt-5.6-sol/medium",
 				"use": "常规实现与调试，速度快",
 				"fallback": ["anthropic/claude-opus-5/medium"]
 			},
-			{
-				"role": "全栈",
+			"全栈": {
 				"model": "anthropic/claude-opus-5/medium",
 				"use": "前后端综合实现与调试",
 				"fallback": ["openai-codex/gpt-5.6-sol/medium"]
 			},
-			{
-				"role": "架构师",
+			"架构师": {
 				"model": "anthropic/claude-fable-5/high",
 				"use": "高级架构顾问；费用高，启用前必须先征求用户确认"
 			},
-			{
-				"role": "设计师",
+			"设计师": {
 				"model": "kimi-coding/k3-256k/high",
 				"use": "纯视觉设计；已有固定组件和设计方案时不适用"
 			},
-			{
-				"role": "哨兵",
+			"哨兵": {
 				"model": "openai-codex/gpt-5.6-luna/low",
 				"use": "盯守 CI、部署与长测试等等待过程"
 			}
-		]
+		}
 	},
 
 	"presets": {

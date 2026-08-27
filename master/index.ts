@@ -12,7 +12,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type MasterModelAtom, type MasterRole } from "../config.js";
+import { MASTER_ROLES, loadConfig, type MasterModelAtom, type MasterRole } from "../config.js";
 import { deliver } from "../deliver.js";
 import { formatDuration } from "../format.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
@@ -106,7 +106,7 @@ export function registerMaster(
 	const loaded = loadMasterConfiguration();
 	const prompts = loadMasterPrompts();
 	const startupError = "error" in loaded ? loaded.error : "error" in prompts ? prompts.error : undefined;
-	const roster = "error" in loaded ? [] : loaded.models;
+	const roster = "error" in loaded ? [] : loaded.roles;
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
 	const autoActivate = "error" in loaded ? false : loaded.autoActivate;
 	const requirePrompts = () => {
@@ -501,7 +501,7 @@ export function registerMaster(
 			}),
 			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
-			role: Type.Optional(Type.String({ description: "start 必填角色表角色；send 可选，传入时切换角色，省略则沿用。" })),
+			role: Type.Optional(StringEnum(MASTER_ROLES, { description: "start 必填固定角色；send 可选，传入时切换角色，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
 			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
 			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
@@ -917,15 +917,15 @@ function loadMasterConfiguration() {
 	} catch (error) {
 		return { error: `Master 配置读取失败：${error instanceof Error ? error.message : String(error)}` };
 	}
-	const problems = loaded.problems.filter((problem) => problem.startsWith("master") || problem.startsWith("未知字段 master.") || problem.startsWith("config.jsonc") || problem.startsWith("features"));
+	const problems = loaded.problems.filter((problem) => problem.startsWith("master") || problem.startsWith("未知字段 master.") || problem.startsWith("未知角色 master.") || problem.startsWith("config.jsonc") || problem.startsWith("features"));
 	if (problems.length) return { error: `Master 配置有问题，已停止：${problems.join("；")}` };
-	if (!loaded.config.master.models.length) return { error: "Master 配置有问题，已停止：请显式配置 master.models 角色表" };
+	if (!loaded.config.master.roles.length) return { error: "Master 配置有问题，已停止：请在 master.roles 至少配置一个角色" };
 	return loaded.config.master;
 }
 
-function resolveRole(models: MasterRole[], role: string): MasterRole {
-	const entry = models.find((candidate) => candidate.role === role);
-	if (!entry) throw new Error(`role 不在角色表：${role}。角色表：${rosterText(models)}`);
+function resolveRole(roles: MasterRole[], role: string): MasterRole {
+	const entry = roles.find((candidate) => candidate.role === role);
+	if (!entry) throw new Error(`角色未配置：${role}。已配置角色：${roles.map((candidate) => candidate.role).join("、")}`);
 	return entry;
 }
 

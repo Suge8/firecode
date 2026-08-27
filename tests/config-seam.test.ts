@@ -98,17 +98,17 @@ test("runtime config enables only its declared behavior", async () => {
 	expect(shortcuts).toEqual(["alt+r"]);
 });
 
-test("Master 角色表严格解析原子、唯一角色与 fallback", async () => {
+test("Master 固定角色对象严格解析原子与 fallback", async () => {
 	const { parseMasterConfig } = await loadFirecodeModule("config.ts") as any;
 	const validProblems: string[] = [];
 	const parsed = parseMasterConfig({
-		models: [
-			{ role: "工程师", model: "test/shared/medium", use: "实现", fallback: ["test/backup/high"] },
-			{ role: "哨兵", model: "test/shared/low", use: "盯守" },
-		],
+		roles: {
+			工程师: { model: "test/shared/medium", use: "实现", fallback: ["test/backup/high"] },
+			哨兵: { model: "test/shared/low", use: "盯守" },
+		},
 	}, validProblems);
 	expect(validProblems).toEqual([]);
-	expect(parsed.models).toEqual([
+	expect(parsed.roles).toEqual([
 		{
 			role: "工程师", model: "test/shared", thinking: "medium", use: "实现",
 			fallback: [{ model: "test/backup", thinking: "high" }],
@@ -118,16 +118,28 @@ test("Master 角色表严格解析原子、唯一角色与 fallback", async () =
 
 	const problems: string[] = [];
 	parseMasterConfig({
-		models: [
-			{ role: "重复", model: "invalid-model/high", thinking: "medium", use: "旧写法" },
-			{ role: "重复", model: "test/model/turbo", use: "坏档", fallback: ["test/a/low", "test/b/low", "test/c/low"] },
-		],
+		roles: {
+			工程师: {
+				model: "invalid-model/high", thinking: "medium", use: "旧写法",
+				fallback: ["test/a/low", "test/b/low", "test/c/low"],
+			},
+			哨兵: { model: "test/model/turbo", use: "坏档" },
+			自定义角色: { model: "test/model/low", use: "未知" },
+		},
 	}, problems);
-	expect(problems).toContain("未知字段 master.models[0].thinking");
-	expect(problems).toContain("master.models[0].model 模型无效：必须是 provider/model");
-	expect(problems).toContain("master.models[1].model 思考档无效：turbo");
-	expect(problems).toContain("master.models[1].fallback 必须是至多 2 项的数组");
-	expect(problems).toContain("master.models 角色名不能重复");
+	expect(problems).toContain("未知角色 master.roles.自定义角色，可用：调研员 / 工程师 / 全栈 / 架构师 / 设计师 / 哨兵");
+	expect(problems).toContain("未知字段 master.roles.工程师.thinking");
+	expect(problems).toContain("master.roles.工程师.model 模型无效：必须是 provider/model");
+	expect(problems).toContain("master.roles.哨兵.model 思考档无效：turbo");
+	expect(problems).toContain("master.roles.工程师.fallback 必须是至多 2 项的数组");
+
+	const emptyProblems: string[] = [];
+	parseMasterConfig({ roles: {} }, emptyProblems);
+	expect(emptyProblems).toContain("master.roles 必须是至少包含一个固定角色的对象");
+
+	const legacyProblems: string[] = [];
+	parseMasterConfig({ models: [{ role: "工程师", model: "test/model/low", use: "旧数组" }] }, legacyProblems);
+	expect(legacyProblems).toEqual(["未知字段 master.models"]);
 });
 
 test("公共配置模板可解析并启用完整推荐工作流", async () => {
@@ -140,7 +152,7 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.config.features.bark).toBeFalse();
 	expect(loaded.config.master.autoActivate).toBeTrue();
-	expect(loaded.config.master.models.map((entry: any) => entry.role)).toEqual([
+	expect(loaded.config.master.roles.map((entry: any) => entry.role)).toEqual([
 		"调研员", "工程师", "全栈", "架构师", "设计师", "哨兵",
 	]);
 	expect(loaded.config.watcher.enabled).toBeTrue();
