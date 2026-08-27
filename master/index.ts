@@ -393,7 +393,7 @@ export function registerMaster(
 			model: Type.Optional(Type.String({ description: "start 必填：从选型表选 provider/model；send 可传以原地切换，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "start 必填；send 可传以原地切换思考档，省略则沿用。" })),
 			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
-			review: Type.Optional(Type.Boolean({ description: "start/send 的重要实现票设 true 以记录审查义务；完成后必须显式发起 review。" })),
+			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
@@ -764,6 +764,8 @@ function rosterText(models: MasterModel[]): string {
 	return models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；");
 }
 
+const REVIEW_DISCIPLINE = "审查纪律：默认省略 review；仅高影响或难以窄测证明的重要实现设 review:true，典型边界是安全权限、持久化/迁移、并发/状态机、公共/跨进程接口、构建发布；调查、文档、机械修改、局部低风险修复、纯重构、纯追问均为轻量。review:true 只记录持久义务，不自动开审；义务在 send/中断/失败后保留并阻止 ack，完成且验证通过后显式 review，审查通过或质量裁决停止后消除义务；未挂义务的 idle Worker 仍可补审；拿不准先省略。";
+
 function masterGuidelines(models: MasterModel[]): string[] {
 	return [
 		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
@@ -775,6 +777,7 @@ function masterGuidelines(models: MasterModel[]): string[] {
 		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
 		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
 		"投递纪律：子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节。",
+		REVIEW_DISCIPLINE,
 		'调用样板：start {"worker":"fix-auth","model":"provider/model","thinking":"medium","prompt":"自包含工作说明"}。',
 	];
 }

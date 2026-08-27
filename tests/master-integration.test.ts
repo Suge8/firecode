@@ -65,7 +65,7 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
-test("自定义系统提示仍注入选型表与四项调度纪律", async () => {
+test("自定义系统提示仍注入选型表与调度纪律", async () => {
 	const harness = await setup();
 	const systemPrompt = await harness.systemPrompt("自定义系统提示");
 	expect(systemPrompt.startsWith("自定义系统提示\n\n")).toBe(true);
@@ -76,6 +76,10 @@ test("自定义系统提示仍注入选型表与四项调度纪律", async () =>
 	expect(systemPrompt).toContain("实现票保留待收口");
 	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
 	expect(systemPrompt).toContain("子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节");
+	expect(systemPrompt).toContain("审查纪律：默认省略 review；仅高影响或难以窄测证明的重要实现设 review:true，典型边界是安全权限、持久化/迁移、并发/状态机、公共/跨进程接口、构建发布");
+	expect(systemPrompt).toContain("调查、文档、机械修改、局部低风险修复、纯重构、纯追问均为轻量");
+	expect(systemPrompt).toContain("review:true 只记录持久义务，不自动开审；义务在 send/中断/失败后保留并阻止 ack，完成且验证通过后显式 review，审查通过或质量裁决停止后消除义务");
+	expect(systemPrompt).toContain("未挂义务的 idle Worker 仍可补审；拿不准先省略");
 	expect(systemPrompt).toContain('调用样板：start {"worker":"fix-auth"');
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
@@ -161,7 +165,8 @@ test("subagents 是 worker 必填的七命令，池快照是独立零参查询",
 	expect(harness.parameterDescriptions.model).toContain("start 必填");
 	expect(harness.parameterDescriptions.model).toContain("send");
 	expect(harness.parameterDescriptions.model).toContain("切换");
-	expect(harness.parameterDescriptions.review).toContain("显式发起 review");
+	expect(harness.parameterDescriptions.review).toContain("审查纪律");
+	expect(harness.parameterDescriptions.review).toContain("true 不自动开审");
 	expect(harness.listTool.description).toBe("查看子代理池快照");
 	expect(harness.listTool.parameters.required ?? []).toEqual([]);
 	expect(Object.keys(harness.listTool.parameters.properties)).toEqual([]);
