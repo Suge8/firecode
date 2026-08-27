@@ -336,6 +336,34 @@ test("供应商故障在无 fallback 时明确报告链已用尽", async () => {
 	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
+test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定", async () => {
+	const harness = await setup(true, {
+		models: [{ ...TEST_MODEL, fallback: ["test/worker-2/high"] }, TEST_MODEL_2],
+	});
+	faux.setResponses([fauxAssistantMessage("已启动")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({
+		action: "start", worker: "rate-limited", prompt: "初始化", role: "工程师",
+	});
+	await delivered;
+
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
+	const rateLimit = fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit exceeded" });
+	faux.setResponses([rateLimit, rateLimit]);
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "rate-limited", prompt: "继续" });
+	await delivered;
+
+	const content = harness.messages.at(-1).message.content;
+	expect(content).toContain("错误：\n429 rate limit exceeded");
+	expect(content).not.toContain("已切换");
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({
+		status: "idle", role: "工程师", model: "test/worker", thinking: "medium",
+	});
+});
+
 test("供应商故障按角色 fallback 在同一会话续跑并更新实际模型", async () => {
 	const harness = await setup(true, {
 		models: [{ ...TEST_MODEL, fallback: ["test/worker-2/high"] }, TEST_MODEL_2],
@@ -759,6 +787,30 @@ test("crash 恢复只重投 pending 减 ack 的差集", async () => {
 		"<firecode_master_event>\n未确认结果\n</firecode_master_event>",
 	]);
 	expect(harness.appended).toEqual([["firecode-master-event-ack", { ids: ["e1"] }]]);
+});
+
+test("send 只覆盖 thinking 时沿用当前角色与模型", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("第一轮"), fauxAssistantMessage("升档完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({
+		action: "start", worker: "thinking-only", prompt: "初始化", role: "工程师",
+	});
+	await delivered;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "send", worker: "thinking-only", prompt: "继续", thinking: "high",
+	});
+	await delivered;
+
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({
+		status: "idle", role: "工程师", model: "test/worker", thinking: "high",
+		session: (started.details as any).worker.session,
+	});
+	const sessionText = await Bun.file(worker.session).text();
+	expect(sessionText.match(/"type":"model_change"/gu)).toHaveLength(1);
 });
 
 test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地切换并入会话记录", async () => {
