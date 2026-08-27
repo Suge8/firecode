@@ -23,7 +23,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 - `ack`：消除待发落标记；审查义务未履行时拒绝。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
 
-`subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数，展开后每个 Worker 一行投影当前工具与耗时、审查轮次进度或落定相对时间。
+`subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数与每个 Worker 的「角色·状态」，展开后每个 Worker 一行以角色为主投影当前工具与耗时、审查轮次进度或落定相对时间，模型与思考档降为行尾次要信息。底栏指挥官段同源于池状态（见 statusbar 细则）。
 
 同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回。
 

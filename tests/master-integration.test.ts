@@ -43,13 +43,13 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
-test("status 每个子代理一行显示中文状态与模型短名", async () => {
+test("status 每个子代理一行以角色为主、模型短名次之", async () => {
 	const { statusText } = await loadFirecodeModule("master/index.js") as any;
 
 	expect(statusText([
-		{ name: "侦察", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
-		{ name: "验收", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
-	])).toBe("侦察 工作 gpt-5.1-codex-mini\n验收 审查 claude-sonnet-4-5");
+		{ name: "侦察", role: "调研员", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
+		{ name: "验收", role: "工程师", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
+	])).toBe("侦察 调研员·工作 gpt-5.1-codex-mini\n验收 工程师·审查 claude-sonnet-4-5");
 });
 
 test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
@@ -260,11 +260,11 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	expect(workingAction.startedAt <= toolEventAfter).toBe(true);
 	const collapsed = harness.renderListLine(listed);
 	expect(collapsed).toHaveLength(1);
-	expect(collapsed[0]).toContain("池 1");
+	expect(collapsed[0]).toContain("池 1：observed 工程师·工作");
 	(listed.details as any).workers[0].currentAction.startedAt = Date.now() - 300;
 	const expanded = harness.renderResult(listed, true).join("\n");
 	expect(expanded).toContain("observed");
-	expect(expanded).toMatch(/read · 已 0\.[34]s/u);
+	expect(expanded).toMatch(/工程师·工作 · read · 已 0\.[34]s/u);
 
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const settledBefore = Date.now();

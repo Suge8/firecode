@@ -130,9 +130,27 @@ export function registerMaster(
 	const requireRuntimeOwner = (active: MasterRuntime): void => {
 		if (!ownsRuntime(active)) throw new Error("Master 会话已替换，取消旧会话动作");
 	};
+	let spinFrame = 0;
+	let spinTimer: ReturnType<typeof setInterval> | undefined;
+	/** 计时器只在活动期存活：状态变化起停，全部落定即停，无常驻轮询。 */
+	const syncSpinner = (active: boolean) => {
+		if (active === (spinTimer !== undefined)) return;
+		if (!active) {
+			clearInterval(spinTimer);
+			spinTimer = undefined;
+			return;
+		}
+		spinTimer = setInterval(() => {
+			spinFrame += 1;
+			renderStatus();
+		}, SPINNER_MS);
+		spinTimer.unref?.();
+	};
 	const renderStatus = () => {
 		if (!runtime) return;
-		runtime.ctx.ui.setStatus("master", masterStatusLine(runtime.store.state.workers, runtime.ctx.ui.theme));
+		const workers = runtime.store.state.workers;
+		syncSpinner(masterActive(workers));
+		runtime.ctx.ui.setStatus("master", masterStatusLine(workers, runtime.ctx.ui.theme, spinFrame));
 	};
 	const activate = (ctx: ExtensionContext, restored?: MasterState): MasterRuntime => {
 		if (startupError) throw new Error(startupError);
@@ -166,6 +184,7 @@ export function registerMaster(
 		const active = runtime;
 		runtime = undefined;
 		pool.disposeAll();
+		syncSpinner(false);
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
 		activeRuns.clear();
@@ -957,6 +976,8 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 
 const renderSubagentsResult = makeResultRenderer(false);
 const STATUS_WORD = { working: "工作", idle: "空闲", reviewing: "审查" } satisfies Record<WorkerStatus, string>;
+const SPINNER_FRAMES = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
+const SPINNER_MS = 120;
 
 function reviewProgressFromEntry(entry: unknown): ReviewProgress | undefined {
 	if (!entry || typeof entry !== "object") return undefined;
@@ -1029,9 +1050,9 @@ function expandedWorkerList(
 				return new ToolLine({
 					label: String(worker.name),
 					value: [
-						{ text: `${String(worker.model).split("/").pop()}/${String(worker.thinking)}`, color: "muted" },
-						{ text: ` · ${STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status)}`, color: "accent" },
+						{ text: roleStatusText(worker), color: "accent" },
 						...actionParts,
+						{ text: ` · ${String(worker.model).split("/").pop()}/${String(worker.thinking)}`, color: "muted" },
 					],
 					clip: "end",
 					theme,
@@ -1045,19 +1066,45 @@ function listMeta(workers: unknown[]): Part[] {
 	if (!workers.length) return [{ text: " — 池 0", color: "muted" }];
 	return [{ text: ` — 池 ${workers.length}：${workers.map((value) => {
 		const worker = value as Record<string, unknown>;
-		return `${String(worker.name)} ${STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status)}`;
+		return `${String(worker.name)} ${roleStatusText(worker)}`;
 	}).join(" · ")}`, color: "muted" }];
 }
+/** 角色为主的状态投影：「工程师·工作」；档案缺角色时退到纯状态词。 */
+function roleStatusText(worker: { role?: unknown; status?: unknown }): string {
+	const status = STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status);
+	return worker.role ? `${String(worker.role)}·${status}` : status;
+}
+/** 有子代理在飞（工作或审查）时底栏活动动画运转，也是动画计时器的唯一起停判据。 */
+export function masterActive(workers: ReadonlyArray<Pick<WorkerRef, "status">>): boolean {
+	return workers.some((worker) => worker.status !== "idle");
+}
 export function masterStatusLine(
-	workers: ReadonlyArray<Pick<WorkerRef, "status">>,
+	workers: ReadonlyArray<Pick<WorkerRef, "status" | "role">>,
 	theme: Pick<ExtensionContext["ui"]["theme"], "fg">,
+	frame = 0,
 ): string {
-	const count = (status: WorkerStatus) => workers.filter((worker) => worker.status === status).length;
-	return `${theme.fg("dim", "👑 指挥官")}${count("working") ? theme.fg("dim", `/工作${count("working")}`) : ""}${count("reviewing") ? theme.fg("dim", `/审${count("reviewing")}`) : ""}${count("idle") ? theme.fg("dim", `/闲${count("idle")}`) : ""}`;
+	if (!workers.length) return theme.fg("dim", "👑 指挥官");
+	const spinner = masterActive(workers) ? `${SPINNER_FRAMES[frame % SPINNER_FRAMES.length]} ` : "";
+	const byRole = new Map<string, number>();
+	let idle = 0;
+	for (const worker of workers) {
+		if (worker.status === "idle") idle += 1;
+		else {
+			const initial = roleInitial(worker.role);
+			byRole.set(initial, (byRole.get(initial) ?? 0) + 1);
+		}
+	}
+	const counts = [...byRole].map(([initial, count]) => `${initial}${count}`);
+	if (idle) counts.push(`闲${idle}`);
+	return theme.fg("dim", `👑 ${spinner}${counts.join("·")}`);
+}
+/** 角色首字（按 code point 取，兼容 emoji 角色名）；无角色时以工作态首字兜底。 */
+function roleInitial(role: string | undefined): string {
+	return [...(role ?? "")][0] ?? STATUS_WORD.working[0]!;
 }
 export function statusText(workers: WorkerRef[]): string {
 	return workers.length
-		? workers.map((worker) => `${worker.name} ${STATUS_WORD[worker.status]} ${worker.model.split("/").pop()}`).join("\n")
+		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
 		: "没有子代理";
 }
 function compactWorker(worker: WorkerRef) {
