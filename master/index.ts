@@ -12,7 +12,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type MasterModel } from "../config.js";
+import { loadConfig, type MasterModelAtom, type MasterRole } from "../config.js";
 import { deliver } from "../deliver.js";
 import { formatDuration } from "../format.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
@@ -336,7 +336,7 @@ export function registerMaster(
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run || event.type !== "agent_end") return;
 			terminal = captureWorkerTerminal(event.messages);
 		});
-		const settled = (error?: unknown) => {
+		const settled = async (error?: unknown) => {
 			unsubscribeTerminal();
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
 			activeRuns.delete(worker.sessionPath);
@@ -352,10 +352,56 @@ export function registerMaster(
 				armInterruptReminder(active, interrupted);
 				return;
 			}
+			const fault = providerFaultReason(terminal);
+			if (fault && error === undefined) {
+				await resumeWithFallback(active, worker, session, terminal!, fault);
+				return;
+			}
 			const content = settleWorker(active, worker, terminal, error);
 			if (content) enqueueEvent(active, content, worker.name);
 		};
-		void session.prompt(prompt).then(() => settled(), settled);
+		void session.prompt(prompt).then(() => void settled(), (error) => void settled(error));
+	};
+	const resumeWithFallback = async (
+		active: MasterRuntime,
+		identity: WorkerRef,
+		session: Awaited<ReturnType<typeof openWorkerSession>>,
+		terminal: WorkerTerminal,
+		reason: string,
+	) => {
+		const current = currentWorker(active, identity);
+		const configuredRole = roster.find((entry) => entry.role === current.role);
+		if (!configuredRole) {
+			const failure = `${terminalFailure(terminal)}\n角色 ${current.role} 已不在角色表，无法 fallback`;
+			const content = settleWorker(active, current, terminal, new Error(failure));
+			if (content) enqueueEvent(active, content, current.name);
+			return;
+		}
+		const fallback = nextFallback(configuredRole, current);
+		if (!fallback) {
+			const failure = `${terminalFailure(terminal)}\n角色 ${current.role} 的 fallback 链已用尽`;
+			const content = settleWorker(active, current, terminal, new Error(failure));
+			if (content) enqueueEvent(active, content, current.name);
+			return;
+		}
+		try {
+			const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(fallback.model);
+			requireRuntimeOwner(active);
+			await session.setModel(model);
+			requireRuntimeOwner(active);
+			session.setThinkingLevel(fallback.thinking);
+			const latest = currentWorker(active, current);
+			const switched: WorkerRef = { ...latest, ...fallback, status: "working" };
+			active.store.dispatch({ type: "UPSERT_WORKER", worker: switched });
+			const from = modelAtomText(current);
+			const to = modelAtomText(fallback);
+			enqueueEvent(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
+			runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
+		} catch (error) {
+			const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
+			const content = settleWorker(active, current, terminal, new Error(failure));
+			if (content) enqueueEvent(active, content, current.name);
+		}
 	};
 
 	pi.registerCommand("fire-master", {
@@ -425,7 +471,7 @@ export function registerMaster(
 	pi.registerTool({
 		name: MASTER_TOOL,
 		label: "子代理",
-		description: "指挥官的七动作子代理接口：start 新建，send 续派或切换模型，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，kill 收口移除；无 sleep/session。",
+		description: "指挥官的七动作子代理接口：start 按角色新建，send 续派或切换角色，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，kill 收口移除；无 sleep/session。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
@@ -436,8 +482,8 @@ export function registerMaster(
 			}),
 			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
-			model: Type.Optional(Type.String({ description: "start 必填：从选型表选 provider/model；send 可传以原地切换，省略则沿用。" })),
-			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "start 必填；send 可传以原地切换思考档，省略则沿用。" })),
+			role: Type.Optional(Type.String({ description: "start 必填角色表角色；send 可选，传入时切换角色，省略则沿用。" })),
+			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
 			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
 			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
 		}),
@@ -543,9 +589,8 @@ export function registerMaster(
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 				if (target.status !== "idle" || transitioningNames.has(target.name))
 					throw new Error(`${target.name} 正在处理其他动作；急件先 interrupt 再 send`);
-				const requestedModel = optionalString(params.model);
-				if (requestedModel && !roster.some((entry) => entry.model === requestedModel))
-					throw new Error(`model 不在选型表：${requestedModel}。选型表：${rosterText(roster)}`);
+				const requestedRole = optionalString(params.role);
+				const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
 				const requestedThinking = optionalString(params.thinking);
 				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
 					throw new Error(`thinking 值无效：${requestedThinking}`);
@@ -553,28 +598,32 @@ export function registerMaster(
 				validateDelegationText(prompt);
 				transitioningNames.add(target.name);
 				try {
-					const nextModel = requestedModel
-						? await (dependencies.resolveModel ?? resolveConfiguredModel)(requestedModel)
+					const nextModel = selection
+						? await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model)
 						: undefined;
 					requireRuntimeOwner(active);
 					const session = await openWorkerSession(active, target);
 					await session.waitForIdle();
 					requireRuntimeOwner(active);
+					let role = target.role;
 					let model = target.model;
 					let thinking = target.thinking;
-					if (requestedModel && nextModel) {
+					if (selection && nextModel) {
 						await session.setModel(nextModel);
 						requireRuntimeOwner(active);
-						model = requestedModel;
+						role = selection.role;
+						model = selection.model;
+						thinking = selection.thinking;
 					}
-					if (requestedThinking) {
-						session.setThinkingLevel(requestedThinking as WorkerRef["thinking"]);
-						thinking = requestedThinking as WorkerRef["thinking"];
+					if (selection || requestedThinking) {
+						thinking = requestedThinking as WorkerRef["thinking"] | undefined ?? thinking;
+						session.setThinkingLevel(thinking);
 					}
 					const current = currentWorker(active, target);
 					const { disposition: _disposition, interruptedAt, ...rest } = current;
 					const activeWorker: WorkerRef = {
 						...rest,
+						role,
 						model,
 						thinking,
 						status: "working",
@@ -603,7 +652,14 @@ export function registerMaster(
 				throw new Error(`Worker 并发上限 15，当前在飞：${[...inFlight.map((worker) => worker.name), ...startingNames].join("、")}`);
 			const prompt = requiredString(params.prompt, "prompt");
 			validateDelegationText(prompt);
-			const selection = resolveSelection(roster, params);
+			const selectedRole = resolveRole(roster, requiredString(params.role, "start 必须指定 role"));
+			const requestedThinking = optionalString(params.thinking);
+			if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
+				throw new Error(`thinking 值无效：${requestedThinking}`);
+			const selection = {
+				...selectedRole,
+				thinking: requestedThinking as WorkerRef["thinking"] | undefined ?? selectedRole.thinking,
+			};
 			startingNames.add(name);
 			try {
 				const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
@@ -613,6 +669,7 @@ export function registerMaster(
 				const sessionPath = preallocateWorkerSession(mainSessionPath, cwd);
 				const worker: WorkerRef = {
 					name,
+					role: selection.role,
 					model: selection.model,
 					thinking: selection.thinking,
 					status: "working",
@@ -777,6 +834,18 @@ function terminalFailure(terminal: WorkerTerminal | undefined): string | undefin
 	return undefined;
 }
 
+function providerFaultReason(terminal: WorkerTerminal | undefined): string | undefined {
+	if (terminal?.stopReason !== "error" || !terminal.errorMessage) return undefined;
+	const message = terminal.errorMessage;
+	if (/GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota (?:exceeded|exhausted)|billing/iu.test(message))
+		return "额度或计费耗尽";
+	if (/(?:model|deployment).*(?:not found|does not exist|unavailable|not available|unsupported)|(?:not found|unavailable).*(?:model|deployment)/iu.test(message))
+		return "模型不可用或找不到";
+	if (/\b(?:500|502|503|504|524)\b|service.?unavailable|internal.?server.?error/iu.test(message))
+		return "持续 5xx，宿主重试已用尽";
+	return undefined;
+}
+
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
 	const message = messages.findLast((candidate) => candidate.role === "assistant");
 	return assistantText(message?.content);
@@ -831,25 +900,34 @@ function loadMasterConfiguration() {
 	}
 	const problems = loaded.problems.filter((problem) => problem.startsWith("master") || problem.startsWith("未知字段 master.") || problem.startsWith("config.jsonc") || problem.startsWith("features"));
 	if (problems.length) return { error: `Master 配置有问题，已停止：${problems.join("；")}` };
-	if (!loaded.config.master.models.length) return { error: "Master 配置有问题，已停止：请显式配置 master.models 选型表" };
+	if (!loaded.config.master.models.length) return { error: "Master 配置有问题，已停止：请显式配置 master.models 角色表" };
 	return loaded.config.master;
 }
 
-function resolveSelection(models: MasterModel[], params: Record<string, unknown>) {
-	const model = optionalString(params.model);
-	const entry = models.find((candidate) => candidate.model === model);
-	if (!entry) {
-		const reason = model ? `model 不在选型表：${model}` : "start 必须显式指定 model";
-		throw new Error(`${reason}。选型表：${rosterText(models)}`);
-	}
-	const thinking = optionalString(params.thinking);
-	if (!thinking) throw new Error(`start 必须显式指定 thinking：${entry.model} 默认档是 ${entry.thinking}`);
-	if (!THINKING_LEVELS.includes(thinking as WorkerRef["thinking"])) throw new Error(`thinking 值无效：${thinking}`);
-	return { model: entry.model, thinking: thinking as WorkerRef["thinking"] };
+function resolveRole(models: MasterRole[], role: string): MasterRole {
+	const entry = models.find((candidate) => candidate.role === role);
+	if (!entry) throw new Error(`role 不在角色表：${role}。角色表：${rosterText(models)}`);
+	return entry;
 }
 
-function rosterText(models: MasterModel[]): string {
-	return models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；");
+function nextFallback(role: MasterRole, worker: WorkerRef): MasterModelAtom | undefined {
+	const chain: MasterModelAtom[] = [role, ...role.fallback];
+	let index = chain.findIndex((atom) => atom.model === worker.model && atom.thinking === worker.thinking);
+	if (index < 0) index = chain.findIndex((atom) => atom.model === worker.model);
+	return chain[index + 1];
+}
+
+function rosterText(models: MasterRole[]): string {
+	return models.map((entry) => {
+		const fallback = entry.fallback.length
+			? `，fallback ${entry.fallback.map(modelAtomText).join(" → ")}`
+			: "";
+		return `${entry.role}：${modelAtomText(entry)}（${entry.use}${fallback}）`;
+	}).join("；");
+}
+
+function modelAtomText(atom: Pick<MasterModelAtom, "model" | "thinking">): string {
+	return `${atom.model}/${atom.thinking}`;
 }
 
 function masterEventEnvelope(content: string): string {
@@ -860,14 +938,18 @@ function resumeCheckPrompt(): string {
 	return masterEventEnvelope("上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。");
 }
 
+function fallbackResumePrompt(from: string, to: string, reason: string): string {
+	return masterEventEnvelope(`供应商故障，已切换 ${from}→${to}（${reason}）。沿用当前会话与原工作说明，从中断处继续，不要重复已经完成的副作用。`);
+}
+
 const ACTION_VERB: Record<string, string> = { start: "启动", list: "查看", kill: "移除", send: "发送", interrupt: "中断", review: "审查", tail: "近况", ack: "待命" };
 function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
 	const parts: Part[] = [{ text: ACTION_VERB[action] ?? action, bold: true }];
 	const target = optionalString(args.worker);
 	if (target) parts.push({ text: ` ${target}`, color: "accent" });
-	const model = optionalString(args.model);
-	if (action === "start" && model) parts.push({ text: ` · ${model.split("/").pop()}`, color: "muted" });
+	const role = optionalString(args.role);
+	if ((action === "start" || action === "send") && role) parts.push({ text: ` · ${role}`, color: "muted" });
 	const prompt = optionalString(args.prompt)?.split("\n", 1)[0];
 	if (prompt && action === "start") parts.push({ text: ` — ${prompt}`, color: "muted" });
 	return parts;
@@ -981,6 +1063,7 @@ export function statusText(workers: WorkerRef[]): string {
 function compactWorker(worker: WorkerRef) {
 	return {
 		name: worker.name,
+		role: worker.role,
 		status: worker.status,
 		model: worker.model,
 		thinking: worker.thinking,
