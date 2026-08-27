@@ -29,8 +29,8 @@ compaction、会话切换或观察会话自身上下文超过阈值时，丢弃�
 
 ## 投递
 
-发言只有一条路径，与指挥官事件同构：`sendMessage` + `deliverAs: "steer"` + `triggerTurn: true`，无条件
-分支。投递时机完全由宿主队列决定——指挥官忙时在当前回合的句缝追加，空闲时唤起一个回合；Esc 打断后同样
+发言只有一条路径，与指挥官事件同构：经根级 `deliver.ts` 统一投递——指挥官忙时投卡片、经宿主 steer 队列在
+句缝追加；歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，见根 AGENTS.md 硬约束）；Esc 打断后同样
 照发。建议自带时点标记（「基于第 N 回合前的观察」），投递时主会话可能已经走远。进入模型上下文的正文包在
 `<firecode_watcher>` 信封里，权衡声明位于信封内；details 保持原始数据供展示卡使用。收束为单通道的权衡见
 [ADR 0011](../docs/adr/0011-watcher-single-channel-delivery.md)。

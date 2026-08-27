@@ -97,3 +97,61 @@ export default function (pi) {
 		session.dispose();
 	}
 }, 10_000);
+
+test("idle wake via sendUserMessage runs before_agent_start on every request", async () => {
+	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-wake-"));
+	const cwd = join(directory, "project");
+	const agentDir = join(directory, "agent");
+	const extensionsDir = join(agentDir, "extensions");
+	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
+	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
+	await writeFile(join(extensionsDir, "mark.ts"), `
+export default function (pi) {
+	pi.on("before_agent_start", async (event) => ({ systemPrompt: event.systemPrompt + "\\n\\nGUIDELINES-MARK" }));
+}
+`);
+
+	faux = registerFauxProvider();
+	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	const model = faux.getModel();
+	const modelRuntime = await ModelRuntime.create({
+		authPath: join(agentDir, "auth.json"),
+		modelsPath: join(agentDir, "models.json"),
+	});
+	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
+	const prompts: string[] = [];
+	faux.setResponses([
+		(context: any) => {
+			prompts.push(context.systemPrompt ?? "");
+			return fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
+		},
+		(context: any) => {
+			prompts.push(context.systemPrompt ?? "");
+			return fauxAssistantMessage("woken");
+		},
+	]);
+	const { session } = await createAgentSession({
+		cwd,
+		agentDir,
+		model,
+		modelRuntime,
+		tools: ["contract_wait"],
+		customTools: [{
+			name: "contract_wait",
+			label: "Contract wait",
+			description: "Completes one deterministic tool call",
+			parameters: { type: "object", properties: {}, additionalProperties: false },
+			execute: async () => ({ content: [{ type: "text", text: "tool completed" }], details: {} }),
+		}],
+		sessionManager: SessionManager.inMemory(cwd),
+	});
+
+	try {
+		// 会话歇透时的前门唤醒：deliver.ts 空闲分支依赖的宿主契约。
+		await session.sendUserMessage("delivered while idle");
+		expect(prompts).toHaveLength(2);
+		expect(prompts.every((prompt) => prompt.includes("GUIDELINES-MARK"))).toBe(true);
+	} finally {
+		session.dispose();
+	}
+}, 10_000);

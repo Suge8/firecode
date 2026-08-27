@@ -14,7 +14,7 @@ import {
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth: (text: string) => number };
 const WATCHER_CONFIG = { model: "test/watcher", thinking: "low" };
-const QUEUE_OPTIONS = { deliverAs: "steer", triggerTurn: true };
+const QUEUE_OPTIONS = { deliverAs: "steer" };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 let faux: any;
@@ -144,6 +144,20 @@ test("评估落后时合并跳最新，同批增量只产生一条建议", async
 		{ note: "第一次", turnIndex: 1 },
 		{ note: "合并后的建议", turnIndex: 3 },
 	]);
+});
+
+test("主会话空闲时发言走前门用户消息，不出卡片", async () => {
+	const harness = await setup();
+	harness.idle = true;
+	advise("空闲现场的提醒");
+	const delivered = harness.next();
+	await harness.turnEnd(9, "刚停下");
+	await delivered;
+
+	expect(harness.messages).toEqual([]);
+	expect(harness.userMessages).toHaveLength(1);
+	expect(harness.userMessages[0]).toContain("<firecode_watcher>");
+	expect(harness.userMessages[0]).toContain("空闲现场的提醒");
 });
 
 test("一次评估只接受一条 advise，多余的当场拒绝", async () => {
@@ -368,7 +382,9 @@ async function setup(options: {
 	const commands = new Map<string, any>();
 	const channels = new Map<string, any[]>();
 	const messages: any[] = [];
+	const userMessages: string[] = [];
 	const notices: string[] = [];
+	let idle = false;
 	const statuses = new Map<string, string>();
 	let waiter: (() => void) | undefined;
 	const settle = () => waiter?.();
@@ -381,11 +397,13 @@ async function setup(options: {
 			emit: (name: string, data: any) => { for (const handler of channels.get(name) ?? []) handler(data); },
 		},
 		sendMessage: (message: any, sendOptions: any) => { messages.push({ message, options: sendOptions }); settle(); },
+		sendUserMessage: async (content: string) => { userMessages.push(content); settle(); },
 	};
 	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
 		cwd,
+		isIdle: () => idle,
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getSessionFile: () => main.getSessionFile(),
@@ -407,8 +425,10 @@ async function setup(options: {
 	await emit("session_start", { type: "session_start", reason: "startup" });
 	return {
 		messages,
+		userMessages,
 		notices,
 		statuses,
+		set idle(value: boolean) { idle = value; },
 		notes: () => messages.map((entry) => entry.message.details),
 		registeredCommands: [...commands.keys()],
 		registeredEvents: [...handlers.keys()],

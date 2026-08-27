@@ -10,6 +10,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type WatcherConfig } from "../config.js";
+import { deliver } from "../deliver.js";
 import { formatModelName } from "../format.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import {
@@ -86,13 +87,10 @@ export function registerWatcher(
 		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👓 ${formatModelName(config.model)}/${config.thinking}`));
 		return runtime;
 	};
-	// 与指挥官事件同构：投递时机完全委托宿主队列——忙时句缝追加，空闲时唤起一个回合。
-	const deliver = (advice: Advice, turnIndex: number) => {
+	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
+	const speak = (active: WatcherRuntime, advice: Advice, turnIndex: number) => {
 		const card: WatcherCard = { note: advice.note, turnIndex };
-		pi.sendMessage<WatcherCard>(
-			{ customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card), display: true, details: card },
-			{ deliverAs: "steer", triggerTurn: true },
-		);
+		return deliver(pi, active.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card), details: card });
 	};
 	const evaluate = async (active: WatcherRuntime) => {
 		active.evaluating = true;
@@ -111,7 +109,7 @@ export function registerWatcher(
 				});
 				const advice = await active.observer.evaluate(increment);
 				if (current !== era) continue;
-				if (advice && runtime === active) deliver(advice, turnIndex);
+				if (advice && runtime === active) await speak(active, advice, turnIndex);
 				// 自身上下文快满时也重新入场：观察员只需要当下，不需要完整历史。
 				if ((active.observer?.contextPercent() ?? 0) >= CONTEXT_RESET_PERCENT) resetObserver();
 			}
