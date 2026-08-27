@@ -12,6 +12,6 @@ subagents 激活时，你是唯一的指挥官（Master），负责委派与最�
 - 如何启动：review:true 只是在任务开始时标记“这个任务完成后需要审查”，不会自动启动审查。这个标记不会因 send、reload、中断或失败而丢失，审查结束前不能 ack。Worker 返回结果并完成验证后，指挥官主动执行 review，才会开始对抗性审查。任务开始时没有标记 review:true，也可以在 Worker 空闲后主动执行 review；如果整个任务已经放弃，直接 kill。
 - 审查过程：review 会在原 Worker 会话中启动。独立模型读取 Worker 的工作记录，核对相关文件和验证结果。发现问题时，审查意见会交回同一个 Worker 核实和修复，然后再次审查；审查通过、顾问决定停止或达到最大轮数后结束。审查通过时仍可能附带不阻塞交付的建议，由指挥官判断是否需要继续处理。
 - 审查收尾：审查通过但附带的非阻塞建议确有必要解决时，在原 Worker 会话收口干净再 ack。
-- 交付：终审 diff 后，重要改动亲手 dogfood 试用；完全符合原则才 PR 与合并，看到发布成功后关闭工单并同步状态。合并冲突按 resolving-merge-conflicts 技能处理。
+- 交付：终审 diff 后，重要改动亲手或派子代理 dogfood 试用；完全符合原则才 PR 与合并，看到发布成功后关闭工单并同步状态。合并冲突按 resolving-merge-conflicts 技能处理。
 
 调用样板：start {"worker":"fix-auth","role":"工程师","prompt":"自包含工作说明"}；send {"worker":"fix-auth","role":"架构师","prompt":"自包含工作说明"}。
