@@ -72,6 +72,7 @@ test("Master Markdown 与动态角色表按单一接缝注入", async () => {
 		prompt.readMasterPrompt("master"),
 		"工程师：test/worker/medium（测试）；架构师：test/worker-2/high（切换测试）",
 	);
+	expect(expected).toContain("角色表：工程师：test/worker/medium（测试）");
 	expect(expected).toContain("投递：Worker 结果、中断与审查终态会自动送达；tail 仅用于按需读取执行细节。");
 	expect(expected).toContain("何时审查：复杂且影响大的实现，以及无法靠窄测可靠验收的任务，需要对抗性审查，在 start 时传 review:true；其余任务省略。");
 	expect(expected).toContain("如何启动：review:true 只是在任务开始时标记“这个任务完成后需要审查”，不会自动启动审查。这个标记不会因 send、reload、中断或失败而丢失，审查结束前不能 ack。Worker 返回结果并完成验证后，指挥官主动执行 review，才会开始对抗性审查。任务开始时没有标记 review:true，也可以在 Worker 空闲后主动执行 review；如果整个任务已经放弃，直接 kill。");

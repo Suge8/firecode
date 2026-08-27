@@ -18,7 +18,7 @@ export function readMasterPrompt(kind: MasterPromptKind): string {
 }
 
 export function assembleMasterPrompt(prompt: string, roster: string): string {
-	return `${prompt}\n\n选型表：${roster}。`;
+	return `${prompt}\n\n角色表：${roster}。`;
 }
 
 export function assembleWorkerPrompt(prompt: string, name: string): string {
