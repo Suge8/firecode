@@ -21,6 +21,8 @@ test("portable loader copies runtime sources without repository metadata or deve
 				.map((path) => path.split(sep).join("/"))
 				.sort(),
 		).toEqual([
+			"master/prompts/master.zh.md",
+			"master/prompts/worker.zh.md",
 			"review/prompts/advisor.en.md",
 			"review/prompts/advisor.zh.md",
 			"review/prompts/review.en.md",

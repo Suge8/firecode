@@ -20,6 +20,7 @@ import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { MASTER_EVENT_TYPE, masterEventDetails, sectionLine } from "./event-format.js";
+import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
 	MasterStore,
@@ -97,10 +98,15 @@ export function registerMaster(
 	}
 	let runtime: MasterRuntime | undefined;
 	const loaded = loadMasterConfiguration();
+	const prompts = loadMasterPrompts();
+	const startupError = "error" in loaded ? loaded.error : "error" in prompts ? prompts.error : undefined;
 	const roster = "error" in loaded ? [] : loaded.models;
-	const guidelines = masterGuidelines(roster).join("\n");
 	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
 	const autoActivate = "error" in loaded ? false : loaded.autoActivate;
+	const requirePrompts = () => {
+		if ("error" in prompts) throw new Error(prompts.error);
+		return prompts;
+	};
 	const reviewGate = reviewGateError();
 	const pool = dependencies.pool ?? new InProcessSessionPool();
 	const activeRuns = new Map<string, symbol>();
@@ -114,18 +120,25 @@ export function registerMaster(
 		const tools = pi.getActiveTools().filter((name) => !MASTER_TOOLS.includes(name));
 		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
+	const ownsRuntime = (active: MasterRuntime): boolean => runtime === active;
+	const requireRuntimeOwner = (active: MasterRuntime): void => {
+		if (!ownsRuntime(active)) throw new Error("Master 会话已替换，取消旧会话动作");
+	};
 	const renderStatus = () => {
 		if (!runtime) return;
 		runtime.ctx.ui.setStatus("master", masterStatusLine(runtime.store.state.workers, runtime.ctx.ui.theme));
 	};
 	const activate = (ctx: ExtensionContext, restored?: MasterState): MasterRuntime => {
-		if ("error" in loaded) throw new Error(loaded.error);
+		if (startupError) throw new Error(startupError);
 		if (runtime) {
 			runtime.ctx = ctx;
 			return runtime;
 		}
-		const store = new MasterStore(masterStatePath(ctx.sessionManager.getSessionId()), restored, renderStatus);
-		runtime = {
+		let active!: MasterRuntime;
+		const store = new MasterStore(masterStatePath(ctx.sessionManager.getSessionId()), restored, () => {
+			if (ownsRuntime(active)) renderStatus();
+		});
+		active = {
 			ctx,
 			store,
 			pool,
@@ -135,12 +148,13 @@ export function registerMaster(
 			reviewProgress: new Map(),
 			observedSessions: new Map(),
 		};
+		runtime = active;
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；旧运行时进程不会纳入新池，请手动清理`, "warning");
 		// store 创建时 runtime 尚未就位，激活完成后只补这一次首绘。
 		renderStatus();
-		return runtime;
+		return active;
 	};
 	const deactivate = () => {
 		const active = runtime;
@@ -150,14 +164,17 @@ export function registerMaster(
 		interruptTimers.clear();
 		activeRuns.clear();
 		interruptedRuns.clear();
+		startingNames.clear();
+		transitioningNames.clear();
 		if (active?.flushTimer) clearTimeout(active.flushTimer);
 		for (const observed of active?.observedSessions.values() ?? []) observed.unsubscribe();
 		active?.ctx.ui.setStatus("master", undefined);
 		setTools(false);
 	};
 	const flushEvents = (active: MasterRuntime) => {
+		if (!ownsRuntime(active)) return;
 		active.flushTimer = undefined;
-		if (runtime !== active || !active.events.length) return;
+		if (!active.events.length) return;
 		const batch = active.events.splice(0);
 		const content = batch.map((event) => event.content).join("\n\n");
 		deliver(pi, active.ctx, {
@@ -165,6 +182,7 @@ export function registerMaster(
 			content: masterEventEnvelope(content),
 			details: masterEventDetails(batch.map((event) => event.content)),
 		}).then(() => {
+			if (!ownsRuntime(active)) return;
 			try {
 				pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
 			} catch (error) {
@@ -177,6 +195,7 @@ export function registerMaster(
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
 			}
 		}, (error) => {
+			if (!ownsRuntime(active)) return;
 			active.events.unshift(...batch);
 			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
 			active.flushTimer = setTimeout(() => flushEvents(active), EVENT_RETRY_MS);
@@ -190,6 +209,7 @@ export function registerMaster(
 		persist = true,
 		id = crypto.randomUUID(),
 	) => {
+		if (!ownsRuntime(active)) return;
 		const event: PendingMasterEvent = { id, content, ...(worker ? { worker } : {}) };
 		if (persist) {
 			try {
@@ -210,10 +230,12 @@ export function registerMaster(
 		interruptTimers.delete(name);
 	};
 	const armInterruptReminder = (active: MasterRuntime, worker: WorkerRef) => {
+		if (!ownsRuntime(active)) return;
 		clearInterruptTimer(worker.name);
 		const duration = dependencies.interruptResumeMs ?? 5 * 60_000;
 		const delay = Math.max(0, (worker.interruptedAt ?? Date.now()) + duration - Date.now());
 		const timer = setTimeout(() => {
+			if (!ownsRuntime(active)) return;
 			interruptTimers.delete(worker.name);
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
@@ -245,33 +267,42 @@ export function registerMaster(
 		return active;
 	};
 	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
+		requireRuntimeOwner(active);
 		const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 		if (current?.sessionPath === identity.sessionPath) return current;
 		active.pool.dispose(identity.sessionPath);
 		throw new Error(`${identity.name} 已被 kill，取消本次动作`);
 	};
-	const openWorkerSession = async (worker: WorkerRef) => {
-		const hot = pool.getSession(worker.sessionPath);
+	const openWorkerSession = async (active: MasterRuntime, worker: WorkerRef) => {
+		requireRuntimeOwner(active);
+		const hot = active.pool.getSession(worker.sessionPath);
 		if (hot) return hot;
 		const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(worker.model);
-		const spawned = await pool.spawn({
+		requireRuntimeOwner(active);
+		const spawned = await active.pool.spawn({
 			cwd: worker.cwd ?? process.cwd(),
 			role: "worker",
 			model,
 			thinking: worker.thinking,
 			tools: WORKER_TOOLS,
 			excludeExtensions: exclusions,
-			systemPrompt: { mode: "append", text: workerInstructions(worker.name) },
+			systemPrompt: { mode: "append", text: assembleWorkerPrompt(requirePrompts().worker, worker.name) },
 			contextFiles: true,
 			persistence: { type: "file", sessionPath: worker.sessionPath, resume: true },
 		});
+		if (!ownsRuntime(active)) {
+			spawned.dispose();
+			requireRuntimeOwner(active);
+		}
 		return spawned.session;
 	};
 	const observeWorker = (active: MasterRuntime, sessionPath: string, session: AgentSession) => {
+		requireRuntimeOwner(active);
 		const previous = active.observedSessions.get(sessionPath);
 		if (previous?.session === session) return;
 		previous?.unsubscribe();
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+			if (!ownsRuntime(active)) return;
 			if (event.type === "tool_execution_start") {
 				const tools = active.currentTools.get(sessionPath) ?? new Map<string, CurrentTool>();
 				tools.set(event.toolCallId, { tool: event.toolName, startedAt: Date.now() });
@@ -290,11 +321,12 @@ export function registerMaster(
 		active.observedSessions.set(sessionPath, { session, unsubscribe });
 	};
 	const runWorker = (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
+		requireRuntimeOwner(active);
 		observeWorker(active, worker.sessionPath, session);
 		const run = Symbol(worker.name);
 		activeRuns.set(worker.sessionPath, run);
 		const settled = (error?: unknown) => {
-			if (activeRuns.get(worker.sessionPath) !== run) return;
+			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
 				interruptedRuns.delete(worker.sessionPath);
@@ -342,7 +374,9 @@ export function registerMaster(
 
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${guidelines}` };
+		return {
+			systemPrompt: `${event.systemPrompt}\n\n${assembleMasterPrompt(requirePrompts().master, rosterText(roster))}`,
+		};
 	});
 
 	pi.registerTool({
@@ -433,8 +467,9 @@ export function registerMaster(
 					throw new Error(`${target.name} 正在处理其他动作，不能 review`);
 				transitioningNames.add(target.name);
 				try {
-					const session = await openWorkerSession(target);
+					const session = await openWorkerSession(active, target);
 					await session.waitForIdle();
+					requireRuntimeOwner(active);
 					observeWorker(active, target.sessionPath, session);
 					const current = currentWorker(active, target);
 					const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
@@ -445,6 +480,7 @@ export function registerMaster(
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
 					void monitorReview(session, target.sessionPath, previousRunId).then(
 						(outcome) => {
+							if (!ownsRuntime(active)) return;
 							const current = active.store.state.workers.find((worker) => worker.name === target.name);
 							if (!current || current.sessionPath !== target.sessionPath || current.status !== "reviewing") return;
 							const { reviewNeeded: _needed, ...fulfilled } = current;
@@ -458,6 +494,7 @@ export function registerMaster(
 							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
 						},
 						(error) => {
+							if (!ownsRuntime(active)) return;
 							const current = active.store.state.workers.find((worker) => worker.name === target.name);
 							if (!current || current.status !== "reviewing") return;
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
@@ -469,7 +506,7 @@ export function registerMaster(
 					);
 					return toolResult({ reviewing: true });
 				} finally {
-					transitioningNames.delete(target.name);
+					if (ownsRuntime(active)) transitioningNames.delete(target.name);
 				}
 			}
 			if (params.action === "interrupt") {
@@ -482,9 +519,10 @@ export function registerMaster(
 				interruptedRuns.set(target.sessionPath, run);
 				try {
 					await session.abort();
+					requireRuntimeOwner(active);
 					return toolResult({ interrupted: true });
 				} catch (error) {
-					if (interruptedRuns.get(target.sessionPath) === run) interruptedRuns.delete(target.sessionPath);
+					if (ownsRuntime(active) && interruptedRuns.get(target.sessionPath) === run) interruptedRuns.delete(target.sessionPath);
 					throw error;
 				}
 			}
@@ -506,12 +544,15 @@ export function registerMaster(
 					const nextModel = requestedModel
 						? await (dependencies.resolveModel ?? resolveConfiguredModel)(requestedModel)
 						: undefined;
-					const session = await openWorkerSession(target);
+					requireRuntimeOwner(active);
+					const session = await openWorkerSession(active, target);
 					await session.waitForIdle();
+					requireRuntimeOwner(active);
 					let model = target.model;
 					let thinking = target.thinking;
 					if (requestedModel && nextModel) {
 						await session.setModel(nextModel);
+						requireRuntimeOwner(active);
 						model = requestedModel;
 					}
 					if (requestedThinking) {
@@ -534,7 +575,7 @@ export function registerMaster(
 					runWorker(active, activeWorker, session, text);
 					return toolResult({ sent: true });
 				} finally {
-					transitioningNames.delete(target.name);
+					if (ownsRuntime(active)) transitioningNames.delete(target.name);
 				}
 			}
 			if (params.action !== "start") throw new Error(`未知 subagents action：${String(params.action)}`);
@@ -554,6 +595,7 @@ export function registerMaster(
 			startingNames.add(name);
 			try {
 				const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
+				requireRuntimeOwner(active);
 				const mainSessionPath = ctx.sessionManager.getSessionFile?.();
 				if (!mainSessionPath) throw new Error("主会话尚未落盘，无法创建子代理会话目录");
 				const sessionPath = preallocateWorkerSession(mainSessionPath, cwd);
@@ -570,6 +612,7 @@ export function registerMaster(
 				startingNames.delete(name);
 				try {
 					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
+					requireRuntimeOwner(active);
 					const spawned = await active.pool.spawn({
 						cwd,
 						role: "worker",
@@ -577,25 +620,29 @@ export function registerMaster(
 						thinking: selection.thinking,
 						tools: WORKER_TOOLS,
 						excludeExtensions: exclusions,
-						systemPrompt: { mode: "append", text: workerInstructions(name) },
+						systemPrompt: { mode: "append", text: assembleWorkerPrompt(requirePrompts().worker, name) },
 						contextFiles: true,
 						persistence: { type: "file", sessionPath },
 					});
+					if (!ownsRuntime(active)) {
+						spawned.dispose();
+						requireRuntimeOwner(active);
+					}
 					runWorker(active, worker, spawned.session, prompt);
 					return toolResult({ started: true, worker: compactWorker(worker) });
 				} catch (error) {
-					active.store.dispatch({ type: "REMOVE_WORKER", name });
+					if (ownsRuntime(active)) active.store.dispatch({ type: "REMOVE_WORKER", name });
 					throw error;
 				}
 			} finally {
-				startingNames.delete(name);
+				if (ownsRuntime(active)) startingNames.delete(name);
 			}
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		deactivate();
-		if (!autoActivate || "error" in loaded) return;
+		if (!autoActivate) return;
 		try {
 			activateSession(ctx);
 		} catch (error) {
@@ -644,10 +691,17 @@ function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
 function monitorReview(
 	session: { subscribe: (listener: (event: { type: string }) => void) => () => void; prompt: (text: string) => Promise<void> },
 	sessionPath: string,
-	previousRunId?: string,
+	previousRunId: string | undefined,
 ): Promise<ReviewOutcome> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
+		let unsubscribe = () => {};
+		const fail = (error: unknown) => {
+			if (settled) return;
+			settled = true;
+			unsubscribe();
+			reject(error);
+		};
 		const finish = (outcome: ReviewOutcome) => {
 			if (settled) return;
 			const runId = reviewRunId(outcome);
@@ -657,15 +711,9 @@ function monitorReview(
 			unsubscribe();
 			resolve(outcome);
 		};
-		const unsubscribe = session.subscribe((event) => {
+		unsubscribe = session.subscribe((event) => {
 			if (event.type === "entry_appended") finish(readReviewOutcome(sessionPath));
 		});
-		const fail = (error: unknown) => {
-			if (settled) return;
-			settled = true;
-			unsubscribe();
-			reject(error);
-		};
 		void session.prompt("/fire-review").then(
 			() => {
 				const outcome = readReviewOutcome(sessionPath);
@@ -734,6 +782,17 @@ function reviewGateError(): string | undefined {
 	return problems.length ? `fire-review 配置有问题，已停止：${problems.join("；")}` : undefined;
 }
 
+function loadMasterPrompts() {
+	try {
+		return {
+			master: readMasterPrompt("master"),
+			worker: readMasterPrompt("worker"),
+		};
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 function loadMasterConfiguration() {
 	let loaded: ReturnType<typeof loadConfig>;
 	try {
@@ -764,34 +823,12 @@ function rosterText(models: MasterModel[]): string {
 	return models.map((entry) => `${entry.model}（${entry.use}，thinking ${entry.thinking}）`).join("；");
 }
 
-const REVIEW_DISCIPLINE = "审查纪律：默认省略 review；仅高影响或难以窄测证明的重要实现设 review:true，典型边界是安全权限、持久化/迁移、并发/状态机、公共/跨进程接口、构建发布；调查、文档、机械修改、局部低风险修复、纯重构、纯追问均为轻量。review:true 只记录持久义务，不自动开审；义务在 send/中断/失败后保留并阻止 ack，完成且验证通过后显式 review，审查通过或质量裁决停止后消除义务；未挂义务的 idle Worker 仍可补审；拿不准先省略。";
-
-function masterGuidelines(models: MasterModel[]): string[] {
-	return [
-		"subagents 激活时，你是唯一的指挥官（Master），负责委派与最终验收。",
-		`选型表：${rosterText(models)}。start 必须显式传 model 与 thinking；thinking 取表内默认档，仅用户显式指示时偏离。`,
-		"哨兵纪律：以等待为主的盯守（CI、部署、长测试）派最便宜档哨兵票。",
-		"动手边界：指挥官亲手只做三类事——读取与收割、数条命令内可得决定性证据的快速取证、终审 diff 与交付裁决；其余执行与验证一律派票，模型按选型表就任务所需能力选档；dogfood 亦然——执行派票，裁决亲手。",
-		"并行纪律：相互无阻塞边的工作默认并行派发；共享 checkout 时按路径划界，工作说明写明各自触碰的目录。",
-		"工单纪律：项目存在工单库时，派工前按其约定认领，新工单由指挥官决策开立；无工单库则以用户验收为交付边界。",
-		"收割纪律：调查/哨兵票收割要点后立即 kill；实现票保留待收口。",
-		"计划维护纪律：计划产物存在时，其维护责任随指挥权归指挥官。",
-		"投递纪律：子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节。",
-		REVIEW_DISCIPLINE,
-		'调用样板：start {"worker":"fix-auth","model":"provider/model","thinking":"medium","prompt":"自包含工作说明"}。',
-	];
-}
-
 function masterEventEnvelope(content: string): string {
 	return `<firecode_master_event>\n${content}\n</firecode_master_event>`;
 }
 
 function resumeCheckPrompt(): string {
 	return masterEventEnvelope("上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。");
-}
-
-function workerInstructions(name: string): string {
-	return `<firecode_worker name="${name}">\n你是指挥官委派的子代理，只完成工作说明。使用现有工具在当前 checkout 内工作，必须自测并报告证据；不得启动子 Agent、git push 或新增依赖。提交只带自己改动的路径。\n</firecode_worker>`;
 }
 
 const ACTION_VERB: Record<string, string> = { start: "启动", list: "查看", kill: "移除", send: "发送", interrupt: "中断", review: "审查", tail: "近况", ack: "待命" };

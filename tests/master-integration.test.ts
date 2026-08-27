@@ -65,24 +65,57 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
-test("自定义系统提示仍注入选型表与调度纪律", async () => {
+test("Master Markdown 与动态选型表按单一接缝注入", async () => {
 	const harness = await setup();
-	const systemPrompt = await harness.systemPrompt("自定义系统提示");
-	expect(systemPrompt.startsWith("自定义系统提示\n\n")).toBe(true);
-	expect(systemPrompt).toContain("选型表：test/worker（测试，thinking medium）");
-	expect(systemPrompt).toContain("哨兵纪律");
-	expect(systemPrompt).toContain("动手边界");
-	expect(systemPrompt).toContain("调查/哨兵票收割要点后立即 kill");
-	expect(systemPrompt).toContain("实现票保留待收口");
-	expect(systemPrompt).toContain("计划产物存在时，其维护责任随指挥权归指挥官");
-	expect(systemPrompt).toContain("子代理结果、中断与审查终态都会自动送达你的回合，无需也不要用 list/tail 轮询进度；tail 只用于按需读取执行细节");
-	expect(systemPrompt).toContain("审查纪律：默认省略 review；仅高影响或难以窄测证明的重要实现设 review:true，典型边界是安全权限、持久化/迁移、并发/状态机、公共/跨进程接口、构建发布");
-	expect(systemPrompt).toContain("调查、文档、机械修改、局部低风险修复、纯重构、纯追问均为轻量");
-	expect(systemPrompt).toContain("review:true 只记录持久义务，不自动开审；义务在 send/中断/失败后保留并阻止 ack，完成且验证通过后显式 review，审查通过或质量裁决停止后消除义务");
-	expect(systemPrompt).toContain("未挂义务的 idle Worker 仍可补审；拿不准先省略");
-	expect(systemPrompt).toContain('调用样板：start {"worker":"fix-auth"');
+	const prompt = await loadFirecodeModule("master/prompt.js") as any;
+	const expected = prompt.assembleMasterPrompt(
+		prompt.readMasterPrompt("master"),
+		"test/worker（测试，thinking medium）；test/worker-2（切换测试，thinking high）",
+	);
+	expect(expected).toContain("投递：Worker 结果、中断与审查终态会自动送达；tail 仅用于按需读取执行细节。");
+	expect(expected).toContain("何时审查：复杂且影响大的实现，以及无法靠窄测可靠验收的任务，需要对抗性审查，在 start 时传 review:true；其余任务省略。");
+	expect(expected).toContain("如何启动：review:true 只是在任务开始时标记“这个任务完成后需要审查”，不会自动启动审查。这个标记不会因 send、reload、中断或失败而丢失，审查结束前不能 ack。Worker 返回结果并完成验证后，指挥官主动执行 review，才会开始对抗性审查。任务开始时没有标记 review:true，也可以在 Worker 空闲后主动执行 review；如果整个任务已经放弃，直接 kill。");
+	expect(expected).toContain("审查过程：review 会在原 Worker 会话中启动。独立模型读取 Worker 的工作记录，核对相关文件和验证结果。发现问题时，审查意见会交回同一个 Worker 核实和修复，然后再次审查；审查通过、顾问决定停止或达到最大轮数后结束。审查通过时仍可能附带不阻塞交付的建议，由指挥官判断是否需要继续处理。");
+	expect(await harness.systemPrompt("自定义系统提示")).toBe(`自定义系统提示\n\n${expected}`);
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
+});
+
+test("Worker Markdown 只组装动态名字与协议信封", async () => {
+	const harness = await setup();
+	const prompt = await loadFirecodeModule("master/prompt.js") as any;
+	let systemPrompt = "";
+	faux.setResponses([(context: any) => {
+		systemPrompt = context.systemPrompt ?? "";
+		return fauxAssistantMessage("完成");
+	}]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "prompt-contract", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	await settled;
+	expect(systemPrompt).toContain(prompt.assembleWorkerPrompt(
+		"你是指挥官委派的 Worker，只在当前 checkout 内完成工作说明。验证改动并报告结果、证据与遗留风险；无法完成或验证时如实报告阻塞原因和现场，不得假成功。Git 操作限于本地且仅覆盖自己修改的路径。",
+		"prompt-contract",
+	));
+});
+
+test("Master prompt 缺失或为空时只关闭 Master 并明确失败", async () => {
+	const missing = await loadFirecodeModule("master/prompt.js") as any;
+	expect(() => missing.readMasterPrompt("missing")).toThrow("Master missing prompt 读取失败");
+
+	for (const kind of ["master", "worker"]) {
+		const empty = await loadFirecodeModule("master/prompt.js", {
+			extraFiles: { [`master/prompts/${kind}.zh.md`]: " \n" },
+		}) as any;
+		expect(() => empty.readMasterPrompt(kind)).toThrow(`Master ${kind} prompt 为空`);
+	}
+
+	const harness = await setup(true, {
+		promptFiles: { "master/prompts/master.zh.md": " \n" },
+	});
+	expect(harness.notices.at(-1)).toContain("Master master prompt 为空");
+	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 });
 
 test("真 SDK 在执行前拒绝缺 worker 与旧 list 动作", async () => {
@@ -322,6 +355,52 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 	expect(harness.pool.has(sessionPath)).toBe(false);
 	await harness.execute({ action: "kill", worker: "cold-kill" });
 	expect(existsSync(sessionPath)).toBe(true);
+});
+
+test("空闲前门投递未完成时替换会话，旧投递不得确认到新 runtime", async () => {
+	const harness = await setup(true, { deferUserMessage: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("旧会话结果")]);
+	await harness.execute({
+		action: "start", worker: "old-delivery", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	await harness.userMessageStarted;
+	const appendedBeforeReplacement = harness.appended.length;
+
+	await harness.replaceSession();
+	harness.releaseUserMessage();
+	await Bun.sleep(0);
+
+	expect(harness.appended).toHaveLength(appendedBeforeReplacement);
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event"]);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
+});
+
+test("审查结算中替换会话，旧 continuation 不得写入新 runtime", async () => {
+	const harness = await setup(true, { review: true, mockReview: true });
+	faux.setResponses([fauxAssistantMessage("实现完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({
+		action: "start", worker: "old-review", prompt: "实现", model: "test/worker", thinking: "medium", review: true,
+	});
+	await delivered;
+
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	let releaseReview!: () => void;
+	const reviewGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+	const prompt = session.prompt.bind(session);
+	session.prompt = (text: string) => text === "/fire-review" ? reviewGate : prompt(text);
+	await harness.execute({ action: "review", worker: "old-review" });
+	await harness.replaceSession();
+	const appendedBeforeSettlement = harness.appended.length;
+	const noticesBeforeSettlement = harness.notices.length;
+
+	releaseReview();
+	await Bun.sleep(0);
+
+	expect(harness.appended).toHaveLength(appendedBeforeSettlement);
+	expect(harness.notices).toHaveLength(noticesBeforeSettlement);
+	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("主回合空闲时，并发落定合并走前门用户消息，投递前写 pending、成功后写 ack", async () => {
@@ -729,6 +808,8 @@ async function setup(activate = true, options: {
 	mockReview?: boolean;
 	reviewProgressOnly?: boolean;
 	autoActivate?: boolean;
+	deferUserMessage?: boolean;
+	promptFiles?: Record<string, string>;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -773,6 +854,7 @@ async function setup(activate = true, options: {
 		...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
 	});
 	const module = await loadFirecodeModule("master/index.js", {
+		extraFiles: options.promptFiles,
 		configJsonc: JSON.stringify({
 			features: { master: true, review: options.review === true },
 			review: TEST_REVIEW_CONFIG,
@@ -793,6 +875,12 @@ async function setup(activate = true, options: {
 	const userMessages: string[] = [];
 	let onMessage: (() => void) | undefined;
 	let idle = false;
+	let releaseUserMessage = () => {};
+	const userMessageGate = options.deferUserMessage
+		? new Promise<void>((resolve) => { releaseUserMessage = resolve; })
+		: Promise.resolve();
+	let markUserMessageStarted!: () => void;
+	const userMessageStarted = new Promise<void>((resolve) => { markUserMessageStarted = resolve; });
 	let activeTools = ["read", "bash", "edit", "write"];
 	const pi = {
 		registerMessageRenderer() {},
@@ -807,9 +895,14 @@ async function setup(activate = true, options: {
 			entries.push({ type: "custom", customType: type, data });
 		},
 		sendMessage: (message: any, options: any) => { messages.push({ message, options }); onMessage?.(); },
-		sendUserMessage: async (content: string) => { userMessages.push(content); onMessage?.(); },
+		sendUserMessage: async (content: string) => {
+			userMessages.push(content);
+			markUserMessageStarted();
+			await userMessageGate;
+			onMessage?.();
+		},
 	};
-	const sessionId = crypto.randomUUID();
+	let sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
 		cwd,
@@ -838,7 +931,7 @@ async function setup(activate = true, options: {
 	if (activate) await command("");
 	return {
 		cwd,
-		sessionId,
+		get sessionId() { return sessionId; },
 		notices,
 		messages,
 		userMessages,
@@ -847,9 +940,16 @@ async function setup(activate = true, options: {
 		pool,
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
+		userMessageStarted,
+		releaseUserMessage,
 		command,
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+		},
+		replaceSession: async () => {
+			sessionId = crypto.randomUUID();
+			entries.length = 0;
+			for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
 		},
 		agentDir,
 		model: fauxModel,

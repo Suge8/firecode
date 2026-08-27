@@ -9,7 +9,7 @@
 
 Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记；`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
 
-热冷只属于运行时缓存：空闲会话超时释放，档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 删除池引用并释放热会话，永不删除 JSONL。
+热冷只属于运行时缓存：空闲会话超时释放，档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 删除池引用并释放热会话，永不删除 JSONL。异步回写只属于满足 `runtime === active` 的当前 runtime；会话关闭先清空当前 runtime，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
 
 ## 工具契约
 
@@ -31,11 +31,9 @@ Worker 档案是 v7：`working / idle / reviewing` 三态，另有 `interruptedA
 
 落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息：主回合进行中投卡片、经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达；主回合歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，带完整 `before_agent_start` 仪式，见根 AGENTS.md 硬约束）。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
 
-审查默认省略 `review`；仅高影响或难以用窄测证明的重要实现设 `review:true`，典型边界是安全权限、持久化/迁移、并发/状态机、公共/跨进程接口与构建发布。调查、文档、机械修改、局部低风险修复、纯重构和纯追问均为轻量；拿不准时省略。
+`review:true` 是持久化到票上的审查义务，不自动开审；它在 `send`、reload、中断和失败后保留并阻止 `ack`，由审查通过或质量裁决停止消除。`kill` 随整票删除义务。
 
-`review:true` 只把审查义务持久化到票上，不自动开审。义务在 `send`、reload、中断和失败后保留并阻止 `ack`；实现完成且验证通过后显式 `review`，审查通过或质量裁决停止后消除义务。未挂义务的 idle Worker 仍可补审，`kill` 随整票删除。
-
-提示词注入四项调度纪律：等待类任务派最便宜模型的哨兵票；调查与哨兵票收割要点后立即 kill，实现票保留到收口；存在计划产物时，维护责任随指挥权归指挥官；结果、中断与审查终态自动送达，tail 只按需读取执行细节。
+Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.zh.md` 与 `prompts/worker.zh.md`；修改委派纪律或 Worker 约束时改对应提示词，不在本文复述。
 
 ## 隔离与配置
 

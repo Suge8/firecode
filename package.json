@@ -20,6 +20,7 @@
     "*.ts",
     "config.example.jsonc",
     "master/*.ts",
+    "master/prompts/*.md",
     "provider/claude-sub.ts",
     "provider/openai-native/index.ts",
     "provider/openai-native/src/compact-client.ts",
