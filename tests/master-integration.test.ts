@@ -319,6 +319,55 @@ test("失败落定事件使用统一分节格式并生成紧凑正文预览", as
 	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
+test("溢出恢复删除运行时消息后仍落定供应商错误而非过期回复", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("上一回合回复")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({
+		action: "start", worker: "overflow", prompt: "初始化", model: "test/worker", thinking: "medium",
+	});
+	await delivered;
+
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	const providerError = "maximum context length is 128 tokens";
+	faux.setResponses([async () => {
+		await gate;
+		return fauxAssistantMessage("", { stopReason: "error", errorMessage: providerError });
+	}]);
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	const deleted = new Promise<void>((resolve) => session.subscribe((event: any) => {
+		if (event.type !== "agent_end") return;
+		session.messages.splice(-1, 1);
+		resolve();
+	}));
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "overflow", prompt: "继续" });
+	release();
+	await deleted;
+	await delivered;
+
+	const content = harness.messages.at(-1).message.content;
+	expect(content).toContain(`错误：\n${providerError}`);
+	expect(content).not.toContain("上一回合回复");
+	expect(content).not.toContain("（无回复）");
+});
+
+test("非显式中断的 aborted 终态落定明确原因", async () => {
+	const harness = await setup();
+	faux.setResponses([
+		fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "upstream connection closed" }),
+	]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "aborted", prompt: "执行", model: "test/worker", thinking: "medium",
+	});
+	await delivered;
+
+	expect(harness.messages[0].message.content).toContain("错误：\n回合意外中止：upstream connection closed");
+	expect(harness.messages[0].message.content).not.toContain("（无回复）");
+});
+
 test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失文件明确失败", async () => {
 	const harness = await setup();
 	const module = await loadFirecodeModule("master/spawn.js") as any;

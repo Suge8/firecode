@@ -66,6 +66,12 @@ interface ReviewProgress {
 	total: number;
 }
 
+interface WorkerTerminal {
+	text: string;
+	stopReason?: string;
+	errorMessage?: string;
+}
+
 interface ObservedSession {
 	session: AgentSession;
 	unsubscribe: () => void;
@@ -324,8 +330,14 @@ export function registerMaster(
 		requireRuntimeOwner(active);
 		observeWorker(active, worker.sessionPath, session);
 		const run = Symbol(worker.name);
+		let terminal: WorkerTerminal | undefined;
 		activeRuns.set(worker.sessionPath, run);
+		const unsubscribeTerminal = session.subscribe((event) => {
+			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run || event.type !== "agent_end") return;
+			terminal = captureWorkerTerminal(event.messages);
+		});
 		const settled = (error?: unknown) => {
+			unsubscribeTerminal();
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
@@ -340,7 +352,7 @@ export function registerMaster(
 				armInterruptReminder(active, interrupted);
 				return;
 			}
-			const content = settleWorker(active, worker, session.messages, error);
+			const content = settleWorker(active, worker, terminal, error);
 			if (content) enqueueEvent(active, content, worker.name);
 		};
 		void session.prompt(prompt).then(() => settled(), settled);
@@ -656,7 +668,7 @@ export function registerMaster(
 function settleWorker(
 	active: MasterRuntime,
 	identity: WorkerRef,
-	messages: Array<{ role: string; content?: unknown; stopReason?: string; errorMessage?: string }>,
+	terminal: WorkerTerminal | undefined,
 	error?: unknown,
 ): string | undefined {
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
@@ -665,10 +677,10 @@ function settleWorker(
 	active.currentTools.delete(identity.sessionPath);
 	active.idleSince.set(identity.sessionPath, Date.now());
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
-	const failure = error instanceof Error ? error.message : error === undefined ? latestAssistantError(messages) : String(error);
+	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	return failure
 		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
-		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${latestAssistantText(messages) || "（无回复）"}${obligation}`;
+		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
 }
 
 function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
@@ -745,17 +757,34 @@ function reviewOutcomeText(
 	return `子代理 ${name} 审查未完成`;
 }
 
-function latestAssistantError(
-	messages: Array<{ role: string; stopReason?: string; errorMessage?: string }>,
-): string | undefined {
+function captureWorkerTerminal(
+	messages: Array<{ role: string; content?: unknown; stopReason?: string; errorMessage?: string }>,
+): WorkerTerminal | undefined {
 	const message = messages.findLast((candidate) => candidate.role === "assistant");
-	return message?.stopReason === "error" ? message.errorMessage || "未知错误" : undefined;
+	if (!message) return undefined;
+	return {
+		text: assistantText(message.content),
+		...(message.stopReason ? { stopReason: message.stopReason } : {}),
+		...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
+	};
+}
+
+function terminalFailure(terminal: WorkerTerminal | undefined): string | undefined {
+	if (!terminal) return "回合结束但未产生 assistant 终态";
+	if (terminal.stopReason === "error") return terminal.errorMessage || "供应商返回未知错误";
+	if (terminal.stopReason === "aborted") return `回合意外中止：${terminal.errorMessage || "供应商未提供原因"}`;
+	if (!terminal.text) return "回合结束但未产生回复";
+	return undefined;
 }
 
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
 	const message = messages.findLast((candidate) => candidate.role === "assistant");
-	if (!message || !Array.isArray(message.content)) return "";
-	return message.content
+	return assistantText(message?.content);
+}
+
+function assistantText(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content
 		.filter((part): part is { type: "text"; text: string } =>
 			!!part && typeof part === "object" && (part as { type?: unknown }).type === "text"
 			&& typeof (part as { text?: unknown }).text === "string")
