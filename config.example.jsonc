@@ -51,11 +51,6 @@
 				"use": "默认使用，常规实现/调试（速度快，偏 Debug 或纯执行，但容易过度工程过度测试）"
 			},
 			{
-				"model": "antigravity/gemini-3.7-flash",
-				"thinking": "high",
-				"use": "大规模并行，便宜，适合调研任务，不适合实现"
-			},
-			{
 				"model": "openai-codex/gpt-5.6-luna",
 				"thinking": "xhigh",
 				"use": "大规模并行，便宜，适合调研任务，不适合实现"

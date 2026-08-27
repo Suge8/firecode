@@ -22,6 +22,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |
+| `deliver.ts` | Master 事件与观察员发言共用的统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |
@@ -33,7 +34,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递必须走宿主队列语义（steer/nextTurn/followUp）；禁止在回合进行中以 `triggerTurn: false` 立即追加，否则快照与状态分叉会造成提示词缓存整段重写（#28 事故）。
+投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。
 
 `tools/grouping.ts` 依赖 pi 内部组件树与原型 patch，是与宿主耦合最紧的一处，升级 pi 时优先检查。
 

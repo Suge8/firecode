@@ -13,6 +13,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type MasterModel } from "../config.js";
+import { deliver } from "../deliver.js";
 import { formatDuration } from "../format.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
@@ -159,29 +160,28 @@ export function registerMaster(
 		if (runtime !== active || !active.events.length) return;
 		const batch = active.events.splice(0);
 		const content = batch.map((event) => event.content).join("\n\n");
-		try {
-			pi.sendMessage(
-				{ customType: MASTER_EVENT_TYPE, content: masterEventEnvelope(content), display: true, details: masterEventDetails(batch.map((event) => event.content)) },
-				{ deliverAs: "steer", triggerTurn: true },
-			);
-		} catch (error) {
+		deliver(pi, active.ctx, {
+			customType: MASTER_EVENT_TYPE,
+			content: masterEventEnvelope(content),
+			details: masterEventDetails(batch.map((event) => event.content)),
+		}).then(() => {
+			try {
+				pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
+			} catch (error) {
+				active.ctx.ui.notify(`子代理结果确认写入失败，reload 后可能重复投递：${String(error)}`, "warning");
+			}
+			for (const event of batch) {
+				if (!event.worker) continue;
+				const worker = active.store.state.workers.find((candidate) => candidate.name === event.worker);
+				if (worker?.status === "idle" && worker.disposition !== "reminded")
+					active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
+			}
+		}, (error) => {
 			active.events.unshift(...batch);
 			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
 			active.flushTimer = setTimeout(() => flushEvents(active), EVENT_RETRY_MS);
 			active.flushTimer.unref?.();
-			return;
-		}
-		try {
-			pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
-		} catch (error) {
-			active.ctx.ui.notify(`子代理结果确认写入失败，reload 后可能重复投递：${String(error)}`, "warning");
-		}
-		for (const event of batch) {
-			if (!event.worker) continue;
-			const worker = active.store.state.workers.find((candidate) => candidate.name === event.worker);
-			if (worker?.status === "idle" && worker.disposition !== "reminded")
-				active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
-		}
+		});
 	};
 	const enqueueEvent = (
 		active: MasterRuntime,

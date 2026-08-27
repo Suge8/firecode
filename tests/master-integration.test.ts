@@ -244,6 +244,7 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	const worker = (started.details as any).worker;
 	expect(worker.status).toBe("working");
 	await settled;
+	await Bun.sleep(0);
 
 	const listed = await harness.list();
 	expect(JSON.parse(listed.content[0].text).workers).toEqual([{ ...worker, status: "idle", disposition: "pending" }]);
@@ -252,7 +253,7 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	]);
 	expect(harness.messages[0]).toMatchObject({
 		message: { content: "<firecode_master_event>\n子代理 trace 已停下\n回复：\n确定性完成\n</firecode_master_event>" },
-		options: { deliverAs: "steer", triggerTurn: true },
+		options: { deliverAs: "steer" },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
 	expect(trace.content[0].text).toContain("assistant: 确定性完成");
@@ -318,8 +319,9 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
-test("主回合空闲时，并发落定合并为一条 steer，投递前写 pending、成功后写 ack", async () => {
+test("主回合空闲时，并发落定合并走前门用户消息，投递前写 pending、成功后写 ack", async () => {
 	const harness = await setup();
+	harness.idle = true;
 	let release!: () => void;
 	const gate = new Promise<void>((resolve) => { release = resolve; });
 	faux.setResponses([
@@ -333,10 +335,11 @@ test("主回合空闲时，并发落定合并为一条 steer，投递前写 pend
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	release();
 	await delivered;
-	expect(harness.messages).toHaveLength(1);
-	expect(harness.messages[0].message.content).toContain("结果 A");
-	expect(harness.messages[0].message.content).toContain("结果 B");
-	expect(harness.messages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
+	await Bun.sleep(0);
+	expect(harness.messages).toEqual([]);
+	expect(harness.userMessages).toHaveLength(1);
+	expect(harness.userMessages[0]).toContain("结果 A");
+	expect(harness.userMessages[0]).toContain("结果 B");
 	expect(harness.appended.map(([type]) => type)).toEqual([
 		"firecode-master-pending-event",
 		"firecode-master-pending-event",
@@ -578,6 +581,7 @@ test("crash 恢复只重投 pending 减 ack 的差集", async () => {
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.emit("session_start", {});
 	await delivered;
+	await Bun.sleep(0);
 	expect(harness.messages.map((entry) => entry.message.content)).toEqual([
 		"<firecode_master_event>\n未确认结果\n</firecode_master_event>",
 	]);
@@ -781,7 +785,9 @@ async function setup(activate = true, options: {
 	const messages: any[] = [];
 	const appended: Array<[string, any]> = [];
 	const entries: any[] = [];
+	const userMessages: string[] = [];
 	let onMessage: (() => void) | undefined;
+	let idle = false;
 	let activeTools = ["read", "bash", "edit", "write"];
 	const pi = {
 		registerMessageRenderer() {},
@@ -796,11 +802,13 @@ async function setup(activate = true, options: {
 			entries.push({ type: "custom", customType: type, data });
 		},
 		sendMessage: (message: any, options: any) => { messages.push({ message, options }); onMessage?.(); },
+		sendUserMessage: async (content: string) => { userMessages.push(content); onMessage?.(); },
 	};
 	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
 		cwd,
+		isIdle: () => idle,
 		sessionManager: {
 			getSessionId: () => sessionId,
 			getSessionFile: () => main.getSessionFile(),
@@ -828,10 +836,12 @@ async function setup(activate = true, options: {
 		sessionId,
 		notices,
 		messages,
+		userMessages,
 		appended,
 		entries,
 		pool,
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
+		set idle(value: boolean) { idle = value; },
 		command,
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
