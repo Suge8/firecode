@@ -1,0 +1,151 @@
+name: Watch T3 Code Pi support
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: watch-t3code-pi-support
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check upstream main branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Detect official Pi provider and notify
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const upstream = { owner: "pingdotgg", repo: "t3code" };
+            const targetTitle = "T3 Code 已在官方主线加入 Pi 支持";
+
+            async function readText(path, ref) {
+              try {
+                const response = await github.rest.repos.getContent({
+                  ...upstream,
+                  path,
+                  ref,
+                });
+                if (Array.isArray(response.data) || response.data.type !== "file") {
+                  return "";
+                }
+                return Buffer.from(
+                  response.data.content,
+                  response.data.encoding || "base64",
+                ).toString("utf8");
+              } catch (error) {
+                if (error?.status === 404) return "";
+                throw error;
+              }
+            }
+
+            function docsDeclarePiBuiltIn(text) {
+              const windows = [
+                /drivers?\s+ship\s+built\s+in[\s\S]{0,600}/i,
+                /BUILT_IN_DRIVERS[\s\S]{0,600}/,
+                /built-in\s+providers?[\s\S]{0,600}/i,
+              ];
+              return windows.some((pattern) => {
+                const match = text.match(pattern);
+                return Boolean(match && /(^|[^A-Za-z])Pi([^A-Za-z]|$)/.test(match[0]));
+              });
+            }
+
+            const repo = await github.rest.repos.get(upstream);
+            const branch = repo.data.default_branch;
+            const commit = await github.rest.repos.getCommit({
+              ...upstream,
+              ref: branch,
+            });
+            const sha = commit.data.sha;
+
+            const builtIns = await readText(
+              "apps/server/src/provider/builtInDrivers.ts",
+              branch,
+            );
+            const overview = await readText("docs/internals/overview.md", branch);
+            const providers = await readText("docs/internals/providers.md", branch);
+
+            // T3 Code's own provider architecture says a first-party provider must
+            // be registered in BUILT_IN_DRIVERS. The documentation check is a
+            // fallback in case the source layout changes.
+            const sourceSignal =
+              /\bPi(?:CodingAgent)?Driver\b/.test(builtIns) ||
+              /from\s+["'][^"']*\/Pi[^"']*Driver(?:\.ts)?["']/.test(builtIns) ||
+              /\bdriverKind\s*[:=]\s*["']pi["']/i.test(builtIns);
+            const docsSignal =
+              docsDeclarePiBuiltIn(overview) || docsDeclarePiBuiltIn(providers);
+            const detected = sourceSignal || docsSignal;
+
+            await core.summary
+              .addHeading("T3 Code Pi support check")
+              .addTable([
+                [
+                  { data: "Upstream commit", header: true },
+                  { data: "Source signal", header: true },
+                  { data: "Docs signal", header: true },
+                ],
+                [
+                  `[${sha.slice(0, 12)}](https://github.com/${upstream.owner}/${upstream.repo}/commit/${sha})`,
+                  String(sourceSignal),
+                  String(docsSignal),
+                ],
+              ])
+              .write();
+
+            if (!detected) {
+              core.info(`Pi is not an official built-in provider at ${sha}.`);
+              return;
+            }
+
+            const query = [
+              `repo:${context.repo.owner}/${context.repo.repo}`,
+              "is:issue",
+              "in:title",
+              `\"${targetTitle}\"`,
+            ].join(" ");
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: query,
+              per_page: 10,
+            });
+
+            if (existing.data.total_count > 0) {
+              core.info("Notification issue already exists; skipping duplicate.");
+              return;
+            }
+
+            const evidence = [
+              sourceSignal ? "官方 BUILT_IN_DRIVERS 源码已出现 Pi provider/driver。" : null,
+              docsSignal ? "官方 provider 文档已把 Pi 列为 built-in provider。" : null,
+            ].filter(Boolean).join("\n");
+
+            const body = [
+              "自动监控发现：T3 Code 的官方默认分支已经出现 Pi 支持信号。",
+              "",
+              `- 上游仓库：https://github.com/${upstream.owner}/${upstream.repo}`,
+              `- 默认分支：${branch}`,
+              `- 检测提交：https://github.com/${upstream.owner}/${upstream.repo}/commit/${sha}`,
+              "",
+              evidence,
+              "",
+              "检测标准：Pi 被注册为官方 built-in provider，或官方 provider 文档明确将 Pi 列入 built-in provider。请打开上游提交做最终确认。",
+            ].join("\n");
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: targetTitle,
+              body,
+              assignees: [context.repo.owner],
+            });
+
+            core.notice(`Created notification issue: ${issue.data.html_url}`);
