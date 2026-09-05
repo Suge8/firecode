@@ -1,6 +1,6 @@
 {
 	// 公开推荐配置：除 Bark 外功能全开。复制后重启 Pi。
-	// Watcher 默认在每个主会话回合后调用模型；OpenAI priority 会按供应商规则加价。
+	// Watcher 默认在每个主会话回合后调用模型。
 	// 凡是指定模型的位置都写同一个模型原子："provider/model/thinking"，思考档取最后一段。
 	"features": {
 		"header": true,
@@ -24,12 +24,12 @@
 		"fast": "ctrl+f"
 	},
 
-	// nativeCompaction 使用 OpenAI 原生上下文压缩；priority 加钱换更快出字。
+	// nativeCompaction 使用 OpenAI 原生上下文压缩；priority 加钱换更快出字，默认关。
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {
-			"openai-codex": { "textVerbosity": "low", "priority": true },
-			"xai": { "priority": true }
+			"openai-codex": { "textVerbosity": "low", "priority": false },
+			"xai": { "priority": false }
 		}
 	},
 
@@ -46,30 +46,22 @@
 		"workerExcludeExtensions": [],
 		"roles": {
 			"调研员": {
-				"model": "openai-codex/gpt-5.6-luna/xhigh",
-				"use": "大规模并行调研，便宜，不做实现"
+				"model": "openai-codex/gpt-5.6-luna/high",
+				"use": "大量搜索、读日志、找线索；不实现"
 			},
 			"工程师": {
-				"model": "openai-codex/gpt-5.6-sol/medium",
-				"use": "默认实现/调试（速度快，偏 Debug 或纯执行，但容易过度工程过度测试）",
-				"fallback": ["anthropic/claude-opus-5/medium"]
-			},
-			"全栈": {
-				"model": "anthropic/claude-opus-5/medium",
-				"use": "前端/审美/综合实现（速度中等）",
-				"fallback": ["openai-codex/gpt-5.6-sol/medium"]
-			},
-			"架构师": {
-				"model": "anthropic/claude-fable-5/high",
-				"use": "高级架构咨询与关键实现，可原地执行，贵，启用前需先征求用户确认"
+				"model": "openai-codex/gpt-6-astra/medium",
+				"use": "实现、调试、前端",
+				"fallback": ["anthropic/claude-fable-5/medium", "anthropic/claude-opus-5/medium"]
 			},
 			"设计师": {
-				"model": "kimi-coding/k3-256k/high",
-				"use": "纯视觉创造，速度慢，已有固定组件和设计方案时不适用"
+				"model": "anthropic/claude-fable-5/low",
+				"use": "视觉创作",
+				"fallback": ["anthropic/claude-opus-5/medium", "openai-codex/gpt-6-astra/medium"]
 			},
 			"哨兵": {
 				"model": "openai-codex/gpt-5.6-luna/low",
-				"use": "CI/部署/长测试等待盯守"
+				"use": "CI、部署、长测试等待"
 			}
 		}
 	},
@@ -77,17 +69,17 @@
 	"presets": {
 		"fable": { "model": "anthropic/claude-fable-5/high", "key": "alt+1" },
 		"opus5": { "model": "anthropic/claude-opus-5/medium", "key": "alt+2" },
-		"sol": { "model": "openai-codex/gpt-5.6-sol/medium", "key": "alt+3" },
-		"gemini": { "model": "antigravity/gemini-3.7-flash/high", "key": "alt+4" },
-		"ds": { "model": "deepseek/deepseek-v4-flash/high", "key": "alt+5" },
-		"k3-256": { "model": "kimi-coding/k3-256k/high", "key": "alt+6" },
+		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+3" },
+		"sol": { "model": "openai-codex/gpt-5.6-sol/medium", "key": "alt+4" },
+		"gemini": { "model": "antigravity/gemini-3.7-flash/high", "key": "alt+5" },
+		"ds": { "model": "deepseek/deepseek-v4-flash/high", "key": "alt+6" },
 		"xai": { "model": "xai/grok-4.6/high", "key": "alt+7" }
 	},
 
 	// 审查只在用户或指挥官发起时调用模型。
 	"review": {
 		"advisor": "anthropic/claude-fable-5/high",
-		"reviewers": ["anthropic/claude-sonnet-5/medium", "anthropic/claude-opus-5/medium"],
+		"reviewers": ["openai-codex/gpt-6-astra/medium", "anthropic/claude-opus-5/medium"],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 20,
