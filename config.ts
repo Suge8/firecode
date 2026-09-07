@@ -46,11 +46,8 @@ export interface ReviewConfig {
 	language: Language;
 }
 
-export const MASTER_ROLES = ["调研员", "工程师", "全栈", "架构师", "设计师", "哨兵"] as const;
-export type MasterRoleName = (typeof MASTER_ROLES)[number];
-
 export interface MasterRole extends ModelAtom {
-	role: MasterRoleName;
+	role: string;
 	use: string;
 	fallback: ModelAtom[];
 }
@@ -420,26 +417,15 @@ export function parseMasterConfig(raw: Record<string, unknown>, problems: string
 	if (raw.roles === undefined)
 		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
 	if (!isPlainObject(raw.roles) || Object.keys(raw.roles).length === 0) {
-		problems.push("master.roles 必须是至少包含一个固定角色的对象");
+		problems.push("master.roles 必须是至少包含一个角色的对象");
 		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
 	}
-	const configured = raw.roles;
-	for (const role of Object.keys(configured))
-		if (!MASTER_ROLES.includes(role as MasterRoleName))
-			problems.push(`未知角色 master.roles.${role}，可用：${MASTER_ROLES.join(" / ")}`);
-	const roles = MASTER_ROLES.flatMap((role) =>
-		Object.hasOwn(configured, role)
-			? [masterRole(configured[role], `master.roles.${role}`, role, problems)]
-			: []);
+	const roles = Object.entries(raw.roles).map(([role, value]) =>
+		masterRole(value, `master.roles.${role}`, role, problems));
 	return { roles, workerExcludeExtensions: exclusions, autoActivate };
 }
 
-function masterRole(
-	value: unknown,
-	field: string,
-	role: MasterRoleName,
-	problems: string[],
-): MasterRole {
+function masterRole(value: unknown, field: string, role: string, problems: string[]): MasterRole {
 	const record = asRecord(value);
 	rejectUnknownKeys(record, ["model", "use", "fallback"], field, problems);
 	const atom = parseModelAtom(record.model, `${field}.model`, problems);

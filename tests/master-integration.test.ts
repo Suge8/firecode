@@ -14,7 +14,7 @@ import {
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const TEST_ROLES = {
 	工程师: { model: "test/worker/medium", use: "测试" },
-	架构师: { model: "test/worker-2/high", use: "切换测试" },
+	设计师: { model: "test/worker-2/high", use: "切换测试" },
 };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -72,7 +72,7 @@ test("Master Markdown 与动态角色表按单一接缝注入", async () => {
 	const prompt = await loadFirecodeModule("master/prompt.js") as any;
 	const expected = prompt.assembleMasterPrompt(
 		prompt.readMasterPrompt("master"),
-		"工程师：test/worker/medium（测试）；架构师：test/worker-2/high（切换测试）",
+		"工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）",
 	);
 	expect(expected).toContain("角色表：工程师：test/worker/medium（测试）");
 	expect(expected).toContain("投递：Worker 结果、中断与审查终态会自动送达；tail 仅用于按需读取执行细节。");
@@ -185,25 +185,15 @@ test("角色表、原子与 fallback 配置错误时拒绝启动", async () => {
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 });
 
-test("角色表提示词只注入已配置角色，缺失角色拒绝派发并列出已配置项", async () => {
+test("角色表提示词与 role 枚举都只来自已配置角色", async () => {
 	const harness = await setup(true, { roles: { 工程师: TEST_ROLES.工程师 } });
 	const prompt = await harness.systemPrompt("主提示词");
 	expect(prompt).toContain("角色表：工程师：test/worker/medium（测试）");
-	expect(prompt).not.toContain("架构师：");
+	expect(prompt).not.toContain("设计师：");
+	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师"]);
 	await expect(harness.execute({
 		action: "start", worker: "missing-role", prompt: "执行",
 	})).rejects.toThrow("start 必须指定 role");
-	await expect(harness.execute({
-		action: "start", worker: "outside-roster", prompt: "执行", role: "架构师",
-	})).rejects.toThrow("角色未配置：架构师。已配置角色：工程师");
-
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "switch-role", prompt: "执行", role: "工程师" });
-	await settled;
-	await expect(harness.execute({
-		action: "send", worker: "switch-role", prompt: "继续", role: "架构师",
-	})).rejects.toThrow("角色未配置：架构师。已配置角色：工程师");
 });
 
 test("subagents 是 worker 必填的七命令，池快照是独立零参查询", async () => {
@@ -222,10 +212,7 @@ test("subagents 是 worker 必填的七命令，池快照是独立零参查询",
 	expect(harness.parameterDescriptions.role).toContain("start 必填");
 	expect(harness.parameterDescriptions.role).toContain("send");
 	expect(harness.parameterDescriptions.role).toContain("切换");
-	expect(harness.commandTool.parameters.properties.role.anyOf?.map((item: any) => item.const)
-		?? harness.commandTool.parameters.properties.role.enum).toEqual([
-		"调研员", "工程师", "全栈", "架构师", "设计师", "哨兵",
-	]);
+	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
 	expect(harness.parameterDescriptions.review).toContain("审查纪律");
 	expect(harness.parameterDescriptions.review).toContain("true 不自动开审");
 	expect(harness.listTool.description).toBe("查看子代理池快照");
@@ -675,7 +662,7 @@ test("kill 赢过正在准备的 send/review，异步写回不会复活已删档
 
 	faux.setResponses([fauxAssistantMessage("不应执行")]);
 	const sending = harness.execute({
-		action: "send", worker: "kill-send", prompt: "新任务", role: "架构师",
+		action: "send", worker: "kill-send", prompt: "新任务", role: "设计师",
 	});
 	await harness.execute({ action: "kill", worker: "kill-send" });
 	await expect(sending).rejects.toThrow("已被 kill");
@@ -854,11 +841,11 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({
-		action: "send", worker: "revive", prompt: "切换", role: "架构师",
+		action: "send", worker: "revive", prompt: "切换", role: "设计师",
 	});
 	await delivered;
 	listed = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(listed).toMatchObject({ status: "idle", role: "架构师" });
+	expect(listed).toMatchObject({ status: "idle", role: "设计师" });
 	const sessionText = await Bun.file(sessionPath).text();
 	expect(sessionText).toContain('"type":"model_change"');
 	expect(sessionText).toContain('"type":"thinking_level_change"');

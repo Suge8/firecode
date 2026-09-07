@@ -98,7 +98,7 @@ test("runtime config enables only its declared behavior", async () => {
 	expect(shortcuts).toEqual(["alt+r"]);
 });
 
-test("Master 固定角色对象严格解析原子与 fallback", async () => {
+test("Master 角色对象严格解析原子与 fallback", async () => {
 	const { parseMasterConfig } = await loadFirecodeModule("config.ts") as any;
 	const validProblems: string[] = [];
 	const parsed = parseMasterConfig({
@@ -125,10 +125,8 @@ test("Master 固定角色对象严格解析原子与 fallback", async () => {
 			},
 			哨兵: { model: "test/model/turbo", use: "坏档" },
 			调研员: { model: "test/model", use: "漏写思考档" },
-			自定义角色: { model: "test/model/low", use: "未知" },
 		},
 	}, problems);
-	expect(problems).toContain("未知角色 master.roles.自定义角色，可用：调研员 / 工程师 / 全栈 / 架构师 / 设计师 / 哨兵");
 	expect(problems).toContain("未知字段 master.roles.工程师.thinking");
 	expect(problems).toContain(
 		"master.roles.工程师.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：invalid-model）",
@@ -142,7 +140,7 @@ test("Master 固定角色对象严格解析原子与 fallback", async () => {
 
 	const emptyProblems: string[] = [];
 	parseMasterConfig({ roles: {} }, emptyProblems);
-	expect(emptyProblems).toContain("master.roles 必须是至少包含一个固定角色的对象");
+	expect(emptyProblems).toContain("master.roles 必须是至少包含一个角色的对象");
 
 	const legacyProblems: string[] = [];
 	parseMasterConfig({ models: [{ role: "工程师", model: "test/model/low", use: "旧数组" }] }, legacyProblems);

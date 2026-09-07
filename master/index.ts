@@ -12,7 +12,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { MASTER_ROLES, loadConfig, type ModelAtom, type MasterRole } from "../config.js";
+import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
 import { deliver } from "../deliver.js";
 import { formatDuration } from "../format.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
@@ -501,7 +501,7 @@ export function registerMaster(
 			}),
 			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
-			role: Type.Optional(StringEnum(MASTER_ROLES, { description: "start 必填固定角色；send 可选，传入时切换角色，省略则沿用。" })),
+			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: "start 必填角色表中的角色；send 可选，传入时切换角色，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
 			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
 			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
@@ -923,10 +923,9 @@ function loadMasterConfiguration() {
 	return loaded.config.master;
 }
 
+/** 宿主已按 schema 枚举校验过 role，这里只查表。 */
 function resolveRole(roles: MasterRole[], role: string): MasterRole {
-	const entry = roles.find((candidate) => candidate.role === role);
-	if (!entry) throw new Error(`角色未配置：${role}。已配置角色：${roles.map((candidate) => candidate.role).join("、")}`);
-	return entry;
+	return roles.find((candidate) => candidate.role === role)!;
 }
 
 function nextFallback(role: MasterRole, worker: WorkerRef): ModelAtom | undefined {
