@@ -11,6 +11,7 @@ const PRIORITY_MODEL_IDS = new Set([
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
+	"gpt-6-astra",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
