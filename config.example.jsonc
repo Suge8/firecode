@@ -50,14 +50,14 @@
 				"use": "大量搜索、读日志、找线索；不实现"
 			},
 			"工程师": {
-				"model": "openai-codex/gpt-6-astra/medium",
-				"use": "实现、调试、前端",
-				"fallback": ["anthropic/claude-fable-5/medium", "anthropic/claude-opus-5/medium"]
+				"model": "openai-codex/gpt-6-astra/low",
+				"use": "实现、调试",
+				"fallback": ["anthropic/claude-fable-5-1/low", "anthropic/claude-opus-5/medium"]
 			},
 			"设计师": {
-				"model": "anthropic/claude-fable-5/low",
-				"use": "视觉创作",
-				"fallback": ["anthropic/claude-opus-5/medium", "openai-codex/gpt-6-astra/medium"]
+				"model": "anthropic/claude-fable-5-1/low",
+				"use": "视觉、前端",
+				"fallback": ["anthropic/claude-opus-5/medium", "openai-codex/gpt-6-astra/low"]
 			},
 			"哨兵": {
 				"model": "openai-codex/gpt-5.6-luna/low",
@@ -67,18 +67,18 @@
 	},
 
 	"presets": {
-		"fable": { "model": "anthropic/claude-fable-5/high", "key": "alt+1" },
+		"fable": { "model": "anthropic/claude-fable-5-1/medium", "key": "alt+1" },
 		"opus5": { "model": "anthropic/claude-opus-5/medium", "key": "alt+2" },
 		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+3" },
 		"sol": { "model": "openai-codex/gpt-5.6-sol/medium", "key": "alt+4" },
-		"gemini": { "model": "antigravity/gemini-3.7-flash/high", "key": "alt+5" },
-		"ds": { "model": "deepseek/deepseek-v4-flash/high", "key": "alt+6" },
+		"gemini": { "model": "antigravity/gemini-3.8-flash/high", "key": "alt+5" },
+		"ds": { "model": "deepseek/deepseek-v4-flash-vision-exp/high", "key": "alt+6" },
 		"xai": { "model": "xai/grok-4.6/high", "key": "alt+7" }
 	},
 
 	// 审查只在用户或指挥官发起时调用模型。
 	"review": {
-		"advisor": "anthropic/claude-fable-5/high",
+		"advisor": "anthropic/claude-fable-5-1/high",
 		"reviewers": ["openai-codex/gpt-6-astra/medium", "anthropic/claude-opus-5/medium"],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
