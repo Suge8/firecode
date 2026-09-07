@@ -22,9 +22,10 @@ function createHarness() {
 	};
 }
 
+// usage.output 模拟 Anthropic message_start 的占位计数：流中速度必须忽略它。
 function assistantDelta(delta = "x".repeat(400)) {
 	return {
-		message: { role: "assistant", usage: { output: 0 } },
+		message: { role: "assistant", usage: { output: 3 } },
 		assistantMessageEvent: { type: "text_delta", delta },
 	};
 }
@@ -36,11 +37,9 @@ describe("footer response timing", () => {
 
 		harness.setTime(1_500);
 		harness.handlers.get("message_update")?.(assistantDelta(), {});
-		expect(harness.updates.at(-1)).toEqual({ phase: "live" });
-
 		harness.setTime(2_400);
 		harness.handlers.get("message_update")?.(assistantDelta(), {});
-		expect(harness.updates).toHaveLength(1);
+		expect(harness.updates).toHaveLength(0);
 
 		harness.setTime(2_500);
 		harness.handlers.get("message_update")?.(assistantDelta(), {});
@@ -48,7 +47,7 @@ describe("footer response timing", () => {
 
 		harness.setTime(2_600);
 		harness.handlers.get("message_update")?.(assistantDelta(), {});
-		expect(harness.updates).toHaveLength(2);
+		expect(harness.updates).toHaveLength(1);
 	});
 
 	test("publishes official final timing and retains it while the next request waits", () => {
@@ -78,7 +77,7 @@ describe("footer response timing", () => {
 
 		harness.setTime(4_500);
 		harness.handlers.get("message_update")?.(assistantDelta(), {});
-		expect(harness.updates.at(-1)).toEqual({ phase: "live" });
+		expect(harness.updates).toHaveLength(completedUpdates);
 	});
 
 	test("keeps the previous result when a request fails before output", () => {

@@ -2,12 +2,14 @@
 import { performance } from "node:perf_hooks";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// 流中没有供应商给出可靠的输出计数（Anthropic 的 message_start 只带占位值，OpenAI 完全不带），
+// 所以流中速度只能按字符估算；中文与摘要式思考会明显偏低，结束后的官方值才是精确值。
 const TOKEN_CHARS = 4;
 const MIN_SAMPLE_MS = 1_000;
 const UPDATE_INTERVAL_MS = 250;
 
 export type TpsStatus =
-	| { phase: "live"; tokensPerSecond?: number }
+	| { phase: "live"; tokensPerSecond: number }
 	| { phase: "complete"; elapsedSeconds: number; tokensPerSecond?: number };
 
 function deltaText(event: { type: string; delta?: unknown }): string | undefined {
@@ -25,14 +27,14 @@ export function registerTps(
 	let requestStartedAt: number | undefined;
 	let firstDeltaAt: number | undefined;
 	let lastDeltaAt: number | undefined;
-	let lastUpdateAt: number | undefined;
+	let lastUpdateAt = 0;
 	let estimatedTokens = 0;
 
 	function resetMeasurement(): void {
 		requestStartedAt = undefined;
 		firstDeltaAt = undefined;
 		lastDeltaAt = undefined;
-		lastUpdateAt = undefined;
+		lastUpdateAt = 0;
 		estimatedTokens = 0;
 	}
 
@@ -54,20 +56,13 @@ export function registerTps(
 
 		const current = now();
 		lastDeltaAt = current;
-		estimatedTokens += Math.max(0, delta.length / TOKEN_CHARS);
-		if (firstDeltaAt === undefined) {
-			firstDeltaAt = current;
-			lastUpdateAt = current;
-			update({ phase: "live" });
-			return;
-		}
+		firstDeltaAt ??= current;
+		estimatedTokens += delta.length / TOKEN_CHARS;
 
 		const elapsed = current - firstDeltaAt;
-		if (elapsed < MIN_SAMPLE_MS || current - (lastUpdateAt ?? 0) < UPDATE_INTERVAL_MS) return;
+		if (elapsed < MIN_SAMPLE_MS || current - lastUpdateAt < UPDATE_INTERVAL_MS) return;
 		lastUpdateAt = current;
-		const officialTokens = event.message.usage.output;
-		const tokens = officialTokens > 0 ? officialTokens : Math.round(estimatedTokens);
-		update({ phase: "live", tokensPerSecond: Math.round((tokens * 1_000) / elapsed) });
+		update({ phase: "live", tokensPerSecond: Math.round((estimatedTokens * 1_000) / elapsed) });
 	});
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant" || firstDeltaAt === undefined || lastDeltaAt === undefined) return;

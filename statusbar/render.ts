@@ -96,17 +96,10 @@ export function renderCache(theme: ForegroundTheme, percent: number | undefined)
 
 export function renderTps(theme: ForegroundTheme, status: TpsStatus | undefined): string {
 	if (!status) return "";
-	if (status.phase === "live") {
-		return theme.fg(
-			"success",
-			`↗ ${status.tokensPerSecond ? `${status.tokensPerSecond}t/s` : "…"}`,
-		);
-	}
-	const elapsed = formatDuration(status.elapsedSeconds * 1_000);
-	const duration = theme.fg("dim", `⏱ ${elapsed}${status.tokensPerSecond ? " · " : ""}`);
-	return status.tokensPerSecond
-		? `${duration}${theme.fg("success", `↗ ${status.tokensPerSecond}t/s`)}`
-		: duration;
+	const speed = status.tokensPerSecond === undefined ? "" : theme.fg("success", `↗ ${status.tokensPerSecond}t/s`);
+	if (status.phase === "live") return speed;
+	const duration = theme.fg("dim", `⏱ ${formatDuration(status.elapsedSeconds * 1_000)}`);
+	return speed ? `${duration}${theme.fg("dim", " · ")}${speed}` : duration;
 }
 
 /** /fire-review 广播的审查进度，右对齐挂在首行末尾。 */
