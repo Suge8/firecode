@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
+import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
 
@@ -71,21 +71,7 @@ test.each([
 	{ feature: "stats", commands: ["quota", "tokens"], shortcuts: [] },
 ])("runtime config enables only $feature behavior", async ({ feature, commands: expectedCommands, shortcuts: expectedShortcuts }) => {
 	const configJsonc = JSON.stringify({
-		features: Object.fromEntries([
-			"header",
-			"statusbar",
-			"tools",
-			"presets",
-			"rename",
-			"stats",
-			"claudeSub",
-			"openaiNative",
-			"workingFlame",
-			"bark",
-			"review",
-			"master",
-			"watcher",
-		].map((name) => [name, name === feature])),
+		features: await featuresOnly(feature),
 		keys: { rename: "alt+r" },
 	});
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });

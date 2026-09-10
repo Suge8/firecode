@@ -64,12 +64,12 @@ function adviseTool(current: () => Advice | undefined, capture: (advice: Advice)
 		parameters: Type.Object({
 			note: Type.String({ description: "一句话说清问题与定位。" }),
 		}),
-		execute(_id: string, params: Record<string, unknown>) {
+		async execute(_id: string, params: Record<string, unknown>) {
 			if (current()) throw new Error("本次评估已提交过建议；余下的问题留到下一次评估");
 			const note = typeof params.note === "string" ? params.note.trim() : "";
 			if (!note) throw new Error("note 不能为空");
 			capture({ note });
-			return { content: [{ type: "text" as const, text: "已记录，本次评估结束。" }] };
+			return { content: [{ type: "text" as const, text: "已记录，本次评估结束。" }], details: undefined };
 		},
 	};
 }

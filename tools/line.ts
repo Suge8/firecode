@@ -110,67 +110,94 @@ export function paintBgLine(line: string, width: number, bgFn?: (text: string) =
 	return bgFn ? bgFn(padded) : padded;
 }
 
-export class ToolLine implements Component {
+export interface GroupSummary {
+	calls: number;
+	running: number;
+	failures: number;
+	activity?: string;
+}
+
+export interface GroupRenderer extends Component {
+	renderGroup(width: number, summary: GroupSummary): string[];
+}
+
+export class ToolLine implements GroupRenderer {
 	constructor(private readonly options: ToolLineOptions) {}
-
 	invalidate(): void {}
+	render(width: number): string[] { return renderLine(this.options, width); }
 
-	render(width: number): string[] {
-		const { theme, ctx } = this.options;
-		const state = ctx.state;
-		const status = ctx.isError ? STATUS.err : ctx.isPartial ? STATUS.run : STATUS.ok;
-		const safeWidth = Math.max(1, width - 2);
-		const head: Part[] = [
-			{ text: RAIL, color: "dim" },
-			{ text: `${status.glyph} `, color: status.color, bold: true },
-			{
-				text: `${this.options.label} `,
-				color: ctx.isError ? "error" : "toolTitle",
-				bold: true,
+	/** 保留原动作/目标，丢弃单工具耗时与大小，避免被误读为整组统计。 */
+	renderGroup(width: number, summary: GroupSummary): string[] {
+		const { activity, calls, running, failures } = summary;
+		const label = [activity ?? this.options.label, calls ? `工具 ${calls} 次` : "",
+			failures ? `${failures} 次失败` : "", running ? `${running} 个运行中` : ""].filter(Boolean).join(" · ");
+		const isPartial = running > 0 || activity !== undefined;
+		return renderLine({
+			...this.options, label, value: activity ? [] : this.options.value,
+			meta: activity ? undefined : this.options.meta,
+			ctx: {
+				...this.options.ctx, expanded: false, isPartial, isError: failures > 0 && !isPartial,
+				state: activity ? {} : { meta: this.options.ctx.state.meta },
 			},
-		];
-		const headWidth = partsWidth(head);
-		const bgFn = typeof theme.bg === "function" ? (text: string) => theme.bg(status.bg, text) : undefined;
-		if (safeWidth <= headWidth) {
-			const clipped = paint(theme, clipParts(head, safeWidth, "end"));
-			return [paintBgLine(clipped, width, bgFn)];
-		}
-
-		const meta = [...(this.options.meta ?? []), ...(state.meta ?? [])];
-		const right = [durationPart(state.durationMs), sizePart(state.chars)].filter(
-			(part): part is Part => !!part,
-		);
-		while (
-			right.length &&
-			safeWidth - headWidth - rightContentWidth(right) - RIGHT_GAP < MIN_VALUE_WIDTH
-		)
-			right.pop();
-		const rightVisible = rightContentWidth(right);
-		const freeWidth = safeWidth - headWidth - (right.length ? rightVisible + RIGHT_GAP : 0);
-		const errorText = ctx.isError && !ctx.expanded ? oneLine(state.errorText ?? "") : "";
-		let value = [...this.options.value, ...meta];
-		if (ctx.isError) value = value.map((part) => ({ ...part, color: "error" as const }));
-
-		let errorPart: Part | undefined;
-		if (errorText) {
-			value = clipParts(value, Math.max(1, Math.floor(freeWidth * ERROR_VALUE_RATIO)), this.options.clip);
-			const errorWidth = freeWidth - partsWidth(value) - 3;
-			if (errorWidth >= 1)
-				errorPart = { text: ` · ${clip(errorText, errorWidth, "end")}`, color: "error" };
-		} else {
-			value = clipParts(value, freeWidth, this.options.clip);
-		}
-
-		const body = [...head, ...value, ...(errorPart ? [errorPart] : [])];
-		let line = paint(theme, body);
-		if (right.length) {
-			const pad = Math.max(RIGHT_GAP, safeWidth - partsWidth(body) - rightVisible);
-			line +=
-				" ".repeat(pad) +
-				right.map((part) => paint(theme, [part])).join(theme.fg("dim", " · "));
-		}
-		return [paintBgLine(line, width, bgFn)];
+		}, width);
 	}
+}
+
+function renderLine(options: ToolLineOptions, width: number): string[] {
+	const { theme, ctx } = options;
+	const state = ctx.state;
+	const status = ctx.isError ? STATUS.err : ctx.isPartial ? STATUS.run : STATUS.ok;
+	const safeWidth = Math.max(1, width - 2);
+	const head: Part[] = [
+		{ text: RAIL, color: "dim" },
+		{ text: `${status.glyph} `, color: status.color, bold: true },
+		{
+			text: `${options.label} `,
+			color: ctx.isError ? "error" : "toolTitle",
+			bold: true,
+		},
+	];
+	const headWidth = partsWidth(head);
+	const bgFn = typeof theme.bg === "function" ? (text: string) => theme.bg(status.bg, text) : undefined;
+	if (safeWidth <= headWidth) {
+		const clipped = paint(theme, clipParts(head, safeWidth, "end"));
+		return [paintBgLine(clipped, width, bgFn)];
+	}
+
+	const meta = [...(options.meta ?? []), ...(state.meta ?? [])];
+	const right = [durationPart(state.durationMs), sizePart(state.chars)].filter(
+		(part): part is Part => !!part,
+	);
+	while (
+		right.length &&
+		safeWidth - headWidth - rightContentWidth(right) - RIGHT_GAP < MIN_VALUE_WIDTH
+	)
+		right.pop();
+	const rightVisible = rightContentWidth(right);
+	const freeWidth = safeWidth - headWidth - (right.length ? rightVisible + RIGHT_GAP : 0);
+	const errorText = ctx.isError && !ctx.expanded ? oneLine(state.errorText ?? "") : "";
+	let value = [...options.value, ...meta];
+	if (ctx.isError) value = value.map((part) => ({ ...part, color: "error" as const }));
+
+	let errorPart: Part | undefined;
+	if (errorText) {
+		value = clipParts(value, Math.max(1, Math.floor(freeWidth * ERROR_VALUE_RATIO)), options.clip);
+		const errorWidth = freeWidth - partsWidth(value) - 3;
+		if (errorWidth >= 1)
+			errorPart = { text: ` · ${clip(errorText, errorWidth, "end")}`, color: "error" };
+	} else {
+		value = clipParts(value, freeWidth, options.clip);
+	}
+
+	const body = [...head, ...value, ...(errorPart ? [errorPart] : [])];
+	let line = paint(theme, body);
+	if (right.length) {
+		const pad = Math.max(RIGHT_GAP, safeWidth - partsWidth(body) - rightVisible);
+		line +=
+			" ".repeat(pad) +
+			right.map((part) => paint(theme, [part])).join(theme.fg("dim", " · "));
+	}
+	return [paintBgLine(line, width, bgFn)];
 }
 
 /** 折叠时只回写行状态；展开时输出完整结果。 */

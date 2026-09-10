@@ -142,3 +142,9 @@ export async function cleanupFirecodeModules(): Promise<void> {
 }
 
 export const PI_TUI_URL = PI_TUI;
+
+/** 注册入口测试只开启指定功能，其余开关从运行配置的唯一功能清单派生。 */
+export async function featuresOnly(...enabled: string[]): Promise<Record<string, boolean>> {
+	const { FEATURES } = await loadFirecodeModule("config.ts") as { FEATURES: readonly string[] };
+	return Object.fromEntries(FEATURES.map((feature) => [feature, enabled.includes(feature)]));
+}

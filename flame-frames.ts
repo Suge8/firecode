@@ -374,35 +374,44 @@ type Cell = { char: string; style: string };
 interface ScaledFrameCache {
 	height: number;
 	frames: string[][];
-	width?: number;
+	width: number;
 }
 
 let scaledFrameCache: ScaledFrameCache | undefined;
 const ANSI_GLOBAL = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
 export function flameFrameLines(height: number, frameIndex: number): string[] {
-	const frames = scaledFrames(height);
+	const frames = scaledFrameCacheFor(height).frames;
 	const index = Number.isFinite(frameIndex) ? Math.floor(frameIndex) : 0;
 	return frames[positiveModulo(index, frames.length)];
 }
 
 export function flameFrameWidth(height: number): number {
-	const cache = scaledFrameCacheFor(height);
-	if (cache.width !== undefined) return cache.width;
-	cache.width = Math.max(
-		...cache.frames.flatMap((frame) =>
-			frame.map((line) => line.replace(ANSI_GLOBAL, "").trimEnd().length),
-		),
-	);
-	return cache.width;
+	const targetHeight = normalizeHeight(height);
+	return scaledFrameCache?.height === targetHeight ? scaledFrameCache.width : measureWidth(targetHeight);
 }
 
-export function flameFrameCacheSize() {
-	return scaledFrameCache ? 1 : 0;
-}
+// 所有帧按行合并非空像素；只问尺寸时不生成彩色帧，也不淘汰正在播放的帧缓存。
+const OUTLINE: readonly (readonly boolean[])[] = FRAMES[0].map((_line, row) => {
+	const occupied: boolean[] = [];
+	for (const frame of FRAMES) {
+		const text = frame[row].replace(ANSI_GLOBAL, "");
+		for (let column = 0; column < text.length; column++)
+			if (text[column] !== " ") occupied[column] = true;
+	}
+	return occupied;
+});
 
-function scaledFrames(height: number) {
-	return scaledFrameCacheFor(height).frames;
+function measureWidth(height: number): number {
+	const scale = height / OUTLINE.length;
+	let width = 0;
+	for (let y = 0; y < height; y++) {
+		const row = OUTLINE[Math.floor(y / scale)];
+		for (let x = Math.ceil(row.length * scale) - 1; x >= width; x--) {
+			if (row[Math.floor(x / scale)]) { width = x + 1; break; }
+		}
+	}
+	return width;
 }
 
 function scaledFrameCacheFor(height: number) {
@@ -410,6 +419,7 @@ function scaledFrameCacheFor(height: number) {
 	if (scaledFrameCache?.height === targetHeight) return scaledFrameCache;
 	scaledFrameCache = {
 		height: targetHeight,
+		width: measureWidth(targetHeight),
 		frames: FRAMES.map((frame) => scaleFrame(frame, targetHeight)),
 	};
 	return scaledFrameCache;

@@ -11,7 +11,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type WatcherConfig } from "../config.js";
 import { deliver } from "../deliver.js";
-import { formatModelName } from "../format.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import {
 	adviceMessage,
@@ -85,7 +84,7 @@ export function registerWatcher(
 	const activate = (ctx: ExtensionContext): WatcherRuntime => {
 		const owner = { ctx, pending: [], lastTurnIndex: 0, evaluating: false };
 		runtime = owner;
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", `👓 ${formatModelName(config.model)}/${config.thinking}`));
+		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", "👓 观察员在线"));
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
@@ -163,8 +162,8 @@ export function registerWatcher(
 	});
 
 	// fire-review 活跃期静默：不与对抗审查的反馈打架，增量留着审查完合并评估。
-	pi.events?.on?.(REVIEW_OCCUPANCY_CHANNEL, (data: { active?: boolean } | undefined) => {
-		reviewActive = Boolean(data?.active);
+	pi.events.on(REVIEW_OCCUPANCY_CHANNEL, (data) => {
+		reviewActive = Boolean((data as { active?: boolean } | undefined)?.active);
 		const active = runtime;
 		if (reviewActive || !active || active.evaluating || !active.pending.length) return;
 		void evaluate(active);

@@ -34,27 +34,29 @@ test("working line stays hidden while review holds occupancy across turn boundar
 	expect(visible.at(-1)).toBe(true);
 });
 
-// 素材层不变量：声明宽度必须≥实际可见宽度，否则窄屏适配按小宽放行、渲染却溢出。
-test("declared flame width covers actual visible width for every height and frame", () => {
-	for (const height of [3, 6, 10]) {
-		const declared = flameFrameWidth(height);
-		for (let frame = 0; frame < FLAME_FRAME_COUNT; frame += 1) {
-			for (const line of flameFrameLines(height, frame)) {
-				expect(line.replace(/\u001b\[[0-9;]*m/gu, "").length).toBeLessThanOrEqual(declared);
-			}
-		}
+test("几何量宽与全帧实际宽度相等，工作和审查尺寸均不改变轮廓", () => {
+	for (const height of [...Array.from({ length: 16 }, (_, index) => index + 1), 31]) {
+		const actual = Math.max(...Array.from({ length: FLAME_FRAME_COUNT }, (_, frame) =>
+			Math.max(...flameFrameLines(height, frame).map((line) => line.replace(/\u001b\[[0-9;]*m/gu, "").length))));
+		expect(flameFrameWidth(height)).toBe(actual);
 	}
+	expect([3, 4, 5, 6, 7, 8, 9, 10].map(flameFrameWidth)).toEqual([5, 6, 8, 9, 11, 12, 14, 15]);
 });
 
-// 高矮自适应：矮终端缩小、正常终端满高，钳位 3–10。
-test("flame height tracks terminal rows with clamps", () => {
-	expect(flameHeightFor(undefined)).toBe(10);
-	expect(flameHeightFor(59)).toBe(10);
-	expect(flameHeightFor(28)).toBe(7);
-	expect(flameHeightFor(8)).toBe(3);
+test("工作火焰逐行渐进缩放，小窗口保轮廓，大窗口最多七行", () => {
+	for (const [rows, height] of [[8, 3], [12, 3], [16, 4], [20, 4], [24, 5], [28, 5], [32, 6], [36, 6], [40, 7], [80, 7]])
+		expect(flameHeightFor(rows)).toBe(height);
+	expect(flameHeightFor(undefined)).toBe(5);
 });
 
-// 宽度不够时逐级降高而不是直接消失；窄到装不下最小火焰才隐藏。
+test("宽度查询和逐级适配不生成动画帧，也不淘汰当前尺寸的帧缓存", () => {
+	const frame = flameFrameLines(3, 0);
+	flameFrameWidth(10);
+	expect(flameFrameLines(3, 0)).toBe(frame);
+	flameFitHeight(10, flameFrameWidth(3));
+	expect(flameFrameLines(3, 0)).toBe(frame);
+});
+
 test("flame shrinks to fit narrow widths before hiding", () => {
 	expect(flameFitHeight(10, flameFrameWidth(10))).toBe(10);
 	const narrow = flameFrameWidth(10) - 1;
@@ -62,4 +64,18 @@ test("flame shrinks to fit narrow widths before hiding", () => {
 	expect(fitted).toBeGreaterThan(0);
 	expect(fitted).toBeLessThan(10);
 	expect(flameFitHeight(10, 0)).toBe(0);
+});
+
+test("退出后丢弃尚未落地的火焰 UI 投影", async () => {
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	const writes: string[] = [];
+	registerWorkingFlame({ on: (name: string, handler: never) => handlers.set(name, handler), events: { on() {} } } as never);
+	const ctx = { mode: "tui", ui: {
+		setWorkingVisible: () => writes.push("working"),
+		setWidget: () => writes.push("widget"),
+	} };
+	handlers.get("agent_start")?.({}, ctx);
+	handlers.get("session_shutdown")?.({}, ctx);
+	await microtask();
+	expect(writes).toEqual([]);
 });

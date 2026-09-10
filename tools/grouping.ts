@@ -1,14 +1,14 @@
-/** 工具分组的宿主适配：原始聊天树不变，渲染与鼠标命中共用同一份投影。 */
-import { ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+/** 过程分组的宿主适配：原始聊天树不变，渲染与鼠标命中共用同一份投影。 */
+import { AssistantMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
-import { groupable, projectToolGroups, toggleToolDetails } from "./group-view.js";
+import { groupable, projectProcessGroups, toggleToolDetails } from "./group-view.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
 const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
 
 function findChat(value: Component): Container | undefined {
 	if (!(value instanceof Container)) return undefined;
-	if (value.children.some((child) => child instanceof ToolExecutionComponent)) return value;
+	if (value.children.some((child) => child instanceof ToolExecutionComponent || child instanceof AssistantMessageComponent)) return value;
 	for (const child of value.children) {
 		const found = findChat(child);
 		if (found) return found;
@@ -60,7 +60,7 @@ function attach(tui: TUI, ui: ExtensionUIContext): () => void {
 			tui.requestRender();
 		};
 		chat.render = (width) => {
-			projection.children = projectToolGroups(chat.children, ui, toggle);
+			projection.children = projectProcessGroups(chat.children, ui, toggle);
 			return projection.render(width);
 		};
 		chat.handleMouse = (event) => projection.handleMouse(event);
@@ -69,10 +69,10 @@ function attach(tui: TUI, ui: ExtensionUIContext): () => void {
 			chat.handleMouse = mouse;
 		};
 	};
-	// 宿主没有聊天容器句柄；只在首个工具插入时定位，随后立即卸掉发现钩子。
+	// 宿主没有聊天容器句柄；只在首个助手或工具插入时定位，随后立即卸掉发现钩子。
 	const addChild: Container["addChild"] = function (this: Container, child) {
 		originalAdd.call(this, child);
-		if (child instanceof ToolExecutionComponent && belongsHere(child)) discover();
+		if (child instanceof AssistantMessageComponent || (child instanceof ToolExecutionComponent && belongsHere(child))) discover();
 	};
 	Container.prototype.addChild = addChild;
 	discover();

@@ -9,14 +9,19 @@ afterEach(async () => {
 	await cleanupFirecodeModules();
 });
 
-async function scene() {
+async function scene(withMaster = false) {
 	const [host, tui, module, toolsModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
 		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"),
 	]);
 	host.initTheme("dark");
 	const tools = new Map<string, any>();
-	toolsModule.registerToolRendering({ on() {}, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {} });
+	const api = { on() {}, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {} };
+	toolsModule.registerToolRendering(api);
+	if (withMaster) {
+		const { registerMaster } = await loadFirecodeModule("master/index.ts");
+		registerMaster(api);
+	}
 	const chat = new tui.Container();
 	const root = new tui.Container();
 	root.addChild(chat);
@@ -60,7 +65,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	const bash = s.tool("bash", { command: "bun test" });
 	const summary = s.lines().filter(Boolean);
 	expect(summary).toHaveLength(1);
-	expect(summary[0]).toContain("调用 2 次");
+	expect(summary[0]).toContain("工具 2 次");
 	expect(summary[0]).toContain("1 个运行中");
 	expect(summary[0]).toContain("bun test");
 	expect(summary.join("\n")).not.toContain("private full result");
@@ -87,7 +92,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	expect(s.lines().join("\n")).toContain("private full result");
 });
 
-test("空助手消息不拆组，折叠思考、通知和迟到插入仍保留正确边界", async () => {
+test("思考与工具合成过程组，展开恢复原生思考，通知和文字仍分组", async () => {
 	const s = await scene();
 	const first = s.tool("read", { path: "a" });
 	s.complete(first);
@@ -97,39 +102,47 @@ test("空助手消息不拆组，折叠思考、通知和迟到插入仍保留�
 	const second = s.tool("read", { path: "b" });
 	s.complete(second);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("调用 2 次");
+	expect(s.lines().join("\n")).toContain("工具 2 次");
 
-	empty.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "需要检查另一处" }] });
-	expect(s.lines().filter((line: string) => line.includes("调用 1 次"))).toHaveLength(2);
+	empty.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "需要检查另一处" }] }, false);
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	s.ui.setToolsExpanded(true);
+	const thoughtLine = s.lines().findIndex((line: string) => line.includes("Thinking..."));
+	expect(thoughtLine).toBeGreaterThanOrEqual(0);
+	s.click(thoughtLine);
+	expect(s.lines().join("\n")).toContain("需要检查另一处");
+	s.ui.setToolsExpanded(false);
+	expect(s.lines().join("\n")).not.toContain("需要检查另一处");
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	const index = s.chat.children.indexOf(empty);
 	s.chat.children[index] = new s.tui.Text("审查已完成", 0, 0);
 	expect(s.lines().join("\n")).toContain("审查已完成");
-	expect(s.lines().filter((line: string) => line.includes("调用 1 次"))).toHaveLength(2);
+	expect(s.lines().filter((line: string) => line.includes("工具 1 次"))).toHaveLength(2);
 	s.chat.children.splice(index, 1);
-	expect(s.lines().join("\n")).toContain("调用 2 次");
+	expect(s.lines().join("\n")).toContain("工具 2 次");
 });
 
-test("摘要优先显示运行项且保留失败，图片和自渲染工具独立，切档不改聊天树", async () => {
+test("摘要优先显示运行项且保留失败，图片和交互工具独立，切档不改聊天树", async () => {
 	const s = await scene();
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
 	const summary = s.lines().join("\n");
-	expect(summary).toContain("调用 3 次");
+	expect(summary).toContain("工具 3 次");
 	expect(summary).toContain("1 次失败");
 	expect(summary).toContain("long-running");
 	const image = s.tool("read", { path: "image.png" });
 	image.updateResult({ content: [{ type: "image", data: "", mimeType: "image/png" }], isError: false });
 	const custom = s.tool("interactive", {}, {
 		name: "interactive", label: "interactive", renderShell: "self",
-		renderCall: () => new s.tui.Text("交互区域", 0, 0),
+		renderCall: () => new s.tui.MouseRegion(new s.tui.Text("交互区域", 0, 0), () => ({ handled: true })),
 	});
 	s.complete(custom);
 	s.complete(s.tool("read", { path: "last" }));
 	const originalChildren = [...s.chat.children];
 	expect(s.lines().join("\n")).toContain("交互区域");
 	expect(s.lines().join("\n")).toContain("image.png");
-	expect(s.lines().join("\n")).toContain("调用 1 次");
+	expect(s.lines().join("\n")).toContain("工具 1 次");
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
 	expect(s.chat.children).toEqual(originalChildren);
@@ -167,7 +180,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	s.complete(s.tool("read", { path: "a" }));
 	s.complete(s.tool("read", { path: "b" }));
 	expect(Container.prototype.addChild).toBe(addChild);
-	expect(s.lines().join("\n")).toContain("调用 2 次");
+	expect(s.lines().join("\n")).toContain("工具 2 次");
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
 	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), registerTool() {}, registerCommand() {} });
@@ -177,4 +190,142 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	dispose?.();
 	dispose = undefined;
 	expect(s.chat.render).toBe(s.originalRender);
+});
+
+test("首条思考即显示过程状态，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
+	const s = await scene();
+	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(assistant);
+	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
+	expect(s.lines().join("\n")).toContain("处理中");
+	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("思考中");
+	expect(s.lines().join("\n")).not.toMatch(/第一段内部思考|工具 0 次|思考 \d/);
+	const message = {
+		role: "assistant", stopReason: "stop", content: [
+			{ type: "thinking", thinking: "第一段内部思考" },
+			{ type: "text", text: "第一段正式回复" },
+			{ type: "thinking", thinking: "第二段内部思考" },
+			{ type: "text", text: "**第二段正式回复**" },
+		],
+	};
+	const originalMessage = structuredClone(message);
+	assistant.updateContent(message, false);
+	let clicks = 0;
+	assistant.addChild(new s.tui.MouseRegion(new s.tui.Text("原生额外内容", 0, 0), () => { clicks++; return { handled: true }; }));
+	const originalTree = assistant.children;
+	const originalContent = originalTree[0].children;
+	const collapsed = s.lines().join("\n");
+	expect(collapsed).toContain("第一段正式回复");
+	expect(collapsed).toContain("第二段正式回复");
+	expect(collapsed).not.toMatch(/内部思考|Thinking|工具 0 次/);
+	expect(collapsed.indexOf("第一段正式回复")).toBeLessThan(collapsed.indexOf("第二段正式回复"));
+	const raw = s.chat.render(100).join("\n");
+	expect(raw.match(/\x1b\]133;A\x07/g)).toHaveLength(1);
+	expect(raw).toContain("\x1b]133;B\x07\x1b]133;C\x07");
+	expect(assistant.children).toBe(originalTree);
+	expect(originalTree[0].children).toBe(originalContent);
+	expect(message).toEqual(originalMessage);
+	s.click(s.lines().findIndex((line: string) => line.includes("原生额外内容")));
+	expect(clicks).toBe(1);
+	s.ui.setToolsExpanded(true);
+	assistant.setHideThinkingBlock(false);
+	expect(s.lines().join("\n")).toContain("第一段内部思考");
+	expect(s.lines().join("\n")).toContain("第二段内部思考");
+	s.ui.setToolsExpanded(false);
+	expect(s.lines().join("\n")).toBe(collapsed);
+});
+
+test("思考期间仍保留已有工具失败，异常和截断诊断不会被思考折叠吞掉", async () => {
+	const s = await scene();
+	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
+	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(assistant);
+	const content = [{ type: "thinking", thinking: "不应直接显示的思考" }];
+	assistant.updateContent({ role: "assistant", content, stopReason: "pending" }, true);
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("思考中");
+	expect(s.lines().join("\n")).toContain("1 次失败");
+	for (const [stopReason, diagnostic] of [["error", "Error: failed"], ["aborted", "failed"], ["length", "Response was truncated"]]) {
+		assistant.updateContent({ role: "assistant", content, stopReason, errorMessage: "failed" }, false);
+		expect(s.lines().join("\n")).toContain(diagnostic);
+		expect(s.lines().join("\n")).not.toContain("不应直接显示的思考");
+	}
+});
+
+test("真实子代理调用与池查询纳入过程组，保留原生动作和列表摘要，详情按需展开", async () => {
+	const s = await scene(true);
+	s.complete(s.tool("read", { path: "a.ts" }));
+	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("启动 worker-one");
+	s.complete(start, "worker started");
+	const list = s.tool("subagents_list", {});
+	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
+		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
+	} });
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("工具 3 次");
+	expect(s.lines().join("\n")).toContain("查看");
+	expect(s.lines().join("\n")).toContain("worker-one");
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().filter(Boolean)).toHaveLength(3);
+	expect(s.lines().join("\n")).toContain("启动 worker-one");
+	expect(s.lines().join("\n")).toContain("池 1");
+	const queryLine = s.lines().findIndex((line: string) => line.includes("查看"));
+	s.click(queryLine);
+	expect(s.lines().join("\n")).toContain("model/low");
+	expect(s.lines().join("\n")).toContain("read");
+	s.click(queryLine);
+	expect(s.lines().filter(Boolean)).toHaveLength(3);
+	s.ui.setToolsExpanded(false);
+	for (const [action, label] of [["send", "发送"], ["interrupt", "中断"], ["review", "审查"], ["tail", "近况"], ["ack", "待命"], ["kill", "移除"]]) {
+		s.complete(s.tool("subagents", { action, worker: "worker-one", prompt: "继续" }));
+		expect(s.lines().filter(Boolean)).toHaveLength(1);
+		expect(s.lines().join("\n")).toContain(`${label} worker-one`);
+	}
+});
+
+test("自定义渲染不是独立展示的理由，只有图片和真实交互需要独立", async () => {
+	const s = await scene();
+	for (const shell of ["self", "default"]) {
+		const row = s.tool(`custom-${shell}`, { task: "inspect" }, {
+			name: `custom-${shell}`, label: `custom-${shell}`, renderShell: shell,
+			renderCall() {
+				const box = new s.tui.Box(0, 0);
+				box.addChild(new s.tui.Text(`static custom render ${shell}`, 0, 0));
+				return box;
+			},
+		});
+		s.complete(row);
+	}
+	expect(s.lines().filter(Boolean)).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("工具 2 次");
+	s.ui.setToolsExpanded(true);
+	for (const shell of ["self", "default"]) {
+		s.click(s.lines().findIndex((line: string) => line.includes(`custom-${shell}`)));
+		expect(s.lines().join("\n")).toContain(`static custom render ${shell}`);
+		s.click(s.lines().findIndex((line: string) => line.includes(`static custom render ${shell}`)));
+		expect(s.lines().join("\n")).not.toContain(`static custom render ${shell}`);
+	}
+	s.ui.setToolsExpanded(false);
+	let clicked = 0;
+	const interactive = s.tool("real-control", {}, {
+		name: "real-control", label: "real-control", renderShell: "self",
+		renderCall() {
+			const box = new s.tui.Box(0, 0);
+			box.addChild(new s.tui.MouseRegion(new s.tui.Text("确认操作", 0, 0), () => { clicked++; return { handled: true }; }));
+			return box;
+		},
+	});
+	s.complete(interactive);
+	const controlLine = s.lines().findIndex((line: string) => line.includes("确认操作"));
+	expect(controlLine).toBeGreaterThanOrEqual(0);
+	s.click(controlLine);
+	expect(clicked).toBe(1);
+	s.ui.setToolsExpanded(true);
+	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
+	expect(clicked).toBe(2);
 });

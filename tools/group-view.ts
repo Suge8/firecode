@@ -4,9 +4,10 @@ import {
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Spacer, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { ToolLine, resultText, type RowState, type ToolResult } from "./line.js";
+import { Box, Container, Image, Spacer, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { ToolLine, resultText, type RowState, type ToolResult, type GroupRenderer } from "./line.js";
 import { genericArgsParts } from "./parts.js";
+import { assistantView, type AssistantActivity } from "./assistant-view.js";
 
 /** 宿主工具行内部字段只在工具分组接缝读取，结果与单工具展开仍归宿主所有。 */
 export type ToolRow = ToolExecutionComponent;
@@ -18,61 +19,66 @@ type RowData = {
 	expanded: boolean;
 	isPartial: boolean;
 	rendererState: RowState;
-	toolDefinition?: { label?: string; renderCall?: unknown; renderResult?: unknown };
+	toolDefinition?: { label?: string };
+	callRendererComponent?: Component;
+	resultRendererComponent?: Component;
 	result?: ToolResult & { isError: boolean };
 };
 const rowData = (row: ToolRow): RowData => row as unknown as RowData;
-const BUILT_INS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-const CUSTOM_LINES = new Set(["read", "bash", "edit", "write"]);
+const LAYOUT_MOUSE_HANDLERS = new Set<NonNullable<Component["handleMouse"]>>([
+	Container.prototype.handleMouse, Box.prototype.handleMouse,
+]);
+
+/** 普通布局容器只路由鼠标；真正的输入/鼠标处理或图片需要独立展示。 */
+function requiresStandalone(component: Component | undefined): boolean {
+	if (!component) return false;
+	if (component instanceof Image || component.handleInput) return true;
+	if (component.handleMouse && !LAYOUT_MOUSE_HANDLERS.has(component.handleMouse)) return true;
+	return (component instanceof Container || component instanceof Box) && component.children.some(requiresStandalone);
+}
+
+function groupRenderer(component: Component | undefined): GroupRenderer | undefined {
+	return component && "renderGroup" in component && typeof component.renderGroup === "function"
+		? component as GroupRenderer : undefined;
+}
 
 export function groupable(component: Component): component is ToolRow {
 	if (!(component instanceof ToolExecutionComponent)) return false;
 	const row = rowData(component);
 	if (row.result?.content?.some((block) => block.type === "image")) return false;
-	return BUILT_INS.has(row.toolName) || !(row.toolDefinition?.renderCall || row.toolDefinition?.renderResult);
+	return !requiresStandalone(row.callRendererComponent) && !requiresStandalone(row.resultRendererComponent);
 }
 
-function emptyAssistant(component: Component): boolean {
-	if (!(component instanceof AssistantMessageComponent)) return false;
-	const message = (component as unknown as { lastMessage?: {
-		stopReason?: string;
-		content: Array<{ type: string; text?: string; thinking?: string }>;
-	} }).lastMessage;
-	if (!message) return true;
-	if (["error", "aborted", "length"].includes(message.stopReason ?? "")) return false;
-	return !message.content.some((block) =>
-		(block.type === "text" && block.text?.trim()) || (block.type === "thinking" && block.thinking?.trim()));
-}
-
-function compactLine(row: RowData, theme: Theme, label = row.toolDefinition?.label ?? row.toolName): ToolLine {
+function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
-		label, value: genericArgsParts(row.args), clip: "end", theme,
+		label: row?.toolDefinition?.label ?? row?.toolName ?? "", value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
-			state: { ...row.rendererState, errorText: row.result?.isError ? resultText(row.result, true).displayText : "" },
-			cwd: row.cwd, toolCallId: row.toolCallId,
-			isPartial: row.isPartial, isError: row.result?.isError ?? false, expanded: false,
+			state: { ...row?.rendererState, errorText: row?.result?.isError ? resultText(row.result, true).displayText : "" },
+			cwd: row?.cwd ?? "", toolCallId: row?.toolCallId ?? "",
+			isPartial: row?.isPartial ?? false, isError: row?.result?.isError ?? false, expanded: false,
 		},
 	});
 }
 
-class ToolSummary implements Component {
-	constructor(private readonly rows: ToolRow[], private readonly ui: ExtensionUIContext) {}
+class ProcessSummary implements Component {
+	constructor(
+		private readonly rows: ToolRow[],
+		private readonly activity: AssistantActivity | undefined,
+		private readonly ui: ExtensionUIContext,
+	) {}
 	invalidate(): void {}
 	render(width: number): string[] {
 		let running = 0;
 		let failures = 0;
-		let latest = rowData(this.rows[this.rows.length - 1]);
+		let latest = this.rows.length ? rowData(this.rows[this.rows.length - 1]) : undefined;
 		for (const row of this.rows) {
 			const data = rowData(row);
 			if (data.isPartial) { running++; latest = data; }
 			if (data.result?.isError) failures++;
 		}
-		const label = [`调用 ${this.rows.length} 次`, failures ? `${failures} 次失败` : "", running ? `${running} 个运行中` : ""]
-			.filter(Boolean).join(" · ");
-		return compactLine({
-			...latest, rendererState: {}, isPartial: running > 0,
-			result: { isError: failures > 0 },
-		}, this.ui.theme, `${label} · ${latest.toolDefinition?.label ?? latest.toolName}`).render(width);
+		const activity = this.activity === "thinking" ? "思考中" : this.activity === "processing" ? "处理中" : undefined;
+		const renderer = groupRenderer(latest?.callRendererComponent) ?? compactLine(latest, this.ui.theme);
+		return renderer.renderGroup(width, { calls: this.rows.length, running, failures, activity });
 	}
 	handleMouse(event: TuiMouseEvent) {
 		if (event.type !== "click" || event.button !== "left") return undefined;
@@ -82,6 +88,7 @@ class ToolSummary implements Component {
 }
 
 class ToolItem implements Component {
+	private leadingRows = 0;
 	constructor(
 		private readonly row: ToolRow,
 		private readonly ui: ExtensionUIContext,
@@ -90,11 +97,17 @@ class ToolItem implements Component {
 	invalidate(): void {}
 	render(width: number): string[] {
 		const data = rowData(this.row);
-		if (!data.expanded && !CUSTOM_LINES.has(data.toolName)) return compactLine(data, this.ui.theme).render(width);
+		if (!data.expanded) {
+			const renderer = groupRenderer(data.callRendererComponent) ?? compactLine(data, this.ui.theme);
+			return renderer.render(width);
+		}
 		const lines = this.row.render(width);
-		return lines[0] === "" ? lines.slice(1) : lines;
+		this.leadingRows = lines[0] === "" ? 1 : 0;
+		return lines.slice(this.leadingRows);
 	}
 	handleMouse(event: TuiMouseEvent) {
+		if (rowData(this.row).expanded)
+			return this.row.handleMouse({ ...event, y: event.y + this.leadingRows, height: event.height + this.leadingRows });
 		if (event.type !== "click" || event.button !== "left" || !rowData(this.row).result) return undefined;
 		this.toggle(this.row);
 		return { handled: true };
@@ -102,23 +115,32 @@ class ToolItem implements Component {
 }
 
 /** 从宿主组件顺序投影，既不搬走原组件，也不另存工具调用或展开档位。 */
-export function projectToolGroups(
+export function projectProcessGroups(
 	children: readonly Component[],
 	ui: ExtensionUIContext,
 	toggle: (row: ToolRow) => void,
 ): Component[] {
 	const projected: Component[] = [];
+	const expanded = ui.getToolsExpanded();
 	let rows: ToolRow[] = [];
+	let activity: AssistantActivity | undefined;
 	const flush = () => {
-		if (!rows.length) return;
+		if (!rows.length && !activity) return;
 		projected.push(new Spacer(1));
-		if (ui.getToolsExpanded()) projected.push(...rows.map((row) => new ToolItem(row, ui, toggle)));
-		else projected.push(new ToolSummary(rows, ui));
+		if (expanded) projected.push(...rows.map((row) => new ToolItem(row, ui, toggle)));
+		else projected.push(new ProcessSummary(rows, activity, ui));
 		rows = [];
+		activity = undefined;
 	};
 	for (const child of children) {
-		if (groupable(child)) rows.push(child);
-		else if (!emptyAssistant(child)) {
+		if (groupable(child)) {
+			rows.push(child);
+			activity = undefined;
+		} else if (child instanceof AssistantMessageComponent) {
+			const view = assistantView(child, expanded);
+			if (view.body) { flush(); projected.push(view.body); }
+			activity = view.activity;
+		} else {
 			flush();
 			projected.push(child);
 		}

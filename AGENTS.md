@@ -14,7 +14,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | --- | --- | --- |
 | `header.ts` | 会话启动横幅，窄终端退化为一行 | |
 | `statusbar/` | 底部两行：会话身份与模块状态 + 模型/上下文 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
-| `tools/` | 默认四工具渲染、连续调用组摘要/紧凑列表与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
+| `tools/` | 思考与工具的过程组/过程列表、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 预设、重命名、收尾统计、用量查询、Bark 通知、herdr 身份投影、工作火焰 | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
@@ -36,7 +36,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 
 投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示收尾使用官方 CustomEntry，不走模型消息投递。
 
-`tools/grouping.ts` 是与宿主耦合最紧的一处；改工具分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
+`tools/grouping.ts` 是与宿主耦合最紧的一处；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
 ## 配置
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	cleanupFirecodeModules,
+	featuresOnly,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
@@ -870,11 +871,7 @@ test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () =>
 test("显式 observer 角色不注册 Master 工具面", async () => {
 	const harness = await loadFirecodeModule("role-harness.js", {
 		configJsonc: JSON.stringify({
-			features: {
-				header: false, statusbar: false, tools: false, presets: false, rename: false,
-				stats: false, claudeSub: false, openaiNative: false, workingFlame: false,
-				bark: false, review: false, master: true, watcher: false,
-			},
+			features: await featuresOnly("master"),
 			review: TEST_REVIEW_CONFIG,
 			master: { roles: { 工程师: TEST_ROLES.工程师 }, workerExcludeExtensions: [], autoActivate: true },
 		}),

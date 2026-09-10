@@ -9,7 +9,8 @@ const RESULT_BUDGET = 400;
 
 export function renderTurn(turn: TurnEndEvent, context: WatcherContext): string {
 	const lines: string[] = [];
-	for (const part of blocks(turn.message.content)) {
+	const content = "content" in turn.message ? turn.message.content : undefined;
+	for (const part of blocks(content)) {
 		if (part.type === "text" && typeof part.text === "string" && part.text.trim())
 			lines.push(part.text.trim());
 		if (part.type === "thinking" && context === "full" && typeof part.thinking === "string")

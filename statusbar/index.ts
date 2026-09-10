@@ -59,17 +59,17 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 					const statuses = footerData.getExtensionStatuses();
 					const model = ctx.model;
 					const thinking = pi.getThinkingLevel();
-					const modelCore = `${theme.fg("accent", `🧠 ${formatModelName(model?.id)}`)}${
+					const modelCore = `${theme.fg("text", formatModelName(model?.id))}${
 						model?.reasoning ? theme.fg(thinkingColor(thinking), `/${thinking}`) : ""
 					}`;
 					const modelText = statuses.has("pi-openai-native-fast")
-						? `${modelCore}${theme.fg("warning", " · ⚡fast")}` : modelCore;
+						? `${modelCore}${theme.fg("warning", " · Fast")}` : modelCore;
 					const usage = ctx.getContextUsage();
 					const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
 					const separator = ` ${theme.fg("dim", "｜")} `;
 					return [
 						fitMetadataLine(
-							theme.fg("dim", `💬 ${title}`), statusBadges(statuses, separator), width, separator,
+							theme.fg("dim", title), statusBadges(statuses, separator), width, separator,
 						),
 						fitStatusLine({
 							model: modelText, modelCompact: modelCore,

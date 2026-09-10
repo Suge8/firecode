@@ -15,6 +15,7 @@ import {
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
 import { deliver } from "../deliver.js";
 import { formatDuration } from "../format.js";
+import { FLAME } from "../theme.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
@@ -232,7 +233,7 @@ export function registerMaster(
 		content: string,
 		worker?: string,
 		persist = true,
-		id = crypto.randomUUID(),
+		id: string = crypto.randomUUID(),
 	) => {
 		if (!ownsRuntime(active)) return;
 		const event: PendingMasterEvent = { id, content, ...(worker ? { worker } : {}) };
@@ -525,7 +526,7 @@ export function registerMaster(
 			}
 			if (params.action === "tail") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-				return { content: [{ type: "text" as const, text: await readWorkerTrace(target) }] };
+				return { content: [{ type: "text" as const, text: await readWorkerTrace(target) }], details: undefined };
 			}
 			if (params.action === "ack") {
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
@@ -1082,7 +1083,8 @@ export function masterStatusLine(
 	theme: Pick<ExtensionContext["ui"]["theme"], "fg">,
 	frame = 0,
 ): string {
-	if (!workers.length) return theme.fg("dim", "👑 指挥官");
+	const identity = `${FLAME.orange}👑 指挥模式\x1b[39m`;
+	if (!workers.length) return identity;
 	const spinner = masterActive(workers) ? `${SPINNER_FRAMES[frame % SPINNER_FRAMES.length]} ` : "";
 	const byRole = new Map<string, number>();
 	let idle = 0;
@@ -1095,11 +1097,11 @@ export function masterStatusLine(
 	}
 	const counts = [...byRole].map(([initial, count]) => `${initial}${count}`);
 	if (idle) counts.push(`闲${idle}`);
-	return theme.fg("dim", `👑 ${spinner}${counts.join("·")}`);
+	return `${identity}${theme.fg("dim", ` · ${spinner}${counts.join("·")}`)}`;
 }
-/** 角色首字（按 code point 取，兼容 emoji 角色名）；无角色时以工作态首字兜底。 */
-function roleInitial(role: string | undefined): string {
-	return [...(role ?? "")][0] ?? STATUS_WORD.working[0]!;
+/** 配置与档案入口保证角色非空；按 code point 取首字，避免拆开代理项。 */
+function roleInitial(role: string): string {
+	return String.fromCodePoint(role.codePointAt(0)!);
 }
 export function statusText(workers: WorkerRef[]): string {
 	return workers.length

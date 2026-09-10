@@ -33,7 +33,7 @@ function pick(value: number, thresholds: readonly Threshold[]): ThemeColor {
 const CONTEXT_FILL = [
 	{ at: 75, color: "error" },
 	{ at: 50, color: "warning" },
-	{ at: 0, color: "success" },
+	{ at: 0, color: "dim" },
 ] as const satisfies readonly Threshold[];
 
 const RESULT_SIZE = [

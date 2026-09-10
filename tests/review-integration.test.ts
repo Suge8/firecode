@@ -4,7 +4,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerResult } from "../review/state.js";
-import { cleanupFirecodeModules, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { cleanupFirecodeModules, loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
 type Flush = typeof import("../review/index.js").__reviewFlushForTests;
@@ -608,19 +608,7 @@ describe("registerReview wiring", () => {
 	test("the FireCode entry keeps the renderer when every feature is disabled", async () => {
 		const entry = (await loadFirecodeModule("index.js", {
 			configJsonc: JSON.stringify({
-				features: {
-					header: false,
-					statusbar: false,
-					tools: false,
-					presets: false,
-					rename: false,
-					stats: false,
-					claudeSub: false,
-					openaiNative: false,
-					review: false,
-					master: false,
-					watcher: false,
-				},
+				features: await featuresOnly(),
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
@@ -632,18 +620,7 @@ describe("registerReview wiring", () => {
 	test("Master remains available when review is disabled", async () => {
 		const entry = (await loadFirecodeModule("index.js", {
 			configJsonc: JSON.stringify({
-				features: {
-					header: false,
-					statusbar: false,
-					tools: false,
-					presets: false,
-					rename: false,
-					stats: false,
-					claudeSub: false,
-					openaiNative: false,
-					review: false,
-					master: true,
-				},
+				features: await featuresOnly("master"),
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
@@ -661,18 +638,7 @@ describe("registerReview wiring", () => {
 	test("Master remains available when review configuration is invalid", async () => {
 		const entry = (await loadFirecodeModule("index.js", {
 			configJsonc: JSON.stringify({
-				features: {
-					header: false,
-					statusbar: false,
-					tools: false,
-					presets: false,
-					rename: false,
-					stats: false,
-					claudeSub: false,
-					openaiNative: false,
-					review: true,
-					master: true,
-				},
+				features: await featuresOnly("master", "review"),
 				review: { reviewers: "invalid" },
 			}),
 		})) as { default: (pi: unknown) => void };
