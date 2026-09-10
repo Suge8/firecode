@@ -71,12 +71,12 @@ function sanitizeDisplayText(text: string): string {
 	return output;
 }
 
-function resultText(result: ToolResult): { displayText: string; chars: number } {
+export function resultText(result: ToolResult, includeText: boolean): { displayText: string; chars: number } {
 	const blocks: string[] = [];
 	let chars = 0;
 	for (const item of result.content ?? []) {
 		if (item.type !== "text" || typeof item.text !== "string") continue;
-		blocks.push(sanitizeDisplayText(item.text));
+		if (includeText) blocks.push(sanitizeDisplayText(item.text));
 		chars += item.text.length;
 	}
 	return { displayText: blocks.join("\n"), chars };
@@ -182,7 +182,7 @@ export function makeResultRenderer(sized: boolean) {
 		context: RenderContext,
 	): Component => {
 		const state = context.state;
-		const { displayText, chars } = resultText(result);
+		const { displayText, chars } = resultText(result, options.expanded || context.isError);
 		if (sized) state.chars = chars;
 		const durationMs = takeDuration(context.toolCallId);
 		if (durationMs !== undefined) state.durationMs = durationMs;

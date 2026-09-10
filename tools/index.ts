@@ -1,5 +1,5 @@
 /**
- * 接管默认 4 工具（read/bash/edit/write）的展示：单行摘要 + 耗时/大小列 + 连续行轨道。
+ * 接管默认 4 工具（read/bash/edit/write）的展示：组摘要/紧凑列表 + 单工具正文，保留耗时/大小列。
  *
  * 只包装默认激活的工具：原版 pi 的 registerTool 是注册即激活（会话构建与 reload
  * 固定 includeAllExtensionTools），给 grep/find/ls 挂渲染包装会把它们在所有会话
@@ -12,7 +12,7 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { installGroupPatch, uninstallGroupPatch } from "./grouping.js";
+import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { commandParts, diffMeta, pathValue } from "./parts.js";
 import { clearDurations, executeTimed } from "./timing.js";
@@ -79,18 +79,20 @@ function invoke<T extends (...args: never[]) => unknown>(
 
 export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
-	const decorated = new Set<string>(Object.keys(LABEL));
+	let dispose: (() => void) | undefined;
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		dispose?.();
 		clearDurations();
-		for (const tool of pi.getAllTools()) {
-			decorated.add(tool.name);
-		}
-		installGroupPatch(ctx.ui, decorated);
+		dispose = installGroupPatch(ctx.ui);
+		ctx.ui.setToolsExpanded(false);
 	});
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", () => {
+		if (!dispose) return;
+		dispose();
+		dispose = undefined;
 		clearDurations();
-		uninstallGroupPatch();
 	});
 
 	pi.registerTool({
@@ -146,7 +148,10 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 			const details = result.details as { diff?: unknown } | undefined;
 			const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
 			ctx.state.meta = diff ? diffMeta(diff) : undefined;
-			return editResult(result, options, theme, ctx);
+			const display = options.expanded && diff
+				? { ...result, content: [...result.content, { type: "text" as const, text: diff }] }
+				: result;
+			return editResult(display, options, theme, ctx);
 		},
 	});
 

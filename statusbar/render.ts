@@ -1,81 +1,19 @@
 /** 状态栏的纯渲染与布局：给定数据和宽度产出字符串，不触碰会话状态。 */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { clip, formatDuration, formatTokens, oneLine } from "../format.js";
-import { cacheColor, contextColor, quotaColor } from "../theme.js";
-import type { QuotaStatus } from "./quota-parse.js";
-import type { TpsStatus } from "./tps.js";
+import { clip, formatTokens, oneLine } from "../format.js";
+import { contextColor } from "../theme.js";
 
 export type StatusLineParts = {
 	model: string;
 	modelCompact: string;
-	quota: string;
-	quotaCompact: string;
 	context: string;
 	contextCompact: string;
-	cache: string;
-	tps: string;
 };
 
 type ForegroundTheme = {
 	fg(color: ThemeColor, text: string): string;
 };
-
-/** 最近一条助手消息的 cacheRead / (input + cacheRead + cacheWrite)。 */
-export function latestCacheHitPercent(
-	entries: ReadonlyArray<{
-		type?: string;
-		message?: {
-			role?: string;
-			usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
-		};
-	}>,
-): number | undefined {
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-		const usage = entry.message.usage;
-		if (!usage) continue;
-		const input = usage.input ?? 0;
-		const cacheRead = usage.cacheRead ?? 0;
-		const cacheWrite = usage.cacheWrite ?? 0;
-		const promptTokens = input + cacheRead + cacheWrite;
-		if (promptTokens <= 0 || (cacheRead === 0 && cacheWrite === 0)) return undefined;
-		return (cacheRead / promptTokens) * 100;
-	}
-	return undefined;
-}
-
-export function renderLocation(
-	theme: ForegroundTheme,
-	directory: string,
-	branch: string | null | undefined,
-): string {
-	return [theme.fg("dim", `📍${directory}`), branch ? theme.fg("dim", `🌿 ${branch}`) : ""]
-		.filter(Boolean)
-		.join(" · ");
-}
-
-export function renderQuota(
-	theme: ForegroundTheme,
-	status: QuotaStatus,
-	compact = false,
-): string {
-	if (status.state === "loading") return theme.fg("dim", "🔋 …");
-	if (status.state === "unavailable") return theme.fg("dim", "🔋 —");
-	const windows = compact
-		? [
-				status.windows.reduce((tightest, window) =>
-					window.remaining < tightest.remaining ? window : tightest,
-				),
-			]
-		: status.windows;
-	return `${theme.fg("dim", "🔋 ")}${windows
-		.map((window) =>
-			theme.fg(quotaColor(window.remaining), `${window.label} ${window.remaining}%`),
-		)
-		.join(theme.fg("dim", "/"))}`;
-}
 
 export function renderContext(
 	theme: ForegroundTheme,
@@ -87,19 +25,6 @@ export function renderContext(
 	return `${theme.fg("dim", "📦 ")}${theme.fg(contextColor(percent), percentText)}${
 		compact ? "" : theme.fg("dim", `/${formatTokens(contextWindow)}`)
 	}`;
-}
-
-export function renderCache(theme: ForegroundTheme, percent: number | undefined): string {
-	if (percent === undefined) return "";
-	return `${theme.fg("dim", "♻️ ")}${theme.fg(cacheColor(percent), `${Math.round(percent)}%`)}`;
-}
-
-export function renderTps(theme: ForegroundTheme, status: TpsStatus | undefined): string {
-	if (!status) return "";
-	const speed = status.tokensPerSecond === undefined ? "" : theme.fg("success", `↗ ${status.tokensPerSecond}t/s`);
-	if (status.phase === "live") return speed;
-	const duration = theme.fg("dim", `⏱ ${formatDuration(status.elapsedSeconds * 1_000)}`);
-	return speed ? `${duration}${theme.fg("dim", " · ")}${speed}` : duration;
 }
 
 /** /fire-review 广播的审查进度，右对齐挂在首行末尾。 */
@@ -150,13 +75,8 @@ export function fitStatusLine(
 	separator: string,
 ): string {
 	if (width <= 0) return "";
-	// joinParts 会丢掉空的 quota/cache/tps。顺序：model → quota? → context → cache → tps。
 	const candidates = [
-		[parts.model, parts.quota, parts.context, parts.cache, parts.tps],
-		[parts.model, parts.quota, parts.context, parts.cache],
-		[parts.modelCompact, parts.quota, parts.context, parts.cache],
-		[parts.modelCompact, parts.quotaCompact, parts.context, parts.cache],
-		[parts.modelCompact, parts.context, parts.cache],
+		[parts.model, parts.context],
 		[parts.modelCompact, parts.context],
 		[parts.modelCompact, parts.contextCompact],
 	].map((candidate) => joinParts(candidate, separator));

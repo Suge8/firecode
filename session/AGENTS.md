@@ -1,13 +1,14 @@
 # session：会话层功能
 
-预设、改名、`/tokens`、Bark 通知、herdr 身份投影、工作火焰。各功能互不依赖，关掉任何一个不影响其余。
+预设、改名、用量查询、Bark 通知、herdr 身份投影、工作火焰。`features.stats` 同时注册 `/tokens` 与 `/quota`，其余功能各自独立。
 
 | 文件 | 职责 |
 | --- | --- |
 | `presets.ts` | 预设切换：模型原子、工具集、附加指令 |
 | `rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
-| `stats.ts` | `/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `stats.ts` | 用量命令入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 | `bark.ts` | 任务落定时推 iPhone Bark 通知 |
 | `working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget |
 
@@ -20,6 +21,16 @@ bark：同会话固定 id 新顶旧，有子代理待拍板升 timeSensitive（�
 
 working-flame：高随终端自适应 3–10 行，宽不够逐级降高；回合内隐藏 Working 文本行，订阅占用频道在审查
 活跃期退让。
+
+## quota
+
+只复用 Pi 的 OAuth 登录，由模型注册表解析凭据；不读取其他 CLI 的登录文件。每次命令并行请求两家供应商，
+同一会话只允许一个在途查询。结果带查询时间，经 UI 通知显示，不写入模型上下文、不切模型、不暂停工作。
+没有自动刷新、文件缓存或失败退避；一家失败不隐藏另一家的结果，会话退出取消请求并丢弃迟到通知。
+
+Claude 只解析当前接口的 `limits[]`，`session`、`weekly_all` 与 Fable 的 `weekly_scoped` 分别展示。
+`is_active` 为 false 的窗口仍可能有有效额度，不能据此过滤。Fable 是共享额度下的模型限制，不是额外额度；接口未提供时
+明确说明。接口结构异常报错，不猜数字或回退旧字段。供应商接口是非公开契约，变更需以真实响应重新核实。
 
 ## herdr-display
 

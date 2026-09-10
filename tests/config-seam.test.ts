@@ -66,13 +66,17 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	]);
 });
 
-test("runtime config enables only its declared behavior", async () => {
+test.each([
+	{ feature: "rename", commands: ["rename"], shortcuts: ["alt+r"] },
+	{ feature: "stats", commands: ["quota", "tokens"], shortcuts: [] },
+])("runtime config enables only $feature behavior", async ({ feature, commands: expectedCommands, shortcuts: expectedShortcuts }) => {
 	const configJsonc = JSON.stringify({
 		features: Object.fromEntries([
 			"header",
 			"statusbar",
 			"tools",
 			"presets",
+			"rename",
 			"stats",
 			"claudeSub",
 			"openaiNative",
@@ -81,7 +85,7 @@ test("runtime config enables only its declared behavior", async () => {
 			"review",
 			"master",
 			"watcher",
-		].map((feature) => [feature, false]).concat([["rename", true]])),
+		].map((name) => [name, name === feature])),
 		keys: { rename: "alt+r" },
 	});
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
@@ -94,8 +98,8 @@ test("runtime config enables only its declared behavior", async () => {
 		on() {},
 	});
 
-	expect(commands).toEqual(["rename"]);
-	expect(shortcuts).toEqual(["alt+r"]);
+	expect(commands).toEqual(expectedCommands);
+	expect(shortcuts).toEqual(expectedShortcuts);
 });
 
 test("Master 角色对象严格解析原子与 fallback", async () => {

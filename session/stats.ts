@@ -8,6 +8,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, Container, Markdown, Text, matchesKey } from "@earendil-works/pi-tui";
 
+import { registerQuota } from "./quota.js";
+
 const DEFAULT_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -293,6 +295,7 @@ const dayCompletions: AutocompleteItem[] = [
 ];
 
 export function registerStats(pi: ExtensionAPI): void {
+	registerQuota(pi);
 	pi.registerCommand("tokens", {
 		description: "统计会话 token 与成本，参数为天数：默认 30，0 表示全部",
 		getArgumentCompletions: (prefix: string) => {

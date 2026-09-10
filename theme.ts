@@ -36,20 +36,6 @@ const CONTEXT_FILL = [
 	{ at: 0, color: "success" },
 ] as const satisfies readonly Threshold[];
 
-/** 缓存命中越高越好，与上下文填充方向相反。 */
-const CACHE_HIT = [
-	{ at: 90, color: "success" },
-	{ at: 50, color: "muted" },
-	{ at: 20, color: "warning" },
-	{ at: 0, color: "error" },
-] as const satisfies readonly Threshold[];
-
-const QUOTA_REMAINING = [
-	{ at: 51, color: "success" },
-	{ at: 26, color: "warning" },
-	{ at: 0, color: "error" },
-] as const satisfies readonly Threshold[];
-
 const RESULT_SIZE = [
 	{ at: 50_000, color: "error" },
 	{ at: 10_000, color: "warning" },
@@ -58,12 +44,6 @@ const RESULT_SIZE = [
 
 export const contextColor = (percent: number | null | undefined): ThemeColor =>
 	percent == null ? "muted" : pick(percent, CONTEXT_FILL);
-
-export const cacheColor = (percent: number): ThemeColor =>
-	pick(percent, CACHE_HIT);
-
-export const quotaColor = (remaining: number): ThemeColor =>
-	pick(remaining, QUOTA_REMAINING);
 
 export const sizeColor = (chars: number): ThemeColor =>
 	pick(chars, RESULT_SIZE);

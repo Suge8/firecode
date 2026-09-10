@@ -42,3 +42,53 @@ test("底栏活动动画只在有在飞子代理时开，全部落定即停", as
 	expect(masterStatusLine([{ role: "工程师", status: "idle" }], theme, 3)).toBe("👑 闲1");
 	expect(masterStatusLine([{ role: "工程师", status: "working" }], theme, 3)).toMatch(/^👑 \S 工1$/u);
 });
+
+test("未命名底栏即时取首条消息六个字，重命名和切树同源更新，绘制不扫描历史", async () => {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
+	const events = new Map<string, Function>();
+	let footer: any;
+	let name: string | undefined;
+	let scans = 0;
+	let entries: any[] = [];
+	const statuses = new Map<string, string>([["pi-openai-native-fast", "fast"]]);
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		model: { id: "test-model", reasoning: true, contextWindow: 200_000 },
+		getContextUsage: () => ({ percent: 42.3, contextWindow: 200_000 }),
+		sessionManager: {
+			getCwd: () => "/project/firecode", getSessionName: () => name,
+			getBranch: () => { scans++; return entries; },
+			getEntries: () => { scans++; return entries; },
+		},
+		ui: { setFooter(factory: any) {
+			footer = factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses, getGitBranch: () => "main", onBranchChange: () => () => {} });
+		} },
+	};
+	registerStatusBar({ on: (name: string, fn: Function) => events.set(name, fn), getThinkingLevel: () => "medium" });
+	events.get("session_start")!({}, ctx);
+	expect(footer.render(100)[0]).toContain("📍firecode ｜ 💬 新会话");
+	const message = { role: "user", content: [{ type: "text", text: "优化插件状态栏和工具展示" }] };
+	events.get("message_start")!({ message }, ctx);
+	expect(footer.render(100)[0]).toContain("💬 优化插件状态…");
+	entries.push({ type: "message", message });
+	events.get("message_start")!({ message: { role: "user", content: "第二条消息" } }, ctx);
+	expect(footer.render(100)[0]).toContain("💬 优化插件状态…");
+	name = "完整的自定义会话名称";
+	events.get("session_info_changed")!({}, ctx);
+	expect(footer.render(100)[0]).toContain(name);
+	const before = scans;
+	for (const width of [1, 12, 40, 100])
+		for (const line of footer.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	expect(scans).toBe(before);
+	expect(footer.render(100)[1]).toContain("⚡fast");
+	expect(footer.render(100)[1]).toContain("42.3%/200k");
+	expect(footer.render(100).join("\n")).not.toMatch(/🔋|♻️|t\/s|⏱|🌿/);
+	name = undefined;
+	entries = [];
+	events.get("session_tree")!({}, ctx);
+	expect(footer.render(100)[0]).toContain("新会话");
+	expect(events.has("message_update")).toBe(false);
+	events.get("session_shutdown")!({}, ctx);
+	expect(footer).toBeUndefined();
+});

@@ -1,120 +1,95 @@
-import { describe, expect, test } from "bun:test";
-import { quotaColor } from "../theme.js";
-import type { QuotaCache, QuotaCacheEntry } from "../statusbar/quota-cache.js";
-import {
-	parseAnthropicQuota,
-	parseGrokQuota,
-	parseOpenAIQuota,
-} from "../statusbar/quota-parse.js";
-import { registerQuota } from "../statusbar/quota.js";
+import { expect, test } from "bun:test";
+import { registerQuota } from "../session/quota.ts";
 
-function memoryCache(): QuotaCache {
-	const entries = new Map<string, QuotaCacheEntry>();
-	return {
-		read: (provider) => entries.get(provider),
-		write: (provider, entry) => {
-			entries.set(provider, entry);
+const anthropic = { limits: [
+	{ kind: "session", percent: 0, is_active: false },
+	{ kind: "weekly_all", percent: 37, is_active: false },
+	{ kind: "weekly_scoped", percent: 67, is_active: true, scope: { model: { display_name: "Fable" } } },
+] };
+const codex = { rate_limit: {
+	primary_window: { used_percent: 20, limit_window_seconds: 18_000 },
+	secondary_window: { used_percent: 38, limit_window_seconds: 604_800 },
+} };
+const jwt = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } })).toString("base64url")}.test`;
+
+function setup(fetcher: typeof fetch, oauth = ["openai-codex", "anthropic"]) {
+	let command: any;
+	const events = new Map<string, Function>();
+	const messages: string[] = [];
+	const models = ["openai-codex", "anthropic"].map((provider) => ({ provider, id: "test" }));
+	registerQuota({
+		registerCommand(name, definition) { expect(name).toBe("quota"); command = definition; },
+		on(name: string, handler: Function) { events.set(name, handler); },
+	} as never, fetcher);
+	const ctx = {
+		modelRegistry: {
+			getAll: () => models,
+			isUsingOAuth: (model: any) => oauth.includes(model.provider),
+			getProviderAuth: async (provider: string) => ({ auth: { apiKey: provider === "anthropic" ? "test-claude" : jwt } }),
 		},
+		ui: { notify: (message: string) => messages.push(message) },
 	};
+	return { run: (args = "") => command.handler(args, ctx), messages, events, ctx };
 }
 
-describe("subscription quota parsing", () => {
-	test("converts OpenAI used percentages to remaining 5h and 7d quota", () => {
-		expect(
-			parseOpenAIQuota({
-				rate_limit: {
-					primary_window: {
-						used_percent: 74,
-						limit_window_seconds: 18_000,
-					},
-					secondary_window: {
-						used_percent: 12,
-						limit_window_seconds: 604_800,
-					},
-				},
-			}),
-		).toEqual([
-			{ label: "5h", remaining: 26 },
-			{ label: "7d", remaining: 88 },
-		]);
-	});
-
-	test("parses Anthropic and rejects malformed windows", () => {
-		expect(
-			parseAnthropicQuota({
-				five_hour: { utilization: 2 },
-				seven_day: { utilization: 54 },
-			}),
-		).toEqual([
-			{ label: "5h", remaining: 98 },
-			{ label: "7d", remaining: 46 },
-		]);
-		expect(parseAnthropicQuota({ five_hour: { utilization: "2" } })).toEqual(
-			[],
-		);
-	});
-
-	test("labels Grok weekly and monthly quota as 7d and 30d", () => {
-		expect(
-			parseGrokQuota(
-				{
-					config: {
-						monthlyLimit: { val: 15_000 },
-						used: { val: 6_591 },
-					},
-				},
-				{ config: { creditUsagePercent: 100 } },
-			),
-		).toEqual([
-			{ label: "7d", remaining: 0 },
-			{ label: "30d", remaining: 56 },
-		]);
-	});
+test("额度仅由命令并行查询，读取现代 Claude 窗口及 Fable，不把非活跃标记当作无额度", async () => {
+	const calls: Array<{ url: string; headers: Headers }> = [];
+	const pending: Array<() => void> = [];
+	const s = setup(((url: string, options: RequestInit) => {
+		calls.push({ url, headers: new Headers(options.headers) });
+		return new Promise<Response>((resolve) => pending.push(() => resolve(Response.json(url.includes("anthropic") ? anthropic : codex))));
+	}) as typeof fetch);
+	expect(calls).toEqual([]);
+	expect(s.events.has("agent_end")).toBe(false);
+	const run = s.run();
+	await new Promise((resolve) => setImmediate(resolve));
+	expect(calls).toHaveLength(2);
+	await s.run();
+	expect(calls).toHaveLength(2);
+	expect(s.messages.at(-1)).toContain("正在查询");
+	pending.forEach((resolve) => resolve());
+	await run;
+	const report = s.messages.at(-1)!;
+	expect(report).toContain("查询于");
+	expect(report).toContain("Codex：5小时剩余 80% ｜ 本周剩余 62%");
+	expect(report).toContain("Claude：5小时剩余 100% ｜ 本周剩余 63% ｜ Fable 本周剩余 33%");
+	expect(calls.find((call) => call.url.includes("chatgpt"))?.headers.get("ChatGPT-Account-Id")).toBe("test-account");
+	expect(calls.find((call) => call.url.includes("anthropic"))?.headers.get("anthropic-beta")).toBe("oauth-2025-04-20");
+	const again = s.run();
+	await new Promise((resolve) => setImmediate(resolve));
+	expect(calls).toHaveLength(4);
+	pending.slice(2).forEach((resolve) => resolve());
+	await again;
 });
 
-test("quota refresh does not retain a session context", async () => {
-	const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
-	let resolveToken = (_token: string | undefined) => {};
-	const token = new Promise<string | undefined>((resolve) => {
-		resolveToken = resolve;
-	});
-	let active = true;
-	const model = { provider: "openai-codex", id: "test" };
-	const registry = {
-		isUsingOAuth: () => true,
-		getApiKeyForProvider: () => token,
-	};
-	const ctx = {
-		get model() {
-			if (!active) throw new Error("stale ctx.model");
-			return model;
-		},
-		get modelRegistry() {
-			if (!active) throw new Error("stale ctx.modelRegistry");
-			return registry;
-		},
-	};
-	const updates: unknown[] = [];
-	registerQuota(
-		{
-			on: (event: string, handler: (event: unknown, ctx: unknown) => void) =>
-				handlers.set(event, handler),
-		} as never,
-		(status) => updates.push(status),
-		memoryCache(),
-	);
-	handlers.get("agent_end")?.({}, ctx);
-	active = false;
-	resolveToken(undefined);
-	await Promise.resolve();
-	await Promise.resolve();
-	expect(updates).toEqual([{ state: "unavailable" }]);
+test("未登录不发请求，一家失败不隐藏另一家结果，缺少 Fable 不冒充零额度", async () => {
+	let calls = 0;
+	const s = setup((async () => { calls++; return Response.json({ limits: anthropic.limits.slice(0, 2) }); }) as typeof fetch, ["anthropic"]);
+	await s.run();
+	expect(calls).toBe(1);
+	expect(s.messages.at(-1)).toContain("Codex：未通过 Pi OAuth 登录");
+	expect(s.messages.at(-1)).toContain("Fable 本周：未提供独立额度");
+	const partial = setup((async (url: string) => url.includes("anthropic") ? new Response("secret body", { status: 429 }) : Response.json(codex)) as typeof fetch);
+	await partial.run();
+	expect(partial.messages.at(-1)).toContain("Codex：5小时剩余 80%");
+	expect(partial.messages.at(-1)).toContain("Claude：查询失败（HTTP 429）");
+	expect(partial.messages.at(-1)).not.toContain("secret body");
 });
 
-test("warns at 50% remaining and fails at 25%", () => {
-	expect(quotaColor(51)).toBe("success");
-	expect(quotaColor(50)).toBe("warning");
-	expect(quotaColor(26)).toBe("warning");
-	expect(quotaColor(25)).toBe("error");
-	expect(quotaColor(0)).toBe("error");
+test("接口结构变化明确失败，会话退出取消在途查询，不投递迟到通知", async () => {
+	const changed = setup((async () => Response.json({ unexpected: true })) as typeof fetch);
+	await changed.run();
+	expect(changed.messages.at(-1)).toContain("额度响应格式已变化");
+	let signal: AbortSignal | undefined;
+	const s = setup(((_url: string, options: RequestInit) => new Promise((_resolve, reject) => {
+		signal = options.signal!;
+		signal.addEventListener("abort", () => reject(signal!.reason), { once: true });
+	})) as typeof fetch, ["anthropic"]);
+	const run = s.run();
+	await new Promise((resolve) => setImmediate(resolve));
+	const notices = s.messages.length;
+	s.events.get("session_shutdown")!();
+	await run;
+	expect(signal?.aborted).toBe(true);
+	expect(s.messages).toHaveLength(notices);
 });
