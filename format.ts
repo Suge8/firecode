@@ -2,6 +2,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 const ELLIPSIS = "…";
+const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g;
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** 压平换行与连续空白，用于把任意文本塞进单行 UI。 */
@@ -25,27 +26,33 @@ export function clip(
 	ellipsis: string = ELLIPSIS,
 ): string {
 	if (width <= 0) return "";
-	if (visibleWidth(text) <= width) return text;
-	const target = Math.max(0, width - visibleWidth(ellipsis));
-	const segments = [...segmenter.segment(text)].map((entry) => entry.segment);
-	let output = "";
-	let used = 0;
-	if (from === "start") {
-		for (let index = segments.length - 1; index >= 0; index--) {
-			const segmentWidth = visibleWidth(segments[index]);
-			if (used + segmentWidth > target) break;
-			output = segments[index] + output;
-			used += segmentWidth;
+	const textWidth = visibleWidth(text);
+	if (textWidth <= width) return text;
+	const ellipsisWidth = visibleWidth(ellipsis);
+	if (ellipsisWidth > width) return clip(ellipsis, width, "end", "");
+	const target = width - ellipsisWidth;
+	let output = from === "start" ? ellipsis : "";
+	let column = 0;
+	let clipped = false;
+	const chunks = text.split(ANSI_SEQUENCE);
+	for (let index = 0; index < chunks.length; index++) {
+		if (index % 2) {
+			// 连被裁掉文字后的颜色关闭/链接关闭也保留，避免样式泄漏；不注入全量 reset。
+			output += chunks[index];
+			continue;
 		}
-		return ellipsis + output;
+		for (const { segment } of segmenter.segment(chunks[index])) {
+			const columns = visibleWidth(segment);
+			if (from === "start") {
+				if (column >= textWidth - target) output += segment;
+			} else if (!clipped) {
+				if (column + columns <= target) output += segment;
+				else { output += ellipsis; clipped = true; }
+			}
+			column += columns;
+		}
 	}
-	for (const segment of segments) {
-		const segmentWidth = visibleWidth(segment);
-		if (used + segmentWidth > target) break;
-		output += segment;
-		used += segmentWidth;
-	}
-	return output + ellipsis;
+	return output;
 }
 
 /** 1234 → 1.2k，1_500_000 → 1.5M；0 与 undefined 显示为 ?。 */

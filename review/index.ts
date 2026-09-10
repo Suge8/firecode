@@ -3,7 +3,7 @@
  *
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
- *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、状态栏），
+ *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、活动条），
  *   会话结果一律回灌成事件交给 reducer。模块级只有一个 controller。
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
@@ -16,7 +16,6 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type Language, type ReviewConfig } from "../config.js";
-import { formatDuration } from "../format.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, decisionText, registerCardRenderer } from "./card.js";
@@ -62,7 +61,6 @@ import {
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 /** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
 export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
-const STATUS_KEY = "fire-review";
 const OCCUPANCY_CHANNEL = "herdr:blocked";
 const OCCUPANCY_SOURCE = "firecode-review";
 /** herdr 按 seq 丢弃过期上报；同一 source 单调递增。 */
@@ -99,7 +97,6 @@ interface Controller {
 	state: ReviewState;
 	signal: AbortController;
 	watchdog: ReturnType<typeof setTimeout> | undefined;
-	statusTimer?: ReturnType<typeof setInterval>;
 	/** 本 controller 上一次写入的凭证；null=本审查还没写过，undefined=冲突/失败后停写。 */
 	persistedStamp: CheckpointStamp | null | undefined;
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
@@ -116,7 +113,6 @@ interface Controller {
 	progress: readonly ReviewerProgress[];
 	/** 当前 progress 属于审查者还是顾问：修复相据此决定是否展示裁决摘要。 */
 	progressKind?: "reviewers" | "advisor";
-	progressStartedAt?: number;
 	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
 	editorLocked?: boolean;
 	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
@@ -321,7 +317,6 @@ async function handleCommand(
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
-	armStatusTimer();
 	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier.
 	void dispatch(pi, {
 		type: "START",
@@ -368,7 +363,6 @@ function handleSessionStart(
 		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog();
-	armStatusTimer();
 	syncOccupancy(controller);
 	syncUi();
 	// 恢复只更新持久状态并提出推进请求；绝不在 session_start handler 内起任何工作。
@@ -530,7 +524,6 @@ async function handleShutdown(
 	active.signal.abort();
 	active.actionController?.abort();
 	clearWatchdog();
-	clearStatusTimer(active);
 	clearFeedbackStartTimer(active);
 	await active.actionPromise;
 	if (active.ctx !== ctx) active.ctx = ctx;
@@ -570,28 +563,12 @@ function clearWatchdog() {
 	if (controller?.watchdog) clearTimeout(controller.watchdog);
 }
 
-function armStatusTimer() {
-	const active = controller;
-	if (!active || active.statusTimer) return;
-	// 耗时显示本身就是定时业务语义；宿主没有可订阅的“整秒变化”事件。
-	active.statusTimer = setInterval(() => {
-		if (controller !== active || !isActive(active.state)) return;
-		renderStatus(active.ctx, active.state, active.config.language);
-	}, 1_000);
-	active.statusTimer.unref?.();
-}
-
-function clearStatusTimer(active: Controller) {
-	if (active.statusTimer) clearInterval(active.statusTimer);
-	active.statusTimer = undefined;
-}
-
 function clearFeedbackStartTimer(active: Controller): void {
 	if (active.feedbackStartTimer) clearTimeout(active.feedbackStartTimer);
 	active.feedbackStartTimer = undefined;
 }
 
-// ---- 持久化与状态栏（状态的投影）----
+// ---- 持久化 ----
 
 /** 返回是否已可靠落盘；false 时调用方必须停下本次迁移的副作用。 */
 function persist(pi: ExtensionAPI, state: ReviewState): boolean {
@@ -653,11 +630,9 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
 		clearWatchdog();
-		clearStatusTimer(controller);
 		clearFeedbackStartTimer(controller);
 		const uiCtx = controller.ctx;
 		const language = controller.config.language;
-		if (uiCtx.hasUI) uiCtx.ui.setStatus(STATUS_KEY, undefined);
 		controller = undefined;
 		if (!sealed && uiCtx.hasUI)
 			uiCtx.ui.notify(
@@ -753,13 +728,12 @@ function setOccupancy(active: Controller, held: boolean): void {
 }
 
 /**
- * UI 投影：状态栏一行 + 编辑器上方活动条 + esc 接管，全部从当前状态派生。
+ * UI 投影：编辑器上方活动条 + esc 接管，全部从当前状态派生。
  * 活动条自己按帧重绘，因此进度变化不需要在这里通知。
  */
 function syncUi(): void {
 	const active = controller;
 	if (!active) return;
-	renderStatus(active.ctx, active.state, active.config.language);
 	if (activityView()) {
 		showActivity(active.ctx, activityView);
 		// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
@@ -771,7 +745,6 @@ function syncUi(): void {
 		} else releaseEditor(active);
 		return;
 	}
-	clearStatusTimer(active);
 	hideActivity(active.ctx);
 	releaseEditor(active);
 }
@@ -782,21 +755,17 @@ function releaseEditor(active: Controller) {
 	active.editorLocked = false;
 }
 
-/** 活动条快照；非活动相与总结回合返回 undefined（总结是普通可见回合，不需要活动框）。 */
+/** 活动条只读取当前审查状态，总结阶段由 UI 收成一行。 */
 function activityView(): ActivityView | undefined {
 	const active = controller;
-	if (!active || !isActive(active.state) || active.state.phase === "summarizing" || !active.ctx.hasUI) return undefined;
+	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;
 	return {
 		phase: active.state.phase,
 		round: active.state.round,
-		focus: active.state.focus,
-		roundStartedAt: active.state.roundStartedAt,
-		progressStartedAt: active.progressStartedAt,
+		startedAt: active.state.startedAt,
 		reviewers: active.progress,
 		progressKind: active.progressKind,
-		advisorRunning: active.state.phase === "needs_fix",
 		consecutiveFailures: active.state.consecutiveFailures,
-		cwd: active.ctx.cwd,
 		language: active.config.language,
 	};
 }
@@ -820,45 +789,6 @@ function cancelByUser() {
 	active.signal.abort();
 	active.actionController?.abort();
 	void dispatch(active.pi, { type: "CANCEL", reason: "user" });
-}
-
-function renderStatus(
-	ctx: ExtensionContext,
-	state: ReviewState,
-	language: Language,
-) {
-	if (!ctx.hasUI) return;
-	let prefix: string | undefined;
-	if (state.phase === "queued")
-		prefix = language === "en"
-			? "🔥 running · review when done"
-			: "🔥 执行中 · 完成后自动审查";
-	else if (state.phase === "reviewing" || state.phase === "needs_fix")
-		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "review" : "审查", language)}`;
-	else if (state.phase === "awaiting_fix")
-		prefix = `🔥 ${roundStatus(state.round, language === "en" ? "repair" : "修复中", language)}`;
-	else if (state.phase === "summarizing")
-		prefix = language === "en" ? "🔥 summarizing" : "🔥 总结中";
-	if (!prefix) {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
-		return;
-	}
-	const stepStartedAt = state.phase === "awaiting_fix"
-		? state.updatedAt
-		: state.roundStartedAt || state.startedAt;
-	const stepMs = stepStartedAt ? Date.now() - stepStartedAt : 0;
-	const totalMs = state.startedAt ? Date.now() - state.startedAt : 0;
-	const showTotal = state.round > 1 || state.history.some((round) => round.result === "failed");
-	const elapsed = showTotal
-		? `${formatDuration(stepMs)} / ${language === "en" ? "total" : "总"} ${formatDuration(totalMs)}`
-		: formatDuration(stepMs);
-	ctx.ui.setStatus(STATUS_KEY, `${prefix} · ${elapsed}`);
-}
-
-
-function roundStatus(round: number, phase: string, language: Language) {
-	if (round <= 1) return phase;
-	return language === "en" ? `Round ${round} ${phase}` : `第 ${round} 轮${phase}`;
 }
 
 // ---- 副作用执行器 ----
@@ -908,7 +838,6 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 	if (!state.active) return;
 	const currentActive = state.active;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	active.progressStartedAt = Date.now();
 	active.progressKind = "reviewers";
 	active.progress = initialProgress(
 		currentActive.reviewers.map((item) => ({ model: item.model })),
@@ -992,7 +921,6 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 	if (!state.pending) return;
 	const pending = state.pending;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	active.progressStartedAt = Date.now();
 	active.progressKind = "advisor";
 	active.progress = initialProgress([{ model: config.advisor.model }], config.language);
 	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {

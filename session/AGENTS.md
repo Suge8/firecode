@@ -1,13 +1,14 @@
 # session：会话层功能
 
-预设、改名、用量查询、Bark 通知、herdr 身份投影、工作火焰。`features.stats` 同时注册 `/tokens` 与 `/quota`，其余功能各自独立。
+预设、改名、统计、Bark 通知、herdr 身份投影、工作火焰。`features.stats` 控制收尾行、`/tokens` 与 `/quota`，其余功能各自独立。
 
 | 文件 | 职责 |
 | --- | --- |
 | `presets.ts` | 预设切换：模型原子、工具集、附加指令 |
 | `rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
-| `stats.ts` | 用量命令入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `run-summary.ts` | 主会话处理段收尾：静态时长与均速或异常状态，仅展示、不进入模型上下文 |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 | `bark.ts` | 任务落定时推 iPhone Bark 通知 |
 | `working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget |
@@ -21,6 +22,21 @@ bark：同会话固定 id 新顶旧，有子代理待拍板升 timeSensitive（�
 
 working-flame：高随终端自适应 3–10 行，宽不够逐级降高；回合内隐藏 Working 文本行，订阅占用频道在审查
 活跃期退让。
+
+## run-summary
+
+仅 TUI 会话采集。耗时从宿主收到本段输入开始；自动发起的处理从启动开始。主会话的自动重试与队列续跑并入
+同一处理段，`agent_end` 不结算，`agent_settled` 才写一条收尾。不等待后台子代理或独立审查；中途插话不重置起点。
+
+均速取完整助手响应的供应商 `usage.output` 总和除以对应请求耗时，包含首字等待、网络与请求内部重试，排除
+工具和压缩调用。请求起止无法配对、用量缺失或出现不完整响应时，整段不显示均速，不按字符估算。中断优先
+读取当前处理的 AbortSignal 和助手终态，压缩中止/失败读取压缩事件的明确结果；不通过错误文案猜重试或网络错误次数。
+
+采集只在同步事件回调更新一个不可变处理段记录，不持有会话正文、不定时刷新。结算先清空采集记录，再经
+`appendEntry` 写 CustomEntry，由 `registerEntryRenderer` 原样恢复静态收尾；它不是 CustomMessage，不用
+模型消息队列。切树或会话退出丢弃未完成测量，迟到结束事件不产生收尾；已保存的收尾不重新计算。
+
+左侧固定处理时长；正常时右侧显示有效均速，中断/失败显示相应状态。窄屏先省均速，异常时压缩左侧标签。
 
 ## quota
 

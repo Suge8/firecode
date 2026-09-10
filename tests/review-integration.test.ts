@@ -359,7 +359,7 @@ describe("registerReview wiring", () => {
 		await rm(script, { force: true });
 	}, 20_000);
 
-	test("a pass runs a summary turn: prompt delivered, occupancy held until the turn ends", async () => {
+	test("a pass keeps a one-line summary activity until the summary turn ends, then releases occupancy", async () => {
 		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
 		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(verdict);
 		const sessionManager = makeSessionManager();
@@ -367,6 +367,8 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
+		let activityFactory: any;
+		Object.assign(ctx.ui, { setWidget: (_key: string, factory: unknown) => { activityFactory = factory; } });
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
@@ -377,6 +379,14 @@ describe("registerReview wiring", () => {
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
+		expect(activityFactory).toBeFunction();
+		const activity = activityFactory({ requestRender() {} }, { fg: (_color: string, text: string) => text });
+		try {
+			const lines = activity.render(100);
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toContain("总结中");
+			expect(lines[0]).toContain("总 ");
+		} finally { activity.dispose(); }
 		const sent = registered.sent as { customType?: string; content?: string; display?: boolean }[];
 		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
 		const cardIndex = sent.findIndex((message) => message.customType === "firecode-review-card");
@@ -399,6 +409,7 @@ describe("registerReview wiring", () => {
 		}
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		expect(readCheckpoint({ sessionManager })?.summary ?? null).toBeNull();
+		expect(activityFactory).toBeUndefined();
 		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 		await rm(script, { force: true });
 	}, 20_000);
@@ -582,7 +593,7 @@ describe("registerReview wiring", () => {
 		// streaming 时 sendMessage 会成为 steer；零发送是不能打断当前回复的关键合同。
 		expect(registered.sent).toHaveLength(0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
-		expect(ctx.statuses.at(-1)).toMatch(/^🔥 执行中 · 完成后自动审查 · 0(?:\.0)?s$/u);
+		expect(ctx.statuses).toEqual([]);
 
 		// FireCode 入口把 review 注册在所有自动续跑模块之后；收到 settled 时，
 		// 先前 handler 已完成且没有发起续跑，才会到这里。

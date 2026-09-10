@@ -1,10 +1,9 @@
-/** 底部两行：目录/展示标题/模块状态 + 模型/上下文。 */
-import { basename } from "node:path";
+/** 底部两行：展示标题/模块状态 + 模型/上下文。 */
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { formatModelName, oneLine } from "../format.js";
 import { thinkingColor } from "../theme.js";
-import { alignRight, fitMetadataLine, fitStatusLine, reviewStatus, statusBadges, renderContext } from "./render.js";
+import { fitMetadataLine, fitStatusLine, statusBadges, renderContext } from "./render.js";
 
 const TITLE_CHARACTERS = 6;
 const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -69,10 +68,9 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 					const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
 					const separator = ` ${theme.fg("dim", "｜")} `;
 					return [
-						alignRight(fitMetadataLine(
-							theme.fg("dim", `📍${cleanTitle(basename(ctx.sessionManager.getCwd()) || "/")}`),
-							theme.fg("dim", `💬 ${title}`), width, separator, statusBadges(statuses, separator),
-						), reviewStatus(statuses), width),
+						fitMetadataLine(
+							theme.fg("dim", `💬 ${title}`), statusBadges(statuses, separator), width, separator,
+						),
 						fitStatusLine({
 							model: modelText, modelCompact: modelCore,
 							context: renderContext(theme, usage?.percent, window),

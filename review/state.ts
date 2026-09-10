@@ -10,6 +10,8 @@
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
+import type { ModelAtom } from "../config.js";
+
 export type Phase =
 	| "idle"
 	| "queued"
@@ -25,10 +27,8 @@ export type AdvisorVerdict = "continue" | "stop" | "narrow";
 export type StopReason = "advisor" | "max_rounds" | "user" | "shutdown" | "timeout";
 
 /** 单个审查者的输出（output 契约解析结果，纯数据）。 */
-export interface ReviewerResult {
+export interface ReviewerResult extends ModelAtom {
 	index: number;
-	model: string;
-	thinking: string;
 	status: Exclude<ReviewerStatus, "running">;
 	/** 短摘要：PASS 一行收敛摘要 / FAIL 发现一句话。 */
 	summary: string;
@@ -37,10 +37,8 @@ export interface ReviewerResult {
 }
 
 /** 审查中某个审查者的进行状态；settled 后携带完整结果。 */
-export interface ActiveReviewer {
+export interface ActiveReviewer extends ModelAtom {
 	index: number;
-	model: string;
-	thinking: string;
 	status: ReviewerStatus;
 	result: ReviewerResult | null;
 }
@@ -125,7 +123,7 @@ export interface ReviewLimits {
 	advisorAfterFailures: number;
 	advisorModel: string;
 	/** 本轮审查者（model/thinking），beginRound 时填入 active。 */
-	reviewers: { model: string; thinking: string }[];
+	reviewers: ModelAtom[];
 	language?: "zh" | "en";
 }
 
@@ -518,7 +516,6 @@ function onAdvisorSettled(
 	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
 	const pending = state.pending;
 	const advisor = event.result;
-	const displayDetails = aggregateDetails(pending.reviewers, limits.language ?? "zh");
 	if (advisor.verdict === "stop") {
 		const round = roundRecord(pending.round, "stopped", advisor.advice, pending.reviewers, advisor, state.roundStartedAt, now);
 		return {

@@ -91,13 +91,16 @@ test.each([
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
 	const commands: string[] = [];
 	const shortcuts: string[] = [];
+	const entryRenderers: string[] = [];
 	(registerFirecode as (pi: unknown) => void)({
 		registerCommand: (name: string) => commands.push(name),
 		registerShortcut: (key: string) => shortcuts.push(key),
 		registerMessageRenderer() {},
+		registerEntryRenderer: (name: string) => entryRenderers.push(name),
 		on() {},
 	});
 
+	expect(entryRenderers).toEqual(feature === "stats" ? ["firecode-run-summary"] : []);
 	expect(commands).toEqual(expectedCommands);
 	expect(shortcuts).toEqual(expectedShortcuts);
 });

@@ -51,7 +51,9 @@ test("未命名底栏即时取首条消息六个字，重命名和切树同源�
 	let name: string | undefined;
 	let scans = 0;
 	let entries: any[] = [];
-	const statuses = new Map<string, string>([["pi-openai-native-fast", "fast"]]);
+	const statuses = new Map<string, string>([
+		["pi-openai-native-fast", "fast"], ["fire-review", "🔥 第 2 轮审查"],
+	]);
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
 		model: { id: "test-model", reasoning: true, contextWindow: 200_000 },
@@ -67,7 +69,7 @@ test("未命名底栏即时取首条消息六个字，重命名和切树同源�
 	};
 	registerStatusBar({ on: (name: string, fn: Function) => events.set(name, fn), getThinkingLevel: () => "medium" });
 	events.get("session_start")!({}, ctx);
-	expect(footer.render(100)[0]).toContain("📍firecode ｜ 💬 新会话");
+	expect(footer.render(100)[0]).toBe("💬 新会话");
 	const message = { role: "user", content: [{ type: "text", text: "优化插件状态栏和工具展示" }] };
 	events.get("message_start")!({ message }, ctx);
 	expect(footer.render(100)[0]).toContain("💬 优化插件状态…");
@@ -83,7 +85,7 @@ test("未命名底栏即时取首条消息六个字，重命名和切树同源�
 	expect(scans).toBe(before);
 	expect(footer.render(100)[1]).toContain("⚡fast");
 	expect(footer.render(100)[1]).toContain("42.3%/200k");
-	expect(footer.render(100).join("\n")).not.toMatch(/🔋|♻️|t\/s|⏱|🌿/);
+	expect(footer.render(100).join("\n")).not.toMatch(/firecode|审查|📍|🔋|♻️|t\/s|⏱|🌿/);
 	name = undefined;
 	entries = [];
 	events.get("session_tree")!({}, ctx);

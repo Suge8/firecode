@@ -31,6 +31,10 @@ import type { Phase } from "./state.js";
 
 const WIDGET_KEY = "fire-review";
 const FRAME_MS = 100;
+const CLOCK_MS = 1_000;
+const HEIGHT_RATIO = 0.7;
+const DEFAULT_HEIGHT = 16;
+const SHORT_MODEL_WIDTH = 7;
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const REVIEW_COLOR: readonly [number, number, number] = [255, 153, 102];
 /** 火焰排版阈值：窄屏（48–59 列）收紧边距也要有火焰，<48 才退化为居中文本。 */
@@ -47,15 +51,11 @@ let reviewTitleActive = false;
 export interface ActivityView {
 	phase: Phase;
 	round: number;
-	focus: string;
-	roundStartedAt: number;
-	progressStartedAt?: number;
+	startedAt: number;
 	reviewers: readonly ReviewerProgress[];
 	/** 当前 progress 属于谁：修复相据此判断能否把残留摘要当顾问裁决展示。 */
 	progressKind?: "reviewers" | "advisor";
-	advisorRunning: boolean;
 	consecutiveFailures?: number;
-	cwd?: string;
 	language: Language;
 }
 
@@ -141,33 +141,9 @@ class ReviewEditor extends CustomEditor {
 
 // ---- 组件 ----
 
-abstract class Animated implements Component {
-	protected frame = 0;
+class ActivityBar implements Component {
+	private frame = 0;
 	private readonly timer: ReturnType<typeof setInterval>;
-
-	constructor(requestRender: () => void) {
-		this.timer = setInterval(() => {
-			this.frame += 1;
-			requestRender();
-		}, FRAME_MS);
-		this.timer.unref?.();
-	}
-
-	abstract render(width: number): string[];
-
-	invalidate(): void {}
-
-	dispose(): void {
-		clearInterval(this.timer);
-	}
-
-	protected spinner() {
-		return SPINNER[this.frame % SPINNER.length];
-	}
-}
-
-class ActivityBar extends Animated {
-	/** 官方边框组件；颜色仍用品牌橙，边框字符与宽度处理交给宿主。 */
 	private readonly border = new DynamicBorder(reviewColor);
 
 	constructor(
@@ -176,84 +152,49 @@ class ActivityBar extends Animated {
 		private readonly tui: TUI,
 		requestRender: () => void,
 	) {
-		super(requestRender);
+		this.timer = setInterval(() => {
+			this.frame++;
+			requestRender();
+		}, view()?.phase === "summarizing" ? CLOCK_MS : FRAME_MS);
+		this.timer.unref();
 	}
+
+	invalidate(): void {}
+	dispose(): void { clearInterval(this.timer); }
+	private spinner(): string { return SPINNER[this.frame % SPINNER.length]; }
 
 	render(width: number): string[] {
 		const view = this.view();
-		if (!view) return [];
-		const safeWidth = Math.max(1, width);
+		if (!view || width <= 0) return [];
 		const terminalRows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows;
-		const maxTotalLines = terminalRows ? Math.floor(terminalRows * 0.7) : 16;
+		const maxTotalLines = terminalRows ? Math.floor(terminalRows * HEIGHT_RATIO) : DEFAULT_HEIGHT;
 		if (maxTotalLines <= 0) return [];
-		if (maxTotalLines === 1) {
-			return [centerLine(boldText(this.theme.fg("muted", activityTitle(view))), safeWidth)];
+		const title = centerLine(boldText(this.theme.fg("muted", activityHeading(view))), width);
+		if (view.phase === "summarizing" || maxTotalLines === 1) return [title];
+		if (maxTotalLines <= view.reviewers.length + 2) {
+			return [title, ...compactActivityRows(view, width, maxTotalLines - 1)
+				.map((line) => centerLine(line, width))];
 		}
-		if (maxTotalLines === 2) {
-			const line1 = boldText(this.theme.fg("muted", activityTitle(view)));
-			let line2 = view.reviewers.map((r) => `${statusIcon(r.status)} ${shortModelName(r.label)}`).join(" ");
-			if (visibleWidth(line2) > safeWidth) {
-				line2 = view.reviewers.map((r) => shortModelName(r.label)).join(" ");
-			}
-			return [
-				centerLine(line1, safeWidth),
-				centerLine(this.theme.fg("muted", truncateToWidth(line2, safeWidth, "…")), safeWidth),
-			];
-		}
-
-		const n = view.reviewers.length;
-		// 极矮预算模式（总行数放不下边框+标题+全员）：去掉边框，将总预算行数全部分配给审查者
-		if (maxTotalLines <= n + 1) {
-			// 每人一行也装不下时按行分组压缩：丢行动作可以，静默丢审查者不行。
-			if (maxTotalLines <= n) {
-				const perLine = Math.ceil(n / maxTotalLines);
-				const lines: string[] = [];
-				for (let i = 0; i < n; i += perLine) {
-					const group = view.reviewers
-						.slice(i, i + perLine)
-						.map((r) => `${statusIcon(r.status)} ${shortModelName(r.label)}`)
-						.join("  ");
-					lines.push(centerLine(group, safeWidth));
-				}
-				return lines;
-			}
-			return view.reviewers.map((r) => {
-				const raw = r.details?.[0] || r.summary || (r.status === "running" ? r.action : "通过");
-				const act = raw.replace(/^[↳\s]+/u, "");
-				return centerLine(`${statusIcon(r.status)} ${shortModelName(r.label)}: ${act}${elapsedSuffix(r)}`, safeWidth);
-			});
-		}
-
-		const border = this.border.render(safeWidth)[0] ?? "";
-		const maxBodyLines = Math.max(1, maxTotalLines - 2);
-		const content = this.contentRows(view, maxBodyLines, safeWidth);
-		const body = safeWidth >= FLAME_MIN_WIDTH
-			? this.renderFlameBody(content, safeWidth, maxBodyLines)
-			: content.map((line) => centerLine(line, safeWidth));
-		const finalLines = [border, ...body.slice(0, maxBodyLines), border];
-		return finalLines.slice(0, maxTotalLines);
+		const border = this.border.render(width)[0] ?? "";
+		const maxBodyLines = maxTotalLines - 2;
+		const content = this.contentRows(view, maxBodyLines);
+		const body = width >= FLAME_MIN_WIDTH
+			? this.renderFlameBody(content, width, maxBodyLines)
+			: content.map((line) => centerLine(line, width));
+		return [border, ...body.slice(0, maxBodyLines), border];
 	}
 
-	private contentRows(view: ActivityView, maxBodyLines: number, width: number): string[] {
-		const title = boldText(this.theme.fg("muted", activityTitle(view)));
+	private contentRows(view: ActivityView, maxBodyLines: number): string[] {
+		const title = boldText(this.theme.fg("muted", activityHeading(view)));
 		const hintText = activityHint(view);
 		const hint = hintText ? this.theme.fg("dim", hintText) : "";
 		const reviewers = view.reviewers;
 		const n = reviewers.length;
 
-		// 紧凑纵向模式（放不下多行展开但每人一行能装下）：单行纵向用满整宽输出
-		if (maxBodyLines < n + 1) {
-			return reviewers.map((r) => {
-				const raw = r.details?.[0] || r.summary || (r.status === "running" ? r.action : "通过");
-				const act = raw.replace(/^[↳\s]+/u, "");
-				return `${statusIcon(r.status)} ${shortModelName(r.label)}: ${act}${elapsedSuffix(r)}`;
-			});
-		}
-
 		// 中等/多行展开模式：只要行数足够容纳审查者多行展开
 		if (maxBodyLines >= n * 2 + 1) {
 			// 预留标题/提示/呼吸空行的开销后再分每人行预算。
-			const budgetPer = Math.max(2, Math.floor((maxBodyLines - (hint ? 6 : 4)) / n));
+			const budgetPer = Math.max(2, Math.floor((maxBodyLines - (hint ? 6 : 4)) / Math.max(1, n)));
 			const details = activityRows(view, this.spinner(), maxBodyLines, budgetPer);
 			return breathe(title, details, hint, maxBodyLines);
 		}
@@ -321,8 +262,43 @@ function breathe(title: string, details: string[], hint: string, maxBodyLines: n
 	].slice(0, maxBodyLines);
 }
 
+function activityHeading(view: ActivityView): string {
+	const title = activityTitle(view);
+	if (!view.startedAt) return title;
+	const elapsed = formatDuration(Math.max(0, Date.now() - view.startedAt));
+	return `${title} · ${view.language === "en" ? "total" : "总"} ${elapsed}`;
+}
+
+/** 矮屏先保阶段，再分配模型行；名称装不下时明确汇总状态，不静默丢人。 */
+function compactActivityRows(view: ActivityView, width: number, budget: number): string[] {
+	if (view.phase === "queued" || view.phase === "awaiting_fix" || !view.reviewers.length)
+		return activityRows(view, "⠋", budget, 1).slice(0, budget);
+	const perLine = Math.ceil(view.reviewers.length / budget);
+	const lines: string[] = [];
+	for (let index = 0; index < view.reviewers.length; index += perLine) {
+		const group = view.reviewers.slice(index, index + perLine);
+		if (perLine === 1) {
+			const reviewer = group[0];
+			const action = reviewer.details?.[0] || reviewer.summary || reviewer.action;
+			lines.push(`${statusIcon(reviewer.status)} ${reviewer.label}: ${action.replace(/^[↳\s]+/u, "")}${elapsedSuffix(reviewer)}`);
+			continue;
+		}
+		const names = group.map((reviewer) => shortModelName(reviewer.label)).join(" ");
+		const statuses = group.map((reviewer) => `${statusIcon(reviewer.status)} ${shortModelName(reviewer.label)}`).join(" ");
+		if (visibleWidth(statuses) <= width) lines.push(statuses);
+		else if (visibleWidth(names) <= width) lines.push(names);
+		else {
+			const counts = new Map<ReviewerProgress["status"], number>();
+			for (const reviewer of group) counts.set(reviewer.status, (counts.get(reviewer.status) ?? 0) + 1);
+			lines.push([...counts].map(([status, count]) => `${statusIcon(status)}${count}`).join(" "));
+		}
+	}
+	return lines;
+}
+
 function activityTitle(view: ActivityView) {
 	const { language } = view;
+	if (view.phase === "summarizing") return language === "en" ? "🔥 Summarizing" : "🔥 总结中";
 	if (view.phase === "queued")
 		return language === "en" ? "🔥 Running" : "🔥 执行中";
 	if (view.phase === "needs_fix") {
@@ -359,10 +335,10 @@ function activityRows(view: ActivityView, spinner: string, budget = 16, budgetPe
 	// 连败轮数已并入标题；正文首行即顾问模型行，与审查者行同格式。
 	if (view.phase === "needs_fix")
 		return view.reviewers.flatMap((reviewer) =>
-			reviewerActivityRows(reviewer, spinner, view.language, 1, true, budget, budgetPer),
+			reviewerActivityRows(reviewer, spinner, view.language, 1, true, budgetPer),
 		);
 	const blocks = view.reviewers.map((reviewer) =>
-		reviewerActivityRows(reviewer, spinner, view.language, view.reviewers.length, false, budget, budgetPer),
+		reviewerActivityRows(reviewer, spinner, view.language, view.reviewers.length, false, budgetPer),
 	);
 	// 模型之间空一行：只在预算容得下内容+分隔+标题提示时才加，紧屏不挤掉正文。
 	const total = blocks.reduce((sum, block) => sum + block.length, 0);
@@ -376,7 +352,6 @@ function reviewerActivityRows(
 	language: Language,
 	totalReviewers: number,
 	isAdvisor = false,
-	budget = 16,
 	budgetPer = 2,
 ): string[] {
 	const settled = reviewer.status !== "running";
@@ -449,11 +424,8 @@ function statusIcon(status: ReviewerProgress["status"]): string {
 }
 
 function shortModelName(label: string): string {
-	let s = label.replace(/^gpt-5\.6-/u, "").replace(/-\d+k$/u, "");
-	s = s.replace(/^(?:claude-3-[57]-|claude-)/u, "c37-").replace(/^(?:gemini-2\.[05]-|gemini-)/u, "g25-");
-	if (s.startsWith("c37-sonnet") || s === "c37-3-7-sonnet") return "c37";
-	if (s.startsWith("g25-pro") || s === "g25-2.5-pro") return "g25";
-	return s.length > 7 ? `${s.slice(0, 6)}…` : s;
+	const name = label.replace(/^(?:claude-|(?:gpt|gemini)-\d+(?:\.\d+)*-)/u, "");
+	return clip(name, SHORT_MODEL_WIDTH);
 }
 
 function activityHint(view: ActivityView) {

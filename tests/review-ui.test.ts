@@ -117,9 +117,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 review/state.ts", toolCalls: 2, trail: [], startedAt: Date.now() - 96_000 },
@@ -164,9 +162,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{ index: 0, label: "model-1", status: "passed", action: "通过", summary: "通过核验", details: ["通过核验"], toolCalls: 1, trail: [] },
@@ -199,9 +195,7 @@ describe("review activity layout", () => {
 				() => ({
 					phase: "awaiting_fix",
 					round: 2,
-					focus: "",
-					roundStartedAt: 0,
-					advisorRunning: false,
+					startedAt: 0,
 					language: "zh",
 					progressKind,
 					reviewers: [{ index: 0, label: "claude-fable-5", status: "passed", action: "通过", summary, toolCalls: 1, trail: [] }],
@@ -228,9 +222,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "needs_fix",
 				round: 2,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: true,
+				startedAt: 0,
 				language: "zh",
 				consecutiveFailures: 2,
 				reviewers: [{
@@ -269,9 +261,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{
@@ -323,9 +313,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: Array.from({ length: 5 }, (_, i) => ({
 					index: i,
@@ -361,9 +349,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: Array.from({ length: 5 }, (_, i) => ({
 					index: i,
@@ -399,16 +385,14 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 state.ts", toolCalls: 1, trail: [] },
 					{ index: 1, label: "gpt-5.6-terra", status: "running", action: "跑测试", toolCalls: 1, trail: [] },
 					{ index: 2, label: "gpt-5.6-luna", status: "passed", action: "通过", toolCalls: 1, trail: [] },
-					{ index: 3, label: "claude-3-7-sonnet", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
-					{ index: 4, label: "gemini-2.5-pro", status: "passed", action: "通过", toolCalls: 1, trail: [] },
+					{ index: 3, label: "claude-fable-5", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
+					{ index: 4, label: "gemini-3.8-flash", status: "passed", action: "通过", toolCalls: 1, trail: [] },
 				],
 			}),
 		);
@@ -423,8 +407,8 @@ describe("review activity layout", () => {
 		expect(output).toContain("sol");
 		expect(output).toContain("terra");
 		expect(output).toContain("luna");
-		expect(output).toContain("c37");
-		expect(output).toContain("g25");
+		expect(output).toContain("fable-5");
+		expect(output).toContain("flash");
 		component?.dispose();
 	});
 
@@ -449,9 +433,7 @@ describe("review activity layout", () => {
 				() => ({
 					phase: "reviewing",
 					round: 1,
-					focus: "",
-					roundStartedAt: 0,
-					advisorRunning: false,
+					startedAt: 0,
 					language: "zh",
 					reviewers: [
 						reviewer(0, { status: "passed", details: ["通过"], settledAt: Date.now() - 6_000 }),
@@ -489,9 +471,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: Array.from({ length: 5 }, (_, i) => ({
 					index: i,
@@ -528,9 +508,7 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{ index: 0, label: "gpt-5.6-sol", status: "failed", summary: "未通过", details: ["[高] 发现 1", "问题: 说明 1"], toolCalls: 1, trail: [] },
@@ -565,16 +543,14 @@ describe("review activity layout", () => {
 			() => ({
 				phase: "reviewing",
 				round: 1,
-				focus: "",
-				roundStartedAt: 0,
-				advisorRunning: false,
+				startedAt: 0,
 				language: "zh",
 				reviewers: [
 					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 state.ts", toolCalls: 1, trail: [] },
 					{ index: 1, label: "gpt-5.6-terra", status: "running", action: "跑测试", toolCalls: 1, trail: [] },
 					{ index: 2, label: "gpt-5.6-luna", status: "passed", action: "通过", details: ["验证通过"], toolCalls: 1, trail: [] },
-					{ index: 3, label: "claude-3-7-sonnet", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
-					{ index: 4, label: "gemini-2.5-pro", status: "passed", action: "通过", details: ["核验通过"], toolCalls: 1, trail: [] },
+					{ index: 3, label: "claude-fable-5", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
+					{ index: 4, label: "gemini-3.8-flash", status: "passed", action: "通过", details: ["核验通过"], toolCalls: 1, trail: [] },
 				],
 			}),
 		);
@@ -589,8 +565,8 @@ describe("review activity layout", () => {
 		expect(output).toContain("sol");
 		expect(output).toContain("terra");
 		expect(output).toContain("luna");
-		expect(output).toContain("c37");
-		expect(output).toContain("g25");
+		expect(output).toContain("fable-5");
+		expect(output).toContain("flash");
 		component?.dispose();
 	});
 });
@@ -651,4 +627,31 @@ describe("review editor locks input and routes control keys", () => {
 		ui.unlockEditor(ctx);
 		expect(reset).toBeUndefined();
 	});
+});
+
+test("审查阶段与总耗时只在活动框展示，矮屏仍保留标题，总结退成一行", async () => {
+	const { showActivity } = await loadFirecodeModule("review/ui.ts") as any;
+	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
+	let factory: any;
+	for (const [phase, label] of [
+		["reviewing", "第 2 轮审查中"], ["needs_fix", "顾问介入中"],
+		["awaiting_fix", "第 2 轮修复中"], ["summarizing", "总结中"],
+	]) {
+		showActivity({ ui: { setWidget: (_key: string, next: any) => { factory = next; } } }, () => ({
+			phase, round: 2, startedAt: Date.now() - 90_000, language: "zh", consecutiveFailures: 2,
+			reviewers: Array.from({ length: 5 }, (_, index) => ({ index, label: `model-${index + 1}`, status: "running", action: "思考中", toolCalls: 0, trail: [] })),
+		}));
+		for (const rows of [4, 6, 12, 40]) {
+			const component = factory({ requestRender() {}, terminal: { rows } }, { fg: (_color: string, text: string) => text });
+			try {
+				const lines: string[] = component.render(100);
+				expect(lines.join("\n")).toContain(label);
+				expect(lines.join("\n")).toContain("总 1m30s");
+				expect(lines.length).toBeLessThanOrEqual(Math.floor(rows * 0.7));
+				if (phase === "summarizing") expect(lines).toHaveLength(1);
+				for (const width of [12, 36, 64])
+					for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			} finally { component.dispose(); }
+		}
+	}
 });

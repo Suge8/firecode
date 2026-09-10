@@ -157,7 +157,7 @@ function started(card: Extract<CardData, { kind: "start" }>, language: Language)
 			? `Models: ${card.models.map(shortModel).join(", ")}`
 			: `模型：${card.models.map(shortModel).join("、")}`,
 	];
-	return spec(language, "start", title, lines, "neutral", "🔥");
+	return spec("start", title, lines, "neutral", "🔥");
 }
 
 function shortModel(model: string) {
@@ -169,7 +169,7 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 	const lines = withFooter(formatReviewResultLines(card.summary), [
 		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1, language),
 	]);
-	return spec(language, "pass", title, lines, "success", "✅");
+	return spec("pass", title, lines, "success", "✅");
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
@@ -183,7 +183,6 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 			: [elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)]),
 	];
 	return spec(
-		language,
 		"fail",
 		title,
 		withFooter(formatReviewResultLines(card.details), footer),
@@ -203,16 +202,16 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 			language,
 		);
 		const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
-		return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
+		return spec("stop", title, withFooter(body, footer), "warning", "❌");
 	}
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
-	return spec(language, "stop", title, withFooter(body, footer), "warning", "❌");
+	return spec("stop", title, withFooter(body, footer), "warning", "❌");
 }
 
 function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Language): BuiltCard {
 	const title = language === "en" ? "Review cancelled" : "审查已取消";
-	return spec(language, "cancel", title, [reasonText(card.reason, language)], "neutral", "⏸");
+	return spec("cancel", title, [reasonText(card.reason, language)], "neutral", "⏸");
 }
 
 function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
@@ -221,7 +220,7 @@ function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Langu
 		language === "en" ? "Blocker: review timed out" : "卡点：审查超时",
 		language === "en" ? "Reason: overall time limit exceeded" : "原因：超过总体时限",
 	];
-	return spec(language, "timeout", title, lines, "warning", "🛑");
+	return spec("timeout", title, lines, "warning", "🛑");
 }
 
 /** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
@@ -250,7 +249,7 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 			? []
 			: ["", elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)]),
 	];
-	return spec(language, "error", title, lines, "warning", "🛑");
+	return spec("error", title, lines, "warning", "🛑");
 }
 
 /** 顾问卡与审查结果卡同构：裁决进标题，正文用粗体模型分节行开头。 */
@@ -259,7 +258,7 @@ function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Lan
 	const title = language === "en" ? `Advisor guidance · ${decision}` : `顾问指引 · ${decision}`;
 	const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
 	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
-	return spec(language, "advisor", title, withFooter(body, footer), "neutral", "🧭");
+	return spec("advisor", title, withFooter(body, footer), "neutral", "🧭");
 }
 
 /** 裁决词→人话文案的唯一映射：卡标题与活动条摘要共用，防两处文案漂移。 */
@@ -365,21 +364,14 @@ const REDUNDANT_REVIEW_LINES = new Set([
 ]);
 
 function spec(
-	language: Language,
 	kind: CardDetails["kind"],
 	title: string,
 	lines: string[],
 	tone: CardDetails["tone"],
 	icon: string,
 ): BuiltCard {
-	const localized = localize(lines, language);
 	return {
 		content: `${title}\n${lines.join("\n")}`,
-		details: { version: VERSION, kind, title, lines: localized, tone, icon },
+		details: { version: VERSION, kind, title, lines, tone, icon },
 	};
-}
-
-/** details 行已本地化成品；content 里除标题外都是事实，不做二次翻译。 */
-function localize(lines: string[], language: Language) {
-	return lines;
 }
