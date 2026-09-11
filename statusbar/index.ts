@@ -1,9 +1,9 @@
-/** 底部两行：展示标题/模块状态 + 模型/上下文。 */
+/** 底部单行：标题、模型、上下文与模块状态。 */
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { formatModelName, oneLine } from "../format.js";
-import { thinkingColor } from "../theme.js";
-import { fitMetadataLine, fitStatusLine, statusBadges, renderContext } from "./render.js";
+import { FLAME, thinkingColor } from "../theme.js";
+import { fitFooter, renderContext } from "./render.js";
 
 const TITLE_CHARACTERS = 6;
 const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -62,21 +62,19 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 					const modelCore = `${theme.fg("text", formatModelName(model?.id))}${
 						model?.reasoning ? theme.fg(thinkingColor(thinking), `/${thinking}`) : ""
 					}`;
-					const modelText = statuses.has("pi-openai-native-fast")
-						? `${modelCore}${theme.fg("warning", " · Fast")}` : modelCore;
 					const usage = ctx.getContextUsage();
 					const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
 					const separator = ` ${theme.fg("dim", "｜")} `;
-					return [
-						fitMetadataLine(
-							theme.fg("dim", title), statusBadges(statuses, separator), width, separator,
-						),
-						fitStatusLine({
-							model: modelText, modelCompact: modelCore,
-							context: renderContext(theme, usage?.percent, window),
-							contextCompact: renderContext(theme, usage?.percent, window, true),
-						}, width, separator),
-					];
+					return [fitFooter({
+						title: theme.fg("dim", title),
+						model: modelCore,
+						fast: statuses.has("pi-openai-native-fast") ? theme.fg("warning", "Fast") : "",
+						context: renderContext(theme, usage?.percent, window),
+						contextCompact: renderContext(theme, usage?.percent, window, true),
+						watcher: statuses.get("watcher") ?? "",
+						master: statuses.get("master") ?? "",
+						masterCompact: statuses.has("master") ? `${FLAME.orange}👑\x1b[39m` : "",
+					}, width, separator)];
 				},
 			};
 		});

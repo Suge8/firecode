@@ -68,14 +68,15 @@ export function formatTokens(tokens: number): string {
 	return tokens ? `${tokens}` : "?";
 }
 
-/** 900 → 0.9s，12_400 → 12s，93_000 → 1m33s。 */
+/** 紧凑耗时：十秒以内保留一位小数，长耗时按小时、分钟、秒进位。 */
 export function formatDuration(milliseconds: number): string {
 	if (milliseconds < 10_000) return `${(milliseconds / 1_000).toFixed(1)}s`;
 	const totalSeconds = Math.round(milliseconds / 1_000);
 	if (totalSeconds < 60) return `${totalSeconds}s`;
-	const minutes = Math.floor(totalSeconds / 60);
+	const hours = Math.floor(totalSeconds / 3_600);
+	const minutes = Math.floor(totalSeconds / 60) % 60;
 	const seconds = totalSeconds % 60;
-	return seconds ? `${minutes}m${seconds}s` : `${minutes}m`;
+	return `${hours ? `${hours}h` : ""}${minutes ? `${minutes}m` : ""}${seconds ? `${seconds}s` : ""}`;
 }
 
 /** 去掉模型 id 的 provider 前缀与日期后缀。 */

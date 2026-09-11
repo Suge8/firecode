@@ -1,15 +1,8 @@
-/** 状态栏的纯渲染与布局：给定数据和宽度产出字符串，不触碰会话状态。 */
+/** 状态栏纯布局：宽度变化只影响本次绘制。 */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clip, formatTokens } from "../format.js";
 import { contextColor } from "../theme.js";
-
-export type StatusLineParts = {
-	model: string;
-	modelCompact: string;
-	context: string;
-	contextCompact: string;
-};
 
 type ForegroundTheme = {
 	fg(color: ThemeColor, text: string): string;
@@ -22,43 +15,49 @@ export function renderContext(
 	compact = false,
 ): string {
 	const percentText = percent == null ? "?" : `${percent.toFixed(1)}%`;
-	return `${theme.fg("dim", "📦 ")}${theme.fg(contextColor(percent), percentText)}${
+	return `${theme.fg(contextColor(percent), percentText)}${
 		compact ? "" : theme.fg("dim", `/${formatTokens(contextWindow)}`)
 	}`;
 }
 
-/** 首行模块状态由各模块的 setStatus/onChange 驱动，状态栏只负责组合。 */
-export function statusBadges(statuses: ReadonlyMap<string, string>, separator: string): string {
-	return [statuses.get("master"), statuses.get("watcher")].filter(Boolean).join(separator);
-}
+type FooterParts = {
+	title: string;
+	model: string;
+	fast: string;
+	context: string;
+	contextCompact: string;
+	watcher: string;
+	master: string;
+	masterCompact: string;
+};
 
-export function fitMetadataLine(title: string, badge: string, width: number, separator: string): string {
-	const full = [title, badge].filter(Boolean).join(separator);
-	return visibleWidth(full) <= width ? full : clip(title, width);
-}
+export function fitFooter(parts: FooterParts, width: number, separator: string): string {
+	const join = (values: string[]) => values.filter(Boolean).join(separator);
+	const model = (text: string) => [text, parts.fast].filter(Boolean).join(" · ");
+	const fit = (context: string, watcher: string, master: string): string | undefined => {
+		const rest = join([model(parts.model), context, watcher, master]);
+		const budget = width - visibleWidth(rest) - visibleWidth(separator);
+		if (budget < 1) return undefined;
+		return join([clip(parts.title, budget), rest]);
+	};
+	const full = fit(parts.context, parts.watcher, parts.master);
+	if (full !== undefined) return full;
+	const compact = fit(parts.context, "", parts.masterCompact);
+	if (compact !== undefined) return compact;
+	const percent = fit(parts.contextCompact, "", parts.masterCompact);
+	if (percent !== undefined) return percent;
 
-const joinParts = (parts: string[], separator: string) => parts.filter(Boolean).join(separator);
-
-export function fitStatusLine(
-	parts: StatusLineParts,
-	width: number,
-	separator: string,
-): string {
-	if (width <= 0) return "";
-	const candidates = [
-		[parts.model, parts.context],
-		[parts.modelCompact, parts.context],
-		[parts.modelCompact, parts.contextCompact],
-	].map((candidate) => joinParts(candidate, separator));
-	for (const candidate of candidates) {
-		if (visibleWidth(candidate) <= width) return candidate;
-	}
-
-	const context = parts.contextCompact || parts.context;
-	const contextWidth = visibleWidth(context);
-	const modelBudget = width - contextWidth - visibleWidth(separator);
-	if (modelBudget > 0 && contextWidth <= width) {
-		return `${clip(parts.modelCompact, modelBudget, "end")}${separator}${context}`;
-	}
-	return clip(context, width, "end", "");
+	const trimModel = (title: string, master: string): string | undefined => {
+		const fixed = join([title, model(""), parts.contextCompact, master]);
+		const budget = width - visibleWidth(fixed) - visibleWidth(parts.fast ? " · " : separator);
+		if (budget < 1) return undefined;
+		return join([title, model(clip(parts.model, budget)), parts.contextCompact, master]);
+	};
+	const shortened = trimModel(clip(parts.title, 1), parts.masterCompact);
+	if (shortened !== undefined) return shortened;
+	const minimal = trimModel("", "");
+	if (minimal !== undefined) return minimal;
+	const fast = join([parts.fast, parts.contextCompact]);
+	if (visibleWidth(fast) <= width) return fast;
+	return visibleWidth(parts.contextCompact) <= width ? parts.contextCompact : "";
 }

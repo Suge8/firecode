@@ -59,6 +59,8 @@ test("时长始终在左，右侧只显示有效均速或终态，未知统计�
 	s.emit("agent_settled", {}, 9_000);
 	expect(s.entries[0].data).toEqual({ elapsedMs: 8_000, outcome: "complete" });
 	expect(s.render()).toEqual([" ◷ 处理 8.0s"]);
+	expect(s.render({ elapsedMs: 15_217_000, outcome: "complete", tps: 58.1 }))
+		.toEqual([" ◷ 处理 4h13m37s  ·  ↗ 均速 58.1 tps"]);
 	const { visibleWidth } = await import(PI_TUI_URL);
 	for (const outcome of ["complete", "aborted", "error"]) {
 		const data = { elapsedMs: 18_000, outcome, ...(outcome === "complete" ? { tps: 42 } : {}) };

@@ -179,7 +179,7 @@ test("一次评估只接受一条 advise，多余的当场拒绝", async () => {
 test("裸 /fire-watch 来回翻转当前会话并拒绝旧参数", async () => {
 	const harness = await setup();
 	advise("重新开启后的建议");
-	expect(harness.statuses.get("watcher")).toBe("👓 观察员在线");
+	expect(harness.statuses.get("watcher")).toBe("观察员");
 	await harness.command("");
 	expect(harness.statuses.has("watcher")).toBeFalse();
 	await harness.turnEnd(1, "关闭期间的回合");
@@ -189,7 +189,7 @@ test("裸 /fire-watch 来回翻转当前会话并拒绝旧参数", async () => {
 
 	const delivered = harness.next();
 	await harness.command("");
-	expect(harness.statuses.get("watcher")).toBe("👓 观察员在线");
+	expect(harness.statuses.get("watcher")).toBe("观察员");
 	await harness.turnEnd(2, "重新开启后的回合");
 	await delivered;
 	expect(harness.notes()).toEqual([{ note: "重新开启后的建议", turnIndex: 2 }]);

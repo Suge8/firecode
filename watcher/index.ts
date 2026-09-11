@@ -84,7 +84,7 @@ export function registerWatcher(
 	const activate = (ctx: ExtensionContext): WatcherRuntime => {
 		const owner = { ctx, pending: [], lastTurnIndex: 0, evaluating: false };
 		runtime = owner;
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", "👓 观察员在线"));
+		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", "观察员"));
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
