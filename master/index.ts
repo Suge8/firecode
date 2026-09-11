@@ -857,7 +857,7 @@ function terminalFailure(terminal: WorkerTerminal | undefined): string | undefin
 function providerFaultReason(terminal: WorkerTerminal | undefined): string | undefined {
 	if (terminal?.stopReason !== "error" || !terminal.errorMessage) return undefined;
 	const message = terminal.errorMessage;
-	if (/GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota (?:exceeded|exhausted)|billing/iu.test(message))
+	if (/usage.?limit|available balance|insufficient_quota|out of budget|quota (?:exceeded|exhausted)|billing/iu.test(message))
 		return "额度或计费耗尽";
 	if (/(?:model|deployment).*(?:not found|does not exist|unavailable|not available|unsupported)|(?:not found|unavailable).*(?:model|deployment)/iu.test(message))
 		return "模型不可用或找不到";

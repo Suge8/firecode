@@ -366,7 +366,10 @@ test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定"
 	});
 });
 
-test("供应商故障按角色 fallback 在同一会话续跑并更新实际模型", async () => {
+test.each([
+	"insufficient_quota",
+	"Codex error: The usage limit has been reached",
+])("供应商额度耗尽（%s）按角色 fallback 在同一会话续跑并更新实际模型", async (errorMessage) => {
 	const harness = await setup(true, {
 		roles: {
 			...TEST_ROLES,
@@ -374,7 +377,7 @@ test("供应商故障按角色 fallback 在同一会话续跑并更新实际模�
 		},
 	});
 	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" }),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage }),
 		fauxAssistantMessage("降级后完成"),
 	]);
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
