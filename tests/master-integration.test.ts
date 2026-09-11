@@ -99,7 +99,7 @@ test("Worker Markdown 只组装动态名字与协议信封", async () => {
 	});
 	await settled;
 	expect(systemPrompt).toContain(prompt.assembleWorkerPrompt(
-		"你是指挥官委派的 Worker，只在当前 checkout 内完成工作说明。验证改动并报告结果、证据与遗留风险；无法完成或验证时如实报告阻塞原因和现场，不得假成功。Git 操作限于本地且仅覆盖自己修改的路径。",
+		"你是指挥官委派的 Worker，只在当前 checkout 内完成工作说明。工作说明关联工单或要求实现时，动手前先读 implement 技能并按其步骤交付证据。验证改动并报告结果、证据与遗留风险；无法完成或验证时如实报告阻塞原因和现场，不得假成功。Git 操作限于本地且仅覆盖自己修改的路径。",
 		"prompt-contract",
 	));
 });
