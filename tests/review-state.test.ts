@@ -447,7 +447,11 @@ describe("fire-review reducer", () => {
 		expect(rounds).toEqual([1, 2, 3]);
 	});
 
-	test("an error vote stays labeled by its own model in the archived infrastructure failure", async () => {
+	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里标注，不阻止形成质量结论。
+	test.each([
+		["审查会话超时", "审查会话超时"],
+		["审查输出格式无效：第一行必须是 PASS 或 FAIL", "审查输出格式无效"],
+	])("a PASS round forms without the absent reviewer (%s) and names it in the summary", async (absentDetails, reason) => {
 		await loadState();
 		const three: ReviewLimits = {
 			...LIMITS,
@@ -455,34 +459,15 @@ describe("fire-review reducer", () => {
 		};
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false }, three, 1000).state;
 		state = reduce(state, { type: "REVIEWER_SETTLED", index: 0, result: reviewer(0, "passed", "PASS\n证据：文件=a.ts；命令=ls") }, three, 1000).state;
-		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "passed", "PASS\n证据：文件=b.ts；命令=ls") }, three, 1000).state;
-		const settled = reduce(state, { type: "REVIEWER_SETTLED", index: 2, result: reviewer(2, "error", "审查会话超时") }, three, 1000);
+		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "error", absentDetails) }, three, 1000).state;
+		const settled = reduce(state, { type: "REVIEWER_SETTLED", index: 2, result: reviewer(2, "error", "会话启动失败") }, three, 1000);
 		expect(settled.state.phase).toBe("settled");
-		expect(settled.state.history[0].result).toBe("error");
+		expect(settled.state.history[0].result).toBe("passed");
 		expect(settled.state.history[0].details).toContain("模型 1 · m0\nPASS");
-		expect(settled.state.history[0].details).toContain("模型 3 · m2\n审查会话超时");
-		expect(settled.state.history[0].details).not.toContain("PASS · m2");
-	});
-
-	// 格式错误票可忽略，但必须至少留下一张有效 PASS 才能形成质量结论。
-	test("a minority format-error vote is ignored when valid PASS votes remain", async () => {
-		await loadState();
-		const three: ReviewLimits = {
-			...LIMITS,
-			reviewers: [...LIMITS.reviewers, { model: "p/luna", thinking: "high" }],
-		};
-		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false }, three, 1000).state;
-		state = reduce(state, { type: "REVIEWER_SETTLED", index: 0, result: reviewer(0, "passed", "PASS\nok") }, three, 2000).state;
-		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "passed", "PASS\nok") }, three, 2000).state;
-		const result = reduce(state, {
-			type: "REVIEWER_SETTLED",
-			index: 2,
-			result: reviewer(2, "error", "审查输出格式无效：第一行必须是 PASS 或 FAIL"),
-		}, three, 3000);
-		expect(result.state.history[0].result).toBe("passed");
-		const effect = result.effects[0];
+		expect(settled.state.history[0].details).toContain(`模型 2 · m1\n${absentDetails}`);
+		const effect = settled.effects[0];
 		const summary = effect?.kind === "send_card" && effect.card.kind === "pass" ? effect.card.summary : "";
-		expect(summary).not.toContain("m2");
+		expect(summary).toContain(`未形成裁决：m1（${reason}）、m2（会话启动失败）`);
 	});
 
 	test("all format-error votes are unavailable rather than an empty PASS", async () => {
@@ -494,13 +479,14 @@ describe("fire-review reducer", () => {
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
 	});
 
-	test("a non-format reviewer error makes mixed FAIL infrastructure unavailable", async () => {
+	test("a FAIL verdict forms the round even when the other reviewer errored", async () => {
 		await loadState();
 		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false }, LIMITS, 1000).state;
 		state = settle(state, 0, "failed", "FAIL\n发现 1").state;
 		const result = settle(state, 1, "error", "审查会话认证失败");
-		expect(result.state.history[0].result).toBe("error");
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
+		expect(result.state.history[0].result).toBe("failed");
+		expect(result.state.history[0].details).toContain("模型 2 · m1\n审查会话认证失败");
+		expect(result.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "fail" } });
 	});
 
 	test("advisor infrastructure failure settles as unavailable instead of continuing", async () => {
@@ -518,29 +504,6 @@ describe("fire-review reducer", () => {
 			kind: "send_card",
 			card: { kind: "error", message: "顾问会话额度不足" },
 		}]);
-	});
-
-	test("any non-format reviewer error blocks PASS like pi-flow", async () => {
-		await loadState();
-		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false }, LIMITS, 1000).state;
-		state = settle(state, 0, "passed", "PASS\nok").state;
-		const result = settle(state, 1, "error", "审查会话超时");
-		expect(result.state.history[0].result).toBe("error");
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
-	});
-
-	test("a round where most reviewers errored is an infra error, not a pass", async () => {
-		await loadState();
-		const three: ReviewLimits = {
-			...LIMITS,
-			reviewers: [...LIMITS.reviewers, { model: "p/luna", thinking: "high" }],
-		};
-		let state = reduce(initialState("g"), { type: "START", focus: "", busy: false }, three, 1000).state;
-		state = reduce(state, { type: "REVIEWER_SETTLED", index: 0, result: reviewer(0, "passed", "PASS\n证据：文件=a.ts；命令=ls") }, three, 1000).state;
-		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "error", "会话超时") }, three, 1000).state;
-		const settled = reduce(state, { type: "REVIEWER_SETTLED", index: 2, result: reviewer(2, "error", "会话启动失败") }, three, 1000);
-		expect(settled.state.history[0].result).toBe("error");
-		expect(settled.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
 	});
 
 	test("cancelled and timed-out rounds carry a reason enum, not display text", async () => {
