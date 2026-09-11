@@ -461,7 +461,7 @@ describe("fire-review reducer", () => {
 		state = reduce(state, { type: "REVIEWER_SETTLED", index: 0, result: reviewer(0, "passed", "PASS\n证据：文件=a.ts；命令=ls") }, three, 1000).state;
 		state = reduce(state, { type: "REVIEWER_SETTLED", index: 1, result: reviewer(1, "error", absentDetails) }, three, 1000).state;
 		const settled = reduce(state, { type: "REVIEWER_SETTLED", index: 2, result: reviewer(2, "error", "会话启动失败") }, three, 1000);
-		expect(settled.state.phase).toBe("settled");
+		expect(settled.state.phase).toBe("summarizing");
 		expect(settled.state.history[0].result).toBe("passed");
 		expect(settled.state.history[0].details).toContain("模型 1 · m0\nPASS");
 		expect(settled.state.history[0].details).toContain(`模型 2 · m1\n${absentDetails}`);
