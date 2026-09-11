@@ -715,20 +715,14 @@ function aggregate(
 	archiveDetails: string;
 	summary: string;
 } {
-	const failed = reviewers.filter((item) => item.status === "failed");
-	const errors = reviewers.filter((item) => item.status === "error");
+	const verdicts = reviewers.filter((item) => item.status === "passed" || item.status === "failed");
+	const absent = reviewers.filter((item) => item.status === "error");
 	const archiveDetails = aggregateDetails(reviewers, language);
-	const fatalErrors = errors.filter((item) => !isFormatError(item.details));
-	// 只忽略明确的格式错误票；任何真实基础设施错误都阻止形成质量结论，
-	// 即使同轮已有 FAIL，也不能把未完整形成的审查误报为 Review Failed。
-	if (fatalErrors.length > 0)
-		return {
-			result: "error",
-			displayDetails: aggregateDetails(fatalErrors, language),
-			feedbackDetails: "",
-			archiveDetails,
-			summary: "",
-		};
+	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里点名，不阻止形成质量结论；
+	// 全员缺席才是基础设施不可用。否则一个供应商额度耗尽就会让整条审查通道停摆。
+	if (verdicts.length === 0)
+		return { result: "error", displayDetails: archiveDetails, feedbackDetails: "", archiveDetails, summary: "" };
+	const failed = verdicts.filter((item) => item.status === "failed");
 	if (failed.length > 0)
 		return {
 			result: "failed",
@@ -737,26 +731,13 @@ function aggregate(
 			archiveDetails,
 			summary: "",
 		};
-	const passed = reviewers.filter((item) => item.status === "passed");
-	if (passed.length === 0)
-		return {
-			result: "error",
-			displayDetails: aggregateDetails(errors, language),
-			feedbackDetails: "",
-			archiveDetails,
-			summary: "",
-		};
 	return {
 		result: "passed",
 		displayDetails: archiveDetails,
 		feedbackDetails: "",
 		archiveDetails,
-		summary: aggregatePassSummary(passed, language),
+		summary: aggregatePassSummary(verdicts, absent, language),
 	};
-}
-
-function isFormatError(details: string) {
-	return details.startsWith("审查输出格式无效") || details.startsWith("review output format invalid");
 }
 
 function aggregateDetails(reviewers: ReviewerResult[], language: "zh" | "en"): string {
@@ -765,35 +746,29 @@ function aggregateDetails(reviewers: ReviewerResult[], language: "zh" | "en"): s
 		.join("\n\n");
 }
 
-function aggregatePassSummary(reviewers: ReviewerResult[], language: "zh" | "en") {
-	const fallback = language === "en" ? "Review passed." : "审查通过。";
-	if (reviewers.length === 1) {
-		const reviewer = reviewers[0];
-		const body = passBody(reviewer?.summary ?? "") || fallback;
-		const suggestions = splitSuggestions(reviewer?.details ?? "").suggestions;
-		if (suggestions.length === 0) return body;
-		return [
-			body,
-			"",
-			language === "en" ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
-			...suggestions.map((item) => `- ${item}`),
-		].join("\n");
-	}
-	const parts = reviewers.map((item) => ({
-		body: item.summary,
-		suggestions: splitSuggestions(item.details).suggestions,
-	}));
-	const lines = parts.map((part, index) =>
-		`• ${shortModel(reviewers[index]?.model ?? "")}${language === "en" ? ": " : "："}${passBody(part.body) || fallback}`,
-	);
-	const suggestions = [...new Set(parts.flatMap((part) => part.suggestions))];
+function aggregatePassSummary(passed: ReviewerResult[], absent: ReviewerResult[], language: "zh" | "en") {
+	const en = language === "en";
+	const fallback = en ? "Review passed." : "审查通过。";
+	const lines = passed.length === 1
+		? [passBody(passed[0]?.summary ?? "") || fallback]
+		: passed.map((item) => `• ${shortModel(item.model)}${en ? ": " : "："}${passBody(item.summary) || fallback}`);
+	if (absent.length > 0)
+		lines.push(
+			(en ? "No verdict from " : "未形成裁决：")
+				+ absent.map((item) => `${shortModel(item.model)}${en ? ` (${firstLine(item.details)})` : `（${firstLine(item.details)}）`}`).join(en ? ", " : "、"),
+		);
+	const suggestions = [...new Set(passed.flatMap((item) => splitSuggestions(item.details).suggestions))];
 	if (suggestions.length === 0) return lines.join("\n");
 	return [
 		...lines,
 		"",
-		language === "en" ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
+		en ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
 		...suggestions.map((item) => `- ${item}`),
 	].join("\n");
+}
+
+function firstLine(text: string) {
+	return text.trim().split(/\r?\n/u, 1)[0]?.split(/[：:]/u, 1)[0]?.trim() ?? "";
 }
 
 function splitSuggestions(summary: string) {
