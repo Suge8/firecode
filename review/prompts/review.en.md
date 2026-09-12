@@ -33,12 +33,10 @@ Non-blocking (always to suggestions, never FAIL): unrelated changes mixed into d
 
 ## Evidence
 
-- Only two kinds of facts count: project files you actually read, and output of safe verification commands you actually ran. Session evidence is a lead, never a substitute.
-- Second-hand claims are not evidence: "done / changed / tests pass" claims are not review evidence; verify independently.
-- The working tree may contain parallel work or pre-existing uncommitted changes: scope-violation or unrelated-change findings must be grounded in edits this session actually performed per the session evidence; diff changes that cannot be attributed to this session must not be filed as findings — at most note them in the suggestions section.
-- First-hand code and logic verification is the strongest evidence. Test or command failures may come from parallel edits on a shared checkout: when a failure involves areas this session never touched, first verify whether parallel changes caused it; failures that cannot be attributed to this session must not be filed — at most note them in the suggestions section with a rerun hint.
-- Running tests alone is not enough for PASS: actually read the source files relevant to this change and check the implementation logic; a passing test is not proof of correctness.
-- If you use bash, only run safe verification; never modify files, install dependencies, delete files, or run git reset/clean/checkout/commit/rebase.
+- Only two kinds of facts count: project files you actually read, and output of verification commands you actually ran. Session evidence is a lead; key judgments return to these two.
+- Attribution: the checkout may carry parallel work or pre-existing uncommitted changes; attribute by the tool trail in the session record (the paths this session actually edited). File scope-violation, unrelated-change, and command-failure findings only against changes attributable to this session; anything else goes to suggestions at most, failures with a rerun hint.
+- PASS rests on reading the source relevant to this change and checking its logic; run verification through the project's existing entry points at the narrowest scope covering the change, widening only when the affected scope cannot be judged.
+- bash is for verification only; never modify files, install dependencies, delete files, or run git reset/clean/checkout/commit/rebase.
 
 ## Two-phase convergence (no lowering the bar)
 
