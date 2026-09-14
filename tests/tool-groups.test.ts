@@ -224,7 +224,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	expect(s.chat.render).toBe(s.originalRender);
 });
 
-test("首条思考即显示过程状态，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
+test("首条思考即显示过程状态，思考完成后摘要行留在原位，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
 	const s = await scene();
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
@@ -233,6 +233,8 @@ test("首条思考即显示过程状态，混合消息只藏思考，不改正�
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 思考中\s*$/);
+	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }, { type: "text", text: "第一段" }], stopReason: "pending" }, true);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考\s*$/);
 	const message = {
 		role: "assistant", stopReason: "stop", content: [
 			{ type: "thinking", thinking: "第一段内部思考" },
@@ -248,6 +250,7 @@ test("首条思考即显示过程状态，混合消息只藏思考，不改正�
 	const originalTree = assistant.children;
 	const originalContent = originalTree[0].children;
 	const collapsed = s.lines().join("\n");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考\s*$/);
 	expect(collapsed).toContain("第一段正式回复");
 	expect(collapsed).toContain("第二段正式回复");
 	expect(collapsed).not.toMatch(/内部思考|Thinking|✦/);
@@ -266,6 +269,10 @@ test("首条思考即显示过程状态，混合消息只藏思考，不改正�
 	expect(s.lines().join("\n")).toContain("第二段内部思考");
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().join("\n")).toBe(collapsed);
+	s.chat.addChild(new s.tui.Spacer(1));
+	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss: 20k tokens re-billed"), 1, 0));
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考 · ⚠ 1\s*$/);
+	expect(s.lines().slice(1).join("\n")).toBe(collapsed.split("\n").slice(1).join("\n"));
 });
 
 test("思考期间仍保留已有工具失败，异常和截断诊断不会被思考折叠吞掉", async () => {
