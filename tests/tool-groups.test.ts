@@ -65,9 +65,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	const bash = s.tool("bash", { command: "bun test" });
 	const summary = s.lines().filter(Boolean);
 	expect(summary).toHaveLength(1);
-	expect(summary[0]).toContain("工具 2 次");
-	expect(summary[0]).toContain("1 个运行中");
-	expect(summary[0]).toContain("bun test");
+	expect(summary[0]).toMatch(/^▏ ✦ 操作 \$ bun test\s+读取 1 · 操作 1\s*$/);
 	expect(summary.join("\n")).not.toContain("private full result");
 
 	s.ui.setToolsExpanded(true);
@@ -83,7 +81,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	s.complete(bash);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).not.toContain("运行中");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 操作 \$ bun test\s+读取 1 · 操作 1\s*$/);
 	dispose?.();
 	dispose = undefined;
 	expect(s.chat.render).toBe(s.originalRender);
@@ -102,7 +100,7 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	const second = s.tool("read", { path: "b" });
 	s.complete(second);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("读取 2");
 
 	empty.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "需要检查另一处" }] }, false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -117,9 +115,9 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	const index = s.chat.children.indexOf(empty);
 	s.chat.children[index] = new s.tui.Text("审查已完成", 0, 0);
 	expect(s.lines().join("\n")).toContain("审查已完成");
-	expect(s.lines().filter((line: string) => line.includes("工具 1 次"))).toHaveLength(2);
+	expect(s.lines().filter((line: string) => line.includes("读取 1"))).toHaveLength(2);
 	s.chat.children.splice(index, 1);
-	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("读取 2");
 });
 
 test("摘要优先显示运行项且保留失败，切档不改聊天树", async () => {
@@ -127,10 +125,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
-	const summary = s.lines().join("\n");
-	expect(summary).toContain("工具 3 次");
-	expect(summary).toContain("1 次失败");
-	expect(summary).toContain("long-running");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 操作 \$ long-running · 1 次失败\s+操作 1 · 读取 2\s*$/);
 	const originalChildren = [...s.chat.children];
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
@@ -141,6 +136,9 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 			for (const line of s.lines(width)) expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
 	s.complete(running);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ long-running · 1 次失败\s+操作 1 · 读取 2\s*$/);
+	expect(s.lines(40).filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ long-running · 1 次失败\s*$/);
+	expect(s.lines(26).filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ l… · 1 次失败$/);
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
@@ -167,15 +165,14 @@ test("用户消息之间的整段过程折成一行：图片、中途正文与�
 
 	const collapsed = s.lines().filter(Boolean);
 	expect(collapsed).toHaveLength(2);
-	expect(collapsed[0]).toContain("工具 4 次");
-	expect(collapsed[0]).toContain("b.ts");
+	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 b\.ts\s+读取 3 · 操作 1\s*$/);
 	expect(collapsed[1]).toContain("修好了");
 	expect(collapsed.join("\n")).not.toMatch(/先看一下|fix-auth 完成|image payload/);
 
 	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
 	s.complete(s.tool("read", { path: "c.ts" }));
-	expect(s.lines().filter((line: string) => line.includes("工具 4 次"))).toHaveLength(1);
-	expect(s.lines().filter((line: string) => line.includes("工具 1 次"))).toHaveLength(1);
+	expect(s.lines().filter((line: string) => line.includes("读取 3 · 操作 1"))).toHaveLength(1);
+	expect(s.lines().filter((line: string) => /读取 1\s*$/.test(line))).toHaveLength(1);
 	expect(s.lines().join("\n")).toContain("下一问");
 
 	s.ui.setToolsExpanded(true);
@@ -214,7 +211,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	s.complete(s.tool("read", { path: "a" }));
 	s.complete(s.tool("read", { path: "b" }));
 	expect(Container.prototype.addChild).toBe(addChild);
-	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("读取 2");
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
 	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), registerTool() {}, registerCommand() {} });
@@ -231,11 +228,10 @@ test("首条思考即显示过程状态，混合消息只藏思考，不改正�
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
-	expect(s.lines().join("\n")).toContain("处理中");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 处理中\s*$/);
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("思考中");
-	expect(s.lines().join("\n")).not.toMatch(/第一段内部思考|工具 0 次|思考 \d/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 思考中\s*$/);
 	const message = {
 		role: "assistant", stopReason: "stop", content: [
 			{ type: "thinking", thinking: "第一段内部思考" },
@@ -253,7 +249,7 @@ test("首条思考即显示过程状态，混合消息只藏思考，不改正�
 	const collapsed = s.lines().join("\n");
 	expect(collapsed).toContain("第一段正式回复");
 	expect(collapsed).toContain("第二段正式回复");
-	expect(collapsed).not.toMatch(/内部思考|Thinking|工具 0 次/);
+	expect(collapsed).not.toMatch(/内部思考|Thinking|✦/);
 	expect(collapsed.indexOf("第一段正式回复")).toBeLessThan(collapsed.indexOf("第二段正式回复"));
 	const raw = s.chat.render(100).join("\n");
 	expect(raw.match(/\x1b\]133;A\x07/g)).toHaveLength(1);
@@ -279,8 +275,7 @@ test("思考期间仍保留已有工具失败，异常和截断诊断不会被�
 	const content = [{ type: "thinking", thinking: "不应直接显示的思考" }];
 	assistant.updateContent({ role: "assistant", content, stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("思考中");
-	expect(s.lines().join("\n")).toContain("1 次失败");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 思考中 · 1 次失败\s+读取 1\s*$/);
 	for (const [stopReason, diagnostic] of [["error", "Error: failed"], ["aborted", "failed"], ["length", "Response was truncated"]]) {
 		assistant.updateContent({ role: "assistant", content, stopReason, errorMessage: "failed" }, false);
 		expect(s.lines().join("\n")).toContain(diagnostic);
@@ -293,7 +288,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 1");
 	expect(s.lines().join("\n")).toContain("启动 worker-one");
 	s.complete(start, "worker started");
 	const list = s.tool("subagents_list", {});
@@ -301,7 +296,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
 	} });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("工具 3 次");
+	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 2");
 	expect(s.lines().join("\n")).toContain("查看");
 	expect(s.lines().join("\n")).toContain("worker-one");
 	s.ui.setToolsExpanded(true);
@@ -340,7 +335,7 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 		renderCall: () => new s.tui.MouseRegion(new s.tui.Text("确认操作", 0, 0), () => { clicked++; return { handled: true }; }),
 	}));
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("工具 3 次");
+	expect(s.lines().join("\n")).toContain("custom-self 1 · custom-default 1 · real-control 1");
 	s.ui.setToolsExpanded(true);
 	for (const shell of ["self", "default"]) {
 		s.click(s.lines().findIndex((line: string) => line.includes(`custom-${shell}`)));
