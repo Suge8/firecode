@@ -136,9 +136,10 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 			for (const line of s.lines(width)) expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
 	s.complete(running);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ long-running · 1 次失败\s+操作 1 · 读取 2\s*$/);
-	expect(s.lines(40).filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ long-running · 1 次失败\s*$/);
-	expect(s.lines(26).filter(Boolean)[0]).toMatch(/^▏ ✗ 操作 \$ l… · 1 次失败$/);
+	s.ui.setToolsExpanded(false);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 finished · 1 次失败\s+操作 1 · 读取 2\s*$/);
+	expect(s.lines(40).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 finished · 1 次失败\s*$/);
+	expect(s.lines(26).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 …hed · 1 次失败\s*$/);
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
