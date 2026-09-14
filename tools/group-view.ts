@@ -58,17 +58,20 @@ class ProcessSummary implements Component {
 	) {}
 	invalidate(): void {}
 	render(width: number): string[] {
+		const counts = new Map<string, number>();
 		let running = 0;
 		let failures = 0;
 		let latest = this.rows.length ? rowData(this.rows[this.rows.length - 1]) : undefined;
 		for (const row of this.rows) {
 			const data = rowData(row);
+			const label = data.toolDefinition?.label ?? data.toolName;
+			counts.set(label, (counts.get(label) ?? 0) + 1);
 			if (data.isPartial) { running++; latest = data; }
 			if (data.result?.isError) failures++;
 		}
 		const activity = this.activity === "thinking" ? "思考中" : this.activity === "processing" ? "处理中" : undefined;
 		const renderer = groupRenderer(latest?.callRendererComponent) ?? compactLine(latest, this.ui.theme);
-		return renderer.renderGroup(width, { calls: this.rows.length, running, failures, activity });
+		return renderer.renderGroup(width, { counts: [...counts], running, failures, activity });
 	}
 	handleMouse(event: TuiMouseEvent) {
 		if (event.type !== "click" || event.button !== "left") return undefined;
