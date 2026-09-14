@@ -122,7 +122,7 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	expect(s.lines().join("\n")).toContain("工具 2 次");
 });
 
-test("摘要优先显示运行项且保留失败，图片和交互工具独立，切档不改聊天树", async () => {
+test("摘要优先显示运行项且保留失败，切档不改聊天树", async () => {
 	const s = await scene();
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
@@ -131,28 +131,62 @@ test("摘要优先显示运行项且保留失败，图片和交互工具独立�
 	expect(summary).toContain("工具 3 次");
 	expect(summary).toContain("1 次失败");
 	expect(summary).toContain("long-running");
-	const image = s.tool("read", { path: "image.png" });
-	image.updateResult({ content: [{ type: "image", data: "", mimeType: "image/png" }], isError: false });
-	const custom = s.tool("interactive", {}, {
-		name: "interactive", label: "interactive", renderShell: "self",
-		renderCall: () => new s.tui.MouseRegion(new s.tui.Text("交互区域", 0, 0), () => ({ handled: true })),
-	});
-	s.complete(custom);
-	s.complete(s.tool("read", { path: "last" }));
 	const originalChildren = [...s.chat.children];
-	expect(s.lines().join("\n")).toContain("交互区域");
-	expect(s.lines().join("\n")).toContain("image.png");
-	expect(s.lines().join("\n")).toContain("工具 1 次");
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
 	expect(s.chat.children).toEqual(originalChildren);
-	s.chat.children = originalChildren.slice(0, 3);
 	for (const expanded of [false, true]) {
 		s.ui.setToolsExpanded(expanded);
 		for (const width of [1, 12, 40, 100])
 			for (const line of s.lines(width)) expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
 	s.complete(running);
+});
+
+test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
+	const s = await scene();
+	const assistant = () => {
+		const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+		s.chat.addChild(message);
+		return message;
+	};
+	s.complete(s.tool("read", { path: "a.ts" }));
+	const image = s.tool("read", { path: "shot.png" });
+	image.updateResult({ content: [{ type: "text", text: "image payload" }, { type: "image", data: "", mimeType: "image/png" }], isError: false });
+	const interim = assistant();
+	interim.updateContent({ role: "assistant", stopReason: "pending", content: [{ type: "text", text: "先看一下子代理的进展" }] }, true);
+	expect(s.lines().join("\n")).toContain("先看一下子代理的进展");
+	interim.updateContent({ role: "assistant", stopReason: "toolUse", content: [
+		{ type: "text", text: "先看一下子代理的进展" }, { type: "toolCall", id: "c1", name: "bash", arguments: {} },
+	] }, false);
+	s.complete(s.tool("bash", { command: "bun test" }));
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: "fix-auth 完成", display: true, timestamp: 0 }));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	const final = assistant();
+	final.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "修好了" }] }, false);
+
+	const collapsed = s.lines().filter(Boolean);
+	expect(collapsed).toHaveLength(2);
+	expect(collapsed[0]).toContain("工具 4 次");
+	expect(collapsed[0]).toContain("b.ts");
+	expect(collapsed[1]).toContain("修好了");
+	expect(collapsed.join("\n")).not.toMatch(/先看一下|fix-auth 完成|image payload/);
+
+	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
+	s.complete(s.tool("read", { path: "c.ts" }));
+	expect(s.lines().filter((line: string) => line.includes("工具 4 次"))).toHaveLength(1);
+	expect(s.lines().filter((line: string) => line.includes("工具 1 次"))).toHaveLength(1);
+	expect(s.lines().join("\n")).toContain("下一问");
+
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines().join("\n");
+	const order = ["a.ts", "shot.png", "先看一下子代理的进展", "bun test", "fix-auth 完成", "b.ts", "修好了", "下一问", "c.ts"];
+	const positions = order.map((needle) => expanded.indexOf(needle));
+	expect(positions.every((position) => position >= 0)).toBe(true);
+	expect(positions).toEqual([...positions].sort((a, b) => a - b));
+	expect(expanded).not.toContain("image payload");
+	s.click(s.lines().findIndex((line: string) => line.includes("shot.png")));
+	expect(s.lines().join("\n")).toContain("image payload");
 });
 
 test("普通第三方工具的失败摘要与完整正文都可查看", async () => {
@@ -288,14 +322,14 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	}
 });
 
-test("自定义渲染不是独立展示的理由，只有图片和真实交互需要独立", async () => {
+test("自定义渲染的工具同样入组，单工具正文按需展开", async () => {
 	const s = await scene();
 	for (const shell of ["self", "default"]) {
 		const row = s.tool(`custom-${shell}`, { task: "inspect" }, {
 			name: `custom-${shell}`, label: `custom-${shell}`, renderShell: shell,
 			renderCall() {
 				const box = new s.tui.Box(0, 0);
-				box.addChild(new s.tui.Text(`static custom render ${shell}`, 0, 0));
+				box.addChild(new s.tui.MouseRegion(new s.tui.Text(`static custom render ${shell}`, 0, 0), () => ({ handled: true })));
 				return box;
 			},
 		});
@@ -310,22 +344,4 @@ test("自定义渲染不是独立展示的理由，只有图片和真实交互�
 		s.click(s.lines().findIndex((line: string) => line.includes(`static custom render ${shell}`)));
 		expect(s.lines().join("\n")).not.toContain(`static custom render ${shell}`);
 	}
-	s.ui.setToolsExpanded(false);
-	let clicked = 0;
-	const interactive = s.tool("real-control", {}, {
-		name: "real-control", label: "real-control", renderShell: "self",
-		renderCall() {
-			const box = new s.tui.Box(0, 0);
-			box.addChild(new s.tui.MouseRegion(new s.tui.Text("确认操作", 0, 0), () => { clicked++; return { handled: true }; }));
-			return box;
-		},
-	});
-	s.complete(interactive);
-	const controlLine = s.lines().findIndex((line: string) => line.includes("确认操作"));
-	expect(controlLine).toBeGreaterThanOrEqual(0);
-	s.click(controlLine);
-	expect(clicked).toBe(1);
-	s.ui.setToolsExpanded(true);
-	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
-	expect(clicked).toBe(2);
 });
