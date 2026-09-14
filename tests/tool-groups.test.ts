@@ -322,21 +322,25 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	}
 });
 
-test("自定义渲染的工具同样入组，单工具正文按需展开", async () => {
+test("自定义渲染与自带鼠标处理的工具同样入组，展开态正文与点击归渲染器自己", async () => {
 	const s = await scene();
+	let clicked = 0;
 	for (const shell of ["self", "default"]) {
-		const row = s.tool(`custom-${shell}`, { task: "inspect" }, {
+		s.complete(s.tool(`custom-${shell}`, { task: "inspect" }, {
 			name: `custom-${shell}`, label: `custom-${shell}`, renderShell: shell,
 			renderCall() {
 				const box = new s.tui.Box(0, 0);
-				box.addChild(new s.tui.MouseRegion(new s.tui.Text(`static custom render ${shell}`, 0, 0), () => ({ handled: true })));
+				box.addChild(new s.tui.Text(`static custom render ${shell}`, 0, 0));
 				return box;
 			},
-		});
-		s.complete(row);
+		}));
 	}
+	s.complete(s.tool("real-control", {}, {
+		name: "real-control", label: "real-control", renderShell: "self",
+		renderCall: () => new s.tui.MouseRegion(new s.tui.Text("确认操作", 0, 0), () => { clicked++; return { handled: true }; }),
+	}));
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("工具 2 次");
+	expect(s.lines().join("\n")).toContain("工具 3 次");
 	s.ui.setToolsExpanded(true);
 	for (const shell of ["self", "default"]) {
 		s.click(s.lines().findIndex((line: string) => line.includes(`custom-${shell}`)));
@@ -344,4 +348,7 @@ test("自定义渲染的工具同样入组，单工具正文按需展开", async
 		s.click(s.lines().findIndex((line: string) => line.includes(`static custom render ${shell}`)));
 		expect(s.lines().join("\n")).not.toContain(`static custom render ${shell}`);
 	}
+	s.click(s.lines().findIndex((line: string) => line.includes("real-control")));
+	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
+	expect(clicked).toBe(1);
 });
