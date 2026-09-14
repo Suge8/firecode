@@ -65,7 +65,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	const bash = s.tool("bash", { command: "bun test" });
 	const summary = s.lines().filter(Boolean);
 	expect(summary).toHaveLength(1);
-	expect(summary[0]).toMatch(/^▏ ✦ 操作 \$ bun test\s+读取 1 · 操作 1\s*$/);
+	expect(summary[0]).toMatch(/^▏ ✦ 操作\s+读取 1 · 操作 1\s*$/);
 	expect(summary.join("\n")).not.toContain("private full result");
 
 	s.ui.setToolsExpanded(true);
@@ -81,7 +81,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	s.complete(bash);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 操作 \$ bun test\s+读取 1 · 操作 1\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 操作\s+读取 1 · 操作 1\s*$/);
 	dispose?.();
 	dispose = undefined;
 	expect(s.chat.render).toBe(s.originalRender);
@@ -125,7 +125,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 操作 \$ long-running · 1 次失败\s+操作 1 · 读取 2\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 操作 · 1 次失败\s+操作 1 · 读取 2\s*$/);
 	const originalChildren = [...s.chat.children];
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
@@ -137,9 +137,9 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	}
 	s.complete(running);
 	s.ui.setToolsExpanded(false);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 finished · 1 次失败\s+操作 1 · 读取 2\s*$/);
-	expect(s.lines(40).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 finished · 1 次失败\s*$/);
-	expect(s.lines(26).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 …hed · 1 次失败\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s+操作 1 · 读取 2\s*$/);
+	expect(s.lines(24).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s*$/);
+	expect(s.lines(12).filter(Boolean)[0]).toBe("▏ ✗ 读取 · …");
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
@@ -166,7 +166,7 @@ test("用户消息之间的整段过程折成一行：图片、中途正文与�
 
 	const collapsed = s.lines().filter(Boolean);
 	expect(collapsed).toHaveLength(2);
-	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 b\.ts\s+读取 3 · 操作 1\s*$/);
+	expect(collapsed[0]).toMatch(/^▏ ✓ 读取\s+读取 3 · 操作 1\s*$/);
 	expect(collapsed[1]).toContain("修好了");
 	expect(collapsed.join("\n")).not.toMatch(/先看一下|fix-auth 完成|image payload/);
 
@@ -290,7 +290,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 1");
-	expect(s.lines().join("\n")).toContain("启动 worker-one");
+	expect(s.lines().join("\n")).not.toContain("worker-one");
 	s.complete(start, "worker started");
 	const list = s.tool("subagents_list", {});
 	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
@@ -298,8 +298,8 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	} });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 2");
-	expect(s.lines().join("\n")).toContain("查看");
-	expect(s.lines().join("\n")).toContain("worker-one");
+	expect(s.lines().join("\n")).toContain("子代理");
+	expect(s.lines().join("\n")).not.toContain("worker-one");
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().filter(Boolean)).toHaveLength(3);
 	expect(s.lines().join("\n")).toContain("启动 worker-one");
@@ -314,7 +314,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	for (const [action, label] of [["send", "发送"], ["interrupt", "中断"], ["review", "审查"], ["tail", "近况"], ["ack", "待命"], ["kill", "移除"]]) {
 		s.complete(s.tool("subagents", { action, worker: "worker-one", prompt: "继续" }));
 		expect(s.lines().filter(Boolean)).toHaveLength(1);
-		expect(s.lines().join("\n")).toContain(`${label} worker-one`);
+		expect(s.lines().join("\n")).not.toContain(label);
 	}
 });
 
@@ -383,4 +383,15 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	expect(expanded.indexOf("修好了")).toBeLessThan(expanded.indexOf("Cache miss"));
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(5);
+
+	s.chat.addChild(new s.host.UserMessageComponent("再问"));
+	const plain = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(plain);
+	plain.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "直接回答" }] }, false);
+	const before = s.lines().filter(Boolean);
+	note("warning", "Cache miss: 20k tokens re-billed");
+	const after = s.lines().filter(Boolean);
+	expect(after.slice(0, before.length)).toEqual(before);
+	expect(after.at(-1)).toContain("Cache miss");
+	expect(after.join("\n")).not.toContain("过程");
 });
