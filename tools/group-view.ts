@@ -5,7 +5,8 @@ import {
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Spacer, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
 import { ToolLine, resultText, type RowState, type ToolResult, type GroupRenderer } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, type AssistantActivity } from "./assistant-view.js";
@@ -39,9 +40,20 @@ function isProcess(component: Component): boolean {
 		|| component instanceof CustomMessageComponent;
 }
 
+/**
+ * 宿主把 transcript 提示（缓存/丢思考/压缩计费）与状态行（切档、切模型）画成整行单色 Text：
+ * warning 是提示，dim 是状态。颜色是宿主唯一给出的语义通道；错误与混色文本仍是边界。
+ */
+function noticeKind(component: Component | undefined, theme: Theme): "warning" | "dim" | undefined {
+	if (!(component instanceof Text)) return;
+	const text = (component as unknown as { text: string }).text;
+	const plain = stripVTControlCharacters(text);
+	return (["warning", "dim"] as const).find((color) => theme.fg(color, plain) === text);
+}
+
 function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
-		label: row?.toolDefinition?.label ?? row?.toolName ?? "", value: genericArgsParts(row?.args), clip: "end", theme,
+		label: row?.toolDefinition?.label ?? row?.toolName ?? "过程", value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
 			state: { ...row?.rendererState, errorText: row?.result?.isError ? resultText(row.result, true).displayText : "" },
 			cwd: row?.cwd ?? "", toolCallId: row?.toolCallId ?? "",
@@ -52,7 +64,7 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 class ProcessSummary implements Component {
 	constructor(
-		private readonly rows: ToolRow[],
+		private readonly process: readonly Component[],
 		private readonly activity: AssistantActivity | undefined,
 		private readonly ui: ExtensionUIContext,
 	) {}
@@ -61,17 +73,22 @@ class ProcessSummary implements Component {
 		const counts = new Map<string, number>();
 		let running = 0;
 		let failures = 0;
-		let latest = this.rows.length ? rowData(this.rows[this.rows.length - 1]) : undefined;
-		for (const row of this.rows) {
-			const data = rowData(row);
+		let notices = 0;
+		let latest: RowData | undefined;
+		for (const item of this.process) {
+			if (noticeKind(item, this.ui.theme) === "warning") notices++;
+			if (!(item instanceof ToolExecutionComponent)) continue;
+			const data = rowData(item);
 			const label = data.toolDefinition?.label ?? data.toolName;
 			counts.set(label, (counts.get(label) ?? 0) + 1);
-			if (data.isPartial) { running++; latest = data; }
+			// 运行中的工具优先当“当前动作”；都完成时取最后一个
+			if (data.isPartial) running++;
+			if (data.isPartial || !latest?.isPartial) latest = data;
 			if (data.result?.isError) failures++;
 		}
 		const activity = this.activity === "thinking" ? "思考中" : this.activity === "processing" ? "处理中" : undefined;
 		const renderer = groupRenderer(latest?.callRendererComponent) ?? compactLine(latest, this.ui.theme);
-		return renderer.renderGroup(width, { counts: [...counts], running, failures, activity });
+		return renderer.renderGroup(width, { counts: [...counts], running, failures, notices, activity });
 	}
 	handleMouse(event: TuiMouseEvent) {
 		if (event.type !== "click" || event.button !== "left") return undefined;
@@ -118,30 +135,43 @@ export function projectProcessGroups(
 	let segment: Component[] = [];
 	const flush = () => {
 		if (!segment.length) return;
-		const tail = segment.at(-1);
-		const reply = tail instanceof AssistantMessageComponent ? assistantView(tail, expanded) : undefined;
-		const process = reply?.body ? segment.slice(0, -1) : segment;
-		projected.push(...(expanded ? processList(process, ui, toggle) : processSummary(process, reply?.activity, ui)));
-		if (reply?.body) projected.push(reply.body);
+		if (expanded) projected.push(...processList(segment, ui, toggle));
+		else projected.push(...processSummary(segment, ui));
 		segment = [];
 	};
-	for (const child of children) {
-		if (isProcess(child)) { segment.push(child); continue; }
+	const inSegment = (index: number) => {
+		const child = children[index];
+		if (isProcess(child)) return true;
+		if (!segment.length) return false;
+		const notice = child instanceof Spacer ? children[index + 1] : child;
+		return noticeKind(notice, ui.theme) !== undefined;
+	};
+	for (let index = 0; index < children.length; index++) {
+		if (inSegment(index)) { segment.push(children[index]); continue; }
 		flush();
-		projected.push(child);
+		projected.push(children[index]);
 	}
 	flush();
 	return projected;
 }
 
-function processSummary(process: readonly Component[], activity: AssistantActivity | undefined, ui: ExtensionUIContext): Component[] {
-	const rows = process.filter((item): item is ToolRow => item instanceof ToolExecutionComponent);
-	return rows.length || activity ? [new Spacer(1), new ProcessSummary(rows, activity, ui)] : [];
+/** 段尾回复 = 其后只剩提示与状态行的最后一条助手消息；提示折入摘要，回复留在摘要下方。 */
+function processSummary(segment: readonly Component[], ui: ExtensionUIContext): Component[] {
+	let replyAt = segment.length - 1;
+	while (replyAt >= 0 && !isProcess(segment[replyAt])) replyAt--;
+	const tail = segment[replyAt];
+	const reply = tail instanceof AssistantMessageComponent ? assistantView(tail, false) : undefined;
+	const process = reply?.body ? segment.filter((item) => item !== tail) : segment;
+	const summarized = process.some((item) => item instanceof ToolExecutionComponent || noticeKind(item, ui.theme) === "warning");
+	const out: Component[] = [];
+	if (summarized || reply?.activity) out.push(new Spacer(1), new ProcessSummary(process, reply?.activity, ui));
+	if (reply?.body) out.push(new Spacer(1), reply.body);
+	return out;
 }
 
-function processList(process: readonly Component[], ui: ExtensionUIContext, toggle: (row: ToolRow) => void): Component[] {
+function processList(segment: readonly Component[], ui: ExtensionUIContext, toggle: (row: ToolRow) => void): Component[] {
 	const list: Component[] = [];
-	for (const item of process) {
+	for (const item of segment) {
 		if (item instanceof ToolExecutionComponent) {
 			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
 			list.push(new ToolItem(item, ui, toggle));

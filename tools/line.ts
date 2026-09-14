@@ -120,6 +120,8 @@ export interface GroupSummary {
 	counts: readonly (readonly [label: string, calls: number])[];
 	running: number;
 	failures: number;
+	/** 折入段内的宿主提示条数（缓存、丢思考、压缩计费） */
+	notices: number;
 	activity?: string;
 }
 
@@ -148,14 +150,17 @@ export class ToolLine implements GroupRenderer {
 
 	/** 保留当前动作与目标；整段的统计走固定标记与右列，不冒充单工具耗时与大小。 */
 	renderGroup(width: number, summary: GroupSummary): string[] {
-		const { activity, counts, running, failures } = summary;
+		const { activity, counts, running, failures, notices } = summary;
 		const kind = running || activity ? "run" : failures ? "err" : "ok";
 		return renderLine(this.options.theme, width, {
 			status: kind === "run" ? { glyph: SUMMARY_GLYPH, color: "accent" } : { ...STATUS[kind], bg: undefined },
 			label: { text: activity ?? this.options.label, color: "toolTitle", bold: true },
 			value: activity ? [] : this.valueWithMeta(),
 			clip: this.options.clip,
-			tail: failures ? [{ text: ` · ${failures} 次失败`, color: "error" }] : [],
+			tail: [
+				...(failures ? [{ text: ` · ${failures} 次失败`, color: "error" as const }] : []),
+				...(notices ? [{ text: ` · ⚠ ${notices}`, color: "warning" as const }] : []),
+			],
 			// 计数列整体去留：只显示一部分类别会误导
 			right: counts.length ? [{ text: counts.map(([label, calls]) => `${label} ${calls}`).join(" · "), color: "dim" }] : [],
 		});
