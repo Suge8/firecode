@@ -32,7 +32,7 @@ async function scene(withMaster = false) {
 	const { createInteractiveTuiReference } = await import(new URL("./modes/interactive/tui-renderer.ts", PI_CODING_AGENT_URL).href);
 	const reference = createInteractiveTuiReference(() => root);
 	const ui = {
-		theme: { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text },
+		theme: { fg: (color: string, text: string) => `\x1b[38;5;${[...color].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 256}m${text}\x1b[39m`, bg: (_color: string, text: string) => text, bold: (text: string) => text },
 		getToolsExpanded: () => expanded,
 		setToolsExpanded(value: boolean) {
 			expanded = value;
@@ -347,4 +347,40 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 	s.click(s.lines().findIndex((line: string) => line.includes("real-control")));
 	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
 	expect(clicked).toBe(1);
+});
+
+test("宿主的单色提示与状态行折入段内并计数，错误与混色文本仍是边界", async () => {
+	const s = await scene();
+	const note = (color: string, text: string) => {
+		s.chat.addChild(new s.tui.Spacer(1));
+		s.chat.addChild(new s.tui.Text(s.ui.theme.fg(color, text), 1, 0));
+	};
+	s.complete(s.tool("read", { path: "a.ts" }));
+	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(reply);
+	reply.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "修好了" }] }, false);
+	note("warning", "Cache miss after 8m idle: 63k tokens re-billed");
+	note("warning", "Anthropic dropped 23 thinking blocks: prefix_binding_mismatch");
+	note("dim", "Tool output: collapsed");
+	let collapsed = s.lines().filter(Boolean);
+	expect(collapsed).toHaveLength(2);
+	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 a\.ts · ⚠ 2\s+读取 1\s*$/);
+	expect(collapsed[1]).toContain("修好了");
+
+	note("error", "Error: Request failed");
+	s.chat.addChild(new s.tui.Spacer(1));
+	s.chat.addChild(new s.tui.Text(`${s.ui.theme.fg("dim", "ID:")} session-1`, 1, 0));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	collapsed = s.lines().filter(Boolean);
+	expect(collapsed.map((line: string) => line.trim())).toEqual([
+		expect.stringMatching(/^▏ ✓ 读取 a\.ts · ⚠ 2\s+读取 1$/), "修好了", "Error: Request failed", "ID: session-1",
+		expect.stringMatching(/^▏ ✓ 读取 b\.ts\s+读取 1$/),
+	]);
+
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines().join("\n");
+	for (const needle of ["Cache miss", "prefix_binding_mismatch", "Tool output: collapsed"]) expect(expanded).toContain(needle);
+	expect(expanded.indexOf("修好了")).toBeLessThan(expanded.indexOf("Cache miss"));
+	s.ui.setToolsExpanded(false);
+	expect(s.lines().filter(Boolean)).toHaveLength(5);
 });
