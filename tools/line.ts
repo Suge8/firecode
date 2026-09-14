@@ -148,15 +148,15 @@ export class ToolLine implements GroupRenderer {
 		});
 	}
 
-	/** 保留当前动作与目标；整段的统计走固定标记与右列，不冒充单工具耗时与大小。 */
+	/** 折叠态只留动作词，不露目标；整段的统计走固定标记与右列，不冒充单工具耗时与大小。 */
 	renderGroup(width: number, summary: GroupSummary): string[] {
 		const { activity, counts, running, failures, notices } = summary;
 		const kind = running || activity ? "run" : failures ? "err" : "ok";
 		return renderLine(this.options.theme, width, {
 			status: kind === "run" ? { glyph: SUMMARY_GLYPH, color: "accent" } : { ...STATUS[kind], bg: undefined },
 			label: { text: activity ?? this.options.label, color: "toolTitle", bold: true },
-			value: activity ? [] : this.valueWithMeta(),
-			clip: this.options.clip,
+			value: [],
+			clip: "end",
 			tail: [
 				...(failures ? [{ text: ` · ${failures} 次失败`, color: "error" as const }] : []),
 				...(notices ? [{ text: ` · ⚠ ${notices}`, color: "warning" as const }] : []),
@@ -190,7 +190,7 @@ function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
 		{ text: RAIL, color: "dim" },
 		{ text: `${status.glyph} `, color: status.color, bold: true },
 		spec.label,
-		...(spec.value.length ? [{ text: " " }] : []),
+		...(partsWidth(spec.value) ? [{ text: " " }] : []),
 	];
 	const fixedWidth = partsWidth(head) + partsWidth(tail);
 	const bg = status.bg;

@@ -53,7 +53,7 @@ function noticeKind(component: Component | undefined, theme: Theme): "warning" |
 
 function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
-		label: row?.toolDefinition?.label ?? row?.toolName ?? "过程", value: genericArgsParts(row?.args), clip: "end", theme,
+		label: row?.toolDefinition?.label ?? row?.toolName ?? "", value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
 			state: { ...row?.rendererState, errorText: row?.result?.isError ? resultText(row.result, true).displayText : "" },
 			cwd: row?.cwd ?? "", toolCallId: row?.toolCallId ?? "",
@@ -139,10 +139,11 @@ export function projectProcessGroups(
 		else projected.push(...processSummary(segment, ui));
 		segment = [];
 	};
+	// 提示只折入已有工具的过程组；没有摘要行可依附时保持宿主原样
 	const inSegment = (index: number) => {
 		const child = children[index];
 		if (isProcess(child)) return true;
-		if (!segment.length) return false;
+		if (!segment.some((item) => item instanceof ToolExecutionComponent)) return false;
 		const notice = child instanceof Spacer ? children[index + 1] : child;
 		return noticeKind(notice, ui.theme) !== undefined;
 	};
@@ -162,9 +163,8 @@ function processSummary(segment: readonly Component[], ui: ExtensionUIContext): 
 	const tail = segment[replyAt];
 	const reply = tail instanceof AssistantMessageComponent ? assistantView(tail, false) : undefined;
 	const process = reply?.body ? segment.filter((item) => item !== tail) : segment;
-	const summarized = process.some((item) => item instanceof ToolExecutionComponent || noticeKind(item, ui.theme) === "warning");
 	const out: Component[] = [];
-	if (summarized || reply?.activity) out.push(new Spacer(1), new ProcessSummary(process, reply?.activity, ui));
+	if (process.some((item) => item instanceof ToolExecutionComponent) || reply?.activity) out.push(new Spacer(1), new ProcessSummary(process, reply?.activity, ui));
 	if (reply?.body) out.push(new Spacer(1), reply.body);
 	return out;
 }
