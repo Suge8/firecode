@@ -1,7 +1,7 @@
 /** 过程分组的宿主适配：原始聊天树不变，渲染与鼠标命中共用同一份投影。 */
 import { AssistantMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
-import { groupable, projectProcessGroups, toggleToolDetails } from "./group-view.js";
+import { projectProcessGroups, toggleToolDetails } from "./group-view.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
 const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
@@ -42,7 +42,7 @@ function attach(tui: TUI, ui: ExtensionUIContext): () => void {
 	const belongsHere = (row: ToolExecutionComponent) => (row as unknown as { ui: TUI }).ui === tui;
 	const setExpanded: typeof originalExpand = function (this: ToolExecutionComponent, value) {
 		// 全局展开只控制组摘要/列表；单工具正文通过下方独立的鼠标入口调用原方法。
-		originalExpand.call(this, belongsHere(this) && groupable(this) ? false : value);
+		originalExpand.call(this, belongsHere(this) ? false : value);
 	};
 	prototype.setExpanded = setExpanded;
 

@@ -1,10 +1,11 @@
 import {
 	AssistantMessageComponent,
+	CustomMessageComponent,
 	ToolExecutionComponent,
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Image, Spacer, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Spacer, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ToolLine, resultText, type RowState, type ToolResult, type GroupRenderer } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, type AssistantActivity } from "./assistant-view.js";
@@ -25,28 +26,17 @@ type RowData = {
 	result?: ToolResult & { isError: boolean };
 };
 const rowData = (row: ToolRow): RowData => row as unknown as RowData;
-const LAYOUT_MOUSE_HANDLERS = new Set<NonNullable<Component["handleMouse"]>>([
-	Container.prototype.handleMouse, Box.prototype.handleMouse,
-]);
-
-/** 普通布局容器只路由鼠标；真正的输入/鼠标处理或图片需要独立展示。 */
-function requiresStandalone(component: Component | undefined): boolean {
-	if (!component) return false;
-	if (component instanceof Image || component.handleInput) return true;
-	if (component.handleMouse && !LAYOUT_MOUSE_HANDLERS.has(component.handleMouse)) return true;
-	return (component instanceof Container || component instanceof Box) && component.children.some(requiresStandalone);
-}
 
 function groupRenderer(component: Component | undefined): GroupRenderer | undefined {
 	return component && "renderGroup" in component && typeof component.renderGroup === "function"
 		? component as GroupRenderer : undefined;
 }
 
-export function groupable(component: Component): component is ToolRow {
-	if (!(component instanceof ToolExecutionComponent)) return false;
-	const row = rowData(component);
-	if (row.result?.content?.some((block) => block.type === "image")) return false;
-	return !requiresStandalone(row.callRendererComponent) && !requiresStandalone(row.resultRendererComponent);
+/** 过程 = 模型的输出、动作与收件；用户消息、CustomEntry 等其余节点是段边界。 */
+function isProcess(component: Component): boolean {
+	return component instanceof ToolExecutionComponent
+		|| component instanceof AssistantMessageComponent
+		|| component instanceof CustomMessageComponent;
 }
 
 function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
@@ -122,31 +112,42 @@ export function projectProcessGroups(
 ): Component[] {
 	const projected: Component[] = [];
 	const expanded = ui.getToolsExpanded();
-	let rows: ToolRow[] = [];
-	let activity: AssistantActivity | undefined;
+	let segment: Component[] = [];
 	const flush = () => {
-		if (!rows.length && !activity) return;
-		projected.push(new Spacer(1));
-		if (expanded) projected.push(...rows.map((row) => new ToolItem(row, ui, toggle)));
-		else projected.push(new ProcessSummary(rows, activity, ui));
-		rows = [];
-		activity = undefined;
+		if (!segment.length) return;
+		const tail = segment.at(-1);
+		const reply = tail instanceof AssistantMessageComponent ? assistantView(tail, expanded) : undefined;
+		const process = reply?.body ? segment.slice(0, -1) : segment;
+		projected.push(...(expanded ? processList(process, ui, toggle) : processSummary(process, reply?.activity, ui)));
+		if (reply?.body) projected.push(reply.body);
+		segment = [];
 	};
 	for (const child of children) {
-		if (groupable(child)) {
-			rows.push(child);
-			activity = undefined;
-		} else if (child instanceof AssistantMessageComponent) {
-			const view = assistantView(child, expanded);
-			if (view.body) { flush(); projected.push(view.body); }
-			activity = view.activity;
-		} else {
-			flush();
-			projected.push(child);
-		}
+		if (isProcess(child)) { segment.push(child); continue; }
+		flush();
+		projected.push(child);
 	}
 	flush();
 	return projected;
+}
+
+function processSummary(process: readonly Component[], activity: AssistantActivity | undefined, ui: ExtensionUIContext): Component[] {
+	const rows = process.filter((item): item is ToolRow => item instanceof ToolExecutionComponent);
+	return rows.length || activity ? [new Spacer(1), new ProcessSummary(rows, activity, ui)] : [];
+}
+
+function processList(process: readonly Component[], ui: ExtensionUIContext, toggle: (row: ToolRow) => void): Component[] {
+	const list: Component[] = [];
+	for (const item of process) {
+		if (item instanceof ToolExecutionComponent) {
+			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
+			list.push(new ToolItem(item, ui, toggle));
+		} else if (item instanceof AssistantMessageComponent) {
+			const body = assistantView(item, true).body;
+			if (body) list.push(body);
+		} else list.push(item);
+	}
+	return list;
 }
 
 export function toggleToolDetails(row: ToolRow, setExpanded: ToolRow["setExpanded"]): void {
