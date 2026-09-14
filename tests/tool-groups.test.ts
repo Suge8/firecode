@@ -139,7 +139,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s+操作 1 · 读取 2\s*$/);
 	expect(s.lines(24).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s*$/);
-	expect(s.lines(12).filter(Boolean)[0]).toBe("▏ ✗ 读取 · …");
+	expect(s.lines(12).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 …\s*$/);
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
@@ -364,7 +364,7 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	note("dim", "Tool output: collapsed");
 	let collapsed = s.lines().filter(Boolean);
 	expect(collapsed).toHaveLength(2);
-	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 a\.ts · ⚠ 2\s+读取 1\s*$/);
+	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 · ⚠ 2\s+读取 1\s*$/);
 	expect(collapsed[1]).toContain("修好了");
 
 	note("error", "Error: Request failed");
@@ -373,8 +373,8 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	s.complete(s.tool("read", { path: "b.ts" }));
 	collapsed = s.lines().filter(Boolean);
 	expect(collapsed.map((line: string) => line.trim())).toEqual([
-		expect.stringMatching(/^▏ ✓ 读取 a\.ts · ⚠ 2\s+读取 1$/), "修好了", "Error: Request failed", "ID: session-1",
-		expect.stringMatching(/^▏ ✓ 读取 b\.ts\s+读取 1$/),
+		expect.stringMatching(/^▏ ✓ 读取 · ⚠ 2\s+读取 1$/), "修好了", "Error: Request failed", "ID: session-1",
+		expect.stringMatching(/^▏ ✓ 读取\s+读取 1$/),
 	]);
 
 	s.ui.setToolsExpanded(true);
