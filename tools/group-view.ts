@@ -9,7 +9,7 @@ import { Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-work
 import { stripVTControlCharacters } from "node:util";
 import { ToolLine, resultText, type RowState, type ToolResult, type GroupRenderer } from "./line.js";
 import { genericArgsParts } from "./parts.js";
-import { assistantView, type AssistantActivity } from "./assistant-view.js";
+import { assistantView, hasThinking, type AssistantActivity } from "./assistant-view.js";
 
 /** 宿主工具行内部字段只在工具分组接缝读取，结果与单工具展开仍归宿主所有。 */
 export type ToolRow = ToolExecutionComponent;
@@ -40,6 +40,12 @@ function isProcess(component: Component): boolean {
 		|| component instanceof CustomMessageComponent;
 }
 
+/** 有实质的过程（工具或思考）才有摘要行；提示只折入有摘要行的段。 */
+function hasSubstance(component: Component): boolean {
+	return component instanceof ToolExecutionComponent
+		|| (component instanceof AssistantMessageComponent && hasThinking(component));
+}
+
 /**
  * 宿主把 transcript 提示（缓存/丢思考/压缩计费）与状态行（切档、切模型）画成整行单色 Text：
  * warning 是提示，dim 是状态。颜色是宿主唯一给出的语义通道；错误与混色文本仍是边界。
@@ -53,7 +59,7 @@ function noticeKind(component: Component | undefined, theme: Theme): "warning" |
 
 function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
-		label: row?.toolDefinition?.label ?? row?.toolName ?? "", value: genericArgsParts(row?.args), clip: "end", theme,
+		label: row ? row.toolDefinition?.label ?? row.toolName : "思考", value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
 			state: { ...row?.rendererState, errorText: row?.result?.isError ? resultText(row.result, true).displayText : "" },
 			cwd: row?.cwd ?? "", toolCallId: row?.toolCallId ?? "",
@@ -139,11 +145,10 @@ export function projectProcessGroups(
 		else projected.push(...processSummary(segment, ui));
 		segment = [];
 	};
-	// 提示只折入已有工具的过程组；没有摘要行可依附时保持宿主原样
 	const inSegment = (index: number) => {
 		const child = children[index];
 		if (isProcess(child)) return true;
-		if (!segment.some((item) => item instanceof ToolExecutionComponent)) return false;
+		if (!segment.some(hasSubstance)) return false;
 		const notice = child instanceof Spacer ? children[index + 1] : child;
 		return noticeKind(notice, ui.theme) !== undefined;
 	};
@@ -164,7 +169,7 @@ function processSummary(segment: readonly Component[], ui: ExtensionUIContext): 
 	const reply = tail instanceof AssistantMessageComponent ? assistantView(tail, false) : undefined;
 	const process = reply?.body ? segment.filter((item) => item !== tail) : segment;
 	const out: Component[] = [];
-	if (process.some((item) => item instanceof ToolExecutionComponent) || reply?.activity) out.push(new Spacer(1), new ProcessSummary(process, reply?.activity, ui));
+	if (segment.some(hasSubstance) || reply?.activity) out.push(new Spacer(1), new ProcessSummary(process, reply?.activity, ui));
 	if (reply?.body) out.push(new Spacer(1), reply.body);
 	return out;
 }

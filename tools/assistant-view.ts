@@ -24,21 +24,26 @@ function withoutThinking(children: readonly Component[]): Component[] {
 	return visible;
 }
 
-/** 宿主在 contentContainer 内只给思考块包 MouseRegion；正文和错误仍复用原组件。 */
+/** 宿主在 contentContainer 内只给思考块包 MouseRegion。 */
+export function hasThinking(source: AssistantMessageComponent): boolean {
+	return (source as unknown as AssistantData).contentContainer.children.some((child) => child instanceof MouseRegion);
+}
+
+/** 正文和错误复用原组件；折叠态藏起思考块。 */
 export function assistantView(source: AssistantMessageComponent, expanded: boolean): {
 	body?: Component;
 	activity?: AssistantActivity;
 } {
 	const data = source as unknown as AssistantData;
 	const children = data.contentContainer.children;
-	const hasThinking = children.some((child) => child instanceof MouseRegion);
-	const visible = expanded || !hasThinking ? children : withoutThinking(children);
+	const thinking = hasThinking(source);
+	const visible = expanded || !thinking ? children : withoutThinking(children);
 	const hasBody = visible.some((child) => !(child instanceof Spacer))
 		|| source.children.some((child) => child !== data.contentContainer);
 	let body: Component | undefined;
 	if (hasBody) {
 		body = source;
-		if (!expanded && hasThinking) {
+		if (!expanded && thinking) {
 			const content = new Container();
 			content.children = visible;
 			// 独立的渲染接收者保留原生 OSC133/鼠标布局逻辑；原消息、原树和思考展开状态不改写。
