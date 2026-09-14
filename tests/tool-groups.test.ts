@@ -272,7 +272,8 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	s.chat.addChild(new s.tui.Spacer(1));
 	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss: 20k tokens re-billed"), 1, 0));
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考 · ⚠ 1\s*$/);
-	expect(s.lines().slice(1).join("\n")).toBe(collapsed.split("\n").slice(1).join("\n"));
+	// 前两行是段首空行与摘要行；其后的回复一字不动
+	expect(s.lines().slice(2).join("\n")).toBe(collapsed.split("\n").slice(2).join("\n"));
 });
 
 test("思考期间仍保留已有工具失败，异常和截断诊断不会被思考折叠吞掉", async () => {
