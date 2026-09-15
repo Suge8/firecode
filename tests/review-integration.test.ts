@@ -713,6 +713,37 @@ describe("registerReview wiring", () => {
 	});
 });
 
+describe("review runtime is per session", () => {
+	test("two sessions in one process each run their own review", async () => {
+		await loadAll();
+		const a = makeSessionManager();
+		const b = makeSessionManager();
+		const first = makePi(a);
+		const second = makePi(b);
+		const reviewA = registerReview(first.pi as never, true, false, {
+			runSession: () => new Promise(() => {}),
+		});
+		const reviewB = registerReview(second.pi as never, true, false, {
+			runSession: () => new Promise(() => {}),
+		});
+		const ctxA = makeCtx(a);
+		const ctxB = makeCtx(b);
+		const command = (registered: ReturnType<typeof makePi>["registered"]) =>
+			registered.commands.get("fire-review") as { handler: (args: string, ctx: unknown) => Promise<void> };
+		await command(first.registered).handler("", ctxA);
+		await reviewA.settled();
+		await command(second.registered).handler("", ctxB);
+		await reviewB.settled();
+		expect(ctxA.notices).toEqual([]);
+		expect(ctxB.notices).toEqual([]);
+		const stateA = readCheckpoint({ sessionManager: a });
+		const stateB = readCheckpoint({ sessionManager: b });
+		expect(stateA?.phase).toBe("reviewing");
+		expect(stateB?.phase).toBe("reviewing");
+		expect(stateA?.runId).not.toBe(stateB?.runId);
+	});
+});
+
 describe("checkpoint persistence", () => {
 	test("write then read round-trips; a remembered-expected mismatch is a conflict", async () => {
 		await loadAll();
