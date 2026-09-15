@@ -7,7 +7,7 @@ import type { ReviewerResult } from "../review/state.js";
 import { cleanupFirecodeModules, loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
-type Flush = typeof import("../review/index.js").__reviewFlushForTests;
+type ReviewHandle = ReturnType<RegisterReview>;
 type WriteCheckpoint = typeof import("../review/checkpoint.js").writeCheckpoint;
 type BeginCheckpoint = typeof import("../review/checkpoint.js").beginCheckpoint;
 type ReadCheckpoint = typeof import("../review/checkpoint.js").readCheckpoint;
@@ -15,7 +15,8 @@ type CheckpointConflictError = typeof import("../review/checkpoint.js").Checkpoi
 type InitialState = typeof import("../review/state.js").initialState;
 
 let registerReview: RegisterReview;
-let flush: Flush;
+/** 排空本测试里注册过的每个会话运行时。 */
+let flush: () => Promise<void>;
 let writeCheckpoint: WriteCheckpoint;
 let beginCheckpoint: BeginCheckpoint;
 let readCheckpoint: ReadCheckpoint;
@@ -23,10 +24,7 @@ let CheckpointConflictErrorCtor: CheckpointConflictError;
 let initialState: InitialState;
 
 async function loadAll() {
-	const index = (await loadFirecodeModule("review/index.js")) as {
-		registerReview: RegisterReview;
-		__reviewFlushForTests: Flush;
-	};
+	const index = (await loadFirecodeModule("review/index.js")) as { registerReview: RegisterReview };
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 		writeCheckpoint: WriteCheckpoint;
 		beginCheckpoint: BeginCheckpoint;
@@ -34,8 +32,13 @@ async function loadAll() {
 		CheckpointConflictError: CheckpointConflictError;
 	};
 	const state = (await loadFirecodeModule("review/state.js")) as { initialState: InitialState };
-	registerReview = index.registerReview;
-	flush = index.__reviewFlushForTests;
+	const handles: ReviewHandle[] = [];
+	registerReview = ((...args: Parameters<RegisterReview>) => {
+		const handle = index.registerReview(...args);
+		handles.push(handle);
+		return handle;
+	}) as RegisterReview;
+	flush = async () => { for (const handle of handles) await handle.settled(); };
 	writeCheckpoint = checkpoint.writeCheckpoint;
 	beginCheckpoint = checkpoint.beginCheckpoint;
 	readCheckpoint = checkpoint.readCheckpoint;
@@ -491,15 +494,14 @@ describe("registerReview wiring", () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as {
-			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void;
-			__reviewFlushForTests: () => Promise<void>;
+			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => ReviewHandle;
 		};
 		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
 		};
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi, true, false, {
+		const review = module.registerReview(pi, true, false, {
 			runSession: ({ signal }: { signal?: AbortSignal }) => new Promise((resolve) => {
 				started();
 				signal?.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true });
@@ -516,17 +518,17 @@ describe("registerReview wiring", () => {
 			ctx: unknown,
 		) => Promise<void>;
 		await shutdown({ reason: "quit" }, ctx);
-		await module.__reviewFlushForTests();
+		await review.settled();
 		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	}, 10_000);
 
 	test("installs the activity bar and locks editor when review starts", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: reviewConfig(),
-		})) as { registerReview: (pi: unknown) => void; __reviewFlushForTests: () => Promise<void> };
+		})) as { registerReview: (pi: unknown) => ReviewHandle };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi);
+		const review = module.registerReview(pi);
 		let widgetInstalled = false;
 		let editorLocked = false;
 		const ctx = makeCtx(sessionManager);
@@ -542,7 +544,7 @@ describe("registerReview wiring", () => {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
-		await module.__reviewFlushForTests();
+		await review.settled();
 		expect(widgetInstalled).toBe(true);
 		expect(editorLocked).toBe(true);
 	});
@@ -656,13 +658,10 @@ describe("registerReview wiring", () => {
 	test("review accepts focus text and rejects flags in the configured language", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: reviewConfig({ language: "en" }),
-		})) as {
-			registerReview: (pi: unknown) => void;
-			__reviewFlushForTests: () => Promise<void>;
-		};
+		})) as { registerReview: (pi: unknown) => ReviewHandle };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi);
+		const review = module.registerReview(pi);
 		const ctx = makeCtx(sessionManager, true);
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
@@ -670,7 +669,7 @@ describe("registerReview wiring", () => {
 		await command.handler("--unknown=value", ctx);
 		expect(ctx.notices).toContain("Invalid fire-review arguments.");
 		await command.handler("focus", ctx);
-		await module.__reviewFlushForTests();
+		await review.settled();
 		expect(registered.emitted).toEqual([OCCUPIED]);
 	});
 
@@ -1035,8 +1034,7 @@ describe("reload recovery actually resumes the loop", () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as {
-			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void;
-			__reviewFlushForTests: () => Promise<void>;
+			registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => ReviewHandle;
 		};
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -1060,7 +1058,7 @@ describe("reload recovery actually resumes the loop", () => {
 			roundStartedAt: Date.now(),
 			updatedAt: Date.now(),
 		});
-		module.registerReview(pi, true, false, {
+		const review = module.registerReview(pi, true, false, {
 			runSession: async () => {
 				await writeFile(marker, "started");
 				return { kind: "empty" };
@@ -1070,13 +1068,13 @@ describe("reload recovery actually resumes the loop", () => {
 		ctx.cwd = tmpdir();
 		const sessionStart = (registered.events.get("session_start") ?? [])[0] as (event: unknown, ctx: unknown) => Promise<void>;
 		await sessionStart({}, ctx);
-		await module.__reviewFlushForTests();
+		await review.settled();
 		expect(existsSync(marker)).toBe(false);
 
 		// 模拟后续 master handler 异步等待后触发续跑；post-session 事件此时才到。
 		ctx.setIdle(false);
 		for (const handler of registered.events.get("resources_discover") ?? []) await handler({}, ctx);
-		await module.__reviewFlushForTests();
+		await review.settled();
 		expect(existsSync(marker)).toBe(false);
 
 		ctx.setIdle(true);

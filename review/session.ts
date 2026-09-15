@@ -57,7 +57,7 @@ export async function runReviewSession(options: ReviewSessionOptions): Promise<R
 			: { kind: "error", message: errorText(error) };
 	}
 	if (options.signal?.aborted) {
-		spawned.dispose();
+		await spawned.dispose();
 		return { kind: "aborted" };
 	}
 
@@ -94,7 +94,7 @@ export async function runReviewSession(options: ReviewSessionOptions): Promise<R
 		clearTimeout(timeout);
 		options.signal?.removeEventListener("abort", onAbort);
 		unsubscribe();
-		spawned.dispose();
+		await spawned.dispose();
 	}
 }
 

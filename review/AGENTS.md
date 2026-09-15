@@ -6,7 +6,13 @@
 
 `state.ts` 是唯一状态事实源（纯 reducer，零 IO），循环状态只经 reduce() 迁移，副作用全在 `index.ts` 执行器。
 
-reload/new/resume/fork 保留可恢复状态，quit 才落终态。checkpoint 的键白名单由领域类型 `satisfies` 派生：
+运行时状态按会话隔离：pi 在同一进程内对同一 cwd 复用扩展模块实例，主会话与每个 Worker 子会话跑的是同一份
+`index.ts`，所以 controller 与 dispatch 队列都挂在 `registerReview(pi)` 各自持有的 ReviewRuntime 上，模块级不留会话
+状态。多个 Worker 可同时各审各的；一个会话的 session_shutdown 收口后清空自己的 controller，宿主随后 dispose
+作废 ctx，迟到回调看到空 controller 直接返回（曾因全局单例握着被 kill 的 Worker 的死 ctx，看门狗到点连环抛错杀掉整个 pi 进程）。
+`registerReview` 返回的 `settled()` 只供测试排空该会话的迁移队列。
+
+reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 `master/spawn.ts` 的池释放时同样先收到 quit 再 dispose。checkpoint 的键白名单由领域类型 `satisfies` 派生：
 字段增删不同步会编译失败，这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线。
 
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`

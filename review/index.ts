@@ -4,7 +4,10 @@
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
  *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、活动条），
- *   会话结果一律回灌成事件交给 reducer。模块级只有一个 controller。
+ *   会话结果一律回灌成事件交给 reducer。
+ * - 运行时状态按会话隔离：pi 在同一进程内对同一 cwd 复用扩展模块实例，主会话与每个
+ *   Worker 子会话共用本文件；`registerReview(pi)` 各自持有一份 ReviewRuntime，模块级不留
+ *   任何会话状态，一个会话被 dispose 不会拖累另一个。
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
 import { randomUUID } from "node:crypto";
@@ -91,7 +94,6 @@ function isActive(state: ReviewState) {
 }
 
 interface Controller {
-	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	config: ReviewConfig;
 	state: ReviewState;
@@ -105,7 +107,6 @@ interface Controller {
 	runningAction?: string;
 	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
 	actionPromise?: Promise<void>;
-	runSession: ReviewSessionRunner;
 	actionController?: AbortController;
 	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
@@ -121,8 +122,13 @@ interface Controller {
 	occupancyTimer?: ReturnType<typeof setInterval>;
 }
 
-let controller: Controller | undefined;
-let dispatchQueue: Promise<void> = Promise.resolve();
+/** 一个会话的审查运行时：controller 是当前这场审查，queue 串行化它的状态迁移。 */
+interface ReviewRuntime {
+	readonly pi: ExtensionAPI;
+	readonly runSession: ReviewSessionRunner;
+	controller: Controller | undefined;
+	queue: Promise<void>;
+}
 
 interface ReviewDependencies {
 	pool?: InProcessSessionPool;
@@ -130,37 +136,56 @@ interface ReviewDependencies {
 	runSession?: ReviewSessionRunner;
 }
 
+export interface ReviewHandle {
+	/** 等待 event-loop barrier 与其产生的状态迁移排空（测试用）。 */
+	settled(): Promise<void>;
+}
+
 export function registerReview(
 	pi: ExtensionAPI,
 	enabled = true,
 	configBroken = false,
 	dependencies: ReviewDependencies = {},
-): void {
+): ReviewHandle {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
-	const runSession = dependencies.runSession ?? createReviewSessionRunner(
-		dependencies.pool ?? new InProcessSessionPool(),
-		dependencies.resolveModel ?? resolveConfiguredModel,
-	);
+	const rt: ReviewRuntime = {
+		pi,
+		runSession: dependencies.runSession ?? createReviewSessionRunner(
+			dependencies.pool ?? new InProcessSessionPool(),
+			dependencies.resolveModel ?? resolveConfiguredModel,
+		),
+		controller: undefined,
+		queue: Promise.resolve(),
+	};
+	const handle: ReviewHandle = {
+		settled: async () => {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await rt.queue;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await rt.queue;
+		},
+	};
 	if (!enabled) {
 		// 只有用户明确关闭才封存活动 checkpoint（防重新启用后恢复幽灵审查）；
 		// features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
-		return;
+		return handle;
 	}
 	pi.registerCommand("fire-review", {
 		description: "对抗性审查：审这个会话到目前为止做完的事",
-		handler: (args, ctx) => handleCommand(pi, args, ctx, runSession),
+		handler: (args, ctx) => handleCommand(rt, args, ctx),
 	});
-	pi.on("session_start", (_event, ctx) => handleSessionStart(pi, ctx, runSession));
+	pi.on("session_start", (_event, ctx) => handleSessionStart(rt, ctx));
 	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
-	pi.on("resources_discover", (_event, ctx) => requestAdvance(pi, ctx));
-	pi.on("agent_start", () => handleAgentStart(pi));
+	pi.on("resources_discover", (_event, ctx) => requestAdvance(rt, ctx));
+	pi.on("agent_start", () => handleAgentStart(rt));
 	// agent_end 只记录修复/总结回合的结局，不在此推进审查。
-	pi.on("agent_end", (event) => handleAgentEnd(pi, event));
+	pi.on("agent_end", (event) => handleAgentEnd(rt, event));
 	// settled 后尝试恢复；后续异步 handler 若再触发模型，agent_start 互锁会先停审查。
-	pi.on("agent_settled", (_event, ctx) => scheduleAfterAgentSettled(pi, ctx));
-	pi.on("session_shutdown", (event, ctx) => handleShutdown(pi, event.reason, ctx));
+	pi.on("agent_settled", (_event, ctx) => requestAdvance(rt, ctx));
+	pi.on("session_shutdown", (event, ctx) => handleShutdown(rt, event.reason, ctx));
+	return handle;
 }
 
 function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void {
@@ -192,36 +217,32 @@ function settleUnavailableCheckpoint(
 
 /** 串行化状态迁移：reducer 同步执行，副作用排队；同一时刻只有一个迁移在跑。
  * 返回队尾 Promise，让 pi 的事件处理器（session_shutdown 等）可 await 持久化落盘。 */
-function dispatch(pi: ExtensionAPI, event: ReviewEvent): Promise<void> {
-	const run = dispatchQueue.then(async () => {
-		if (!controller || controller.pi !== pi) return;
-		const { state, effects } = reduce(
-			controller.state,
-			event,
-			limitsOf(controller.config),
-			Date.now(),
-		);
-		if (state !== controller.state) {
-			controller.state = state;
+function dispatch(rt: ReviewRuntime, event: ReviewEvent): Promise<void> {
+	const run = rt.queue.then(async () => {
+		const active = rt.controller;
+		if (!active) return;
+		const { state, effects } = reduce(active.state, event, limitsOf(active.config), Date.now());
+		if (state !== active.state) {
+			active.state = state;
 			// 持久化失败不能当成功继续：否则会拿不一致的状态去起会话、投反馈，
 			// 重启后又从旧 checkpoint 恢复，重现幽灵审查与重复反馈。
-			const persisted = persist(pi, state);
-			if (!persisted) return;
-			syncOccupancy(controller);
-			syncUi();
+			if (!persist(rt, state)) return;
+			if (!isActive(state)) clearWatchdog(rt);
+			syncOccupancy(rt, active);
+			syncUi(rt);
 		}
-		await runEffects(effects);
+		await runEffects(rt, effects);
 	});
 	// 队列一旦 rejected 就再也不会执行后续迁移（连 esc 取消也会失效）：
 	// 副作用异常只能到此为止，不得杀死状态机。
-	dispatchQueue = run.catch((error) => {
-		notifyEffectFailure(error);
+	rt.queue = run.catch((error) => {
+		notifyEffectFailure(rt, error);
 	});
-	return dispatchQueue;
+	return rt.queue;
 }
 
-function notifyEffectFailure(error: unknown) {
-	const active = controller;
+function notifyEffectFailure(rt: ReviewRuntime, error: unknown) {
+	const active = rt.controller;
 	if (!active?.ctx.hasUI) return;
 	const message = error instanceof Error ? error.message : String(error);
 	active.ctx.ui.notify(
@@ -274,12 +295,7 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 	};
 }
 
-async function handleCommand(
-	pi: ExtensionAPI,
-	args: string,
-	ctx: ExtensionContext,
-	runSession: ReviewSessionRunner,
-) {
+async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionContext) {
 	// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
@@ -287,7 +303,7 @@ async function handleCommand(
 		return;
 	}
 	const config = loaded.config;
-	if (controller && isActive(controller.state)) {
+	if (rt.controller && isActive(rt.controller.state)) {
 		if (ctx.hasUI) ctx.ui.notify(
 			config.language === "en"
 				? "A review is already running."
@@ -296,16 +312,12 @@ async function handleCommand(
 		);
 		return;
 	}
-	// 旧审查的看门狗必须在覆盖 controller 前停掉：它的回调读的是全局 controller，
-	// 否则旧超时到点时会把新一场审查中止。
-	clearWatchdog();
 	const command = parseCommand(args, config.language);
 	if ("error" in command) {
 		if (ctx.hasUI) ctx.ui.notify(command.error, "error");
 		return;
 	}
-	controller = {
-		pi,
+	rt.controller = {
 		ctx,
 		config,
 		state: initialState(randomUUID()),
@@ -313,12 +325,11 @@ async function handleCommand(
 		watchdog: undefined,
 		persistedStamp: null,
 		pendingCards: [],
-		runSession,
 		progress: initialProgress(config.reviewers, config.language),
 	};
-	armWatchdog();
+	armWatchdog(rt);
 	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier.
-	void dispatch(pi, {
+	void dispatch(rt, {
 		type: "START",
 		focus: command.focus,
 		busy: true,
@@ -326,32 +337,18 @@ async function handleCommand(
 }
 
 /** 重启 / 会话恢复：从 checkpoint 重建 controller 并续跑未完成的环节。
- * reload / new / resume / fork 是运行时替换（新 pi），先清掉旧 controller，
- * 再按新会话的 checkpoint 恢复；quit 之外不 settle，审查能在重启后继续。 */
-function handleSessionStart(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	runSession: ReviewSessionRunner,
-): Promise<void> | void {
-	if (controller && controller.pi !== pi) {
-		setOccupancy(controller, false);
-		controller = undefined;
-	}
+ * reload / new / resume / fork 是运行时替换（新 pi、新 runtime），旧 runtime 已在
+ * session_shutdown 收口；这里只按新会话的 checkpoint 恢复，quit 之外不 settle。 */
+function handleSessionStart(rt: ReviewRuntime, ctx: ExtensionContext): Promise<void> | void {
 	const checkpoint = readCheckpoint(ctx);
-	if (!checkpoint || !isActive(checkpoint)) {
-		if (controller && !isActive(controller.state)) controller = undefined;
-		return;
-	}
-	if (controller && isActive(controller.state)) return;
+	if (!checkpoint || !isActive(checkpoint)) return;
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) {
 		// session_start 的配置告警由入口统一聚合；这里只保留活动 checkpoint，修好后继续。
 		return;
 	}
 	const config = loaded.config;
-	clearWatchdog();
-	controller = {
-		pi,
+	rt.controller = {
 		ctx,
 		config,
 		state: checkpoint,
@@ -359,25 +356,24 @@ function handleSessionStart(
 		watchdog: undefined,
 		persistedStamp: readStamp(ctx),
 		pendingCards: [],
-		runSession,
 		progress: initialProgress(config.reviewers, config.language),
 	};
-	armWatchdog();
-	syncOccupancy(controller);
-	syncUi();
+	armWatchdog(rt);
+	syncOccupancy(rt, rt.controller);
+	syncUi(rt);
 	// 恢复只更新持久状态并提出推进请求；绝不在 session_start handler 内起任何工作。
-	return dispatch(pi, { type: "RECOVER" });
+	return dispatch(rt, { type: "RECOVER" });
 }
 
-async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
-	const active = controller;
-	if (!active || active.pi !== pi) return;
+async function handleAgentStart(rt: ReviewRuntime): Promise<void> {
+	const active = rt.controller;
+	if (!active) return;
 	if (
 		active.state.phase === "awaiting_fix" &&
 		active.state.repair?.status === "awaiting_start"
 	) {
 		clearFeedbackStartTimer(active);
-		await dispatch(pi, { type: "REPAIR_STARTED" });
+		await dispatch(rt, { type: "REPAIR_STARTED" });
 		return;
 	}
 	if (
@@ -385,7 +381,7 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 		active.state.summary?.status === "awaiting_start"
 	) {
 		clearFeedbackStartTimer(active);
-		await dispatch(pi, { type: "SUMMARY_STARTED" });
+		await dispatch(rt, { type: "SUMMARY_STARTED" });
 		return;
 	}
 	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
@@ -393,20 +389,17 @@ async function handleAgentStart(pi: ExtensionAPI): Promise<void> {
 	if (!active.actionPromise) return;
 	active.actionController?.abort();
 	await active.actionPromise;
-	if (controller !== active || !isActive(active.state)) return;
+	if (rt.controller !== active || !isActive(active.state)) return;
 	active.runningAction = undefined;
 	active.actionPromise = undefined;
 }
 
-function handleAgentEnd(
-	pi: ExtensionAPI,
-	event: { messages: readonly unknown[] },
-): Promise<void> | void {
-	const active = controller;
-	if (!active || active.pi !== pi) return;
+function handleAgentEnd(rt: ReviewRuntime, event: { messages: readonly unknown[] }): Promise<void> | void {
+	const active = rt.controller;
+	if (!active) return;
 	// 总结回合任何结局都收尾：裁决已落地，总结失败/中断不重试不升级。
 	if (active.state.phase === "summarizing" && active.state.summary?.status === "running")
-		return dispatch(pi, { type: "SUMMARY_SETTLED" });
+		return dispatch(rt, { type: "SUMMARY_SETTLED" });
 	if (
 		active.state.phase !== "awaiting_fix" ||
 		active.state.repair?.status !== "running"
@@ -415,77 +408,69 @@ function handleAgentEnd(
 		.reverse()
 		.find((message) => isRecord(message) && message.role === "assistant");
 	if (isRecord(assistant) && assistant.stopReason !== "error" && assistant.stopReason !== "aborted")
-		return dispatch(pi, { type: "REPAIR_COMPLETED" });
+		return dispatch(rt, { type: "REPAIR_COMPLETED" });
 	active.signal.abort();
-	return dispatch(pi, { type: "CANCEL", reason: "user" });
+	return dispatch(rt, { type: "CANCEL", reason: "user" });
 }
 
-function scheduleAfterAgentSettled(pi: ExtensionAPI, ctx: ExtensionContext): void {
-	requestAdvance(pi, ctx);
-}
-
-function requestAdvance(pi: ExtensionAPI, ctx: ExtensionContext): void {
-	const active = controller;
-	if (!active || active.pi !== pi) return;
+function requestAdvance(rt: ReviewRuntime, ctx: ExtensionContext): void {
+	const active = rt.controller;
+	if (!active) return;
 	const runId = active.state.runId;
-	void advanceWhenIdle(pi, ctx, runId).catch((error) => {
-		notifyEffectFailure(error);
-		if (controller !== active) return;
+	void advanceWhenIdle(rt, ctx, runId).catch((error) => {
+		notifyEffectFailure(rt, error);
+		if (rt.controller !== active) return;
 		active.signal.abort();
-		void dispatch(pi, { type: "CANCEL", reason: "user" });
+		void dispatch(rt, { type: "CANCEL", reason: "user" });
 	});
 }
 
-async function advanceWhenIdle(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	runId: string,
-): Promise<void> {
-	const active = controller;
+async function advanceWhenIdle(rt: ReviewRuntime, ctx: ExtensionContext, runId: string): Promise<void> {
+	const active = rt.controller;
 	// 所有启动入口共享 idle 门；正确性另由 agent_start 的同步停审互锁保证。
 	if (
 		!active ||
-		active.pi !== pi ||
 		active.state.runId !== runId ||
 		active.signal.signal.aborted ||
 		!ctx.isIdle() ||
 		ctx.hasPendingMessages()
 	) return;
 	active.ctx = ctx;
-	flushPendingCards(pi);
+	flushPendingCards(rt);
 	const { state } = active;
 	if (state.phase === "queued") {
-		await dispatch(pi, { type: "ADVANCE" });
+		await dispatch(rt, { type: "ADVANCE" });
 		return;
 	}
 	if (state.phase === "reviewing") {
-		startAction(active, `review:${state.round}`, "reviewer", () => startReviewers(pi));
+		startAction(rt, active, `review:${state.round}`, "reviewer", () => startReviewers(rt));
 		return;
 	}
 	if (state.phase === "needs_fix") {
-		startAction(active, `advisor:${state.round}`, "advisor", () => consultAdvisor(pi));
+		startAction(rt, active, `advisor:${state.round}`, "advisor", () => consultAdvisor(rt));
 		return;
 	}
 	if (state.phase === "summarizing") {
 		if (state.summary?.status !== "pending") return;
-		await dispatch(pi, { type: "SUMMARY_DISPATCHED" });
-		const current = controller?.state;
-		if (controller === active && current?.phase === "summarizing" && current.summary?.status === "awaiting_start")
-			deliverSummaryNow(pi, current);
+		await dispatch(rt, { type: "SUMMARY_DISPATCHED" });
+		const current = rt.controller?.state;
+		if (rt.controller === active && current?.phase === "summarizing" && current.summary?.status === "awaiting_start")
+			deliverSummaryNow(rt, current);
 		return;
 	}
 	if (state.phase !== "awaiting_fix" || !state.repair) return;
 	if (state.repair.status === "pending") {
-		await dispatch(pi, { type: "FEEDBACK_DISPATCHED" });
-		const repair = controller?.state.repair;
-		if (controller === active && repair?.status === "awaiting_start")
-			deliverFeedbackNow(pi, repair.details, repair.advisor);
+		await dispatch(rt, { type: "FEEDBACK_DISPATCHED" });
+		const repair = rt.controller?.state.repair;
+		if (rt.controller === active && repair?.status === "awaiting_start")
+			deliverFeedbackNow(rt, repair.details, repair.advisor);
 		return;
 	}
-	if (state.repair.status === "completed") await dispatch(pi, { type: "ADVANCE" });
+	if (state.repair.status === "completed") await dispatch(rt, { type: "ADVANCE" });
 }
 
 function startAction(
+	rt: ReviewRuntime,
 	active: Controller,
 	key: string,
 	kind: "reviewer" | "advisor",
@@ -496,8 +481,8 @@ function startAction(
 	active.actionController = new AbortController();
 	const action = run()
 		.catch(async (error) => {
-			if (controller !== active || active.actionController?.signal.aborted) return;
-			await dispatch(active.pi, {
+			if (rt.controller !== active || active.actionController?.signal.aborted) return;
+			await dispatch(rt, {
 				type: "INFRASTRUCTURE_ERROR",
 				details: sessionErrorText(kind, active.config.language, error),
 			});
@@ -511,56 +496,55 @@ function startAction(
 	active.actionPromise = action;
 }
 
+/** 会话离开当前运行时：取消并等待审查会话退出，quit 落终态，其余保留 checkpoint 给新运行时恢复。
+ * 收口后清空 controller——宿主随后 dispose 会作废 ctx，迟到回调看到空 controller 直接返回。 */
 async function handleShutdown(
-	pi: ExtensionAPI,
+	rt: ReviewRuntime,
 	reason: "quit" | "reload" | "new" | "resume" | "fork",
 	ctx: ExtensionContext,
 ): Promise<void> {
-	const active = controller;
+	const active = rt.controller;
 	if (!active) return;
 	// 会话离开当前运行时就立即释放；reload 恢复会由新 controller 重新配对喊占用。
-	setOccupancy(active, false);
+	setOccupancy(rt, active, false);
 	// 无论何种终止都先取消并等待当前审查会话；旧动作不得泄漏到新运行时。
 	active.signal.abort();
 	active.actionController?.abort();
-	clearWatchdog();
+	clearWatchdog(rt);
 	clearFeedbackStartTimer(active);
 	await active.actionPromise;
 	if (active.ctx !== ctx) active.ctx = ctx;
-	if (reason === "quit") {
-		await dispatch(pi, { type: "CANCEL", reason: "shutdown" });
-		return;
+	if (reason === "quit") await dispatch(rt, { type: "CANCEL", reason: "shutdown" });
+	else {
+		hideActivity(active.ctx);
+		releaseEditor(active);
+		await rt.queue;
 	}
-	// reload / new / resume / fork 保留 checkpoint，由新运行时在 post-session 边界恢复。
-	hideActivity(active.ctx);
-	releaseEditor(active);
-	await dispatchQueue;
+	if (rt.controller === active) rt.controller = undefined;
 }
 
-function armWatchdog() {
-	if (!controller) return;
-	clearWatchdog();
-	const elapsed = controller.state.startedAt
-		? Math.max(0, Date.now() - controller.state.startedAt)
-		: 0;
-	const remaining = Math.max(0, overallTimeoutMs(controller.config) - elapsed);
+function armWatchdog(rt: ReviewRuntime) {
+	const active = rt.controller;
+	if (!active) return;
+	clearWatchdog(rt);
+	const elapsed = active.state.startedAt ? Math.max(0, Date.now() - active.state.startedAt) : 0;
+	const remaining = Math.max(0, overallTimeoutMs(active.config) - elapsed);
 	if (remaining === 0) {
-		controller.signal.abort();
-		void dispatch(controller.pi, { type: "TIMEOUT" });
+		active.signal.abort();
+		void dispatch(rt, { type: "TIMEOUT" });
 		return;
 	}
-	controller.watchdog = setTimeout(() => {
-		const active = controller;
-		if (!active || !isActive(active.state)) return;
+	active.watchdog = setTimeout(() => {
+		if (rt.controller !== active || !isActive(active.state)) return;
 		active.signal.abort();
 		active.actionController?.abort();
-		dispatch(active.pi, { type: "TIMEOUT" });
+		dispatch(rt, { type: "TIMEOUT" });
 	}, remaining);
-	controller.watchdog.unref?.();
+	active.watchdog.unref?.();
 }
 
-function clearWatchdog() {
-	if (controller?.watchdog) clearTimeout(controller.watchdog);
+function clearWatchdog(rt: ReviewRuntime) {
+	if (rt.controller?.watchdog) clearTimeout(rt.controller.watchdog);
 }
 
 function clearFeedbackStartTimer(active: Controller): void {
@@ -571,52 +555,53 @@ function clearFeedbackStartTimer(active: Controller): void {
 // ---- 持久化 ----
 
 /** 返回是否已可靠落盘；false 时调用方必须停下本次迁移的副作用。 */
-function persist(pi: ExtensionAPI, state: ReviewState): boolean {
-	if (!controller) return false;
-	const persisted = controller.persistedStamp;
+function persist(rt: ReviewRuntime, state: ReviewState): boolean {
+	const active = rt.controller;
+	if (!active) return false;
+	const persisted = active.persistedStamp;
 	if (persisted === undefined) return false; // 冲突或写入失败后停写
 	try {
-		controller.persistedStamp =
+		active.persistedStamp =
 			persisted === null
-				? beginCheckpoint(pi, controller.ctx, state)
-				: writeCheckpoint(pi, controller.ctx, state, persisted);
+				? beginCheckpoint(rt.pi, active.ctx, state)
+				: writeCheckpoint(rt.pi, active.ctx, state, persisted);
 		return true;
 	} catch (error) {
 		if (error instanceof CheckpointConflictError) {
 			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
-			setOccupancy(controller, false);
-			controller.persistedStamp = undefined;
-			controller.signal.abort();
-			controller.actionController?.abort();
-			if (controller.ctx.hasUI)
-				controller.ctx.ui.notify(
-					controller.config.language === "en"
+			setOccupancy(rt, active, false);
+			active.persistedStamp = undefined;
+			active.signal.abort();
+			active.actionController?.abort();
+			if (active.ctx.hasUI)
+				active.ctx.ui.notify(
+					active.config.language === "en"
 						? "fire-review checkpoint conflict; review stopped."
 						: "fire-review checkpoint 冲突，已停止审查。",
 					"warning",
 				);
-			void dispatch(pi, { type: "CANCEL", reason: "shutdown" });
+			void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 			return false;
 		}
 		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
-		setOccupancy(controller, false);
-		controller.persistedStamp = undefined;
-		controller.signal.abort();
-		controller.actionController?.abort();
-		if (controller.ctx.hasUI)
-			controller.ctx.ui.notify(
-				controller.config.language === "en"
+		setOccupancy(rt, active, false);
+		active.persistedStamp = undefined;
+		active.signal.abort();
+		active.actionController?.abort();
+		if (active.ctx.hasUI)
+			active.ctx.ui.notify(
+				active.config.language === "en"
 					? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
 					: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`,
 				"error",
 			);
-		releaseEditor(controller);
-		hideActivity(controller.ctx);
+		releaseEditor(active);
+		hideActivity(active.ctx);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
 		let sealed = true;
 		try {
-			beginCheckpoint(pi, controller.ctx, {
+			beginCheckpoint(rt.pi, active.ctx, {
 				...state,
 				phase: "settled",
 				active: null,
@@ -629,14 +614,12 @@ function persist(pi: ExtensionAPI, state: ReviewState): boolean {
 		}
 		// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
-		clearWatchdog();
-		clearFeedbackStartTimer(controller);
-		const uiCtx = controller.ctx;
-		const language = controller.config.language;
-		controller = undefined;
-		if (!sealed && uiCtx.hasUI)
-			uiCtx.ui.notify(
-				language === "en"
+		clearWatchdog(rt);
+		clearFeedbackStartTimer(active);
+		rt.controller = undefined;
+		if (!sealed && active.ctx.hasUI)
+			active.ctx.ui.notify(
+				active.config.language === "en"
 					? "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc."
 					: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
 				"warning",
@@ -649,8 +632,8 @@ function errorText(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function syncOccupancy(active: Controller): void {
-	setOccupancy(active, isActive(active.state));
+function syncOccupancy(rt: ReviewRuntime, active: Controller): void {
+	setOccupancy(rt, active, isActive(active.state));
 }
 
 /**
@@ -659,7 +642,7 @@ function syncOccupancy(active: Controller): void {
  * crash/kill 后无 TTL 的标签永驻会让 Master 把 Worker 的真提问误判为审查占用；
  * 续约同时充当首次投递失败的重试。
  */
-function publishOccupancyLabel(active: Controller, held: boolean): void {
+function publishOccupancyLabel(rt: ReviewRuntime, active: Controller, held: boolean): void {
 	if (held) {
 		void sendOccupancyLabel();
 		if (!active.occupancyTimer) {
@@ -672,7 +655,7 @@ function publishOccupancyLabel(active: Controller, held: boolean): void {
 		clearInterval(active.occupancyTimer);
 		active.occupancyTimer = undefined;
 	}
-	void clearOccupancyLabel();
+	void clearOccupancyLabel(rt);
 }
 
 function sendOccupancyLabel(): Promise<boolean> {
@@ -687,12 +670,12 @@ function sendOccupancyLabel(): Promise<boolean> {
 	});
 }
 
-async function clearOccupancyLabel(): Promise<void> {
+async function clearOccupancyLabel(rt: ReviewRuntime): Promise<void> {
 	const env = herdrPaneEnv();
 	if (!env) return;
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		// 新审查已重新持有时中止重试：迟到的清除会撤掉新租约的标签。
-		if (controller?.occupancyHeld) return;
+		if (rt.controller?.occupancyHeld) return;
 		const delivered = await herdrRequest(OCCUPANCY_SOURCE, "pane.report_metadata", {
 			pane_id: env.paneId,
 			source: OCCUPANCY_SOURCE,
@@ -704,15 +687,15 @@ async function clearOccupancyLabel(): Promise<void> {
 	// 两次未送达：标签带 TTL，最迟 60s 自行过期，不会永久残留。
 }
 
-function setOccupancy(active: Controller, held: boolean): void {
+function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): void {
 	if (Boolean(active.occupancyHeld) === held) return;
 	active.occupancyHeld = held;
 	// 标签走 metadata state_labels：herdr 会丢弃 report_agent 的 message（实测），
 	// 只有这条通道能同时到达 Master（state_labels 判定）与侧边栏（state_text token）。
 	// 频道仍要发：它驱动 herdr 集成的 blocked 状态本身。占用信号不伤审查。
-	publishOccupancyLabel(active, held);
+	publishOccupancyLabel(rt, active, held);
 	try {
-		active.pi.events.emit(OCCUPANCY_CHANNEL, {
+		rt.pi.events.emit(OCCUPANCY_CHANNEL, {
 			active: held,
 			...(held ? { label: OCCUPANCY_LABEL } : {}),
 		});
@@ -731,15 +714,16 @@ function setOccupancy(active: Controller, held: boolean): void {
  * UI 投影：编辑器上方活动条 + esc 接管，全部从当前状态派生。
  * 活动条自己按帧重绘，因此进度变化不需要在这里通知。
  */
-function syncUi(): void {
-	const active = controller;
+function syncUi(rt: ReviewRuntime): void {
+	const active = rt.controller;
 	if (!active) return;
-	if (activityView()) {
-		showActivity(active.ctx, activityView);
+	const view = () => activityView(rt);
+	if (view()) {
+		showActivity(active.ctx, view);
 		// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
-		if (canCancelWithKey()) {
+		if (canCancelWithKey(rt)) {
 			if (!active.editorLocked) {
-				lockEditor(active.ctx, activityView, cancelByUser);
+				lockEditor(active.ctx, view, () => cancelByUser(rt));
 				active.editorLocked = true;
 			}
 		} else releaseEditor(active);
@@ -756,8 +740,8 @@ function releaseEditor(active: Controller) {
 }
 
 /** 活动条只读取当前审查状态，总结阶段由 UI 收成一行。 */
-function activityView(): ActivityView | undefined {
-	const active = controller;
+function activityView(rt: ReviewRuntime): ActivityView | undefined {
+	const active = rt.controller;
 	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;
 	return {
 		phase: active.state.phase,
@@ -770,42 +754,42 @@ function activityView(): ActivityView | undefined {
 	};
 }
 
-function canCancelWithKey() {
-	const phase = controller?.state.phase;
+function canCancelWithKey(rt: ReviewRuntime) {
+	const phase = rt.controller?.state.phase;
 	return phase === "queued" || phase === "reviewing" || phase === "needs_fix";
 }
 
-function cancelByUser() {
-	const active = controller;
+function cancelByUser(rt: ReviewRuntime) {
+	const active = rt.controller;
 	if (!active) return;
 	if (active.state.phase === "needs_fix") {
 		// pi-flow 语义：顾问阶段的 Esc 只跳过本次咨询，不取消整场审查。
 		active.actionController?.abort();
 		void (active.actionPromise ?? Promise.resolve()).then(() =>
-			dispatch(active.pi, { type: "ADVISOR_SKIPPED" }),
+			dispatch(rt, { type: "ADVISOR_SKIPPED" }),
 		);
 		return;
 	}
 	active.signal.abort();
 	active.actionController?.abort();
-	void dispatch(active.pi, { type: "CANCEL", reason: "user" });
+	void dispatch(rt, { type: "CANCEL", reason: "user" });
 }
 
 // ---- 副作用执行器 ----
 
 /** reducer 只发卡或请求推进；所有会启动工作的动作统一经过 idle barrier。 */
-async function runEffects(effects: ReviewEffect[]) {
+async function runEffects(rt: ReviewRuntime, effects: ReviewEffect[]) {
 	for (const effect of effects) {
-		const active = controller;
+		const active = rt.controller;
 		if (!active) return;
 		if (effect.kind === "advance") {
-			requestAdvance(active.pi, active.ctx);
+			requestAdvance(rt, active.ctx);
 			continue;
 		}
 		try {
-			sendCard(active.pi, effect.card);
+			sendCard(rt, effect.card);
 		} catch (error) {
-			notifyEffectFailure(error);
+			notifyEffectFailure(rt, error);
 		}
 	}
 }
@@ -831,8 +815,8 @@ function reviewerModelConfig(model: ReviewConfig["advisor"], config: ReviewConfi
 }
 
 /** 开审那一刻取会话分支快照构造 prompt，所有审查者共用同一 prompt。 */
-async function startReviewers(pi: ExtensionAPI): Promise<void> {
-	const active = controller;
+async function startReviewers(rt: ReviewRuntime): Promise<void> {
+	const active = rt.controller;
 	if (!active) return;
 	const { state, config } = active;
 	if (!state.active) return;
@@ -853,7 +837,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 				reviewer.result.summary,
 				reviewer.result.details,
 			);
-	const evidence = buildEvidence(sessionEntries(), config.language);
+	const evidence = buildEvidence(sessionEntries(rt), config.language);
 	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
 		language: config.language,
 		scope: scopeText(config.language),
@@ -873,9 +857,9 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 					cwd: active.ctx.cwd,
 					language: config.language,
 					signal: actionSignal,
-					runSession: active.runSession,
+					runSession: rt.runSession,
 					onEvent: (event) => {
-						if (controller !== active) return;
+						if (rt.controller !== active) return;
 						active.progress = applySessionEvent(
 							active.progress,
 							reviewer.index,
@@ -884,7 +868,7 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						);
 					},
 				});
-				if (controller === active)
+				if (rt.controller === active)
 					active.progress = settleProgress(
 						active.progress,
 						result.index,
@@ -894,10 +878,10 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 						result.details,
 					);
 				if (!actionSignal.aborted)
-					await dispatch(pi, { type: "REVIEWER_SETTLED", index: result.index, result });
+					await dispatch(rt, { type: "REVIEWER_SETTLED", index: result.index, result });
 			} catch (error) {
 				if (actionSignal.aborted) return;
-				await dispatch(pi, {
+				await dispatch(rt, {
 					type: "REVIEWER_SETTLED",
 					index: reviewer.index,
 					result: {
@@ -914,8 +898,8 @@ async function startReviewers(pi: ExtensionAPI): Promise<void> {
 	await Promise.all(tasks);
 }
 
-async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
-	const active = controller;
+async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
+	const active = rt.controller;
 	if (!active) return;
 	const { state, config } = active;
 	if (!state.pending) return;
@@ -937,13 +921,13 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 			cwd: active.ctx.cwd,
 			language: config.language,
 			signal: actionSignal,
-			runSession: active.runSession,
+			runSession: rt.runSession,
 			onEvent: (event) => {
-				if (controller !== active) return;
+				if (rt.controller !== active) return;
 				active.progress = applySessionEvent(active.progress, 0, event, config.language);
 			},
 		});
-		if (controller === active)
+		if (rt.controller === active)
 			active.progress = settleProgress(
 				active.progress,
 				0,
@@ -953,10 +937,10 @@ async function consultAdvisor(pi: ExtensionAPI): Promise<void> {
 				result.advice,
 			);
 		if (!actionSignal.aborted)
-			await dispatch(pi, { type: "ADVISOR_SETTLED", result });
+			await dispatch(rt, { type: "ADVISOR_SETTLED", result });
 	} catch (error) {
 		if (actionSignal.aborted) return;
-		await dispatch(pi, {
+		await dispatch(rt, {
 			type: "INFRASTRUCTURE_ERROR",
 			details: sessionErrorText("advisor", active.config.language, error),
 		});
@@ -995,13 +979,9 @@ function sessionErrorText(kind: "reviewer" | "advisor", language: Language, erro
 	return language === "en" ? `advisor session error: ${message}` : `顾问会话异常：${message}`;
 }
 
-function deliverFeedbackNow(
-	pi: ExtensionAPI,
-	details: string,
-	advisor: AdvisorResult | null,
-) {
-	const active = controller;
-	if (!active || active.pi !== pi) return;
+function deliverFeedbackNow(rt: ReviewRuntime, details: string, advisor: AdvisorResult | null) {
+	const active = rt.controller;
+	if (!active) return;
 	const feedback = buildFixFeedback({
 		language: active.config.language,
 		details,
@@ -1011,7 +991,7 @@ function deliverFeedbackNow(
 	// API 返回 void，真实异步失败不会进 try/catch；持久化状态等待 agent_start 回执。
 	active.feedbackStartTimer = setTimeout(() => {
 		if (
-			controller !== active ||
+			rt.controller !== active ||
 			active.state.phase !== "awaiting_fix" ||
 			active.state.repair?.status !== "awaiting_start"
 		) return;
@@ -1024,12 +1004,12 @@ function deliverFeedbackNow(
 				"error",
 			);
 		active.signal.abort();
-		void dispatch(pi, { type: "CANCEL", reason: "user" });
+		void dispatch(rt, { type: "CANCEL", reason: "user" });
 	}, FEEDBACK_START_TIMEOUT_MS);
 	active.feedbackStartTimer.unref?.();
 	// display:false 的消息进 LLM 上下文但不渲染；triggerTurn 让执行模型开始修复回合。
 	try {
-		pi.sendMessage(
+		rt.pi.sendMessage(
 			{ customType: FEEDBACK_TYPE, content: feedback, display: false },
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
@@ -1040,9 +1020,9 @@ function deliverFeedbackNow(
 }
 
 /** 总结提示投递：与修复反馈同一套 agent_start 回执机制；失败不升级，静默收尾。 */
-function deliverSummaryNow(pi: ExtensionAPI, state: ReviewState): void {
-	const active = controller;
-	if (!active || active.pi !== pi || !state.summary) return;
+function deliverSummaryNow(rt: ReviewRuntime, state: ReviewState): void {
+	const active = rt.controller;
+	if (!active || !state.summary) return;
 	const last = state.history.at(-1);
 	const material = state.summary.kind === "advisor_stop"
 		? last?.advisor?.advice ?? last?.details ?? ""
@@ -1056,7 +1036,7 @@ function deliverSummaryNow(pi: ExtensionAPI, state: ReviewState): void {
 	clearFeedbackStartTimer(active);
 	active.feedbackStartTimer = setTimeout(() => {
 		if (
-			controller !== active ||
+			rt.controller !== active ||
 			active.state.phase !== "summarizing" ||
 			active.state.summary?.status !== "awaiting_start"
 		) return;
@@ -1069,28 +1049,29 @@ function deliverSummaryNow(pi: ExtensionAPI, state: ReviewState): void {
 					: "fire-review 总结回合未能启动，已直接收尾。",
 				"warning",
 			);
-		void dispatch(pi, { type: "SUMMARY_SETTLED" });
+		void dispatch(rt, { type: "SUMMARY_SETTLED" });
 	}, FEEDBACK_START_TIMEOUT_MS);
 	active.feedbackStartTimer.unref?.();
 	try {
-		pi.sendMessage(
+		rt.pi.sendMessage(
 			{ customType: SUMMARY_REQUEST_TYPE, content: prompt, display: false },
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
 	} catch (error) {
 		clearFeedbackStartTimer(active);
-		notifyEffectFailure(error);
-		void dispatch(pi, { type: "SUMMARY_SETTLED" });
+		notifyEffectFailure(rt, error);
+		void dispatch(rt, { type: "SUMMARY_SETTLED" });
 	}
 }
 
-function sendCard(pi: ExtensionAPI, card: CardData) {
-	if (!controller) return;
+function sendCard(rt: ReviewRuntime, card: CardData) {
+	const active = rt.controller;
+	if (!active) return;
 	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
 	if (card.kind === "cancel") {
-		if (card.reason === "user" && controller.ctx.hasUI)
-			controller.ctx.ui.notify(
-				controller.config.language === "en"
+		if (card.reason === "user" && active.ctx.hasUI)
+			active.ctx.ui.notify(
+				active.config.language === "en"
 					? "⏸ Review cancelled\nStopped by user"
 					: "⏸ 审查已取消\n已按你的操作停止",
 				"info",
@@ -1099,30 +1080,29 @@ function sendCard(pi: ExtensionAPI, card: CardData) {
 	}
 	// 宿主在 streaming 时会把无 options 的 sendMessage 当 steer 塞进当前模型回合。
 	// 卡片只是 UI 投影，绝不能因此唤醒或打断执行模型。
-	if (!controller.ctx.isIdle()) {
-		controller.pendingCards.push(card);
+	if (!active.ctx.isIdle()) {
+		active.pendingCards.push(card);
 		return;
 	}
-	sendCardNow(pi, card);
+	sendCardNow(rt, active, card);
 }
 
-function flushPendingCards(pi: ExtensionAPI): void {
-	const active = controller;
+function flushPendingCards(rt: ReviewRuntime): void {
+	const active = rt.controller;
 	if (!active || !active.ctx.isIdle() || active.pendingCards.length === 0) return;
 	const cards = active.pendingCards.splice(0);
 	for (const card of cards) {
 		try {
-			sendCardNow(pi, card);
+			sendCardNow(rt, active, card);
 		} catch (error) {
-			notifyEffectFailure(error);
+			notifyEffectFailure(rt, error);
 		}
 	}
 }
 
-function sendCardNow(pi: ExtensionAPI, card: CardData): void {
-	if (!controller) return;
-	const built = buildCard(card, controller.config.language);
-	pi.sendMessage({
+function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): void {
+	const built = buildCard(card, active.config.language);
+	rt.pi.sendMessage({
 		customType: CARD_TYPE,
 		content: reviewEnvelope(built.content),
 		display: true,
@@ -1138,8 +1118,8 @@ function parseCommand(args: string, language: Language): { focus: string } | { e
 }
 
 /** 会话分支 entries（供证据组装）；本插件的卡与反馈消息不参与证据，避免自指。 */
-function sessionEntries() {
-	const manager = controller?.ctx.sessionManager as
+function sessionEntries(rt: ReviewRuntime) {
+	const manager = rt.controller?.ctx.sessionManager as
 		| { getBranch?: () => unknown[] }
 		| undefined;
 	const entries = manager?.getBranch?.() ?? [];
@@ -1164,11 +1144,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // 导出供测试用（纯函数 / 类型）
 export { CHECKPOINT_TYPE };
-
-/** 测试专用：等待 event-loop barrier 与其产生的状态迁移排空。 */
-export async function __reviewFlushForTests(): Promise<void> {
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	await dispatchQueue;
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	await dispatchQueue;
-}
