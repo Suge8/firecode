@@ -181,10 +181,10 @@ export function registerMaster(
 		renderStatus();
 		return active;
 	};
-	const deactivate = () => {
+	const deactivate = async () => {
 		const active = runtime;
 		runtime = undefined;
-		pool.disposeAll();
+		await pool.disposeAll();
 		syncSpinner(false);
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
@@ -296,7 +296,7 @@ export function registerMaster(
 		requireRuntimeOwner(active);
 		const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 		if (current?.sessionPath === identity.sessionPath) return current;
-		active.pool.dispose(identity.sessionPath);
+		void active.pool.dispose(identity.sessionPath);
 		throw new Error(`${identity.name} 已被 kill，取消本次动作`);
 	};
 	const openWorkerSession = async (active: MasterRuntime, worker: WorkerRef) => {
@@ -368,6 +368,7 @@ export function registerMaster(
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				active.idleSince.set(worker.sessionPath, Date.now());
+				active.pool.markIdle(worker.sessionPath);
 				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
@@ -520,8 +521,8 @@ export function registerMaster(
 				active.reviewProgress.delete(target.sessionPath);
 				active.observedSessions.get(target.sessionPath)?.unsubscribe();
 				active.observedSessions.delete(target.sessionPath);
-				active.pool.dispose(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
+				await active.pool.dispose(target.sessionPath);
 				return toolResult({ killed: true });
 			}
 			if (params.action === "tail") {
@@ -714,7 +715,7 @@ export function registerMaster(
 						persistence: { type: "file", sessionPath },
 					});
 					if (!ownsRuntime(active)) {
-						spawned.dispose();
+						await spawned.dispose();
 						requireRuntimeOwner(active);
 					}
 					runWorker(active, worker, spawned.session, prompt);
@@ -739,7 +740,7 @@ export function registerMaster(
 		}
 	});
 
-	pi.on("session_shutdown", () => deactivate());
+	pi.on("session_shutdown", async () => { await deactivate(); });
 }
 
 function settleWorker(
@@ -753,6 +754,7 @@ function settleWorker(
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 	active.currentTools.delete(identity.sessionPath);
 	active.idleSince.set(identity.sessionPath, Date.now());
+	active.pool.markIdle(identity.sessionPath);
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	return failure

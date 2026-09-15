@@ -22,7 +22,7 @@ export interface Observer {
 	evaluate(increment: string): Promise<Advice | undefined>;
 	/** 观察会话自身上下文占比（百分数），未知时 undefined。 */
 	contextPercent(): number | undefined;
-	dispose(): void;
+	dispose(): Promise<void>;
 }
 
 export interface ObserverOptions {
