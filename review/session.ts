@@ -84,10 +84,8 @@ export async function runReviewSession(options: ReviewSessionOptions): Promise<R
 			finalError = errorText(error);
 		});
 		await Promise.race([run, interruption]);
-		if (interrupted) {
-			await spawned.session.abort();
-			return { kind: interrupted };
-		}
+		// 中断只靠 finally 的 dispose 收尾：pi 的 abort 在模型流卡死时永不返回，等它会拖住整个关闭链。
+		if (interrupted) return { kind: interrupted };
 		if (finalError) return { kind: "error", message: finalError };
 		return finalText?.trim() ? { kind: "output", text: finalText } : { kind: "empty" };
 	} finally {

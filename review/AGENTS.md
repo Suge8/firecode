@@ -17,7 +17,10 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 
 
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`
 才允许推进；`agent_settled` 由 review 判断能否开审。`agent_start` 另作竞态兜底：若审查仍在跑，先 abort
-并等待全部审查会话退出，执行模型才进入 turn_start。
+并等待全部审查会话释放（dispose，bash 子进程随 abort 同步被杀），执行模型才进入 turn_start。审查者的中断
+不等 pi 的 `session.abort()` 返回：模型流卡在半开连接上时它永不返回（Bun fetch 在网络切换后不保证响应
+AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill 与会话关闭一起拖死；卡死的审查者会话在
+进程里惰性留到 TCP 层放弃。
 
 `awaiting_fix` 把修复生命周期 `pending → awaiting_start → running → completed` 写进 checkpoint；reload
 会重投未确认完成的反馈，只有 completed 才进入下一审查轮。宿主 `sendMessage` 返回 void，因此反馈用
