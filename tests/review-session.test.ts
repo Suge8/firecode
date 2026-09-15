@@ -11,7 +11,8 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	const aborted = new Promise<void>((resolve) => { abort = resolve; });
 	const session = {
 		subscribe(next: (event: Event) => void) { listener = next; return () => { listener = undefined; }; },
-		abort: async () => abort(),
+		// 模型流卡在半开连接上时 pi 的 abort 永不返回；运行器只能靠 dispose 收尾，不得等它。
+		abort: () => new Promise<void>(() => {}),
 	};
 	const pool = {
 		options: undefined as Record<string, unknown> | undefined,
@@ -97,7 +98,7 @@ describe("review in-process session", () => {
 		});
 	});
 
-	test("aborts the session when the caller cancels", async () => {
+	test("caller cancellation returns without waiting for the session to settle", async () => {
 		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
 		const controller = new AbortController();
 		const { runReviewSession } = await runner();
@@ -106,7 +107,7 @@ describe("review in-process session", () => {
 		expect(await pending).toEqual({ kind: "aborted" });
 	});
 
-	test("aborts the session and reports timeout when the deadline expires", async () => {
+	test("deadline expiry returns timeout without waiting for the session to settle", async () => {
 		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
 		const { runReviewSession } = await runner();
 		expect(await runReviewSession({ ...base(runtime.pool), timeoutMs: 5 })).toEqual({ kind: "timeout" });
