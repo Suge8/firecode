@@ -35,15 +35,17 @@ afterEach(async () => {
 test("新会话默认激活 subagents", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
+	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write", "subagents", "subagents_list"]);
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("autoActivate false 的新会话不注入，仍可手动启动", async () => {
 	const harness = await setup(false, { autoActivate: false });
 	await harness.emit("session_start", {});
+	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write"]);
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 	await harness.command("");
-	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
+	expect(harness.activeTools).toContain("subagents");
 });
 
 test("status 每个子代理一行以角色为主、模型短名次之", async () => {
@@ -1126,6 +1128,7 @@ async function setup(activate = true, options: {
 	return {
 		cwd,
 		get sessionId() { return sessionId; },
+		get activeTools() { return [...activeTools]; },
 		notices,
 		messages,
 		userMessages,

@@ -437,7 +437,7 @@ export function registerMaster(
 				return;
 			}
 			if (runtime) {
-				deactivate();
+				await deactivate();
 				ctx.ui.notify("指挥官模式已关闭", "info");
 				return;
 			}
@@ -727,8 +727,8 @@ export function registerMaster(
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
-		deactivate();
+	pi.on("session_start", async (_event, ctx) => {
+		await deactivate();
 		if (!autoActivate) return;
 		try {
 			activateSession(ctx);
