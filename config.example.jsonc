@@ -71,9 +71,8 @@
 		"opus5": { "model": "anthropic/claude-opus-5/medium", "key": "alt+2" },
 		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+3" },
 		"sol": { "model": "openai-codex/gpt-5.6-sol/medium", "key": "alt+4" },
-		"gemini": { "model": "antigravity/gemini-3.8-flash/high", "key": "alt+5" },
-		"ds": { "model": "deepseek/deepseek-v4-flash-vision-exp/high", "key": "alt+6" },
-		"xai": { "model": "xai/grok-4.6/high", "key": "alt+7" }
+		"ds": { "model": "deepseek/deepseek-v4-flash-vision-exp/high", "key": "alt+5" },
+		"xai": { "model": "xai/grok-4.6/high", "key": "alt+6" }
 	},
 
 	// 审查只在用户或指挥官发起时调用模型。
