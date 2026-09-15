@@ -39,7 +39,8 @@ export interface SpawnedSession {
 	readonly session: AgentSession;
 	readonly sessionPath?: string;
 	prompt(text: string): Promise<void>;
-	dispose(): void;
+	/** 先让会话内扩展按宿主契约收口（session_shutdown），再释放；resolve 即收口完成。 */
+	dispose(): Promise<void>;
 }
 
 interface HeldSession {
@@ -47,8 +48,7 @@ interface HeldSession {
 	session: AgentSession;
 	sessionPath?: string;
 	timer?: NodeJS.Timeout;
-	unsubscribe?: () => void;
-	disposed: boolean;
+	releasing?: Promise<void>;
 }
 
 const SESSION_WRITERS = new Set<string>();
@@ -112,12 +112,8 @@ export class InProcessSessionPool {
 		}
 
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
-		const held: HeldSession = { key, session: created, sessionPath, disposed: false };
+		const held: HeldSession = { key, session: created, sessionPath };
 		this.held.set(key, held);
-		held.unsubscribe = created.subscribe((event) => {
-			if (event.type === "agent_start") this.clearTimer(held);
-			if (event.type === "agent_settled") this.armIdleDisposal(held);
-		});
 		return {
 			session: created,
 			sessionPath,
@@ -137,38 +133,39 @@ export class InProcessSessionPool {
 		return held.session;
 	}
 
+	/** 空闲只由调用方判定：池不订阅会话事件自判空闲；超时后释放热会话，档案与 JSONL 保留。 */
 	markIdle(sessionPath: string): void {
 		const held = this.held.get(sessionPath);
-		if (held) this.armIdleDisposal(held);
-	}
-
-	dispose(sessionPath: string): boolean {
-		const held = this.held.get(sessionPath);
-		if (!held) return false;
-		this.release(held);
-		return true;
-	}
-
-	disposeAll(): void {
-		for (const held of [...this.held.values()]) this.release(held);
-	}
-
-	private armIdleDisposal(held: HeldSession): void {
+		if (!held) return;
 		this.clearTimer(held);
-		held.timer = setTimeout(() => {
-			if (!held.session.isStreaming) this.release(held);
-		}, this.environment.idleTimeoutMs ?? IDLE_SESSION_TIMEOUT_MS);
+		held.timer = setTimeout(() => void this.release(held), this.environment.idleTimeoutMs ?? IDLE_SESSION_TIMEOUT_MS);
 		held.timer.unref?.();
 	}
 
-	private release(held: HeldSession): void {
-		if (held.disposed) return;
-		held.disposed = true;
-		held.unsubscribe?.();
-		this.clearTimer(held);
-		held.session.dispose();
-		if (this.held.get(held.key) === held) this.held.delete(held.key);
-		if (held.sessionPath) SESSION_WRITERS.delete(held.sessionPath);
+	async dispose(sessionPath: string): Promise<boolean> {
+		const held = this.held.get(sessionPath);
+		if (!held) return false;
+		await this.release(held);
+		return true;
+	}
+
+	async disposeAll(): Promise<void> {
+		await Promise.all([...this.held.values()].map((held) => this.release(held)));
+	}
+
+	/** 镜像宿主替换会话的顺序：先 session_shutdown 让扩展收口，再 dispose 作废上下文。 */
+	private release(held: HeldSession): Promise<void> {
+		held.releasing ??= (async () => {
+			this.clearTimer(held);
+			if (this.held.get(held.key) === held) this.held.delete(held.key);
+			try {
+				await held.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			} finally {
+				held.session.dispose();
+				if (held.sessionPath) SESSION_WRITERS.delete(held.sessionPath);
+			}
+		})();
+		return held.releasing;
 	}
 
 	private clearTimer(held: HeldSession): void {

@@ -367,8 +367,7 @@ export function registerMaster(
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
-				active.idleSince.set(worker.sessionPath, Date.now());
-				active.pool.markIdle(worker.sessionPath);
+				markWorkerIdle(active, worker.sessionPath);
 				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
@@ -568,8 +567,7 @@ export function registerMaster(
 								: current;
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
-							active.idleSince.set(target.sessionPath, Date.now());
-							active.pool.markIdle(target.sessionPath);
+							markWorkerIdle(active, target.sessionPath);
 							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
 						},
 						(error) => {
@@ -578,8 +576,7 @@ export function registerMaster(
 							if (!current || current.status !== "reviewing") return;
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
-							active.idleSince.set(target.sessionPath, Date.now());
-							active.pool.markIdle(target.sessionPath);
+							markWorkerIdle(active, target.sessionPath);
 							enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
 						},
 					);
@@ -740,7 +737,13 @@ export function registerMaster(
 		}
 	});
 
-	pi.on("session_shutdown", async () => { await deactivate(); });
+	pi.on("session_shutdown", () => deactivate());
+}
+
+/** Worker 闲下来的唯一登记点：Master 记录时刻，池据此起释放计时。 */
+function markWorkerIdle(active: MasterRuntime, sessionPath: string): void {
+	active.idleSince.set(sessionPath, Date.now());
+	active.pool.markIdle(sessionPath);
 }
 
 function settleWorker(
@@ -753,8 +756,7 @@ function settleWorker(
 	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 	active.currentTools.delete(identity.sessionPath);
-	active.idleSince.set(identity.sessionPath, Date.now());
-	active.pool.markIdle(identity.sessionPath);
+	markWorkerIdle(active, identity.sessionPath);
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	return failure

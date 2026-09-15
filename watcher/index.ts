@@ -171,7 +171,7 @@ export function registerWatcher(
 
 	// 主会话压缩：旧增量已不再对应主会话现场，观察员从当前尾部重新入场而不回放。
 	pi.on("session_compact", () => resetObserver());
-	pi.on("session_shutdown", async () => { await deactivate(); });
+	pi.on("session_shutdown", () => deactivate());
 }
 
 function loadWatcherConfiguration(): WatcherConfig | { error: string } {

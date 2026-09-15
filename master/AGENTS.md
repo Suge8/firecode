@@ -9,7 +9,7 @@
 
 Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
 
-热冷只属于运行时缓存：空闲由 Master 单点判定后启动超时释放，释放前先发 session_shutdown 收口；档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 删除池引用并等待 session_shutdown 收口后释放热会话，永不删除 JSONL。异步回写只属于满足 `runtime === active` 的当前 runtime；会话关闭先清空当前 runtime，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
+热冷只属于运行时缓存：池不订阅会话事件自判空闲，只有 Master 在回合落定、中断落定、审查落定时 `markIdle` 才起释放计时，因此 reviewing 中的 Worker（审查期间它自己是闲的，修复回合结束也会落定）不会被释放；到期释放先经该会话的 extensionRunner 发 `session_shutdown`（reason quit）让会话内扩展收口，再 dispose——与宿主替换会话的顺序一致，否则会话里跑着的 fire-review 会成为握着死 ctx 的孤儿。档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 在同步段内删档案与内存引用，再等待 session_shutdown 收口后释放热会话，永不删除 JSONL。异步回写只属于满足 `runtime === active` 的当前 runtime；会话关闭先清空当前 runtime，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
 
 ## 工具契约
 
