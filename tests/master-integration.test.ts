@@ -461,10 +461,45 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	const pool = new module.InProcessSessionPool();
 	const first = await pool.spawn(options);
 	await expect(pool.spawn(options)).rejects.toThrow("已有进程内会话持有");
-	first.dispose();
+	await first.dispose();
 	await expect(pool.spawn({ ...options, persistence: { ...options.persistence, resume: true } }))
 		.rejects.toThrow("会话文件不存在");
 	pool.disposeAll();
+});
+
+test("池只有 markIdle 后才释放，且 dispose 前完成 session_shutdown", async () => {
+	const harness = await setup(true, { idleTimeoutMs: 10 });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const result = await harness.execute({ action: "start", worker: "mark-idle", prompt: "完成", role: "工程师" });
+	await settled;
+	const path = (result.details as any).worker.session;
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(harness.pool.has(path)).toBe(true);
+	harness.pool.markIdle(path);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(harness.pool.has(path)).toBe(false);
+});
+
+test("reviewing Worker 不因回合落定后的 idle 超时被释放", async () => {
+	const harness = await setup(true, { idleTimeoutMs: 10, mockReview: true, review: true });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const result = await harness.execute({ action: "start", worker: "review-hot", prompt: "完成", role: "工程师" });
+	await settled;
+	const path = (result.details as any).worker.session;
+	await harness.execute({ action: "review", worker: "review-hot" });
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	expect(harness.pool.has(path)).toBe(true);
+});
+
+test("kill 在 Worker session_shutdown 收口后才返回", async () => {
+	const harness = await setup(true);
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "shutdown-order", prompt: "完成", role: "工程师" });
+	await settled;
+	expect((await harness.execute({ action: "kill", worker: "shutdown-order" })).details).toEqual({ killed: true });
 });
 
 test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", async () => {
