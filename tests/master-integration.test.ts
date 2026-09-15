@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -467,39 +467,47 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	pool.disposeAll();
 });
 
-test("池只有 markIdle 后才释放，且 dispose 前完成 session_shutdown", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10 });
+test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会话扩展先收到 session_shutdown", async () => {
+	const harness = await setup(true, { idleTimeoutMs: 10, shutdownProbe: true });
+	const sessionPath = join(directory!, "sessions", "subagents", "pool-idle.jsonl");
+	await mkdir(dirname(sessionPath), { recursive: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const result = await harness.execute({ action: "start", worker: "mark-idle", prompt: "完成", role: "工程师" });
-	await settled;
-	const path = (result.details as any).worker.session;
-	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.pool.has(path)).toBe(true);
-	harness.pool.markIdle(path);
-	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.pool.has(path)).toBe(false);
+	const spawned = await harness.pool.spawn({
+		cwd: harness.cwd, model: faux.getModel(), thinking: "medium", tools: [], role: "worker",
+		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
+		persistence: { type: "file", sessionPath },
+	});
+	await spawned.prompt("回合");
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	expect(harness.pool.has(sessionPath)).toBe(true);
+	harness.pool.markIdle(sessionPath);
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	expect(harness.pool.has(sessionPath)).toBe(false);
+	expect(await readFile(join(directory!, "shutdown.log"), "utf8")).toBe("quit\n");
 });
 
-test("reviewing Worker 不因回合落定后的 idle 超时被释放", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10, mockReview: true, review: true });
-	faux.setResponses([fauxAssistantMessage("完成")]);
+test("reviewing 中的 Worker 回合早已落定也不会被 idle 超时释放", async () => {
+	const harness = await setup(true, { idleTimeoutMs: 10, mockReview: true, review: true, reviewProgressOnly: true, reviewFixTurn: true });
+	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("修复完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const result = await harness.execute({ action: "start", worker: "review-hot", prompt: "完成", role: "工程师" });
 	await settled;
 	const path = (result.details as any).worker.session;
 	await harness.execute({ action: "review", worker: "review-hot" });
-	await new Promise((resolve) => setTimeout(resolve, 30));
+	// 修复回合由 faux 即时回复，80ms 足够它落定并越过 10ms 的 idle 超时。
+	await new Promise((resolve) => setTimeout(resolve, 80));
 	expect(harness.pool.has(path)).toBe(true);
+	expect((await harness.list().then((listed) => listed.details as any)).workers[0].status).toBe("reviewing");
 });
 
-test("kill 在 Worker session_shutdown 收口后才返回", async () => {
-	const harness = await setup(true);
+test("kill 等 Worker 的 session_shutdown 收口完成后才返回", async () => {
+	const harness = await setup(true, { shutdownProbe: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "start", worker: "shutdown-order", prompt: "完成", role: "工程师" });
 	await settled;
 	expect((await harness.execute({ action: "kill", worker: "shutdown-order" })).details).toEqual({ killed: true });
+	expect(await readFile(join(directory!, "shutdown.log"), "utf8")).toBe("quit\n");
 });
 
 test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", async () => {
@@ -987,6 +995,10 @@ async function setup(activate = true, options: {
 	review?: boolean;
 	mockReview?: boolean;
 	reviewProgressOnly?: boolean;
+	/** mock 审查停在 reviewing 相并唤起一个修复回合：复现审查期间 Worker 自己落定的现场。 */
+	reviewFixTurn?: boolean;
+	/** 在子会话里装一个慢速 session_shutdown 探针：收口完成才把 reason 追加到 shutdown.log。 */
+	shutdownProbe?: boolean;
 	autoActivate?: boolean;
 	deferUserMessage?: boolean;
 	promptFiles?: Record<string, string>;
@@ -997,11 +1009,12 @@ async function setup(activate = true, options: {
 	const agentDir = join(directory, "agent");
 	const sessionDir = join(directory, "sessions");
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
-	if (options.mockReview) {
-		const extensions = join(agentDir, "extensions");
-		await mkdir(extensions);
-		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension(options.reviewProgressOnly === true));
-	}
+	const extensions = join(agentDir, "extensions");
+	if (options.mockReview || options.shutdownProbe) await mkdir(extensions);
+	if (options.mockReview)
+		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension(options.reviewProgressOnly === true, options.reviewFixTurn === true));
+	if (options.shutdownProbe)
+		await writeFile(join(extensions, "shutdown-probe.ts"), shutdownProbeExtension(join(directory, "shutdown.log")));
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = registerFauxProvider();
@@ -1164,7 +1177,17 @@ async function setup(activate = true, options: {
 	};
 }
 
-function mockReviewExtension(progressOnly = false): string {
+function shutdownProbeExtension(logPath: string): string {
+	return `import { appendFileSync } from "node:fs";
+	export default function(pi) {
+		pi.on("session_shutdown", async (event) => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			appendFileSync(${JSON.stringify(logPath)}, event.reason + "\\n");
+		});
+	}`;
+}
+
+function mockReviewExtension(progressOnly = false, fixTurn = false): string {
 	const base = {
 		version: 5, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
 		consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
@@ -1186,6 +1209,7 @@ function mockReviewExtension(progressOnly = false): string {
 			handler: () => {
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
 				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});`}
+				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
 			},
 		});
 	}`;
