@@ -34,7 +34,8 @@ AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill �
 
 已知暴露：修复反馈与总结提示的 followUp 唤起仍走宿主侧门（跳过 before_agent_start，#33 上游缺陷），修复回合内系统提示注入会抖动一次；因 display:false 的隐形投递无前门等价物，接受此暴露待上游修复，不在插件侧绕行。
 
-`outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。
+`outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。事故终态的 `reason` 取该轮
+`details` 原文（超时、供应商报错都写在里面），枚举名只作缺失兜底：读取方不得把枚举名当原因展示。
 
 ## 卡片与活动条
 

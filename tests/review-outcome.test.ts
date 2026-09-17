@@ -31,13 +31,13 @@ describe("review outcome reader", () => {
 		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped" });
 	});
 
-	test("error, cancelled or timed_out terminals surface as failed with the reason", async () => {
+	test("error, cancelled or timed_out terminals surface as failed carrying the round details", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
 			status: "failed",
 			runId: "error-run",
 			rounds: 2,
-			reason: "error",
+			reason: "issue remains",
 		});
 	});
 

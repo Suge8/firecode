@@ -17,6 +17,7 @@ const TEST_ROLES = {
 	工程师: { model: "test/worker/medium", use: "测试" },
 	设计师: { model: "test/worker-2/high", use: "切换测试" },
 };
+const TIMEOUT_DETAILS = "模型 1 · test/reviewer\n审查会话超时，未在时限内返回有效输出。";
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 let faux: any;
@@ -788,6 +789,22 @@ test("审查义务只能经显式 review 履行，未履行拒绝 ack，kill 随
 		.not.toContainEqual(expect.objectContaining({ name: "discard-obligation" }));
 });
 
+test("审查以基础设施故障落定时把该轮原因带给指挥官", async () => {
+	const harness = await setup(true, { review: true, mockReview: true, reviewTimeout: true });
+	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("审查未完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "timed-out", prompt: "实现", role: "工程师", review: true,
+	});
+	await delivered;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "timed-out" });
+	await delivered;
+
+	expect(harness.messages[1].message.content).toContain(TIMEOUT_DETAILS);
+});
+
 test("review 命令未启动时明确失败结算并保留审查义务", async () => {
 	const harness = await setup(true, { review: true });
 	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("未启动审查")]);
@@ -982,6 +999,8 @@ async function setup(activate = true, options: {
 	reviewProgressOnly?: boolean;
 	/** mock 审查停在 reviewing 相并唤起一个修复回合：复现审查期间 Worker 自己落定的现场。 */
 	reviewFixTurn?: boolean;
+	/** mock 审查以超时终态落定：复现基础设施故障轮次。 */
+	reviewTimeout?: boolean;
 	/** 在子会话里装一个慢速 session_shutdown 探针：收口完成才把 reason 追加到 shutdown.log。 */
 	shutdownProbe?: boolean;
 	autoActivate?: boolean;
@@ -997,7 +1016,11 @@ async function setup(activate = true, options: {
 	const extensions = join(agentDir, "extensions");
 	if (options.mockReview || options.shutdownProbe) await mkdir(extensions);
 	if (options.mockReview)
-		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension(options.reviewProgressOnly === true, options.reviewFixTurn === true));
+		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension({
+			progressOnly: options.reviewProgressOnly === true,
+			fixTurn: options.reviewFixTurn === true,
+			timeout: options.reviewTimeout === true,
+		}));
 	if (options.shutdownProbe)
 		await writeFile(join(extensions, "shutdown-probe.ts"), shutdownProbeExtension(join(directory, "shutdown.log")));
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
@@ -1173,7 +1196,9 @@ function shutdownProbeExtension(logPath: string): string {
 	}`;
 }
 
-function mockReviewExtension(progressOnly = false, fixTurn = false): string {
+function mockReviewExtension(
+	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
+): string {
 	const base = {
 		version: 5, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
 		consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
@@ -1184,10 +1209,15 @@ function mockReviewExtension(progressOnly = false, fixTurn = false): string {
 	};
 	const settled = {
 		...base, seq: 2, phase: "settled", active: null, updatedAt: 2,
-		history: [{
-			round: 1, result: "passed", details: "verified", elapsedMs: 1,
-			reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "ok", details: "verified" }],
-		}],
+		history: [timeout
+			? {
+				round: 1, result: "error", details: TIMEOUT_DETAILS, elapsedMs: 1,
+				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "error", summary: "", details: TIMEOUT_DETAILS }],
+			}
+			: {
+				round: 1, result: "passed", details: "verified", elapsedMs: 1,
+				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "ok", details: "verified" }],
+			}],
 	};
 	return `export default function(pi) {
 		pi.registerCommand("fire-review", {

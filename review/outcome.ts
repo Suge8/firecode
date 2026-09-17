@@ -45,16 +45,18 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 	if (latest.phase === "idle") return { status: "none", runId: latest.runId };
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
 	const rounds = latest.history.length;
-	const result = latest.history.at(-1)?.result;
+	const last = latest.history.at(-1);
+	const result = last?.result;
 	if (result === "passed") return { status: "passed", runId: latest.runId, rounds };
 	// stopped（顾问叫停）与 failed（maxRounds 用尽）都是质量裁决终止；
 	// error / cancelled / timed_out 是基础设施故障或人为中断，不弱化成“停止”。
 	if (result === "stopped" || result === "failed") {
 		// 顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
-		const advice = latest.history.at(-1)?.advisor?.advice;
+		const advice = last?.advisor?.advice;
 		return { status: "stopped", runId: latest.runId, rounds, ...(advice ? { advisorAdvice: advice } : {}) };
 	}
-	return { status: "failed", runId: latest.runId, rounds, reason: result ?? "unknown" };
+	// 轮记录的 details 已写明故障形态（超时/供应商报错）；枚举名只是它缺失时的兜底。
+	return { status: "failed", runId: latest.runId, rounds, reason: last?.details?.trim() || result || "unknown" };
 }
 
 function isCheckpointEntry(value: unknown): value is { data: unknown } {
