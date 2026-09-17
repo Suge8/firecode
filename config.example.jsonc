@@ -46,22 +46,24 @@
 		"workerExcludeExtensions": [],
 		"roles": {
 			"调研员": {
-				"model": "openai-codex/gpt-5.6-luna/high",
-				"use": "大量搜索、读日志、找线索；不实现"
+				"model": "anthropic/claude-sonnet-5/medium",
+				"use": "大量搜索、读日志、找线索；不实现",
+				"fallback": ["openai-codex/gpt-5.6-luna/high"]
 			},
 			"工程师": {
-				"model": "openai-codex/gpt-6-astra/low",
+				"model": "anthropic/claude-opus-5/medium",
 				"use": "实现、调试",
-				"fallback": ["anthropic/claude-fable-5-1/low", "anthropic/claude-opus-5/medium"]
+				"fallback": ["openai-codex/gpt-6-astra/low", "anthropic/claude-fable-5-1/low"]
 			},
 			"设计师": {
-				"model": "anthropic/claude-fable-5-1/low",
+				"model": "anthropic/claude-opus-5/medium",
 				"use": "视觉、前端",
-				"fallback": ["anthropic/claude-opus-5/medium", "openai-codex/gpt-6-astra/low"]
+				"fallback": ["openai-codex/gpt-6-astra/low"]
 			},
 			"哨兵": {
-				"model": "openai-codex/gpt-5.6-luna/low",
-				"use": "CI、部署、长测试等待"
+				"model": "anthropic/claude-sonnet-5/low",
+				"use": "CI、部署、长测试等待",
+				"fallback": ["openai-codex/gpt-5.6-luna/low"]
 			}
 		}
 	},
