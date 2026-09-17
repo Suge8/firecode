@@ -334,7 +334,19 @@ test("供应商故障在无 fallback 时明确报告链已用尽", async () => {
 	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
-test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定", async () => {
+test.each([
+	["insufficient_quota", "insufficient_quota"],
+	["429 rate limit exceeded", "429 rate limit exceeded"],
+	["Codex error: The usage limit has been reached", "Codex error: The usage limit has been reached"],
+	[
+		"Codex error: Our servers are currently overloaded. Please try again later.",
+		"Codex error: Our servers are currently overloaded.",
+	],
+	[
+		"Codex error: An error occurred while processing your request. You can retry your request.",
+		"Codex error: An error occurred while processing your request.",
+	],
+])("宿主重试用尽的故障（%s）按角色 fallback 在同一会话续跑并更新实际模型", async (errorMessage, reason) => {
 	const harness = await setup(true, {
 		roles: {
 			...TEST_ROLES,
@@ -344,50 +356,24 @@ test("429 瞬时限流终态不触发 fallback，按原模型正常报错落定"
 	faux.setResponses([fauxAssistantMessage("已启动")]);
 	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const started = await harness.execute({
-		action: "start", worker: "rate-limited", prompt: "初始化", role: "工程师",
+		action: "start", worker: "fallback", prompt: "初始化", role: "工程师",
 	});
 	await delivered;
 
 	const session = harness.pool.getSession((started.details as any).worker.session);
 	session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
-	const rateLimit = fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit exceeded" });
-	faux.setResponses([rateLimit, rateLimit]);
+	const fault = fauxAssistantMessage("", { stopReason: "error", errorMessage });
+	const respond = (_context: any, _options: any, _state: any, model: any) =>
+		(model.id.endsWith("worker-2") ? fauxAssistantMessage("降级后完成") : fault);
+	faux.setResponses([respond, respond, respond, respond]);
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "send", worker: "rate-limited", prompt: "继续" });
+	await harness.execute({ action: "send", worker: "fallback", prompt: "继续" });
 	await delivered;
 
-	const content = harness.messages.at(-1).message.content;
-	expect(content).toContain("错误：\n429 rate limit exceeded");
-	expect(content).not.toContain("已切换");
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker).toMatchObject({
-		status: "idle", role: "工程师", model: "test/worker", thinking: "medium",
-	});
-});
-
-test.each([
-	"insufficient_quota",
-	"Codex error: The usage limit has been reached",
-])("供应商额度耗尽（%s）按角色 fallback 在同一会话续跑并更新实际模型", async (errorMessage) => {
-	const harness = await setup(true, {
-		roles: {
-			...TEST_ROLES,
-			工程师: { ...TEST_ROLES.工程师, fallback: ["test/worker-2/high"] },
-		},
-	});
-	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "error", errorMessage }),
-		fauxAssistantMessage("降级后完成"),
-	]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({
-		action: "start", worker: "fallback", prompt: "执行", role: "工程师",
-	});
-	await delivered;
-
-	expect(harness.messages[0].message.content).toContain("已切换 test/worker/medium→test/worker-2/high（额度或计费耗尽）");
-	expect(harness.messages[0].message.content).toContain("同一会话自动续跑");
-	expect(harness.messages[0].message.content).toContain("回复：\n降级后完成");
+	const content = harness.messages.map((entry: any) => entry.message.content).join("\n");
+	expect(content).toContain(`已切换 test/worker/medium→test/worker-2/high（${reason}）`);
+	expect(content).toContain("同一会话自动续跑");
+	expect(content).toContain("回复：\n降级后完成");
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({
 		role: "工程师", model: "test/worker-2", thinking: "high", session: (started.details as any).worker.session,

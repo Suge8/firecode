@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
 import { deliver } from "../deliver.js";
-import { formatDuration } from "../format.js";
+import { clip, formatDuration } from "../format.js";
 import { FLAME } from "../theme.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
@@ -42,6 +42,7 @@ const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
 const EVENT_RETRY_MS = 5_000;
+const FAULT_SUMMARY_WIDTH = 80;
 
 interface PendingMasterEvent {
 	id: string;
@@ -372,9 +373,8 @@ export function registerMaster(
 				armInterruptReminder(active, interrupted);
 				return;
 			}
-			const fault = providerFaultReason(terminal);
-			if (fault && error === undefined) {
-				await resumeWithFallback(active, worker, session, terminal!, fault);
+			if (terminal?.stopReason === "error" && error === undefined) {
+				await resumeWithFallback(active, worker, session, terminal, faultSummary(terminal));
 				return;
 			}
 			const content = settleWorker(active, worker, terminal, error);
@@ -858,16 +858,11 @@ function terminalFailure(terminal: WorkerTerminal | undefined): string | undefin
 	return undefined;
 }
 
-function providerFaultReason(terminal: WorkerTerminal | undefined): string | undefined {
-	if (terminal?.stopReason !== "error" || !terminal.errorMessage) return undefined;
-	const message = terminal.errorMessage;
-	if (/usage.?limit|available balance|insufficient_quota|out of budget|quota (?:exceeded|exhausted)|billing/iu.test(message))
-		return "额度或计费耗尽";
-	if (/(?:model|deployment).*(?:not found|does not exist|unavailable|not available|unsupported)|(?:not found|unavailable).*(?:model|deployment)/iu.test(message))
-		return "模型不可用或找不到";
-	if (/\b(?:500|502|503|504|524)\b|service.?unavailable|internal.?server.?error/iu.test(message))
-		return "持续 5xx，宿主重试已用尽";
-	return undefined;
+function faultSummary(terminal: WorkerTerminal): string {
+	const message = terminal.errorMessage?.trim();
+	if (!message) return "供应商返回未知错误";
+	const [first = message] = message.split(/(?<=[.。!！?？])\s|\n/u);
+	return clip(first.trim(), FAULT_SUMMARY_WIDTH);
 }
 
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
