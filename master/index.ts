@@ -347,7 +347,8 @@ export function registerMaster(
 		});
 		active.observedSessions.set(sessionPath, { session, unsubscribe });
 	};
-	const runWorker = (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
+	/** resolve 即回合已在飞：宿主 prompt 的前置阶段仍报空闲，期间 abort 会被丢弃，interrupt 必须晚于 preflight。 */
+	const runWorker = async (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
 		requireRuntimeOwner(active);
 		observeWorker(active, worker.sessionPath, session);
 		const run = Symbol(worker.name);
@@ -380,7 +381,11 @@ export function registerMaster(
 			const content = settleWorker(active, worker, terminal, error);
 			if (content) enqueueEvent(active, content, worker.name);
 		};
-		void session.prompt(prompt).then(() => void settled(), (error) => void settled(error));
+		const inflight = Promise.withResolvers<void>();
+		void session.prompt(prompt, { preflightResult: () => inflight.resolve() })
+			.then(() => settled(), settled)
+			.finally(() => inflight.resolve());
+		await inflight.promise;
 	};
 	const resumeWithFallback = async (
 		active: MasterRuntime,
@@ -416,7 +421,7 @@ export function registerMaster(
 			const from = modelAtomText(current);
 			const to = modelAtomText(fallback);
 			enqueueEvent(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
-			runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
+			await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
 		} catch (error) {
 			const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
 			const content = settleWorker(active, current, terminal, new Error(failure));
@@ -651,7 +656,7 @@ export function registerMaster(
 					active.idleSince.delete(target.sessionPath);
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
 					const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
-					runWorker(active, activeWorker, session, text);
+					await runWorker(active, activeWorker, session, text);
 					return toolResult({ sent: true });
 				} finally {
 					if (ownsRuntime(active)) transitioningNames.delete(target.name);
@@ -715,7 +720,7 @@ export function registerMaster(
 						await spawned.dispose();
 						requireRuntimeOwner(active);
 					}
-					runWorker(active, worker, spawned.session, prompt);
+					await runWorker(active, worker, spawned.session, prompt);
 					return toolResult({ started: true, worker: compactWorker(worker) });
 				} catch (error) {
 					if (ownsRuntime(active)) active.store.dispatch({ type: "REMOVE_WORKER", name });

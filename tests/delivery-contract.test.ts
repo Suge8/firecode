@@ -2,9 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PI_AI_COMPAT_URL, PI_CODING_AGENT_URL } from "./loader.ts";
+import { PI_AI_COMPAT_URL, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 const DELIVERY_TEXT = "queued delivery";
 let directory: string | undefined;
 let faux: any;
@@ -122,11 +123,11 @@ export default function (pi) {
 	const prompts: string[] = [];
 	faux.setResponses([
 		(context: any) => {
-			prompts.push(context.systemPrompt ?? "");
+			prompts.push(getCurrentSystemPrompt(context.messages));
 			return fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
 		},
 		(context: any) => {
-			prompts.push(context.systemPrompt ?? "");
+			prompts.push(getCurrentSystemPrompt(context.messages));
 			return fauxAssistantMessage("woken");
 		},
 	]);

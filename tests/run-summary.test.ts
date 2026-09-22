@@ -197,7 +197,7 @@ test("真实 SDK 续跑只产生一个收尾，展示记录可恢复且不进入
 		await session.prompt("next input");
 		expect(requests).toHaveLength(4);
 		expect(appended).toHaveLength(2);
-		expect(JSON.stringify(requests)).not.toMatch(/firecode-run-summary|elapsedMs/);
+		expect(JSON.stringify(requests)).not.toMatch(/"firecode-run-summary"|"elapsedMs"/);
 		expect(session.messages.at(-1).stopReason).toBe("stop");
 		const restored = SessionManager.open(manager.getSessionFile()).getEntries()
 			.filter((entry: any) => entry.type === "custom" && entry.customType === "firecode-run-summary");

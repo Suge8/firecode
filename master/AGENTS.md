@@ -17,7 +17,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 
 - `start`：显式指定角色表内的 role 和短名；可用 thinking 覆盖角色原子档，可带 cwd、review。
 - `send`：只投空闲 Worker；省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。对在飞 Worker 拒绝并提示先 `interrupt`。
-- `interrupt`：中止 working 回合，保留会话、义务并产生续跑提醒。
+- `interrupt`：中止 working 回合，保留会话、义务并产生续跑提醒。`start` 与 `send` 等回合真正在飞才返回：宿主 prompt 的前置阶段仍报空闲，落在那里的 abort 会被静默丢弃。
 - `review`：只对 idle Worker 显式发起 fire-review。
 - `tail`：读取最近外部输入后的预算式轨迹快照，不改变状态。
 - `ack`：消除待发落标记；审查义务未履行时拒绝。

@@ -8,11 +8,13 @@ import {
 	featuresOnly,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
+	PI_AI_URL,
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 const TEST_ROLES = {
 	工程师: { model: "test/worker/medium", use: "测试" },
 	设计师: { model: "test/worker-2/high", use: "切换测试" },
@@ -90,7 +92,7 @@ test("Worker Markdown 只组装动态名字与协议信封", async () => {
 	const prompt = await loadFirecodeModule("master/prompt.js") as any;
 	let systemPrompt = "";
 	faux.setResponses([(context: any) => {
-		systemPrompt = context.systemPrompt ?? "";
+		systemPrompt = getCurrentSystemPrompt(context.messages);
 		return fauxAssistantMessage("完成");
 	}]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
