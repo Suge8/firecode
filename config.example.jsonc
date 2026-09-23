@@ -1,6 +1,6 @@
 {
 	// 公开推荐配置：除 Bark 外功能全开。复制后重启 Pi。
-	// Watcher 默认在每个主会话回合后调用模型。
+	// Watcher 新会话不自动激活，需要时 /fire-watch 翻转当前会话。
 	// 凡是指定模型的位置都写同一个模型原子："provider/model/thinking"，思考档取最后一段。
 	"features": {
 		"header": true,
@@ -28,14 +28,13 @@
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {
-			"openai-codex": { "textVerbosity": "low", "priority": false },
-			"xai": { "priority": false }
+			"openai-codex": { "textVerbosity": "low", "priority": false }
 		}
 	},
 
-	// 每个主会话回合后评估新增内容，会产生额外模型调用；需要开口时当场插话。
+	// 激活后每个主会话回合评估新增内容，会产生额外模型调用；需要开口时当场插话。
 	"watcher": {
-		"enabled": true,
+		"enabled": false,
 		"model": "openai-codex/gpt-6-sol/medium",
 		"context": "minimal"
 	},
