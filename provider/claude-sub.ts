@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
-const FALLBACK_CLAUDE_CODE_VERSION = "2.1.278";
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
 const DEFAULT_ENTRYPOINT = "cli";
 const BILLING_SALT = "59cf53e54c78";
 
