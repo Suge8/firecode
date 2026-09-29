@@ -45,40 +45,40 @@
 		"workerExcludeExtensions": [],
 		"roles": {
 			"调研员": {
-				"model": "openai-codex/gpt-6-luna/medium",
+				"model": "anthropic/claude-sonnet-5-5/medium",
 				"use": "大量搜索、读日志、找线索；不实现",
-				"fallback": ["anthropic/claude-sonnet-5/medium"]
+				"fallback": ["openai-codex/gpt-6-luna/medium"]
 			},
 			"工程师": {
-				"model": "anthropic/claude-opus-5-5/medium",
+				"model": "anthropic/claude-sonnet-5-5/high",
 				"use": "实现、调试",
-				"fallback": ["openai-codex/gpt-6-astra/low", "anthropic/claude-fable-5-1/low"]
+				"fallback": ["openai-codex/gpt-6-sol/high"]
 			},
 			"设计师": {
 				"model": "anthropic/claude-opus-5-5/medium",
 				"use": "视觉、前端",
-				"fallback": ["openai-codex/gpt-6-astra/low"]
+				"fallback": ["openai-codex/gpt-6-sol/high"]
 			},
 			"哨兵": {
 				"model": "openai-codex/gpt-6-luna/low",
 				"use": "CI、部署、长测试等待",
-				"fallback": ["anthropic/claude-sonnet-5/low"]
+				"fallback": ["anthropic/claude-sonnet-5-5/low"]
 			}
 		}
 	},
 
 	"presets": {
-		"opus": { "model": "anthropic/claude-opus-5-5/medium", "key": "alt+1" },
-		"fable": { "model": "anthropic/claude-fable-5-1/medium", "key": "alt+2" },
-		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+3" },
-		"sol": { "model": "openai-codex/gpt-6-sol/medium", "key": "alt+4" },
-		"ds": { "model": "deepseek/deepseek-flash/high", "key": "alt+5" },
-		"xai": { "model": "xai/grok-4.7/high", "key": "alt+6" }
+		"sonnet": { "model": "anthropic/claude-sonnet-5-5/high", "key": "alt+1" },
+		"opus": { "model": "anthropic/claude-opus-5-5/high", "key": "alt+2" },
+		"fable": { "model": "anthropic/claude-fable-5-1/medium", "key": "alt+3" },
+		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+4" },
+		"sol": { "model": "openai-codex/gpt-6-sol/medium", "key": "alt+5" },
+		"ds": { "model": "deepseek/deepseek-flash/high", "key": "alt+6" }
 	},
 
 	// 审查只在用户或指挥官发起时调用模型。
 	"review": {
-		"advisor": "anthropic/claude-fable-5-1/medium",
+		"advisor": "anthropic/claude-fable-5-1/high",
 		"reviewers": ["anthropic/claude-opus-5-5/low", "openai-codex/gpt-6-sol/low"],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
