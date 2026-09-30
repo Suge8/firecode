@@ -608,7 +608,7 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	await delivered;
 	expect(harness.messages.at(-1).message.content).toContain("已中断");
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.messages.at(-1).message.content).toContain("自动续跑提醒");
+	expect(harness.messages.at(-1).message.content).toMatch(/自动续跑提醒[^]*\n耗时：本次运行 \d/u);
 	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(reminded.disposition).toBe("reminded");
 

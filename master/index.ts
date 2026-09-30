@@ -272,7 +272,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, withElapsed(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`), worker.name);
+			enqueueEvent(active, withElapsed(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.sessionPath, worker.interruptedAt), worker.name);
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -784,11 +784,11 @@ function settleWorker(
 }
 
 /** 事件末尾追加耗时行；起点缺失（reload 后）的部分省略，不用当前时刻冒充。 */
-function withElapsed(active: MasterRuntime, content: string, sessionPath?: string): string {
+function withElapsed(active: MasterRuntime, content: string, sessionPath?: string, runEndedAt?: number): string {
 	const now = Date.now();
 	const parts: string[] = [];
 	const runStartedAt = sessionPath ? active.runStartedAt.get(sessionPath) : undefined;
-	if (runStartedAt !== undefined) parts.push(`本次运行 ${formatDuration(now - runStartedAt)}`);
+	if (runStartedAt !== undefined) parts.push(`本次运行 ${formatDuration((runEndedAt ?? now) - runStartedAt)}`);
 	if (active.taskStartedAt !== undefined) parts.push(`当前任务 ${formatDuration(now - active.taskStartedAt)}`);
 	return parts.length ? `${content}\n耗时：${parts.join(" · ")}` : content;
 }
