@@ -86,6 +86,10 @@ interface MasterRuntime {
 	events: PendingMasterEvent[];
 	currentTools: Map<string, Map<string, CurrentTool>>;
 	idleSince: Map<string, number>;
+	/** Worker 本次回合（start/send/review 投递）的起点，耗时信号的唯一来源。 */
+	runStartedAt: Map<string, number>;
+	/** 最近一条真实用户输入的时刻；Master 事件（source extension）不算。 */
+	taskStartedAt?: number;
 	reviewProgress: Map<string, ReviewProgress>;
 	observedSessions: Map<string, ObservedSession>;
 	flushTimer?: NodeJS.Timeout;
@@ -171,6 +175,7 @@ export function registerMaster(
 			events: [],
 			currentTools: new Map(),
 			idleSince: new Map(),
+			runStartedAt: new Map(),
 			reviewProgress: new Map(),
 			observedSessions: new Map(),
 		};
@@ -233,12 +238,15 @@ export function registerMaster(
 		active: MasterRuntime,
 		content: string,
 		worker?: string,
-		persist = true,
-		id: string = crypto.randomUUID(),
+		options: { replayId?: string; runEndedAt?: number } = {},
 	) => {
 		if (!ownsRuntime(active)) return;
-		const event: PendingMasterEvent = { id, content, ...(worker ? { worker } : {}) };
-		if (persist) {
+		const replay = options.replayId !== undefined;
+		// 重放的 pending 事件正文已带落定当时的耗时，不再追加。
+		const sessionPath = active.store.state.workers.find((candidate) => candidate.name === worker)?.sessionPath;
+		const body = replay ? content : withElapsed(active, content, sessionPath, options.runEndedAt);
+		const event: PendingMasterEvent = { id: options.replayId ?? crypto.randomUUID(), content: body, ...(worker ? { worker } : {}) };
+		if (!replay) {
 			try {
 				pi.appendEntry(PENDING_EVENT_TYPE, event);
 			} catch (error) {
@@ -267,7 +275,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name);
+			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name, { runEndedAt: worker.interruptedAt });
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -290,7 +298,7 @@ export function registerMaster(
 			}
 		}
 		for (const event of unackedEvents(ctx))
-			enqueueEvent(active, event.content, event.worker, false, event.id);
+			enqueueEvent(active, event.content, event.worker, { replayId: event.id });
 		return active;
 	};
 	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
@@ -455,6 +463,10 @@ export function registerMaster(
 		},
 	});
 
+	pi.on("input", (event) => {
+		if (runtime && event.source !== "extension") runtime.taskStartedAt = Date.now();
+	});
+
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
 		return {
@@ -522,6 +534,7 @@ export function registerMaster(
 				interruptedRuns.delete(target.sessionPath);
 				active.currentTools.delete(target.sessionPath);
 				active.idleSince.delete(target.sessionPath);
+				active.runStartedAt.delete(target.sessionPath);
 				active.reviewProgress.delete(target.sessionPath);
 				active.observedSessions.get(target.sessionPath)?.unsubscribe();
 				active.observedSessions.delete(target.sessionPath);
@@ -560,6 +573,7 @@ export function registerMaster(
 					clearInterruptTimer(target.name);
 					const reviewing: WorkerRef = { ...rest, status: "reviewing" };
 					active.idleSince.delete(target.sessionPath);
+					active.runStartedAt.set(target.sessionPath, Date.now());
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
 					void monitorReview(session, target.sessionPath, previousRunId).then(
 						(outcome) => {
@@ -654,6 +668,7 @@ export function registerMaster(
 					};
 					clearInterruptTimer(target.name);
 					active.idleSince.delete(target.sessionPath);
+					active.runStartedAt.set(target.sessionPath, Date.now());
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
 					const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
 					await runWorker(active, activeWorker, session, text);
@@ -701,6 +716,7 @@ export function registerMaster(
 					...(params.review === true ? { reviewNeeded: true } : {}),
 				};
 				active.store.dispatch({ type: "UPSERT_WORKER", worker });
+				active.runStartedAt.set(sessionPath, Date.now());
 				startingNames.delete(name);
 				try {
 					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
@@ -767,6 +783,16 @@ function settleWorker(
 	return failure
 		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
 		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
+}
+
+/** 事件末尾追加耗时行；起点缺失（reload 后）的部分省略，不用当前时刻冒充。 */
+function withElapsed(active: MasterRuntime, content: string, sessionPath?: string, runEndedAt?: number): string {
+	const now = Date.now();
+	const parts: string[] = [];
+	const runStartedAt = sessionPath ? active.runStartedAt.get(sessionPath) : undefined;
+	if (runStartedAt !== undefined) parts.push(`本次运行 ${formatDuration((runEndedAt ?? now) - runStartedAt)}`);
+	if (active.taskStartedAt !== undefined) parts.push(`当前任务 ${formatDuration(now - active.taskStartedAt)}`);
+	return parts.length ? `${content}\n耗时：${parts.join(" · ")}` : content;
 }
 
 function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
