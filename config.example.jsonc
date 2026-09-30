@@ -35,7 +35,7 @@
 	// 激活后每个主会话回合评估新增内容，会产生额外模型调用；需要开口时当场插话。
 	"watcher": {
 		"enabled": false,
-		"model": "openai-codex/gpt-6-sol/medium",
+		"model": "openai-codex/gpt-6.1-sol/medium",
 		"context": "minimal"
 	},
 
@@ -52,12 +52,12 @@
 			"工程师": {
 				"model": "anthropic/claude-sonnet-5-5/high",
 				"use": "实现、调试",
-				"fallback": ["openai-codex/gpt-6-sol/high"]
+				"fallback": ["openai-codex/gpt-6.1-sol/high"]
 			},
 			"设计师": {
 				"model": "anthropic/claude-opus-5-5/medium",
 				"use": "视觉、前端",
-				"fallback": ["openai-codex/gpt-6-sol/high"]
+				"fallback": ["openai-codex/gpt-6.1-sol/high"]
 			},
 			"哨兵": {
 				"model": "openai-codex/gpt-6-luna/low",
@@ -72,14 +72,14 @@
 		"opus": { "model": "anthropic/claude-opus-5-5/high", "key": "alt+2" },
 		"fable": { "model": "anthropic/claude-fable-5-1/medium", "key": "alt+3" },
 		"astra": { "model": "openai-codex/gpt-6-astra/medium", "key": "alt+4" },
-		"sol": { "model": "openai-codex/gpt-6-sol/medium", "key": "alt+5" },
+		"sol": { "model": "openai-codex/gpt-6.1-sol/medium", "key": "alt+5" },
 		"ds": { "model": "deepseek/deepseek-flash/high", "key": "alt+6" }
 	},
 
 	// 审查只在用户或指挥官发起时调用模型。
 	"review": {
 		"advisor": "anthropic/claude-fable-5-1/high",
-		"reviewers": ["anthropic/claude-opus-5-5/low", "openai-codex/gpt-6-sol/low"],
+		"reviewers": ["anthropic/claude-opus-5-5/low", "openai-codex/gpt-6.1-sol/low"],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
