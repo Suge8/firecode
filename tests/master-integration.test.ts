@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +26,8 @@ let faux: any;
 let directory: string | undefined;
 
 afterEach(async () => {
+	setSystemTime();
+	delete (globalThis as any).__reviewTick;
 	faux?.unregister();
 	faux = undefined;
 	if (directory) await rm(directory, { recursive: true, force: true });
@@ -308,7 +310,7 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 		{ ...worker, status: "idle", disposition: "pending", currentAction: expect.objectContaining({ kind: "idle" }) },
 	]);
 	expect(harness.messages[0]).toMatchObject({
-		message: { content: "<firecode_master_event>\n子代理 trace 已停下\n回复：\n确定性完成\n</firecode_master_event>" },
+		message: { content: expect.stringMatching(/^<firecode_master_event>\n子代理 trace 已停下\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
 		options: { deliverAs: "steer" },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
@@ -827,6 +829,72 @@ test("review 命令未启动时明确失败结算并保留审查义务", async (
 	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
 });
 
+const CLOCK = Date.UTC(2030, 0, 1);
+const at = (seconds: number) => setSystemTime(new Date(CLOCK + seconds * 1_000));
+const elapsedTail = (content: string) => content.split("\n").at(-2);
+
+test("落定事件末尾带 Worker 本次运行与指挥官任务耗时，Master 事件不重置任务起点", async () => {
+	const harness = await setup();
+	const settle = async (prompt: string, action: "start" | "send", settleAt: number) => {
+		faux.setResponses([() => { at(settleAt); return fauxAssistantMessage("完成"); }]);
+		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action, worker: "clock", prompt, ...(action === "start" ? { role: "工程师" } : {}) });
+		await delivered;
+		return harness.messages.at(-1).message.content as string;
+	};
+	at(0);
+	await harness.emit("input", { source: "interactive" });
+	at(20);
+	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s · 当前任务 1m25s");
+
+	at(100);
+	await harness.emit("input", { source: "extension" });
+	at(110);
+	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s · 当前任务 2m10s");
+
+	at(200);
+	await harness.emit("input", { source: "interactive" });
+	expect(elapsedTail(await settle("再续", "send", 205))).toBe("耗时：本次运行 5.0s · 当前任务 5.0s");
+});
+
+test("中断事件带耗时", async () => {
+	const harness = await setup();
+	faux.setResponses([async (_context: any, options: any) => {
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中断");
+	}]);
+	at(0);
+	await harness.emit("input", { source: "interactive" });
+	at(10);
+	await harness.execute({ action: "start", worker: "clock", prompt: "开始", role: "工程师" });
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	at(40);
+	await harness.execute({ action: "interrupt", worker: "clock" });
+	await delivered;
+	const content = harness.messages.at(-1).message.content as string;
+	expect(content).toContain("已中断，会话与审查义务均已保留");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 40s");
+});
+
+test("审查终态事件带审查自身耗时与任务耗时", async () => {
+	const harness = await setup(true, { review: true, mockReview: true });
+	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("审查完成")]);
+	at(0);
+	await harness.emit("input", { source: "interactive" });
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "clock", prompt: "实现", role: "工程师", review: true });
+	await delivered;
+
+	at(50);
+	(globalThis as any).__reviewTick = () => at(80);
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "clock" });
+	await delivered;
+	const content = harness.messages.at(-1).message.content as string;
+	expect(content).toContain("审查通过");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 1m20s");
+});
+
 test("crash 恢复只重投 pending 减 ack 的差集", async () => {
 	const harness = await setup(false);
 	harness.entries.push(
@@ -1226,6 +1294,7 @@ function mockReviewExtension(
 			description: "mock review",
 			handler: () => {
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
+				globalThis.__reviewTick?.();
 				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});`}
 				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
 			},
