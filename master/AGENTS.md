@@ -29,7 +29,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 
 ## 投递与义务
 
-落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息：主回合进行中投卡片、经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达；主回合歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，带完整 `before_agent_start` 仪式，见根 AGENTS.md 硬约束）。每个事件正文末尾追加一行耗时：Worker 本次运行（自最近一次 start/send/review 投递起，到落定或中断时刻止；续跑提醒取到中断时刻，不含此后的闲置；reload 后起点丢失则省略）与指挥官当前任务（自最近一条非 extension 来源的用户输入起，Master 事件不重置）；两个起点各只有运行时一处记录，格式复用 `formatDuration`，只追加在事件正文内，不触碰投递路径。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
+落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息：主回合进行中投卡片、经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达；主回合歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，带完整 `before_agent_start` 仪式，见根 AGENTS.md 硬约束）。事件入队处统一在正文末尾追加一行耗时（reload 重放的 pending 事件已带落定时的耗时，不再追加）：Worker 本次运行（自最近一次 start/send/review 投递起，到落定或中断时刻止；续跑提醒取到中断时刻，不含此后的闲置；reload 后起点丢失则省略）与指挥官当前任务（自最近一条非 extension 来源的用户输入起，Master 事件不重置）；两个起点各只有运行时一处记录，格式复用 `formatDuration`，只追加在事件正文内，不触碰投递路径。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
 
 `review:true` 是持久化到票上的审查义务，不自动开审；它在 `send`、reload、中断和失败后保留并阻止 `ack`，由审查通过或质量裁决停止消除。`kill` 随整票删除义务。
 

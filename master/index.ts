@@ -238,12 +238,15 @@ export function registerMaster(
 		active: MasterRuntime,
 		content: string,
 		worker?: string,
-		persist = true,
-		id: string = crypto.randomUUID(),
+		options: { replayId?: string; runEndedAt?: number } = {},
 	) => {
 		if (!ownsRuntime(active)) return;
-		const event: PendingMasterEvent = { id, content, ...(worker ? { worker } : {}) };
-		if (persist) {
+		const replay = options.replayId !== undefined;
+		// 重放的 pending 事件正文已带落定当时的耗时，不再追加。
+		const sessionPath = active.store.state.workers.find((candidate) => candidate.name === worker)?.sessionPath;
+		const body = replay ? content : withElapsed(active, content, sessionPath, options.runEndedAt);
+		const event: PendingMasterEvent = { id: options.replayId ?? crypto.randomUUID(), content: body, ...(worker ? { worker } : {}) };
+		if (!replay) {
 			try {
 				pi.appendEntry(PENDING_EVENT_TYPE, event);
 			} catch (error) {
@@ -272,7 +275,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, withElapsed(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.sessionPath, worker.interruptedAt), worker.name);
+			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name, { runEndedAt: worker.interruptedAt });
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -295,7 +298,7 @@ export function registerMaster(
 			}
 		}
 		for (const event of unackedEvents(ctx))
-			enqueueEvent(active, event.content, event.worker, false, event.id);
+			enqueueEvent(active, event.content, event.worker, { replayId: event.id });
 		return active;
 	};
 	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
@@ -375,7 +378,7 @@ export function registerMaster(
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				markWorkerIdle(active, worker.sessionPath);
-				enqueueEvent(active, withElapsed(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.sessionPath), worker.name);
+				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
 			}
@@ -425,7 +428,7 @@ export function registerMaster(
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: switched });
 			const from = modelAtomText(current);
 			const to = modelAtomText(fallback);
-			enqueueEvent(active, withElapsed(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.sessionPath), current.name);
+			enqueueEvent(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
 			await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
 		} catch (error) {
 			const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
@@ -584,7 +587,7 @@ export function registerMaster(
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
-							enqueueEvent(active, withElapsed(active, reviewOutcomeText(target.name, outcome, session.messages), target.sessionPath), target.name);
+							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
 						},
 						(error) => {
 							if (!ownsRuntime(active)) return;
@@ -593,7 +596,7 @@ export function registerMaster(
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
-							enqueueEvent(active, withElapsed(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.sessionPath), target.name);
+							enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
 						},
 					);
 					return toolResult({ reviewing: true });
@@ -777,10 +780,9 @@ function settleWorker(
 	markWorkerIdle(active, identity.sessionPath);
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
-	const body = failure
+	return failure
 		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
 		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
-	return withElapsed(active, body, identity.sessionPath);
 }
 
 /** 事件末尾追加耗时行；起点缺失（reload 后）的部分省略，不用当前时刻冒充。 */

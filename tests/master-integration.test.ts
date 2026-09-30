@@ -598,17 +598,22 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 			return fauxAssistantMessage("已中断");
 		},
 	]);
+	at(0);
+	await harness.emit("input", { source: "interactive" });
+	at(10);
 	await harness.execute({
 		action: "start", worker: "interrupted", prompt: "开始", role: "工程师",
 	});
 	await expect(harness.execute({ action: "send", worker: "interrupted", prompt: "急件" }))
 		.rejects.toThrow("急件先 interrupt 再 send");
 	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	at(40);
 	await harness.execute({ action: "interrupt", worker: "interrupted" });
 	await delivered;
+	at(400);
 	expect(harness.messages.at(-1).message.content).toContain("已中断");
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.messages.at(-1).message.content).toMatch(/自动续跑提醒[^]*\n耗时：本次运行 \d/u);
+	expect(elapsedTail(harness.messages.at(-1).message.content)).toBe("耗时：本次运行 30s · 当前任务 6m40s");
 	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(reminded.disposition).toBe("reminded");
 
