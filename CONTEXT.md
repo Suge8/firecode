@@ -26,7 +26,7 @@ _避免使用_：审查者、子代理、Supervisor
 _避免使用_：任务、工单、Assignment Record
 
 **子代理结果（Worker Result）**：
-子代理停下时回传给指挥官的最终回复；它是证据输入，不代表指挥官已验收。机器投递在模型上下文中带 `<firecode_master_event>` 来源信封，展示卡仍投影原始正文。
+子代理停下时回传给指挥官的最终回复；它是证据输入，不代表指挥官已验收。机器投递在模型上下文中带 `<firecode_master_event>` 来源信封，末尾附一行耗时（Worker 本次运行、指挥官当前任务），展示卡仍投影原始正文。
 _避免使用_：Task Done、Review Passed
 
 **近况（Trace）**：
