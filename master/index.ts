@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -369,6 +369,9 @@ export function registerMaster(
 		const settled = async (error?: unknown) => {
 			unsubscribeTerminal();
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
+			const stranded = session.clearQueue().steering;
+			if (stranded.length)
+				enqueueEvent(active, `子代理 ${worker.name} 回合结束时有 ${stranded.length} 条补充说明未送达，请重发：\n${stranded.join("\n---\n")}`, worker.name);
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
 				interruptedRuns.delete(worker.sessionPath);
@@ -521,7 +524,7 @@ export function registerMaster(
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
 			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: "start 必填角色表中的角色；send 可选，传入时切换角色，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
-			cwd: Type.Optional(Type.String({ description: "仅 start 可选：Worker 工作目录的绝对路径，默认当前目录。" })),
+			cwd: Type.Optional(Type.String({ description: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。" })),
 			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
@@ -624,22 +627,35 @@ export function registerMaster(
 			if (params.action === "send") {
 				if (params.review === true && reviewGate) throw new Error(reviewGate);
 				const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-				if (target.status !== "idle" || transitioningNames.has(target.name))
-					throw new Error(`${target.name} 正在处理其他动作；急件先 interrupt 再 send`);
+				if (transitioningNames.has(target.name)) throw new Error(`${target.name} 正在切换，稍后再 send`);
 				const requestedRole = optionalString(params.role);
-				const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
 				const requestedThinking = optionalString(params.thinking);
-				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
-					throw new Error(`thinking 值无效：${requestedThinking}`);
+				const requestedCwd = optionalString(params.cwd);
 				const prompt = requiredString(params.prompt, "prompt");
 				validateDelegationText(prompt);
+				if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
+					const session = active.pool.getSession(target.sessionPath);
+					if (!session?.isStreaming) throw new Error(`${target.name} 回合正在收尾，稍后再 send`);
+					await session.steer(prompt);
+					if (params.review === true && !target.reviewNeeded)
+						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...target, reviewNeeded: true } });
+					return toolResult({ steered: true });
+				}
+				if (target.status === "working")
+					throw new Error(`${target.name} 正在工作；切换 role/thinking/cwd 需先 interrupt`);
+				if (target.status !== "idle") throw new Error(`${target.name} 正在审查，等落定再 send`);
+				const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
+				if (requestedThinking && !THINKING_LEVELS.includes(requestedThinking as WorkerRef["thinking"]))
+					throw new Error(`thinking 值无效：${requestedThinking}`);
 				transitioningNames.add(target.name);
 				try {
+					const cwd = await resolveSendCwd(target, requestedCwd);
+					if (cwd !== target.cwd) await active.pool.dispose(target.sessionPath);
 					const nextModel = selection
 						? await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model)
 						: undefined;
 					requireRuntimeOwner(active);
-					const session = await openWorkerSession(active, target);
+					const session = await openWorkerSession(active, { ...target, cwd });
 					await session.waitForIdle();
 					requireRuntimeOwner(active);
 					let role = target.role;
@@ -663,6 +679,7 @@ export function registerMaster(
 						role,
 						model,
 						thinking,
+						cwd,
 						status: "working",
 						...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
 					};
@@ -1208,6 +1225,12 @@ async function resolveWorkerCwd(path: string): Promise<string> {
 	} catch {
 		throw new Error(`cwd 不存在：${path}`);
 	}
+}
+async function resolveSendCwd(worker: WorkerRef, requested: string | undefined): Promise<string | undefined> {
+	if (requested) return resolveWorkerCwd(requested);
+	if (worker.cwd && !existsSync(worker.cwd))
+		throw new Error(`${worker.name} 的 cwd 已不存在：${worker.cwd}；send 请带 cwd 指向新检出`);
+	return worker.cwd;
 }
 async function outsideCheckoutReason(path: string, cwd: string): Promise<string | undefined> {
 	const root = await realpath(cwd);

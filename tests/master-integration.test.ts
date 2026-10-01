@@ -1,6 +1,6 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -604,8 +604,8 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	await harness.execute({
 		action: "start", worker: "interrupted", prompt: "开始", role: "工程师",
 	});
-	await expect(harness.execute({ action: "send", worker: "interrupted", prompt: "急件" }))
-		.rejects.toThrow("急件先 interrupt 再 send");
+	await expect(harness.execute({ action: "send", worker: "interrupted", prompt: "换角色", role: "设计师" }))
+		.rejects.toThrow("先 interrupt");
 	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	at(40);
 	await harness.execute({ action: "interrupt", worker: "interrupted" });
@@ -632,6 +632,98 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(resumedPrompt).toContain("</firecode_master_event>");
 	const listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed.interruptedAt).toBeUndefined();
+});
+
+test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也不报错", async () => {
+	const harness = await setup();
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	let secondContext = "";
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([
+		async () => { entered.resolve(); await gate; return fauxAssistantMessage("第一段"); },
+		(context: any) => { secondContext = userText(context); return fauxAssistantMessage("吸收补充"); },
+	]);
+	await harness.execute({ action: "start", worker: "steered", prompt: "开始", role: "工程师" });
+	await entered.promise;
+	await harness.execute({ action: "send", worker: "steered", prompt: "补充说明" });
+	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("working");
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	release();
+	await delivered;
+	expect(secondContext).toContain("补充说明");
+	expect(harness.messages.at(-1).message.content).toContain("吸收补充");
+});
+
+test("steer 入队后回合被中断而滞留的补充说明，落定时回报指挥官重发，不静默滞留", async () => {
+	const harness = await setup();
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([async (_context: any, options: any) => {
+		entered.resolve();
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中断");
+	}]);
+	await harness.execute({ action: "start", worker: "stranded", prompt: "开始", role: "工程师" });
+	await entered.promise;
+	await harness.execute({ action: "send", worker: "stranded", prompt: "迟到的补充" });
+	const has = () => harness.messages.some((m: any) => String(m.message.content).includes("迟到的补充"));
+	const seen = new Promise<void>((resolve) => { harness.onMessage = () => { if (has()) resolve(); }; });
+	await harness.execute({ action: "interrupt", worker: "stranded" });
+	await seen;
+	const stranded = harness.messages.find((m: any) => String(m.message.content).includes("迟到的补充"));
+	expect(stranded.message.content).toContain("未送达");
+});
+
+test("send 带 cwd 以新目录重开同一会话：上下文保留，bash 以新目录为准，档案记新 cwd", async () => {
+	const harness = await setup();
+	const [first, second] = [join(directory!, "co-a"), join(directory!, "co-b")];
+	await Promise.all([mkdir(first), mkdir(second)]);
+	const realSecond = await realpath(second);
+	faux.setResponses([fauxAssistantMessage("初始完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({ action: "start", worker: "mover", prompt: "初始任务", role: "工程师", cwd: first });
+	await delivered;
+	const sessionPath = (started.details as any).worker.session;
+
+	const pwdRun = (results: string[]) => [
+		fauxAssistantMessage(fauxToolCall("bash", { command: "pwd" }), { stopReason: "toolUse" }),
+		(context: any) => {
+			results.push(JSON.stringify(context.messages.findLast((m: any) => m.role === "toolResult")?.content));
+			return fauxAssistantMessage("pwd 完成");
+		},
+	];
+	const results: string[] = [];
+	let history = "";
+	faux.setResponses([
+		(context: any) => { history = userText(context); return pwdRun(results)[0]; },
+		pwdRun(results)[1],
+	]);
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "mover", prompt: "换目录继续", cwd: second });
+	await delivered;
+	expect(history).toContain("初始任务");
+	expect(results[0]).toContain(realSecond);
+
+	await harness.pool.dispose(sessionPath);
+	faux.setResponses(pwdRun(results));
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "mover", prompt: "冷启动再跑" });
+	await delivered;
+	expect(results[1]).toContain(realSecond);
+	expect((await harness.list().then((result) => result.details as any)).workers[0].session).toBe(sessionPath);
+});
+
+test("Worker 的 cwd 已不存在且 send 没带 cwd：明确报错并提示带 cwd", async () => {
+	const harness = await setup();
+	const gone = join(directory!, "gone");
+	await mkdir(gone);
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "orphan", prompt: "开始", role: "工程师", cwd: gone });
+	await delivered;
+	await rm(gone, { recursive: true });
+	await expect(harness.execute({ action: "send", worker: "orphan", prompt: "继续" })).rejects.toThrow("带 cwd");
+	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
 });
 
 test("失败的 interrupt 不会把本回合或下一回合误记为中断", async () => {
@@ -679,7 +771,7 @@ test("同一空闲 Worker 的并发 send 只接收一票，另一票按在飞拒
 	]);
 	expect(sends.filter((result) => result.status === "fulfilled")).toHaveLength(1);
 	const rejected = sends.find((result) => result.status === "rejected") as PromiseRejectedResult;
-	expect(String(rejected.reason)).toContain("急件先 interrupt 再 send");
+	expect(String(rejected.reason)).toContain("正在切换");
 	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("working");
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -1305,4 +1397,10 @@ function mockReviewExtension(
 			},
 		});
 	}`;
+}
+
+function userText(context: any): string {
+	return context.messages.filter((message: any) => message.role === "user")
+		.map((message: any) => typeof message.content === "string" ? message.content : message.content?.map((part: any) => part.text).join(""))
+		.join("\n");
 }
