@@ -1,17 +1,20 @@
 /**
- * Anthropic OAuth 会话按 Claude Code 的归因格式发请求：补 user-agent 与
- * 系统提示词首块的 billing header，缺失时注入，已存在则原样通过。
+ * Claude 订阅适配（Anthropic OAuth 会话）：
+ * - 归因：按 Claude Code 的格式补 user-agent 与系统提示词首块的 billing header，缺失时注入，已存在则原样通过。
+ * - 换发自愈：Anthropic 换发订阅令牌即吊销旧令牌，换发时仍在途的请求以 401 落空；宿主不重试 401，
+ *   这里把该失败从模型投影中省略并续跑一次，续跑请求由宿主重读令牌文件拿到新令牌。重试仍 401 即登录真失效，照常落定。
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
 const DEFAULT_ENTRYPOINT = "cli";
 const BILLING_SALT = "59cf53e54c78";
+const REVOKED_TOKEN_NOTICE = "Claude 令牌刚换发，已自动重试";
 
 type TextBlock = {
 	type: "text";
@@ -106,6 +109,23 @@ function log(details: Record<string, unknown>): void {
 	}
 }
 
+function isRevokedTokenFailure(entry: SessionEntry | undefined): entry is SessionMessageEntry {
+	if (entry?.type !== "message" || entry.message.role !== "assistant") return false;
+	const { stopReason, provider, errorMessage } = entry.message;
+	return stopReason === "error" && provider === "anthropic" && !!errorMessage?.includes('"authentication_error"');
+}
+
+/** 分支上最后两条消息；中间的 context_edit 等非消息条目不算。 */
+function lastTwoMessages(branch: SessionEntry[]): [SessionEntry | undefined, SessionEntry | undefined] {
+	let last: SessionEntry | undefined;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		if (branch[index].type !== "message") continue;
+		if (last) return [branch[index], last];
+		last = branch[index];
+	}
+	return [undefined, last];
+}
+
 export function registerClaudeSub(pi: ExtensionAPI): void {
 	pi.registerProvider("anthropic", {
 		headers: {
@@ -125,5 +145,14 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 		const header: TextBlock = { type: "text", text: buildBillingHeader(messages) };
 		log({ event: "billing_header_injected", header: header.text });
 		return { ...payload, system: [header, ...blocks] };
+	});
+
+	pi.on("agent_before_settle", (event, ctx) => {
+		if (event.outcome !== "error" || !shouldApply(ctx)) return;
+		const [previous, failure] = lastTwoMessages(ctx.sessionManager.getBranch());
+		// 紧挨着的上一条也是同类失败，说明这次已是自愈重试：登录真失效，交回宿主照常落定。
+		if (!isRevokedTokenFailure(failure) || isRevokedTokenFailure(previous)) return;
+		ctx.ui.notify(REVOKED_TOKEN_NOTICE, "info");
+		return { entries: [{ type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 	});
 }

@@ -1,6 +1,6 @@
 /**
  * FireCode：个人 pi 定制层——启动横幅、状态栏、工具行渲染、预设、会话命名，
- * Claude 归因、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
+ * Claude 订阅适配、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Feature, loadConfig } from "./config.js";
