@@ -369,6 +369,9 @@ export function registerMaster(
 		const settled = async (error?: unknown) => {
 			unsubscribeTerminal();
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
+			const stranded = session.clearQueue().steering;
+			if (stranded.length)
+				enqueueEvent(active, `子代理 ${worker.name} 回合结束时有 ${stranded.length} 条补充说明未送达，请重发：\n${stranded.join("\n---\n")}`, worker.name);
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
 				interruptedRuns.delete(worker.sessionPath);

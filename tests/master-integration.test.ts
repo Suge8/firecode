@@ -655,6 +655,25 @@ test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也
 	expect(harness.messages.at(-1).message.content).toContain("吸收补充");
 });
 
+test("steer 入队后回合被中断而滞留的补充说明，落定时回报指挥官重发，不静默滞留", async () => {
+	const harness = await setup();
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([async (_context: any, options: any) => {
+		entered.resolve();
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中断");
+	}]);
+	await harness.execute({ action: "start", worker: "stranded", prompt: "开始", role: "工程师" });
+	await entered.promise;
+	await harness.execute({ action: "send", worker: "stranded", prompt: "迟到的补充" });
+	const has = () => harness.messages.some((m: any) => String(m.message.content).includes("迟到的补充"));
+	const seen = new Promise<void>((resolve) => { harness.onMessage = () => { if (has()) resolve(); }; });
+	await harness.execute({ action: "interrupt", worker: "stranded" });
+	await seen;
+	const stranded = harness.messages.find((m: any) => String(m.message.content).includes("迟到的补充"));
+	expect(stranded.message.content).toContain("未送达");
+});
+
 test("send 带 cwd 以新目录重开同一会话：上下文保留，bash 以新目录为准，档案记新 cwd", async () => {
 	const harness = await setup();
 	const [first, second] = [join(directory!, "co-a"), join(directory!, "co-b")];
