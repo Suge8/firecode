@@ -65,6 +65,12 @@ Pi 的缓存告警保留。底栏示意：
 结果是供应商返回的快照，不保证供应商零延迟。Fable 与总体周额度共享约束，不是额外额度。
 `features.stats` 同时控制收尾行、`/quota` 和本地用量统计 `/tokens`。
 
+## Claude 订阅
+
+`features.claudeSub` 让 Claude 订阅（Anthropic OAuth）会话的请求带上 Claude Code 归因。Anthropic 换发订阅令牌时会立即
+作废旧令牌，此刻仍在途的请求以 401 失败；FireCode 用新令牌自动重试一次，主会话底部提示「Claude 令牌刚换发，已自动重试」，
+子代理静默续跑，不触发 fallback。重试仍被拒说明登录确已失效，照常报错，需要重新 `/login`。API key 的 401 不重试。
+
 ## 开发
 
 需要 [Bun](https://bun.sh/) 和一个 pi-mono checkout。开发版 `pi` 在 `PATH` 中时，测试会自动定位它；否则设置 `PI_PACKAGES_DIR` 为 pi-mono 的 `packages/` 目录。

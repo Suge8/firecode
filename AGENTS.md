@@ -1,6 +1,6 @@
 # FireCode
 
-pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Anthropic OAuth 归因、`/fire-review`
+pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Claude 订阅适配、`/fire-review`
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
@@ -19,7 +19,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
-| `provider/claude-sub.ts` | Anthropic OAuth 请求补 Claude Code 归因头 | |
+| `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | [ADR 0016](docs/adr/0016-claude-token-rotation-recovery.md) |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |
 | `deliver.ts` | Master 事件与观察员发言共用的统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
