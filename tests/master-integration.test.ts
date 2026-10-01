@@ -639,11 +639,13 @@ test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也
 	let release!: () => void;
 	const gate = new Promise<void>((resolve) => { release = resolve; });
 	let secondContext = "";
+	const entered = Promise.withResolvers<void>();
 	faux.setResponses([
-		async () => { await gate; return fauxAssistantMessage("第一段"); },
+		async () => { entered.resolve(); await gate; return fauxAssistantMessage("第一段"); },
 		(context: any) => { secondContext = userText(context); return fauxAssistantMessage("吸收补充"); },
 	]);
 	await harness.execute({ action: "start", worker: "steered", prompt: "开始", role: "工程师" });
+	await entered.promise;
 	await harness.execute({ action: "send", worker: "steered", prompt: "补充说明" });
 	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("working");
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });

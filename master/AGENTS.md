@@ -16,7 +16,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 `subagents` 只有七个命令动作，结构上都要求 Worker：
 
 - `start`：显式指定角色表内的 role 和短名；可用 thinking 覆盖角色原子档，可带 cwd、review。
-- `send`：只投空闲 Worker；省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。对在飞 Worker 拒绝并提示先 `interrupt`。
+- `send`：working Worker 的普通 send 经宿主 `session.steer` 在句缝送达，不打断（仅回合确在流式时；steer 是子会话自己的消息队列，与根 AGENTS.md 两条主会话 `sendMessage` 红线无关，且只在流式中使用，不会唤起歇透会话）。切换 role、thinking 或 cwd 要求 Worker 空闲，working 时提示先 `interrupt`，reviewing 时等落定。省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。带 cwd 时释放热会话并以新目录重开同一份 JSONL（不新建会话），档案记新 cwd；Worker 的 cwd 已不存在且未带 cwd 时明确报错并提示带 cwd。
 - `interrupt`：中止 working 回合，保留会话、义务并产生续跑提醒。`start` 与 `send` 等回合真正在飞才返回：宿主 prompt 的前置阶段仍报空闲，落在那里的 abort 会被静默丢弃。
 - `review`：只对 idle Worker 显式发起 fire-review。
 - `tail`：读取最近外部输入后的预算式轨迹快照，不改变状态。
