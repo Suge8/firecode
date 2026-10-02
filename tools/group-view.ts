@@ -273,9 +273,10 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 	let turn = env.headless;
 	let segment: Component[] = [];
 	env.clock.track(children.findLast(isHuman) ?? env.headless);
+	const closing = lastEntries(children);
 	const flush = (final: boolean) => {
 		if (!segment.length) return;
-		const view = renderSegment(segment, turn, final, env);
+		const view = renderSegment(segment, turn, final, env, closing);
 		nodes.push(...view.nodes);
 		animating ||= view.animating;
 		segment = [];
@@ -317,7 +318,21 @@ function tailReply(segment: readonly Component[]) {
 	return { tail, reply };
 }
 
-function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv) {
+/** 每轮最后一条 CustomEntry（收尾统计）：折叠态只有它留在最后回复下方。 */
+function lastEntries(children: readonly Component[]): Set<Component> {
+	const last = new Set<Component>();
+	let current: Component | undefined;
+	for (const child of children) {
+		if (isHuman(child)) {
+			if (current) last.add(current);
+			current = undefined;
+		} else if (isEntry(child)) current = child;
+	}
+	if (current) last.add(current);
+	return last;
+}
+
+function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv, closing: ReadonlySet<Component>) {
 	const { tail, reply } = tailReply(segment);
 	const globalOpen = env.ui.getToolsExpanded();
 	const open = globalOpen || env.isOpen(turn);
@@ -334,7 +349,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 		}, env.ui.theme));
 	}
 	if (open) nodes.push(...processList(segment, env));
-	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env), ...segment.filter(isEntry));
+	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env), ...segment.filter((item) => closing.has(item)));
 	return { nodes, animating: hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd))) };
 }
 
