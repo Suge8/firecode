@@ -297,7 +297,8 @@ function foldedReplies(
 		if (middle.length > shown.length) out.push(new Line(`  ${theme.fg("dim", `+${middle.length - shown.length} 条`)}`));
 		for (const text of shown) out.push(new Line(`  ${theme.fg("muted", firstSentence(text))}`));
 	}
-	if (body) out.push(new Spacer(1), body);
+	// 宿主助手正文自带前导空行，不再另垫。
+	if (body) out.push(body);
 	return out;
 }
 
