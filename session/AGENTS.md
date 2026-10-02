@@ -11,7 +11,6 @@
 | `run-summary.ts` | 主会话处理段收尾：静态时长与均速或异常状态，仅展示、不进入模型上下文 |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 | `bark.ts` | 任务落定时推 iPhone Bark 通知 |
-| `working-flame.ts` | 工作回合内 aboveEditor 居中多行火焰 widget |
 
 预设的 `model` 是模型原子（`provider/model/thinking`），模型与思考档一起切换：模型切换失败时思考档也不动。
 调 Pi 接口前才把 provider 与模型名拆开。
@@ -19,11 +18,6 @@
 预设名写入会话记录，重开会话只恢复名字与附加指令，不重放模型和工具切换。
 
 bark：同会话固定 id 新顶旧，有子代理待拍板升 timeSensitive（只读 `master/state.ts` 持久化），Worker 静默。
-
-working-flame：普通工作火焰随终端高度逐行增长，范围 3–7 行，未知尺寸用中等高度；宽不够逐级降高。
-回合内隐藏 Working 文本行，订阅占用频道在审查活跃期退让。审查火焰保持随内容高度走，不受此尺寸规则限制。
-共享素材只缓存当前尺寸的彩色帧；宽度从原始素材的非空像素轮廓推导，试尺寸不生成帧或淘汰播放缓存。
-退出时清空旧 UI 引用，尚未落地的微任务不再写入旧会话；动画组件由宿主卸载并停止计时器。
 
 ## run-summary
 

@@ -42,9 +42,10 @@ import {
 	type ActivityView,
 	hideActivity,
 	lockEditor,
+	reviewActivity,
 	showActivity,
-	unlockEditor,
 } from "./ui.js";
+import { REVIEW_ACTIVITY_CHANNEL } from "./activity-channel.js";
 import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt, reviewEnvelope } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
@@ -114,8 +115,8 @@ interface Controller {
 	progress: readonly ReviewerProgress[];
 	/** 当前 progress 属于审查者还是顾问：修复相据此决定是否展示裁决摘要。 */
 	progressKind?: "reviewers" | "advisor";
-	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
-	editorLocked?: boolean;
+	/** 审查接管了编辑器（禁输入 + esc 取消）时的解锁函数，还原成接管前的编辑器。 */
+	unlockEditor?: () => void;
 	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
 	occupancyHeld?: boolean;
 	/** 占用标签租约续期计时器；释放与 shutdown 时清除。 */
@@ -516,8 +517,7 @@ async function handleShutdown(
 	if (active.ctx !== ctx) active.ctx = ctx;
 	if (reason === "quit") await dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 	else {
-		hideActivity(active.ctx);
-		releaseEditor(active);
+		clearUi(rt, active);
 		await rt.queue;
 	}
 	if (rt.controller === active) rt.controller = undefined;
@@ -595,8 +595,7 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 					: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`,
 				"error",
 			);
-		releaseEditor(active);
-		hideActivity(active.ctx);
+		clearUi(rt, active);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
 		let sealed = true;
@@ -711,32 +710,31 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 }
 
 /**
- * UI 投影：编辑器上方活动条 + esc 接管，全部从当前状态派生。
- * 活动条自己按帧重绘，因此进度变化不需要在这里通知。
+ * UI 投影：编辑器上方单行活动 + esc 接管 + 向输入框外壳发布进度，全部从当前状态派生。
+ * 活动行自己按帧重绘，因此耗时变化不需要在这里通知。
  */
 function syncUi(rt: ReviewRuntime): void {
 	const active = rt.controller;
 	if (!active) return;
 	const view = () => activityView(rt);
-	if (view()) {
-		showActivity(active.ctx, view);
-		// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
-		if (canCancelWithKey(rt)) {
-			if (!active.editorLocked) {
-				lockEditor(active.ctx, view, () => cancelByUser(rt));
-				active.editorLocked = true;
-			}
-		} else releaseEditor(active);
-		return;
-	}
+	const current = view();
+	if (!current) return clearUi(rt, active);
+	showActivity(active.ctx, view);
+	rt.pi.events.emit(REVIEW_ACTIVITY_CHANNEL, reviewActivity(current));
+	// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
+	if (!canCancelWithKey(rt)) return releaseEditor(active);
+	active.unlockEditor ??= lockEditor(active.ctx, () => cancelByUser(rt));
+}
+
+function clearUi(rt: ReviewRuntime, active: Controller) {
 	hideActivity(active.ctx);
 	releaseEditor(active);
+	rt.pi.events.emit(REVIEW_ACTIVITY_CHANNEL, undefined);
 }
 
 function releaseEditor(active: Controller) {
-	if (!active.editorLocked) return;
-	unlockEditor(active.ctx);
-	active.editorLocked = false;
+	active.unlockEditor?.();
+	active.unlockEditor = undefined;
 }
 
 /** 活动条只读取当前审查状态，总结阶段由 UI 收成一行。 */

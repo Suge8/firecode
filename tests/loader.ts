@@ -53,7 +53,6 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 		stats: true,
 		claudeSub: false,
 		openaiNative: false,
-		workingFlame: true,
 		bark: false,
 		review: true,
 		master: false,

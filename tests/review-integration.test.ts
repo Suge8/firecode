@@ -132,7 +132,8 @@ function makePi(sessionManager: MockSessionManager) {
 			sessionManager.appendCustomEntry(customType, data);
 		},
 		events: {
-			emit: (name: string, data: unknown) => registered.emitted.push({ name, data }),
+			// 这些用例只关心 herdr 占用频道；外壳进度频道在 review-ui 与 statusbar 测试里验证。
+			emit: (name: string, data: unknown) => { if (name === "herdr:blocked") registered.emitted.push({ name, data }); },
 		},
 	};
 	return { pi, registered };
@@ -388,7 +389,6 @@ describe("registerReview wiring", () => {
 			const lines = activity.render(100);
 			expect(lines).toHaveLength(1);
 			expect(lines[0]).toContain("总结中");
-			expect(lines[0]).toContain("总 ");
 		} finally { activity.dispose(); }
 		const sent = registered.sent as { customType?: string; content?: string; display?: boolean }[];
 		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
