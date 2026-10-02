@@ -285,10 +285,13 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 		if (isProcess(child)) return true;
 		// 收尾统计等 CustomEntry 属于本轮：有段可依附时不切段。
 		if (isEntry(child)) return segment.length > 0;
-		if (!segment.some(hasSubstance)) return false;
-		const notice = child instanceof Spacer ? children[index + 1] : child;
-		return noticeKind(notice, env.ui.theme) !== undefined;
+		// 宿主在用户消息（含空闲送达的信封）与提示前先插一个 Spacer：它跟着后面的节点走，
+		// 后面的节点属于本段，它就属于本段。
+		if (child instanceof Spacer) return segment.length > 0 && leadsInto(children[index + 1]);
+		return segment.some(hasSubstance) && noticeKind(child, env.ui.theme) !== undefined;
 	};
+	const leadsInto = (next: Component | undefined) =>
+		next !== undefined && (isProcess(next) || isEntry(next) || (segment.some(hasSubstance) && noticeKind(next, env.ui.theme) !== undefined));
 	for (let index = 0; index < children.length; index++) {
 		const child = children[index];
 		if (isHuman(child)) {
@@ -362,7 +365,9 @@ function foldedReplies(
 
 function processList(segment: readonly Component[], env: ProjectionEnv): Component[] {
 	const list: Component[] = [];
-	for (const item of segment) {
+	for (const [index, item] of segment.entries()) {
+		// 机器消息前的宿主 Spacer 已由列表自己的间距取代。
+		if (item instanceof Spacer && machineEntriesOf(segment[index + 1] ?? item)) continue;
 		const machine = machineEntriesOf(item);
 		if (machine) {
 			// 工具行之后空一行，免得 ↳ 行像是贴在上一个工具行底下。

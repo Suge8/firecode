@@ -40,10 +40,21 @@ function entryOf(body: string): MachineEntry {
 
 /**
  * 一行预览用的首句，机器消息行、中间回复与事件卡共用这一份规则：
- * 首句以冒号结尾（如“标准输出：”）本身没有信息，并入下一非空行的首句。
+ * 首句以冒号结尾（如“标准输出：”）本身没有信息，并入下一非空行的首句；围栏行与空行不算有效文字，行内 Markdown 标记去掉。
  */
 export function firstSentence(text: string): string {
-	return sentenceOf(text.split("\n").map(oneLine).filter(Boolean));
+	const lines = text.split("\n").filter((line) => !FENCE.test(line)).map((line) => oneLine(plain(line))).filter(Boolean);
+	return sentenceOf(lines);
+}
+
+const FENCE = /^\s*```/u;
+
+/** 预览是纯文本：链接只留文字，去掉粗体与行内代码标记。 */
+function plain(line: string): string {
+	return line
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+		.replace(/(\*\*|__)(.+?)\1/gu, "$2")
+		.replace(/`([^`]+)`/gu, "$1");
 }
 
 function sentenceOf([head = "", ...rest]: string[]): string {
