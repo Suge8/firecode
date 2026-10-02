@@ -1,27 +1,26 @@
 # FireCode
 
-pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预设与重命名、Claude 订阅适配、`/fire-review`
+pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设与重命名、Claude 订阅适配、`/fire-review`
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
 状态，关掉任何一个不影响其余；跨模块接缝只有六条：Master 只读调 `review/outcome.ts`，bark 只读调
 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默。
+`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度。
 
 ## 模块
 
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
 | `header.ts` | 会话启动横幅：半格像素火焰 + 字标分三档（≥83 / 52–82 / <52 列一行），启动点亮扫光约 1.5 秒后定格并退订动画时钟 | |
-| `statusbar/` | 单行底栏：会话、模型、上下文与模块状态 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
+| `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 思考与工具的过程组/过程列表、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
-| `session/` | 预设、重命名、收尾统计、用量查询、Bark 通知、herdr 身份投影、工作火焰 | [session/AGENTS.md](session/AGENTS.md) |
-| `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、活动条 | [review/AGENTS.md](review/AGENTS.md) |
+| `session/` | 预设、重命名、收尾统计、用量查询、Bark 通知、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
+| `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、单行活动 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | [ADR 0016](docs/adr/0016-claude-token-rotation-recovery.md) |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
-| `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |
 | `deliver.ts` | Master 事件与观察员发言共用的统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |

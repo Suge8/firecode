@@ -180,7 +180,7 @@ async function loadSingleFailReview() {
 	return loadReviewWithVerdict(FAIL_VERDICT);
 }
 
-const OCCUPIED = { name: "herdr:blocked", data: { active: true, label: "对抗审查进行中" } };
+const OCCUPIED = { name: "herdr:blocked", data: { active: true, label: "对抗审查进行中", progress: expect.any(Function) } };
 const RELEASED = { name: "herdr:blocked", data: { active: false } };
 const reviewConfig = (overrides: Record<string, unknown> = {}) =>
 	JSON.stringify({ review: { ...TEST_REVIEW_CONFIG, ...overrides } });
@@ -388,7 +388,6 @@ describe("registerReview wiring", () => {
 			const lines = activity.render(100);
 			expect(lines).toHaveLength(1);
 			expect(lines[0]).toContain("总结中");
-			expect(lines[0]).toContain("总 ");
 		} finally { activity.dispose(); }
 		const sent = registered.sent as { customType?: string; content?: string; display?: boolean }[];
 		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
