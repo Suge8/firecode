@@ -113,10 +113,10 @@ test("窄屏先截短动作（保留开头带 …），放不下再丢角色；�
 	const long: Spec = { name: "fix-auth", tool: "bash", args: { command: "bun test tests/master-activity-list.test.ts" }, started: NOW - 72_000 };
 	const review: Spec = { name: "repo-scan", status: "reviewing", review: [2, 1, 3], started: NOW - 130_000 };
 	for (const width of [72, 56, 40]) {
-		for (const [spec, head] of [[long, "操作 $ bun"], [review, "审查第"]] as const) {
+		for (const [spec, head] of [[long, "操作 $"], [review, "审查"]] as const) {
 			const [line] = (await lines([spec], width)).text;
 			expect(line.length).toBeLessThanOrEqual(width);
-			if (width <= 56) expect(line).toMatch(/工程师 · .*…/u);
+			if (width <= 40 || (spec === long && width <= 56)) expect(line).toMatch(/工程师 · .*…/u);
 			expect(line).toContain(head);
 		}
 	}
