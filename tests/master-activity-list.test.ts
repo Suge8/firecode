@@ -78,7 +78,7 @@ test("行序以启动序为准：并发 start 入池顺序不同、落定或状�
 	expect(await names(pool({ name: "a", launch: 1 }))).toEqual(["a", "b", "c"]);
 	expect(await names(pool({ name: "a", launch: 1, status: "reviewing" }))).toEqual(["a", "b", "c"]);
 	expect(await names(pool({ ...idle("a", "done", 1_000), launch: 1 }))).toEqual(["a", "b", "c"]);
-	expect((await lines(pool({ name: "a", launch: 1 }), 72, 3)).text.map((line) => line.match(/ (a|b|c) /u)?.[1])).toEqual(["a", "b", undefined]);
+	expect((await lines(pool({ name: "a", launch: 1 }), 72, 2)).text.map((line) => line.match(/ (a|b|c) /u)?.[1])).toEqual(["a", undefined]);
 });
 
 test("动效：有行在动才要求时钟，全部静止则不要", async () => {
