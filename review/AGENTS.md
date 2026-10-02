@@ -63,7 +63,7 @@ UI 只读 reducer 的审查者状态，不再另派生逐审查者工具进度�
 
 审查活跃期双通道：进程内 `herdr:blocked` 频道驱动 herdr 集成的 blocked 状态（集成只转发状态，message
 会被 herdr 丢弃）；持有时的 payload 另带活的 `progress` 访问器（返回 `k/n`），输入框外壳借它显示审查进度，占用是 UI 唯一事实源，
-访问器不重发 true 以免破坏计数配对；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
+访问器不重发 true 以免破坏计数配对；`progress` 是进程内求值函数，频道不可序列化转发；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
 投递（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
 
 标签是租约：持有期带 TTL 定时续约（herdr 无“进程退出即清 metadata”接口，crash 残留靠 TTL 自愈，续约
