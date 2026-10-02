@@ -20,7 +20,7 @@ import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
-import { ActivityList, type ReviewProgress, type SettledFact } from "./activity-list.js";
+import { ActivityList, visibleRows, type ReviewProgress, type SettledFact } from "./activity-list.js";
 import { MASTER_EVENT_TYPE, sectionLine } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
@@ -171,7 +171,7 @@ export function registerMaster(
 					reviewProgress: active.reviewProgress,
 					runStartedAt: active.runStartedAt,
 					settled: active.settled,
-				}));
+				}), () => visibleRows(tui.terminal?.rows, ctx.ui.getToolsExpanded()));
 				return active.list;
 			},
 			{ placement: "aboveEditor" },
