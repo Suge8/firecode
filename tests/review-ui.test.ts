@@ -106,552 +106,89 @@ describe("reviewer progress derived from structured session events", () => {
 	});
 });
 
-describe("review activity layout", () => {
-	test("matches the pi-flow bordered quality box with flame, rows, and hint", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 review/state.ts", toolCalls: 2, trail: [], startedAt: Date.now() - 96_000 },
-					{
-						index: 1,
-						label: "gpt-5.6-terra",
-						status: "failed",
-						action: "发现问题",
-						summary: "审查未通过",
-						details: ["审查未通过", "↳ [高] 结算态丢失完整结果"],
-						toolCalls: 3,
-						trail: [],
-					},
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {} },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(100) ?? [];
-		const output = lines.join("\n");
-		expect(output).toContain("🔥 审查中");
-		// 运行中模型带自己的耗时；未设 startedAt 的其他 fixture 不显示。
-		expect(output).toMatch(/gpt-5\.6-sol · 2 次调用 · 1m3\ds/u);
-		expect(output).toContain("读 review/state");
-		expect(output).toContain("❌ gpt-5.6-terra");
-		expect(output).toContain("[高] 结算态丢失完整结果");
-		expect(output).toContain("Esc/Ctrl+C 取消");
-		expect(lines[0].replace(/\x1b\[[0-9;]*m/gu, "")).toBe("─".repeat(100));
-		expect(lines.at(-1)?.replace(/\x1b\[[0-9;]*m/gu, "")).toBe("─".repeat(100));
-		component?.dispose();
-	});
+const reviewer = (index: number, status: string) => ({
+	index, label: `model-${index + 1}`, status, action: "读 a.ts", toolCalls: 1, trail: [],
+});
 
-	test("compacts to single line per reviewer when reviewers exceed 3", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{ index: 0, label: "model-1", status: "passed", action: "通过", summary: "通过核验", details: ["通过核验"], toolCalls: 1, trail: [] },
-					{ index: 1, label: "model-2", status: "passed", action: "通过", summary: "通过核验", details: ["通过核验"], toolCalls: 1, trail: [] },
-					{ index: 2, label: "model-3", status: "passed", action: "通过", summary: "通过核验", details: ["通过核验"], toolCalls: 1, trail: [] },
-					{ index: 3, label: "model-4", status: "failed", action: "发现问题", summary: "未通过", details: ["[高] 发现 4"], toolCalls: 1, trail: [] },
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {} },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const output = (component?.render(64) ?? []).join("\n");
-		expect(output).toContain("✅ model-1 · 通过核验");
-		expect(output).toContain("❌ model-4 · [高] 发现 4");
-		// 4个模型紧凑单行，不带双行箭头
-		expect(output).not.toContain("  ↳");
-		component?.dispose();
-	});
+describe("review activity row", () => {
+	async function render(view: Record<string, unknown>, width = 100) {
+		const { showActivity } = await loadFirecodeModule("review/ui.js") as any;
+		let factory: any;
+		const widgets: any[] = [];
+		const ctx = { ui: { setWidget: (_key: string, next: any, options: any) => { factory = next; widgets.push(options); } } };
+		showActivity(ctx, () => view);
+		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text });
+		try { return { lines: component.render(width) as string[], widgets }; } finally { component.dispose(); }
+	}
+	const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 
-	test("advisor verdict summary stays visible in the repair phase activity bar", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		const renderWith = (progressKind: string | undefined, summary: string) => {
-			ui.showActivity(
-				{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-				() => ({
-					phase: "awaiting_fix",
-					round: 2,
-					startedAt: 0,
-					language: "zh",
-					progressKind,
-					reviewers: [{ index: 0, label: "claude-fable-5", status: "passed", action: "通过", summary, toolCalls: 1, trail: [] }],
-				}),
-			);
-			const component = factory?.({ requestRender: () => {} }, { fg: (_tone: string, text: string) => text });
-			const output = (component?.render(80) ?? []).join("\n");
-			component?.dispose();
-			return output;
-		};
-		const withAdvisor = renderWith("advisor", "继续修复：settled 竞态属实");
-		expect(withAdvisor).toContain("正在修复第 2 轮审查反馈");
-		expect(withAdvisor).toContain("💡 继续修复：settled 竞态属实");
-		expect(renderWith("reviewers", "核心逻辑已核对")).not.toContain("💡");
-	});
-
-	test("advisor consultation phase displays advisor consulting title and live advisor progress", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "needs_fix",
-				round: 2,
-				startedAt: 0,
-				language: "zh",
-				consecutiveFailures: 2,
-				reviewers: [{
-					index: 0,
-					label: "claude-fable-5",
-					status: "running",
-					action: "跑 bun test tests/review-ui.test.ts",
-					toolCalls: 2,
-					recentTools: [{ id: "t1", tool: "read", args: "review/state.ts", startedAt: 1, endedAt: 2 }],
-					trail: [],
-				}],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {} },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const output = (component?.render(80) ?? []).join("\n");
-		expect(output).toContain("🔥 顾问介入中 · 连续 2 轮未过");
-		expect(output).toContain("顾问 claude-fable-5 · 2 次调用");
-		// 动作按时间顺序滚动：旧在上新在下，不标当前/历史。
-		expect(output).toContain("↳ 读 state.ts");
-		expect(output).toContain("↳ 跑 bun test");
-		expect(output).not.toContain("当前:");
-		expect(output).toContain("Esc/Ctrl+C 跳过咨询");
-		component?.dispose();
-	});
-
-	test("small reviewer count (<=3) unfolds multiline details and tool history without losing summary", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{
-						index: 0,
-						label: "gpt-5.6-terra",
-						status: "passed",
-						action: "通过",
-						summary: "核心逻辑与测试已通过",
-						details: ["核心逻辑与测试已通过", "↳ 建议：可为边界场景补充单测"],
-						toolCalls: 3,
-						trail: [],
-					},
-					{
-						index: 1,
-						label: "gpt-5.6-sol",
-						status: "failed",
-						action: "发现问题",
-						summary: "未通过",
-						details: ["↳ [高] 结算态丢失完整结果", "↳ 问题: 大屏仍只显示标题，不展示这段核心问题说明"],
-						toolCalls: 3,
-						trail: [],
-					},
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {} },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const output = (component?.render(80) ?? []).join("\n");
-		// PASS 保留核心摘要，同时附带建议
-		expect(output).toContain("✅ gpt-5.6-terra");
-		expect(output).toContain("核心逻辑与测试已通过");
-		expect(output).toContain("建议：可为边界场景补充单测");
-		// FAIL 展示标题与问题正文
-		expect(output).toContain("❌ gpt-5.6-sol");
-		expect(output).toContain("[高] 结算态丢失完整结果");
-		expect(output).toContain("问题: 大屏仍只显示标题");
-		component?.dispose();
-	});
-
-	test("honors terminal height budget under 12-row terminal with 5 reviewers", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: Array.from({ length: 5 }, (_, i) => ({
-					index: i,
-					label: `model-${i + 1}`,
-					status: "running",
-					action: `读 state-${i + 1}.ts`,
-					toolCalls: 2,
-					trail: [],
-				})),
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 64, rows: 12 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(64) ?? [];
-		// 12 * 0.7 = 8 行
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(12 * 0.7));
-		const output = lines.join("\n");
-		for (let i = 1; i <= 5; i += 1) {
-			expect(output).toContain(`model-${i}`);
-		}
-		component?.dispose();
-	});
-
-	test("retains all 5 reviewers in compact single-line mode under 10-row terminal", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: Array.from({ length: 5 }, (_, i) => ({
-					index: i,
-					label: `model-${i + 1}`,
-					status: "running",
-					action: `读 state-${i + 1}.ts`,
-					toolCalls: 2,
-					trail: [],
-				})),
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 64, rows: 10 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(64) ?? [];
-		// 10 * 0.7 = 7 行
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(10 * 0.7));
-		const output = lines.join("\n");
-		for (let i = 1; i <= 5; i += 1) {
-			expect(output).toContain(`model-${i}`);
-		}
-		component?.dispose();
-	});
-
-	test("strictly honors height budget under ultra-low 4-row terminal with all 5 reviewers visible", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 state.ts", toolCalls: 1, trail: [] },
-					{ index: 1, label: "gpt-5.6-terra", status: "running", action: "跑测试", toolCalls: 1, trail: [] },
-					{ index: 2, label: "gpt-5.6-luna", status: "passed", action: "通过", toolCalls: 1, trail: [] },
-					{ index: 3, label: "claude-fable-5", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
-					{ index: 4, label: "gemini-3.8-flash", status: "passed", action: "通过", toolCalls: 1, trail: [] },
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 36, rows: 4 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(36) ?? [];
-		// 4 * 0.7 = 2 行
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(4 * 0.7));
-		const output = lines.join("\n");
-		expect(output).toContain("sol");
-		expect(output).toContain("terra");
-		expect(output).toContain("luna");
-		expect(output).toContain("fable-5");
-		expect(output).toContain("flash");
-		component?.dispose();
-	});
-
-	// 紧凑单行与极矮纵向路径同样携带每模型耗时：落定冻结、运行走表。
-	test("compact single-line and ultra-short paths carry per-model elapsed", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		const reviewer = (index: number, over: Record<string, unknown>) => ({
-			index,
-			label: `model-${index + 1}`,
-			summary: "",
-			toolCalls: 2,
-			trail: [],
-			startedAt: Date.now() - 96_000,
-			...over,
+	test("主会话审查是编辑器上方的一行，写明轮次与通过进度", async () => {
+		const { lines, widgets } = await render({
+			phase: "reviewing", round: 2, startedAt: Date.now() - 90_000, language: "zh",
+			reviewers: [reviewer(0, "passed"), reviewer(1, "running"), reviewer(2, "running")],
 		});
-		const renderAt = (rows: number) => {
-			ui.showActivity(
-				{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-				() => ({
-					phase: "reviewing",
-					round: 1,
-					startedAt: 0,
-					language: "zh",
-					reviewers: [
-						reviewer(0, { status: "passed", details: ["通过"], settledAt: Date.now() - 6_000 }),
-						reviewer(1, { status: "running", action: "跑 test" }),
-						reviewer(2, { status: "running", action: "读 a.ts" }),
-						reviewer(3, { status: "running", action: "思考中" }),
-					],
-				}),
-			);
-			const component = factory?.(
-				{ requestRender: () => {}, terminal: { rows } },
-				{ fg: (_tone: string, text: string) => text },
-			);
-			const output = (component?.render(120) ?? []).join("\n");
-			component?.dispose();
-			return output;
-		};
-		// 落定单行（>3 人的 !multiline 路径）：冻结在 1m30s，不随渲染走表。
-		const tall = renderAt(40);
-		expect(tall).toMatch(/✅ model-1 · 通过 · 1m30s/u);
-		expect(tall).toMatch(/model-2 · 跑 test · 2 次调用 · 1m3\ds/u);
-		// 极矮纵向路径同样携带。
-		const short = renderAt(8);
-		expect(short).toMatch(/✅ model-1: 通过 · 1m30s/u);
+		expect(widgets).toEqual([{ placement: "aboveEditor" }]);
+		expect(lines).toHaveLength(1);
+		expect(plain(lines[0])).toMatch(/^ {2}◈ 本轮改动 +审查 · 第 2 轮 · 1\/3 位审查者通过 +1m30s $/u);
 	});
 
-	// 预算 3…n 行的中间地带曾静默丢审查者：按行分组压缩后全员必须在场。
-	test("6-row terminal groups reviewers per line without dropping any", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: Array.from({ length: 5 }, (_, i) => ({
-					index: i,
-					label: `model-${i + 1}`,
-					status: "running",
-					action: `action-${i + 1}`,
-					summary: "",
-					toolCalls: 1,
-					tokens: 0,
-					activeTools: [],
-					recentTools: [],
-					trail: [],
-				})),
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 64, rows: 6 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(64) ?? [];
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(6 * 0.7));
-		const output = lines.join("\n");
-		for (let i = 1; i <= 5; i += 1) expect(output).toContain(`model-${i}`);
-		component?.dispose();
+	test("有审查者未通过时注明阻断", async () => {
+		const { lines } = await render({
+			phase: "reviewing", round: 1, startedAt: Date.now(), language: "zh",
+			reviewers: [reviewer(0, "passed"), reviewer(1, "failed"), reviewer(2, "running")],
+		});
+		expect(lines).toHaveLength(1);
+		expect(plain(lines[0])).toContain("1/3 位审查者通过，1 位阻断");
 	});
 
-	test("unfolds all 3 settled reviewers with findings and issues under 64x15 terminal", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{ index: 0, label: "gpt-5.6-sol", status: "failed", summary: "未通过", details: ["[高] 发现 1", "问题: 说明 1"], toolCalls: 1, trail: [] },
-					{ index: 1, label: "gpt-5.6-terra", status: "failed", summary: "未通过", details: ["[高] 发现 2", "问题: 说明 2"], toolCalls: 1, trail: [] },
-					{ index: 2, label: "gpt-5.6-luna", status: "failed", summary: "未通过", details: ["[高] 发现 3", "问题: 说明 3"], toolCalls: 1, trail: [] },
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 64, rows: 15 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(64) ?? [];
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(15 * 0.7));
-		const output = lines.join("\n");
-		expect(output).toContain("gpt-5.6-sol · [高] 发现 1");
-		expect(output).toContain("问题: 说明 1");
-		expect(output).toContain("gpt-5.6-terra · [高] 发现 2");
-		expect(output).toContain("问题: 说明 2");
-		expect(output).toContain("gpt-5.6-luna · [高] 发现 3");
-		expect(output).toContain("问题: 说明 3");
-		component?.dispose();
-	});
-
-	test("honors 5-row budget under 36x8 terminal and displays reviewers in full width", async () => {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			showActivity: (ctx: unknown, view: unknown) => void;
-		};
-		let factory: ((tui: unknown, theme: unknown) => { render: (width: number) => string[]; dispose: () => void }) | undefined;
-		ui.showActivity(
-			{ ui: { setWidget: (_key: string, next: typeof factory) => { factory = next; } } },
-			() => ({
-				phase: "reviewing",
-				round: 1,
-				startedAt: 0,
-				language: "zh",
-				reviewers: [
-					{ index: 0, label: "gpt-5.6-sol", status: "running", action: "读 state.ts", toolCalls: 1, trail: [] },
-					{ index: 1, label: "gpt-5.6-terra", status: "running", action: "跑测试", toolCalls: 1, trail: [] },
-					{ index: 2, label: "gpt-5.6-luna", status: "passed", action: "通过", details: ["验证通过"], toolCalls: 1, trail: [] },
-					{ index: 3, label: "claude-fable-5", status: "running", action: "读 index.ts", toolCalls: 1, trail: [] },
-					{ index: 4, label: "gemini-3.8-flash", status: "passed", action: "通过", details: ["核验通过"], toolCalls: 1, trail: [] },
-				],
-			}),
-		);
-		const component = factory?.(
-			{ requestRender: () => {}, terminal: { columns: 36, rows: 8 } },
-			{ fg: (_tone: string, text: string) => text },
-		);
-		const lines = component?.render(36) ?? [];
-		// 8 * 0.7 = 5 行
-		expect(lines.length).toBeLessThanOrEqual(Math.floor(8 * 0.7));
-		const output = lines.join("\n");
-		expect(output).toContain("sol");
-		expect(output).toContain("terra");
-		expect(output).toContain("luna");
-		expect(output).toContain("fable-5");
-		expect(output).toContain("flash");
-		component?.dispose();
+	test("窄屏不超宽，顾问与修复相仍是单行", async () => {
+		for (const phase of ["queued", "needs_fix", "awaiting_fix", "summarizing"])
+			for (const width of [26, 40, 72]) {
+				const { lines } = await render({
+					phase, round: 2, startedAt: Date.now(), language: "zh", consecutiveFailures: 2,
+					reviewers: [reviewer(0, "running")],
+				}, width);
+				expect(lines).toHaveLength(1);
+				expect([...plain(lines[0])].length).toBeLessThanOrEqual(width);
+			}
 	});
 });
 
-describe("review editor locks input and routes control keys", () => {
-	async function makeEditor(language: "zh" | "en" = "zh") {
-		const ui = (await loadFirecodeModule("review/ui.js")) as {
-			lockEditor: (ctx: unknown, view: unknown, cancel: () => void) => void;
-			unlockEditor: (ctx: unknown) => void;
-		};
-		const events: string[] = [];
-		let factory: ((tui: unknown, theme: unknown, keys: unknown) => unknown) | undefined;
-		const ctx = {
-			ui: {
-				setEditorComponent: (next?: (tui: unknown, theme: unknown, keys: unknown) => unknown) => {
-					factory = next;
-				},
-				custom: async () => undefined,
-			},
-		};
-		ui.lockEditor(ctx, () => ({ language, phase: "reviewing", round: 1 }), () =>
-			events.push("cancel"),
-		);
-		const tui = { requestRender: () => {}, addInputListener: () => () => {} };
-		const theme = { borderColor: (text: string) => text, selectList: {} };
-		const keys = { matches: (data: string, action: string) => action === "app.interrupt" && data === "\x1b" };
-		const editor = factory?.(tui, theme, keys) as {
-			handleInput: (data: string) => void;
-			render: (width: number) => string[];
-			getText: () => string;
-		};
-		return { editor, events, ctx, ui, hasFactory: () => factory !== undefined };
+describe("review editor lock", () => {
+	const tui = { requestRender: () => {}, terminal: { rows: 40 } };
+	const theme = { borderColor: (text: string) => text, selectList: {} };
+	const keys = { matches: (data: string, action: string) => action === "app.interrupt" && data === "\x1b" };
+
+	async function lock(previous?: unknown) {
+		const ui = await loadFirecodeModule("review/ui.js") as any;
+		const installed: unknown[] = [];
+		const ctx = { ui: { getEditorComponent: () => previous, setEditorComponent: (next: unknown) => installed.push(next) } };
+		const cancelled: string[] = [];
+		const unlock = ui.lockEditor(ctx, () => cancelled.push("cancel"));
+		const editor = (installed[0] as any)(tui, theme, keys);
+		return { editor, unlock, installed, cancelled };
 	}
 
-	test("typing does not reach the editor buffer", async () => {
-		const { editor } = await makeEditor();
+	test("输入不进缓冲区，esc 立即取消", async () => {
+		const { editor, cancelled } = await lock();
 		editor.handleInput("这段字不该出现");
 		expect(editor.getText()).toBe("");
-	});
-
-	test("escape triggers cancel instantly and reliably", async () => {
-		const { editor, events } = await makeEditor();
 		editor.handleInput("\x1b");
-		expect(events).toEqual(["cancel"]);
+		expect(cancelled).toEqual(["cancel"]);
 	});
 
-	test("hides the editor completely while quality checks run", async () => {
-		const { editor } = await makeEditor("en");
-		expect(editor.render(80)).toEqual([]);
+	test("锁定期间输入区收起，只留上下边框承载状态", async () => {
+		const { editor } = await lock();
+		expect(editor.render(80)).toHaveLength(2);
 	});
 
-	test("unlock restores the default editor", async () => {
-		const { ctx, ui } = await makeEditor();
-		let reset: unknown = "not-called";
-		ctx.ui.setEditorComponent = (next?: unknown) => {
-			reset = next;
-		};
-		ui.unlockEditor(ctx);
-		expect(reset).toBeUndefined();
+	test("解锁恢复锁定前的自定义编辑器，没有自定义编辑器则恢复默认", async () => {
+		const custom = () => ({});
+		const first = await lock(custom);
+		first.unlock();
+		expect(first.installed.at(-1)).toBe(custom);
+		const second = await lock(undefined);
+		second.unlock();
+		expect(second.installed.at(-1)).toBeUndefined();
 	});
-});
-
-test("审查阶段与总耗时只在活动框展示，矮屏仍保留标题，总结退成一行", async () => {
-	const { showActivity } = await loadFirecodeModule("review/ui.ts") as any;
-	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	let factory: any;
-	for (const [phase, label] of [
-		["reviewing", "第 2 轮审查中"], ["needs_fix", "顾问介入中"],
-		["awaiting_fix", "第 2 轮修复中"], ["summarizing", "总结中"],
-	]) {
-		showActivity({ ui: { setWidget: (_key: string, next: any) => { factory = next; } } }, () => ({
-			phase, round: 2, startedAt: Date.now() - 90_000, language: "zh", consecutiveFailures: 2,
-			reviewers: Array.from({ length: 5 }, (_, index) => ({ index, label: `model-${index + 1}`, status: "running", action: "思考中", toolCalls: 0, trail: [] })),
-		}));
-		for (const rows of [4, 6, 12, 40]) {
-			const component = factory({ requestRender() {}, terminal: { rows } }, { fg: (_color: string, text: string) => text });
-			try {
-				const lines: string[] = component.render(100);
-				expect(lines.join("\n")).toContain(label);
-				expect(lines.join("\n")).toContain("总 1m30s");
-				expect(lines.length).toBeLessThanOrEqual(Math.floor(rows * 0.7));
-				if (phase === "summarizing") expect(lines).toHaveLength(1);
-				for (const width of [12, 36, 64])
-					for (const line of component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			} finally { component.dispose(); }
-		}
-	}
 });
