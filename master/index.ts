@@ -59,6 +59,7 @@ interface MasterDependencies {
 
 interface CurrentTool {
 	tool: string;
+	args: unknown;
 	startedAt: number;
 }
 
@@ -334,7 +335,7 @@ export function registerMaster(
 			if (!ownsRuntime(active)) return;
 			if (event.type === "tool_execution_start") {
 				const tools = active.currentTools.get(sessionPath) ?? new Map<string, CurrentTool>();
-				tools.set(event.toolCallId, { tool: event.toolName, startedAt: Date.now() });
+				tools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
 				active.currentTools.set(sessionPath, tools);
 			}
 			if (event.type === "tool_execution_end") {

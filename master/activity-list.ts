@@ -6,7 +6,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { ACTIVITY_ROWS, renderActivityRow, renderMoreRow, type ActivityRow } from "../activity.js";
 import { flame, onFrame, phaseOf, reviewMark, settleMark, settling, type Settle } from "../flame.js";
-import { formatDuration } from "../format.js";
+import { clip, formatDuration } from "../format.js";
+import { toolActionText } from "../tools/actions.js";
 import type { WorkerRef } from "./state.js";
 
 export interface ReviewProgress {
@@ -24,8 +25,8 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "disposition">[];
-	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string }>>;
+	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "disposition" | "cwd">[];
+	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
@@ -37,6 +38,8 @@ interface Entry {
 	row: ActivityRow;
 }
 
+/** 动作文本上限：长命令截断，免得整段动作在窄屏被整体丢弃。 */
+const ACTION_MAX = 40;
 const duration = (ms: number) => formatDuration(Math.max(0, ms));
 
 function entryOf(facts: ActivityFacts, index: number, now: number): (Entry & { moving: boolean }) | undefined {
@@ -46,9 +49,9 @@ function entryOf(facts: ActivityFacts, index: number, now: number): (Entry & { m
 	const start = facts.runStartedAt.get(path);
 	const base = { name: worker.name, role: worker.role };
 	if (worker.status === "working") {
-		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1)?.tool;
+		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const elapsed = start === undefined ? "" : duration(now - start);
-		return { rank: 2, moving: true, row: { ...base, mark: flame(1, phase), action: tool ?? "思考中", elapsed } };
+		return { rank: 2, moving: true, row: { ...base, mark: flame(1, phase), action: tool ? clip(toolActionText(tool.tool, tool.args, worker.cwd ?? ""), ACTION_MAX, "end", "…") : "思考中", elapsed } };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
