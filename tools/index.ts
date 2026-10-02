@@ -12,10 +12,12 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../config.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { commandParts, diffMeta, pathValue } from "./parts.js";
 import { clearDurations, executeTimed } from "./timing.js";
+import { TurnClock } from "./turn-clock.js";
 
 const LABEL = { read: "读取", bash: "操作", edit: "修改", write: "写入" } as const;
 
@@ -80,12 +82,16 @@ function invoke<T extends (...args: never[]) => unknown>(
 export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
 	let dispose: (() => void) | undefined;
+	let clock = new TurnClock();
 
+	pi.on("agent_start", () => clock.begin());
+	pi.on("agent_end", () => clock.finish());
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
-		dispose = installGroupPatch(ctx.ui);
+		clock = new TurnClock();
+		dispose = installGroupPatch(ctx.ui, { replyLines: loadConfig().config.tools.replyLines, clock });
 		ctx.ui.setToolsExpanded(false);
 	});
 	pi.on("session_shutdown", () => {

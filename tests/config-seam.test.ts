@@ -172,3 +172,27 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	expect(loaded.config.master.roles.map((entry: any) => entry.role)).toEqual(["调研员", "工程师", "设计师", "哨兵"]);
 	expect(loaded.config.watcher.enabled).toBeFalse();
 });
+
+test("tools.replyLines 默认 3，接受非负整数，类型错误与未知字段报配置问题", async () => {
+	const load = async (tools: string | undefined) => {
+		const configJsonc = tools === undefined ? "{}" : `{ "tools": ${tools} }`;
+		const { loadConfig } = await loadFirecodeModule("config.ts", { configJsonc });
+		const loaded = (loadConfig as () => { config: any; problems: string[] })();
+		await cleanupFirecodeModules();
+		return loaded;
+	};
+	expect((await load(undefined)).config.tools.replyLines).toBe(3);
+	expect((await load("{}")).config.tools.replyLines).toBe(3);
+	for (const value of [0, 5]) {
+		const loaded = await load(`{ "replyLines": ${value} }`);
+		expect(loaded.config.tools.replyLines).toBe(value);
+		expect(loaded.problems.filter((problem) => problem.startsWith("tools"))).toEqual([]);
+	}
+	for (const bad of ["-1", "1.5", '"3"', "null"]) {
+		const loaded = await load(`{ "replyLines": ${bad} }`);
+		expect(loaded.problems).toContain("tools.replyLines 必须是非负整数");
+		expect(loaded.config.tools.replyLines).toBe(3);
+	}
+	expect((await load('{ "replyLine": 2 }')).problems).toContain("未知字段 tools.replyLine");
+	expect((await load("[]")).problems).toContain("tools 必须是对象");
+});

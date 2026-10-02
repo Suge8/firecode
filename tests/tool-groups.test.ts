@@ -9,11 +9,16 @@ afterEach(async () => {
 	await cleanupFirecodeModules();
 });
 
-async function scene(withMaster = false) {
-	const [host, tui, module, toolsModule] = await Promise.all([
+const FLAME = "[\u2800-\u28ff]";
+
+async function scene(options: { withMaster?: boolean; replyLines?: number } = {}) {
+	const { withMaster = false, replyLines = 3 } = options;
+	const [host, tui, module, toolsModule, clockModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
-		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"),
+		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"), loadFirecodeModule("tools/turn-clock.ts"),
 	]);
+	let now = 0;
+	const clock = new (clockModule.TurnClock as any)(() => now);
 	host.initTheme("dark");
 	const tools = new Map<string, any>();
 	const api = { on() {}, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {} };
@@ -54,8 +59,9 @@ async function scene(withMaster = false) {
 	const lines = (width = 100) => chat.render(width).map(stripVTControlCharacters);
 	const click = (y: number, width = 100) => chat.handleMouse({ type: "click", button: "left", x: 5, y, width, height: chat.render(width).length, shift: false, alt: false, ctrl: false });
 	const originalRender = chat.render;
-	dispose = module.installGroupPatch(ui);
-	return { host, tui, chat, root, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	dispose = module.installGroupPatch(ui, { replyLines, clock });
+	const setNow = (value: number) => { now = value; };
+	return { clock, setNow, host, tui, chat, root, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -65,11 +71,12 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	const bash = s.tool("bash", { command: "bun test" });
 	const summary = s.lines().filter(Boolean);
 	expect(summary).toHaveLength(1);
-	expect(summary[0]).toMatch(/^▏ ✦ 操作\s+读取 1 · 操作 1\s*$/);
+	expect(summary[0]).toMatch(new RegExp(`^${FLAME} 操作 · 读 1 · 运行 1 ▸\\s*$`));
 	expect(summary.join("\n")).not.toContain("private full result");
 
 	s.ui.setToolsExpanded(true);
-	expect(s.lines().filter(Boolean)).toHaveLength(2);
+	expect(s.lines().filter(Boolean)).toHaveLength(3);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 · 读 1 · 运行 1 ▾\\s*$`));
 	expect(s.lines().join("\n")).toContain("读取");
 	expect(s.lines().join("\n")).not.toContain("private full result");
 	const readLine = s.lines().findIndex((line: string) => line.includes("读取"));
@@ -81,7 +88,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	s.complete(bash);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 操作\s+读取 1 · 操作 1\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ 读 1 · 运行 1 ▸\s*$/);
 	dispose?.();
 	dispose = undefined;
 	expect(s.chat.render).toBe(s.originalRender);
@@ -100,7 +107,7 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	const second = s.tool("read", { path: "b" });
 	s.complete(second);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("读取 2");
+	expect(s.lines().join("\n")).toContain("读 2");
 
 	empty.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "需要检查另一处" }] }, false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -115,9 +122,9 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	const index = s.chat.children.indexOf(empty);
 	s.chat.children[index] = new s.tui.Text("审查已完成", 0, 0);
 	expect(s.lines().join("\n")).toContain("审查已完成");
-	expect(s.lines().filter((line: string) => line.includes("读取 1"))).toHaveLength(2);
+	expect(s.lines().filter((line: string) => line.includes("读 1"))).toHaveLength(2);
 	s.chat.children.splice(index, 1);
-	expect(s.lines().join("\n")).toContain("读取 2");
+	expect(s.lines().join("\n")).toContain("读 2");
 });
 
 test("摘要优先显示运行项且保留失败，切档不改聊天树", async () => {
@@ -125,7 +132,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 操作 · 1 次失败\s+操作 1 · 读取 2\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 · 1 次失败 · 读 2 · 运行 1 ▸\\s*$`));
 	const originalChildren = [...s.chat.children];
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
@@ -137,9 +144,9 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	}
 	s.complete(running);
 	s.ui.setToolsExpanded(false);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s+操作 1 · 读取 2\s*$/);
-	expect(s.lines(24).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 · 1 次失败\s*$/);
-	expect(s.lines(12).filter(Boolean)[0]).toMatch(/^▏ ✗ 读取 …\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✗ 1 次失败 · 读 2 · 运行 1 ▸\s*$/);
+	expect(s.lines(24).filter(Boolean)[0]).toMatch(/^✗ 1 次失败 · 读 2 ▸\s*$/);
+	expect(s.lines(12).filter(Boolean)[0]).toMatch(/^✗ 1 次失败 ▸\s*$/);
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
@@ -165,15 +172,15 @@ test("用户消息之间的整段过程折成一行：图片、中途正文与�
 	final.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "修好了" }] }, false);
 
 	const collapsed = s.lines().filter(Boolean);
-	expect(collapsed).toHaveLength(2);
-	expect(collapsed[0]).toMatch(/^▏ ✓ 读取\s+读取 3 · 操作 1\s*$/);
-	expect(collapsed[1]).toContain("修好了");
-	expect(collapsed.join("\n")).not.toMatch(/先看一下|fix-auth 完成|image payload/);
+	expect(collapsed.map((line: string) => line.trim())).toEqual([
+		expect.stringMatching(/^✓ 读 3 · 运行 1 ▸$/), "先看一下子代理的进展", "修好了",
+	]);
+	expect(collapsed.join("\n")).not.toMatch(/fix-auth 完成|image payload/);
 
 	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
 	s.complete(s.tool("read", { path: "c.ts" }));
-	expect(s.lines().filter((line: string) => line.includes("读取 3 · 操作 1"))).toHaveLength(1);
-	expect(s.lines().filter((line: string) => /读取 1\s*$/.test(line))).toHaveLength(1);
+	expect(s.lines().filter((line: string) => line.includes("读 3 · 运行 1"))).toHaveLength(1);
+	expect(s.lines().filter((line: string) => /^✓ 读 1 ▸\s*$/.test(line))).toHaveLength(1);
 	expect(s.lines().join("\n")).toContain("下一问");
 
 	s.ui.setToolsExpanded(true);
@@ -206,13 +213,14 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	dispose = undefined;
 	expect(Container.prototype.addChild).toBe(addChild);
 	const module = await loadFirecodeModule("tools/grouping.ts");
-	const oldDispose = module.installGroupPatch(s.ui);
-	dispose = module.installGroupPatch(s.ui);
+	const options = { replyLines: 3, clock: s.clock };
+	const oldDispose = module.installGroupPatch(s.ui, options);
+	dispose = module.installGroupPatch(s.ui, options);
 	oldDispose();
 	s.complete(s.tool("read", { path: "a" }));
 	s.complete(s.tool("read", { path: "b" }));
 	expect(Container.prototype.addChild).toBe(addChild);
-	expect(s.lines().join("\n")).toContain("读取 2");
+	expect(s.lines().join("\n")).toContain("读 2");
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
 	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), registerTool() {}, registerCommand() {} });
@@ -229,12 +237,12 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 处理中\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 处理中 ▸\\s*$`));
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 思考中\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中 ▸\\s*$`));
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }, { type: "text", text: "第一段" }], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ 思考 ▸\s*$/);
 	const message = {
 		role: "assistant", stopReason: "stop", content: [
 			{ type: "thinking", thinking: "第一段内部思考" },
@@ -250,7 +258,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	const originalTree = assistant.children;
 	const originalContent = originalTree[0].children;
 	const collapsed = s.lines().join("\n");
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ 思考 ▸\s*$/);
 	expect(collapsed).toContain("第一段正式回复");
 	expect(collapsed).toContain("第二段正式回复");
 	expect(collapsed).not.toMatch(/内部思考|Thinking|✦/);
@@ -271,7 +279,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	expect(s.lines().join("\n")).toBe(collapsed);
 	s.chat.addChild(new s.tui.Spacer(1));
 	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss: 20k tokens re-billed"), 1, 0));
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✓ 思考 · ⚠ 1\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ ⚠ 1 · 思考 ▸\s*$/);
 	// 前两行是段首空行与摘要行；其后的回复一字不动
 	expect(s.lines().slice(2).join("\n")).toBe(collapsed.split("\n").slice(2).join("\n"));
 });
@@ -284,7 +292,7 @@ test("思考期间仍保留已有工具失败，异常和截断诊断不会被�
 	const content = [{ type: "thinking", thinking: "不应直接显示的思考" }];
 	assistant.updateContent({ role: "assistant", content, stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^▏ ✦ 思考中 · 1 次失败\s+读取 1\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中 · 1 次失败 · 读 1 ▸\\s*$`));
 	for (const [stopReason, diagnostic] of [["error", "Error: failed"], ["aborted", "failed"], ["length", "Response was truncated"]]) {
 		assistant.updateContent({ role: "assistant", content, stopReason, errorMessage: "failed" }, false);
 		expect(s.lines().join("\n")).toContain(diagnostic);
@@ -293,11 +301,11 @@ test("思考期间仍保留已有工具失败，异常和截断诊断不会被�
 });
 
 test("真实子代理调用与池查询纳入过程组，保留原生动作和列表摘要，详情按需展开", async () => {
-	const s = await scene(true);
+	const s = await scene({ withMaster: true });
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 1");
+	expect(s.lines().join("\n")).toContain("读 1 · 子代理 1");
 	expect(s.lines().join("\n")).not.toContain("worker-one");
 	s.complete(start, "worker started");
 	const list = s.tool("subagents_list", {});
@@ -305,11 +313,11 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
 	} });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("读取 1 · 子代理 2");
+	expect(s.lines().join("\n")).toContain("读 1 · 子代理 2");
 	expect(s.lines().join("\n")).toContain("子代理");
 	expect(s.lines().join("\n")).not.toContain("worker-one");
 	s.ui.setToolsExpanded(true);
-	expect(s.lines().filter(Boolean)).toHaveLength(3);
+	expect(s.lines().filter(Boolean)).toHaveLength(4);
 	expect(s.lines().join("\n")).toContain("启动 worker-one");
 	expect(s.lines().join("\n")).toContain("池 1");
 	const queryLine = s.lines().findIndex((line: string) => line.includes("查看"));
@@ -317,7 +325,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	expect(s.lines().join("\n")).toContain("model/low");
 	expect(s.lines().join("\n")).toContain("read");
 	s.click(queryLine);
-	expect(s.lines().filter(Boolean)).toHaveLength(3);
+	expect(s.lines().filter(Boolean)).toHaveLength(4);
 	s.ui.setToolsExpanded(false);
 	for (const [action, label] of [["send", "发送"], ["interrupt", "中断"], ["review", "审查"], ["tail", "近况"], ["ack", "待命"], ["kill", "移除"]]) {
 		s.complete(s.tool("subagents", { action, worker: "worker-one", prompt: "继续" }));
@@ -347,12 +355,12 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 	expect(s.lines().join("\n")).toContain("custom-self 1 · custom-default 1 · real-control 1");
 	s.ui.setToolsExpanded(true);
 	for (const shell of ["self", "default"]) {
-		s.click(s.lines().findIndex((line: string) => line.includes(`custom-${shell}`)));
+		s.click(s.lines().findIndex((line: string) => line.startsWith("▏") && line.includes(`custom-${shell}`)));
 		expect(s.lines().join("\n")).toContain(`static custom render ${shell}`);
 		s.click(s.lines().findIndex((line: string) => line.includes(`static custom render ${shell}`)));
 		expect(s.lines().join("\n")).not.toContain(`static custom render ${shell}`);
 	}
-	s.click(s.lines().findIndex((line: string) => line.includes("real-control")));
+	s.click(s.lines().findIndex((line: string) => line.startsWith("▏") && line.includes("real-control")));
 	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
 	expect(clicked).toBe(1);
 });
@@ -372,7 +380,7 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	note("dim", "Tool output: collapsed");
 	let collapsed = s.lines().filter(Boolean);
 	expect(collapsed).toHaveLength(2);
-	expect(collapsed[0]).toMatch(/^▏ ✓ 读取 · ⚠ 2\s+读取 1\s*$/);
+	expect(collapsed[0]).toMatch(/^✓ ⚠ 2 · 读 1 ▸\s*$/);
 	expect(collapsed[1]).toContain("修好了");
 
 	note("error", "Error: Request failed");
@@ -381,8 +389,8 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	s.complete(s.tool("read", { path: "b.ts" }));
 	collapsed = s.lines().filter(Boolean);
 	expect(collapsed.map((line: string) => line.trim())).toEqual([
-		expect.stringMatching(/^▏ ✓ 读取 · ⚠ 2\s+读取 1$/), "修好了", "Error: Request failed", "ID: session-1",
-		expect.stringMatching(/^▏ ✓ 读取\s+读取 1$/),
+		expect.stringMatching(/^✓ ⚠ 2 · 读 1 ▸$/), "修好了", "Error: Request failed", "ID: session-1",
+		expect.stringMatching(/^✓ 读 1 ▸$/),
 	]);
 
 	s.ui.setToolsExpanded(true);
@@ -402,4 +410,114 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	expect(after.slice(0, before.length)).toEqual(before);
 	expect(after.at(-1)).toContain("Cache miss");
 	expect(after.join("\n")).not.toContain("过程");
+});
+
+const WORKER_RESULT = (name: string, body = "刷新改为单飞。更多细节") =>
+	`<firecode_master_event>\n子代理 ${name} 已停下\n回复：\n${body}\n耗时：本次运行 8m · 当前任务 19m\n</firecode_master_event>`;
+
+function assistant(s: any, content: unknown[], stopReason = "stop") {
+	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(message);
+	message.updateContent({ role: "assistant", stopReason, content }, false);
+	return message;
+}
+
+test("空闲路径的信封用户消息不切段；展开后它投影成 ↳ 行，忙时 CustomMessage 交给 Master 事件卡自己渲染，两者含同一名字、时长与首句", async () => {
+	const s = await scene();
+	const { registerMasterEventRenderer } = await loadFirecodeModule("master/event-card.ts");
+	let renderer: any;
+	registerMasterEventRenderer({ registerMessageRenderer: (_type: string, render: unknown) => { renderer = render; } });
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.complete(s.tool("read", { path: "a.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"), display: true, timestamp: 0 }, renderer));
+	assistant(s, [{ type: "text", text: "全部收口" }]);
+
+	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(collapsed.filter((line: string) => line.includes("开工"))).toHaveLength(1);
+	expect(collapsed.filter((line: string) => /^✓ 读 2 ▸$/.test(line))).toHaveLength(1);
+	expect(collapsed.join("\n")).not.toMatch(/firecode_master_event|fix-auth|lint-sweep/);
+	expect(collapsed.at(-1)).toBe("全部收口");
+
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines().map((line: string) => line.trim());
+	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 刷新改为单飞。");
+	// CustomMessage 在展开态交给自己的渲染器（Master 事件卡），不被投影成 ↳ 行。
+	expect(expanded.some((line: string) => line.startsWith("↳ lint-sweep"))).toBe(false);
+	const card = expanded.slice(expanded.findIndex((line: string) => line.includes("lint-sweep"))).join("\n");
+	for (const fact of ["lint-sweep", "8m", "清掉 4 处 lint。"]) expect(card).toContain(fact);
+	expect(expanded.join("\n")).not.toContain("firecode_master_event");
+	const order = ["a.ts", "fix-auth", "b.ts", "lint-sweep", "全部收口"].map((needle) => expanded.findIndex((line: string) => line.includes(needle)));
+	expect(order).toEqual([...order].sort((a, b) => a - b));
+});
+
+test.each([
+	[0, ["全文收尾"]],
+	[3, ["+2 条", "第 3 步。", "第 4 步。", "第 5 步。", "全文收尾"]],
+])("replyLines=%i：折叠态中间回复取最近几条首句，更早的折成 +N 条，最后一条回复全文", async (replyLines, expected) => {
+	const s = await scene({ replyLines });
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	for (let step = 1; step <= 5; step++) {
+		assistant(s, [{ type: "text", text: `第 ${step} 步。细节${step}` }, { type: "toolCall", id: `c${step}`, name: "read", arguments: {} }], "toolUse");
+		s.complete(s.tool("read", { path: `${step}.ts` }));
+	}
+	assistant(s, [{ type: "text", text: "全文收尾" }]);
+
+	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(lines.filter((line: string) => line.includes("开工"))).toHaveLength(1);
+	expect(lines.slice(lines.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(expected);
+	expect(lines.join("\n")).not.toContain("细节");
+});
+
+test("点击某一轮摘要只展开这一轮，ctrl+o 的全局档位不变", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
+	s.complete(s.tool("read", { path: "first.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent("第二问"));
+	s.complete(s.tool("read", { path: "second.ts" }));
+	const summaryAt = (nth: number) => s.lines().map((line: string, index: number) => [line, index] as const)
+		.filter(([line]) => /^✓ 读 1 [▸▾]/.test(line))[nth][1];
+	expect(s.lines().join("\n")).not.toMatch(/first\.ts|second\.ts/);
+
+	s.click(summaryAt(0));
+	expect(s.lines().join("\n")).toContain("first.ts");
+	expect(s.lines().join("\n")).not.toContain("second.ts");
+	expect(s.ui.getToolsExpanded()).toBe(false);
+	s.click(summaryAt(0));
+	expect(s.lines().join("\n")).not.toContain("first.ts");
+});
+
+test("运行中的摘要显示实时计时，子代理结果到达时短暂高亮已返回随后回到当前动作，落定后定格时长", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.setNow(1000);
+	s.clock.begin();
+	const bash = s.tool("bash", { command: "bun test" });
+	s.setNow(6000);
+	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 · 5.0s · 运行 1 ▸`));
+
+	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
+	expect(s.lines().find((line: string) => line.includes("已返回"))).toMatch(new RegExp(`^${FLAME} fix-auth 已返回 · 5.0s`));
+	s.setNow(9000);
+	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(new RegExp(`^${FLAME} 操作 · 8.0s`));
+
+	s.complete(bash);
+	s.setNow(10000);
+	s.clock.finish();
+	s.setNow(20000);
+	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(/^✓ 9.0s · 运行 1 ▸/);
+});
+
+test("review 的信封消息归入过程不切段", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.complete(s.tool("read", { path: "a.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent("<firecode_review>\n第 1 轮未通过，请修复。\n</firecode_review>"));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(lines.filter((line: string) => /^✓ 读 2 ▸$/.test(line))).toHaveLength(1);
+	expect(lines.join("\n")).not.toContain("firecode_review");
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
 });

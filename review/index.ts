@@ -11,6 +11,7 @@
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
 import { randomUUID } from "node:crypto";
+import { wrapEnvelope } from "../deliver.js";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	getAgentDir,
@@ -40,7 +41,7 @@ import {
 	showActivity,
 } from "./ui.js";
 import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
-import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt, reviewEnvelope } from "./prompt.js";
+import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
@@ -1013,7 +1014,7 @@ function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): voi
 	const built = buildCard(card, active.config.language);
 	rt.pi.sendMessage({
 		customType: CARD_TYPE,
-		content: reviewEnvelope(built.content),
+		content: wrapEnvelope("firecode_review", built.content),
 		display: true,
 		details: built.details,
 	});
