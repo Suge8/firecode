@@ -364,8 +364,11 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 	const list: Component[] = [];
 	for (const item of segment) {
 		const machine = machineEntriesOf(item);
-		if (machine) list.push(new MachineItem(item, machine, env));
-		else if (item instanceof ToolExecutionComponent) {
+		if (machine) {
+			// 工具行之后空一行，免得 ↳ 行像是贴在上一个工具行底下。
+			if (list.at(-1) instanceof ToolItem) list.push(new Spacer(1));
+			list.push(new MachineItem(item, machine, env));
+		} else if (item instanceof ToolExecutionComponent) {
 			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
 			list.push(new ToolItem(item, env.ui, env.toggleRow));
 		} else if (item instanceof AssistantMessageComponent) {
