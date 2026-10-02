@@ -422,13 +422,16 @@ function assistant(s: any, content: unknown[], stopReason = "stop") {
 	return message;
 }
 
-test("空闲路径的信封用户消息不切段，展开后与忙时卡片渲染为同一行", async () => {
+test("空闲路径的信封用户消息不切段；展开后它投影成 ↳ 行，忙时 CustomMessage 交给 Master 事件卡自己渲染，两者含同一名字、时长与首句", async () => {
 	const s = await scene();
+	const { registerMasterEventRenderer } = await loadFirecodeModule("master/event-card.ts");
+	let renderer: any;
+	registerMasterEventRenderer({ registerMessageRenderer: (_type: string, render: unknown) => { renderer = render; } });
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
 	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
 	s.complete(s.tool("read", { path: "b.ts" }));
-	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"), display: true, timestamp: 0 }));
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"), display: true, timestamp: 0 }, renderer));
 	assistant(s, [{ type: "text", text: "全部收口" }]);
 
 	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
@@ -440,7 +443,10 @@ test("空闲路径的信封用户消息不切段，展开后与忙时卡片渲�
 	s.ui.setToolsExpanded(true);
 	const expanded = s.lines().map((line: string) => line.trim());
 	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 刷新改为单飞。");
-	expect(expanded).toContain("↳ lint-sweep 已返回 · 8m 清掉 4 处 lint。");
+	// CustomMessage 在展开态交给自己的渲染器（Master 事件卡），不被投影成 ↳ 行。
+	expect(expanded.some((line: string) => line.startsWith("↳ lint-sweep"))).toBe(false);
+	const card = expanded.slice(expanded.findIndex((line: string) => line.includes("lint-sweep"))).join("\n");
+	for (const fact of ["lint-sweep", "8m", "清掉 4 处 lint。"]) expect(card).toContain(fact);
 	expect(expanded.join("\n")).not.toContain("firecode_master_event");
 	const order = ["a.ts", "fix-auth", "b.ts", "lint-sweep", "全部收口"].map((needle) => expanded.findIndex((line: string) => line.includes(needle)));
 	expect(order).toEqual([...order].sort((a, b) => a - b));
