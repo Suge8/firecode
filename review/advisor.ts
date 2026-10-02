@@ -12,7 +12,6 @@ export interface RunAdvisorOptions {
 	language: Language;
 	signal?: AbortSignal;
 	runSession: ReviewSessionRunner;
-	onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorResult> {
@@ -25,7 +24,6 @@ export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorRes
 		cwd: options.cwd,
 		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
-		onEvent: options.onEvent,
 	});
 	if (result.kind !== "output") throw new Error(advisorProcessError(result, options.language));
 	return parseAdvisorOutput(result.text, options.language);

@@ -15,10 +15,8 @@ import { type Component, type EditorComponent, type EditorTheme, type TUI, visib
 import { type ActivityRow, renderActivityRow } from "../activity.js";
 import type { Language } from "../config.js";
 import { onFrame, phaseOf, reviewMark } from "../flame.js";
-import { formatDuration } from "../format.js";
-import type { ReviewActivity } from "./activity-channel.js";
-import type { ReviewerProgress } from "./progress.js";
-import type { Phase } from "./state.js";
+import { clip, formatDuration } from "../format.js";
+import type { Phase, ReviewerStatus } from "./state.js";
 
 const WIDGET_KEY = "fire-review";
 let reviewTitleActive = false;
@@ -28,9 +26,8 @@ export interface ActivityView {
 	phase: Phase;
 	round: number;
 	startedAt: number;
-	reviewers: readonly ReviewerProgress[];
-	/** 当前 progress 属于谁：顾问与修复相的 progress 不是审查者票数。 */
-	progressKind?: "reviewers" | "advisor";
+	/** 本轮各审查者的状态（来自 reducer）；只有审查相的票数可数。 */
+	reviewers: readonly { status: ReviewerStatus }[];
 	consecutiveFailures?: number;
 	language: Language;
 }
@@ -52,13 +49,12 @@ const WORDS = {
 	},
 } as const;
 
-const countStatus = (view: ActivityView, status: ReviewerProgress["status"]) =>
+const countStatus = (view: ActivityView, status: ReviewerStatus) =>
 	view.reviewers.filter((reviewer) => reviewer.status === status).length;
 
-/** 输入框外壳要显示的审查进度：只有审查相的票数可数。 */
-export function reviewActivity(view: ActivityView): ReviewActivity {
-	const counts = view.phase === "reviewing" ? `${countStatus(view, "passed")}/${view.reviewers.length}` : "";
-	return { counts };
+/** 输入框外壳显示的审查进度如 `2/3`；没有可数票数的阶段（排队、顾问、修复、总结）为空串。 */
+export function reviewCounts(view: ActivityView | undefined): string {
+	return view?.phase === "reviewing" ? `${countStatus(view, "passed")}/${view.reviewers.length}` : "";
 }
 
 function activityRow(view: ActivityView): ActivityRow {
@@ -140,7 +136,7 @@ export function lockEditor(ctx: ExtensionContext, cancel: () => void): () => voi
 }
 
 /**
- * 审查期间的只读编辑器：输入区收起，只画 frame（锁定前的编辑器）的上下边框，
+ * 审查期间的只读编辑器：输入区收起成一行暗色提示，上下边框取自 frame（锁定前的编辑器），
  * 外壳状态（审查进度、会话标题、模型）因此保持可见。
  */
 class ReviewEditor extends CustomEditor {
@@ -161,7 +157,10 @@ class ReviewEditor extends CustomEditor {
 
 	override render(width: number): string[] {
 		const lines = this.frame.render(width);
-		return lines.length > 1 ? [lines[0], lines[lines.length - 1]] : lines;
+		if (lines.length < 2) return lines;
+		const keys = this.keys.getKeys("app.interrupt").join("/").replaceAll("escape", "esc") || "esc";
+		const hint = clip(`  审查进行中 · ${keys} 取消`, width, "end", "");
+		return [lines[0], `\x1b[2m${hint}\x1b[22m`, lines[lines.length - 1]];
 	}
 }
 

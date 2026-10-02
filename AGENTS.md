@@ -4,9 +4,9 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有七条：Master 只读调 `review/outcome.ts`，bark 只读调
+状态，关掉任何一个不影响其余；跨模块接缝只有六条：Master 只读调 `review/outcome.ts`，bark 只读调
 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅 review 发布的活动频道显示审查进度。
+`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度。
 
 ## 模块
 

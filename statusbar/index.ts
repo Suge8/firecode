@@ -14,7 +14,6 @@ import {
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { REVIEW_ACTIVITY_CHANNEL, type ReviewActivity } from "../review/activity-channel.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 
@@ -48,6 +47,8 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 	return (incoming && userTitle(incoming)) || "新会话";
 }
 
+/** review 发布的占用频道：外壳借它显示审查进度，不另开频道。 */
+const REVIEW_OCCUPANCY_CHANNEL = "herdr:blocked";
 const FAST_STATUS = "pi-openai-native-fast";
 /** 回合结束后落定标记与暖光的保留时长。 */
 const SETTLE_SHOW_MS = 1_000;
@@ -58,7 +59,8 @@ type Turn = { startedAt: number } | { endedAt: number; elapsed: number; failed: 
 class Shell {
 	title = "新会话";
 	turn: Turn | undefined;
-	review: ReviewActivity | undefined;
+	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
+	review: (() => string) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
 	theme: Theme | undefined;
 	requestRender = () => {};
@@ -102,7 +104,7 @@ class Shell {
 			parts.glow = Math.max(0, 1 - since / SETTLE_SHOW_MS);
 		}
 		if (review) {
-			const counts = review.counts;
+			const counts = review();
 			parts.review = `${reviewMark(phaseOf(2))} ${paint(HEAT_COLORS.gold, `审查${counts ? ` ${counts}` : ""}`)}`;
 			parts.reviewShort = `${reviewMark(phaseOf(2))}${counts ? ` ${paint(HEAT_COLORS.gold, counts)}` : ""}`;
 		}
@@ -181,8 +183,9 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 		shell.syncClock();
 		shell.requestRender();
 	});
-	pi.events.on(REVIEW_ACTIVITY_CHANNEL, (data) => {
-		shell.review = (data as ReviewActivity | undefined) ?? undefined;
+	pi.events.on(REVIEW_OCCUPANCY_CHANNEL, (data) => {
+		const occupancy = data as { active?: boolean; progress?: () => string } | undefined;
+		shell.review = occupancy?.active ? (occupancy.progress ?? (() => "")) : undefined;
 		shell.syncClock();
 		shell.requestRender();
 	});

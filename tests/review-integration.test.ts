@@ -132,8 +132,7 @@ function makePi(sessionManager: MockSessionManager) {
 			sessionManager.appendCustomEntry(customType, data);
 		},
 		events: {
-			// 这些用例只关心 herdr 占用频道；外壳进度频道在 review-ui 与 statusbar 测试里验证。
-			emit: (name: string, data: unknown) => { if (name === "herdr:blocked") registered.emitted.push({ name, data }); },
+			emit: (name: string, data: unknown) => registered.emitted.push({ name, data }),
 		},
 	};
 	return { pi, registered };
@@ -181,7 +180,7 @@ async function loadSingleFailReview() {
 	return loadReviewWithVerdict(FAIL_VERDICT);
 }
 
-const OCCUPIED = { name: "herdr:blocked", data: { active: true, label: "对抗审查进行中" } };
+const OCCUPIED = { name: "herdr:blocked", data: { active: true, label: "对抗审查进行中", progress: expect.any(Function) } };
 const RELEASED = { name: "herdr:blocked", data: { active: false } };
 const reviewConfig = (overrides: Record<string, unknown> = {}) =>
 	JSON.stringify({ review: { ...TEST_REVIEW_CONFIG, ...overrides } });

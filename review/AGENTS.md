@@ -49,22 +49,21 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 主会话审查的活动只占编辑器上方一行（`activity.ts` 的 `renderActivityRow`）：`◈ 本轮改动 · 审查 · 第 N 轮 ·
 k/n 位审查者通过`，有审查者未通过时注明阻断；排队、顾问、修复、总结相各有对应动作文案，耗时为整场总耗时。
-逐审查者的工具进度与落定摘要不再进 UI（仍在 `progress.ts` 里派生，供结果卡与测试）。动效经 `flame.ts` 的全局时钟，
+UI 只读 reducer 的审查者状态，不再另派生逐审查者工具进度或摘要。动效经 `flame.ts` 的全局时钟，
 组件 dispose 时退订；执行器不维护计时器。Working 指示的可见性归 statusbar 管，本模块不写。
 
 `ui.ts` 等待模型时接管编辑器：禁止输入，esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 与
 `summarizing` 相把输入交还用户。接管时保存 `getEditorComponent()` 的当前工厂，解锁还原它（可能是别的扩展设置的自定义编辑器，
-不是宿主默认）；锁定期间输入区收起，只画被包住编辑器的上下边框。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
-每次 UI 投影同时在 `firecode:review-activity` 频道发布通过进度供输入框外壳显示（结束时发布 undefined）。
+不是宿主默认）；锁定期间输入区收起成一行暗色“审查进行中 · esc 取消”（快捷键文案取自 keybindings），上下边框取自被包住的编辑器。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。
 无 TUI 的会话照常运行完整审查循环，不访问 UI；取消由会话退出或总体 watchdog 负责，结果卡仍写入会话记录。
 
-`progress.ts` 从 spawn 发布的结构化会话事件派生模型进度、token、当前工具耗时及历史工具行，是纯 UI 态，
-不入 checkpoint；最终回复直接取会话事件中的完整 assistant 消息，没有文本流截断层。
+审查会话的最终回复直接取会话事件中的完整 assistant 消息，没有文本流截断层。
 
 ## 占用信号
 
 审查活跃期双通道：进程内 `herdr:blocked` 频道驱动 herdr 集成的 blocked 状态（集成只转发状态，message
-会被 herdr 丢弃）；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
+会被 herdr 丢弃）；持有时的 payload 另带活的 `progress` 访问器（返回 `k/n`），输入框外壳借它显示审查进度，占用是 UI 唯一事实源，
+访问器不重发 true 以免破坏计数配对；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
 投递（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
 
 标签是租约：持有期带 TTL 定时续约（herdr 无“进程退出即清 metadata”接口，crash 残留靠 TTL 自愈，续约
