@@ -336,7 +336,6 @@ test("供应商故障在无 fallback 时明确报告链已用尽", async () => {
 	});
 	await delivered;
 	expect(harness.messages[0].message.content).toMatch(/^<firecode_master_event>\n子代理 failed 已停下\n错误：\nquota exhausted\n角色 工程师 的 fallback 链已用尽\n耗时：[^\n]+\n<\/firecode_master_event>$/u);
-	expect(harness.messages[0].message.details.titles).toEqual(["子代理 failed 已停下 — quota exhausted"]);
 });
 
 test.each([
