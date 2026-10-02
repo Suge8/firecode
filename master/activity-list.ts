@@ -30,6 +30,8 @@ export interface ActivityFacts {
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
+	/** 名字 → 启动序号（start 调用到达的先后）；池数组顺序受并发 start 的 await 影响，不能当启动序。重载恢复的没有记录，排最前并保持池内相对顺序。 */
+	launchOrder: ReadonlyMap<string, number>;
 }
 
 interface Entry {
@@ -87,7 +89,9 @@ function entryOf(facts: ActivityFacts, index: number, now: number): Entry | unde
 }
 
 function collect(facts: ActivityFacts, now: number) {
-	const entries = facts.workers.flatMap((_, index) => entryOf(facts, index, now) ?? []);
+	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
+	const indexes = facts.workers.map((_, index) => index).sort((a, b) => launch(a) - launch(b) || a - b);
+	const entries = indexes.flatMap((index) => entryOf(facts, index, now) ?? []);
 	const expiries = entries.flatMap((entry) => entry.expiresAt ?? []);
 	return {
 		entries,

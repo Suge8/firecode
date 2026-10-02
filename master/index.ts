@@ -88,6 +88,9 @@ interface MasterRuntime {
 	reviewProgress: Map<string, ReviewProgress>;
 	/** 本次运行的落定事实（时刻与成败）；列表据此保留“待发落”行，ack 或续派后失效。 */
 	settled: Map<string, SettledFact>;
+	/** 名字 → start 到达序号，活动列表的唯一排序依据。 */
+	launchOrder: Map<string, number>;
+	launchSeq: number;
 	list?: ActivityList;
 	observedSessions: Map<string, ObservedSession>;
 	flushTimer?: NodeJS.Timeout;
@@ -159,6 +162,8 @@ export function registerMaster(
 			runStartedAt: new Map(),
 			reviewProgress: new Map(),
 			settled: new Map(),
+			launchOrder: new Map(),
+			launchSeq: 0,
 			observedSessions: new Map(),
 		};
 		runtime = active;
@@ -171,6 +176,7 @@ export function registerMaster(
 					reviewProgress: active.reviewProgress,
 					runStartedAt: active.runStartedAt,
 					settled: active.settled,
+					launchOrder: active.launchOrder,
 				}), () => visibleRows(tui.terminal?.rows, ctx.ui.getToolsExpanded()));
 				return active.list;
 			},
@@ -536,6 +542,7 @@ export function registerMaster(
 				active.runStartedAt.delete(target.sessionPath);
 				active.reviewProgress.delete(target.sessionPath);
 				active.settled.delete(target.sessionPath);
+				active.launchOrder.delete(target.name);
 				active.observedSessions.get(target.sessionPath)?.unsubscribe();
 				active.observedSessions.delete(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
@@ -718,6 +725,8 @@ export function registerMaster(
 				thinking: requestedThinking as WorkerRef["thinking"] | undefined ?? selectedRole.thinking,
 			};
 			startingNames.add(name);
+			// 同步登记：并发 start 越过后续 await 的先后不定，序号必须在此取。
+			active.launchOrder.set(name, ++active.launchSeq);
 			try {
 				const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 				requireRuntimeOwner(active);
@@ -758,7 +767,10 @@ export function registerMaster(
 					await runWorker(active, worker, spawned.session, prompt);
 					return toolResult({ started: true, worker: compactWorker(worker) });
 				} catch (error) {
-					if (ownsRuntime(active)) active.store.dispatch({ type: "REMOVE_WORKER", name });
+					if (ownsRuntime(active)) {
+						active.store.dispatch({ type: "REMOVE_WORKER", name });
+						active.launchOrder.delete(name);
+					}
 					throw error;
 				}
 			} finally {
