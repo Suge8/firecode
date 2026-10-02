@@ -12,7 +12,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
-| `header.ts` | 会话启动横幅，窄终端退化为一行 | |
+| `header.ts` | 会话启动横幅：半格像素火焰 + 字标分三档（≥83 / 52–82 / <52 列一行），启动点亮扫光约 1.5 秒后定格并退订动画时钟 | |
 | `statusbar/` | 单行底栏：会话、模型、上下文与模块状态 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 思考与工具的过程组/过程列表、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 预设、重命名、收尾统计、用量查询、Bark 通知、herdr 身份投影、工作火焰 | [session/AGENTS.md](session/AGENTS.md) |
