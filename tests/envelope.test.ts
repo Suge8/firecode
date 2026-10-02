@@ -30,3 +30,8 @@ test("不是整条由信封构成的文本不被识别为机器消息", async ()
 	expect(parseEnvelopes(`${wrapped}\n顺便说一句`)).toBeUndefined();
 	expect(parseEnvelopes("<firecode_other>\nx\n</firecode_other>")).toBeUndefined();
 });
+
+test("review 的修复反馈与总结提示同样是信封机器消息", async () => {
+	const { wrapEnvelope, parseEnvelopes } = await envelope();
+	expect(parseEnvelopes(wrapEnvelope("firecode_review", "第 1 轮未通过"))).toEqual([{ tag: "firecode_review", body: "第 1 轮未通过" }]);
+});

@@ -502,3 +502,16 @@ test("运行中的摘要显示实时计时，子代理结果到达时短暂高�
 	s.setNow(20000);
 	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(/^✓ 9.0s · 运行 1 ▸/);
 });
+
+test("review 的信封消息归入过程不切段", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.complete(s.tool("read", { path: "a.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent("<firecode_review>\n第 1 轮未通过，请修复。\n</firecode_review>"));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(lines.filter((line: string) => /^✓ 读 2 ▸$/.test(line))).toHaveLength(1);
+	expect(lines.join("\n")).not.toContain("firecode_review");
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
+});
