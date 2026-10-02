@@ -92,15 +92,18 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(top()).not.toContain("处理中");
 	events.get("agent_start")!({}, ctx);
 	expect(top()).toMatch(/处理中 \d/u);
-	bus.get("firecode:review-activity")!({ counts: "1/2" });
+	let counts = "1/2";
+	bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => counts });
 	expect(top()).toContain("◈ 审查 1/2");
+	counts = "2/2";
+	expect(top()).toContain("◈ 审查 2/2");
 	statuses.set("watcher", "观察员");
 	statuses.set("master", "指挥官");
 	expect(top()).toEndWith(" 观察员 指挥官 ─");
 	events.get("agent_end")!({ messages: [] }, ctx);
 	expect(top()).not.toContain("处理中");
-	expect(top()).toContain("◈ 审查 1/2");
-	bus.get("firecode:review-activity")!(undefined);
+	expect(top()).toContain("◈ 审查 2/2");
+	bus.get("herdr:blocked")!({ active: false });
 	expect(top()).not.toContain("◈");
 
 	for (let width = 1; width <= 120; width++)
