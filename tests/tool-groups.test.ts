@@ -523,6 +523,34 @@ test("收尾统计这类 CustomEntry 属于本轮：不切段，其后的宿主�
 	for (const needle of ["a.ts", "修好了", "◷ 处理 3s", "Cache miss", "Tool output: collapsed"]) expect(expanded).toContain(needle);
 });
 
+test("一轮被唤起多次时，折叠态只留最后一条收尾统计行，更早的随过程折起，展开态按序都在", async () => {
+	const s = await scene();
+	class Entry extends s.tui.Container {
+		constructor(text: string) { super(); this.addChild(new s.tui.Spacer(1)); this.addChild(new s.tui.Text(text, 0, 0)); }
+		hasContent() { return true; }
+		setExpanded() {}
+	}
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "第一次回复" }]);
+	s.chat.addChild(new Entry("◷ 处理 3s"));
+	hostUser(s, WORKER_RESULT("fix-auth"));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	assistant(s, [{ type: "text", text: "第二次回复" }]);
+	s.chat.addChild(new Entry("◷ 处理 9s"));
+	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
+	s.chat.addChild(new Entry("◷ 处理 1s"));
+
+	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(collapsed.filter((line: string) => line.startsWith("◷"))).toEqual(["◷ 处理 9s", "◷ 处理 1s"]);
+	expect(collapsed.indexOf("◷ 处理 9s")).toBeGreaterThan(collapsed.indexOf("第二次回复"));
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines().join("\n");
+	const order = ["第一次回复", "◷ 处理 3s", "fix-auth", "第二次回复", "◷ 处理 9s"].map((needle) => expanded.indexOf(needle));
+	expect(order.every((position) => position >= 0)).toBe(true);
+	expect(order).toEqual([...order].sort((a, b) => a - b));
+});
+
 test.each([
 	[0, ["全文收尾"]],
 	[3, ["+2 条", "第 3 步。", "第 4 步。", "第 5 步。", "全文收尾"]],
