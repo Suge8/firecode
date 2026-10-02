@@ -7,7 +7,7 @@ afterEach(cleanupFirecodeModules);
 const theme = { fg: (_color: string, text: string) => text };
 const NOW = 1_000_000;
 
-type Spec = { name: string; status?: string; tool?: string; args?: unknown; review?: [number, number, number]; started?: number; settled?: [number, "done" | "failed"] };
+type Spec = { name: string; launch?: number; status?: string; tool?: string; args?: unknown; review?: [number, number, number]; started?: number; settled?: [number, "done" | "failed"] };
 
 function facts(specs: Spec[]) {
 	const workers = specs.map((spec) => ({
@@ -17,6 +17,7 @@ function facts(specs: Spec[]) {
 		new Map(specs.flatMap((spec) => { const value = pick(spec); return value === undefined ? [] : [[`/s/${spec.name}`, value] as const]; }));
 	return {
 		workers,
+		launchOrder: new Map(specs.map((spec, index) => [spec.name, spec.launch ?? index] as const)),
 		currentTools: new Map(specs.flatMap((spec) => spec.tool ? [[`/s/${spec.name}`, new Map([["1", { tool: spec.tool, args: spec.args, startedAt: NOW }]])] as const] : [])),
 		reviewProgress: byPath((spec) => spec.review && { kind: "review" as const, round: spec.review[0], settled: spec.review[1], total: spec.review[2] }),
 		runStartedAt: byPath((spec) => spec.started),
@@ -68,6 +69,16 @@ test("行一律按启动顺序；超过上限时末行 +N；上限随终端高�
 	expect(visibleRows(20, false)).toBe(4);
 	expect(visibleRows(60, false)).toBe(10);
 	expect(visibleRows(60, true)).toBe(Infinity);
+});
+
+test("行序以启动序为准：并发 start 入池顺序不同、落定或状态变化后都不跳", async () => {
+	// 池里的数组顺序是 b、a、c（并发 start 越过 await 的先后），启动序是 a、b、c。
+	const pool = (a: Spec): Spec[] => [{ name: "b", launch: 2 }, a, { name: "c", launch: 3 }];
+	const names = async (specs: Spec[]) => (await lines(specs, 72, 10)).text.map((line) => line.match(/ (a|b|c) /u)?.[1]);
+	expect(await names(pool({ name: "a", launch: 1 }))).toEqual(["a", "b", "c"]);
+	expect(await names(pool({ name: "a", launch: 1, status: "reviewing" }))).toEqual(["a", "b", "c"]);
+	expect(await names(pool({ ...idle("a", "done", 1_000), launch: 1 }))).toEqual(["a", "b", "c"]);
+	expect((await lines(pool({ name: "a", launch: 1 }), 72, 3)).text.map((line) => line.match(/ (a|b|c) /u)?.[1])).toEqual(["a", "b", undefined]);
 });
 
 test("动效：有行在动才要求时钟，全部静止则不要", async () => {
