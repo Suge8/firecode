@@ -19,8 +19,6 @@ export interface RunReviewerOptions {
 	language: Language;
 	signal?: AbortSignal;
 	runSession: ReviewSessionRunner;
-	/** 结构化会话事件：驱动活动条的实时进度。 */
-	onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export type ParseOutcome = {
@@ -40,7 +38,6 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 		cwd: options.cwd,
 		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
-		onEvent: options.onEvent,
 	});
 	const parsed =
 		result.kind === "output"

@@ -83,7 +83,6 @@ export const FEATURES = [
 	"stats",
 	"claudeSub",
 	"openaiNative",
-	"workingFlame",
 	"bark",
 	"review",
 	"master",

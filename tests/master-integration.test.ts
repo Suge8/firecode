@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
 import {
 	cleanupFirecodeModules,
@@ -60,6 +61,17 @@ test("status 每个子代理一行以角色为主、模型短名次之", async (
 		{ name: "侦察", role: "调研员", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
 		{ name: "验收", role: "工程师", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
 	])).toBe("侦察 调研员·工作 gpt-5.1-codex-mini\n验收 工程师·审查 claude-sonnet-4-5");
+});
+
+test("底栏身份只发布“指挥官”，子代理进出不改变它", async () => {
+	const harness = await setup();
+	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "status-id", prompt: "执行", role: "工程师" });
+	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
+	await settled;
+	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
 });
 
 test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
@@ -1270,6 +1282,7 @@ async function setup(activate = true, options: {
 			onMessage?.();
 		},
 	};
+	const statuses = new Map<string, string>();
 	let sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
@@ -1282,7 +1295,8 @@ async function setup(activate = true, options: {
 		},
 		ui: {
 			notify: (message: string) => notices.push(message),
-			setStatus() {},
+			setStatus: (key: string, text: string | undefined) => { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
+			setWidget() {},
 			theme: {
 				fg: (_color: string, text: string) => text,
 				bg: (_color: string, text: string) => text,
@@ -1302,6 +1316,7 @@ async function setup(activate = true, options: {
 		get sessionId() { return sessionId; },
 		get activeTools() { return [...activeTools]; },
 		notices,
+		statuses,
 		messages,
 		userMessages,
 		appended,

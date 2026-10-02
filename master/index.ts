@@ -20,6 +20,7 @@ import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
+import { ActivityList, type ReviewProgress, type SettledFact } from "./activity-list.js";
 import { MASTER_EVENT_TYPE, sectionLine } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
@@ -61,13 +62,6 @@ interface CurrentTool {
 	startedAt: number;
 }
 
-interface ReviewProgress {
-	kind: "review";
-	round: number;
-	settled: number;
-	total: number;
-}
-
 interface WorkerTerminal {
 	text: string;
 	stopReason?: string;
@@ -91,6 +85,9 @@ interface MasterRuntime {
 	/** 最近一条真实用户输入的时刻；Master 事件（source extension）不算。 */
 	taskStartedAt?: number;
 	reviewProgress: Map<string, ReviewProgress>;
+	/** 本次运行的落定事实（时刻与成败）；列表据此保留“待发落”行，ack 或续派后失效。 */
+	settled: Map<string, SettledFact>;
+	list?: ActivityList;
 	observedSessions: Map<string, ObservedSession>;
 	flushTimer?: NodeJS.Timeout;
 }
@@ -136,27 +133,10 @@ export function registerMaster(
 	const requireRuntimeOwner = (active: MasterRuntime): void => {
 		if (!ownsRuntime(active)) throw new Error("Master 会话已替换，取消旧会话动作");
 	};
-	let spinFrame = 0;
-	let spinTimer: ReturnType<typeof setInterval> | undefined;
-	/** 计时器只在活动期存活：状态变化起停，全部落定即停，无常驻轮询。 */
-	const syncSpinner = (active: boolean) => {
-		if (active === (spinTimer !== undefined)) return;
-		if (!active) {
-			clearInterval(spinTimer);
-			spinTimer = undefined;
-			return;
-		}
-		spinTimer = setInterval(() => {
-			spinFrame += 1;
-			renderStatus();
-		}, SPINNER_MS);
-		spinTimer.unref?.();
-	};
 	const renderStatus = () => {
 		if (!runtime) return;
-		const workers = runtime.store.state.workers;
-		syncSpinner(masterActive(workers));
-		runtime.ctx.ui.setStatus("master", masterStatusLine(workers, runtime.ctx.ui.theme, spinFrame));
+		runtime.ctx.ui.setStatus("master", MASTER_IDENTITY);
+		runtime.list?.sync();
 	};
 	const activate = (ctx: ExtensionContext, restored?: MasterState): MasterRuntime => {
 		if (startupError) throw new Error(startupError);
@@ -177,9 +157,24 @@ export function registerMaster(
 			idleSince: new Map(),
 			runStartedAt: new Map(),
 			reviewProgress: new Map(),
+			settled: new Map(),
 			observedSessions: new Map(),
 		};
 		runtime = active;
+		ctx.ui.setWidget(
+			LIST_WIDGET_KEY,
+			(tui, theme) => {
+				active.list = new ActivityList(tui, theme, () => ({
+					workers: active.store.state.workers,
+					currentTools: active.currentTools,
+					reviewProgress: active.reviewProgress,
+					runStartedAt: active.runStartedAt,
+					settled: active.settled,
+				}));
+				return active.list;
+			},
+			{ placement: "aboveEditor" },
+		);
 		setTools(true);
 		if (store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(`旧版 v${store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；旧运行时进程不会纳入新池，请手动清理`, "warning");
@@ -191,7 +186,6 @@ export function registerMaster(
 		const active = runtime;
 		runtime = undefined;
 		await pool.disposeAll();
-		syncSpinner(false);
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
 		activeRuns.clear();
@@ -200,6 +194,8 @@ export function registerMaster(
 		transitioningNames.clear();
 		if (active?.flushTimer) clearTimeout(active.flushTimer);
 		for (const observed of active?.observedSessions.values() ?? []) observed.unsubscribe();
+		active?.list?.dispose();
+		active?.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
 		active?.ctx.ui.setStatus("master", undefined);
 		setTools(false);
 	};
@@ -376,6 +372,7 @@ export function registerMaster(
 				const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 				if (!current || current.sessionPath !== worker.sessionPath) return;
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
+				active.settled.set(worker.sessionPath, { at: interrupted.interruptedAt!, kind: "failed", note: "已中断" });
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				markWorkerIdle(active, worker.sessionPath);
@@ -537,6 +534,7 @@ export function registerMaster(
 				active.idleSince.delete(target.sessionPath);
 				active.runStartedAt.delete(target.sessionPath);
 				active.reviewProgress.delete(target.sessionPath);
+				active.settled.delete(target.sessionPath);
 				active.observedSessions.get(target.sessionPath)?.unsubscribe();
 				active.observedSessions.delete(target.sessionPath);
 				active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
@@ -555,6 +553,8 @@ export function registerMaster(
 					const { disposition: _disposition, ...rest } = target;
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
 				}
+				active.settled.delete(target.sessionPath);
+				renderStatus();
 				return toolResult({ acked: true });
 			}
 			if (params.action === "review") {
@@ -585,6 +585,8 @@ export function registerMaster(
 							const worker = outcome.status === "passed" || outcome.status === "stopped"
 								? fulfilled
 								: current;
+							const passed = outcome.status === "passed" || outcome.status === "stopped";
+							active.settled.set(target.sessionPath, { at: Date.now(), kind: passed ? "done" : "failed", note: "审查未通过" });
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
@@ -594,6 +596,7 @@ export function registerMaster(
 							if (!ownsRuntime(active)) return;
 							const current = active.store.state.workers.find((worker) => worker.name === target.name);
 							if (!current || current.status !== "reviewing") return;
+							active.settled.set(target.sessionPath, { at: Date.now(), kind: "failed", note: "审查未完成" });
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
@@ -790,11 +793,12 @@ function settleWorker(
 ): string | undefined {
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
+	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
+	active.settled.set(identity.sessionPath, { at: Date.now(), kind: failure ? "failed" : "done" });
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 	active.currentTools.delete(identity.sessionPath);
 	markWorkerIdle(active, identity.sessionPath);
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
-	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	return failure
 		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
 		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
@@ -1021,8 +1025,9 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 
 const renderSubagentsResult = makeResultRenderer(false);
 const STATUS_WORD = { working: "工作", idle: "空闲", reviewing: "审查" } satisfies Record<WorkerStatus, string>;
-const SPINNER_FRAMES = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
-const SPINNER_MS = 120;
+const LIST_WIDGET_KEY = "firecode-master-list";
+/** 底栏身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
+const MASTER_IDENTITY = `${FLAME.orange}指挥官\x1b[39m`;
 
 function reviewProgressFromEntry(entry: unknown): ReviewProgress | undefined {
 	if (!entry || typeof entry !== "object") return undefined;
@@ -1118,35 +1123,6 @@ function listMeta(workers: unknown[]): Part[] {
 function roleStatusText(worker: { role?: unknown; status?: unknown }): string {
 	const status = STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status);
 	return worker.role ? `${String(worker.role)}·${status}` : status;
-}
-/** 有子代理在飞（工作或审查）时底栏活动动画运转，也是动画计时器的唯一起停判据。 */
-export function masterActive(workers: ReadonlyArray<Pick<WorkerRef, "status">>): boolean {
-	return workers.some((worker) => worker.status !== "idle");
-}
-export function masterStatusLine(
-	workers: ReadonlyArray<Pick<WorkerRef, "status" | "role">>,
-	theme: Pick<ExtensionContext["ui"]["theme"], "fg">,
-	frame = 0,
-): string {
-	const identity = `${FLAME.orange}👑 指挥模式\x1b[39m`;
-	if (!workers.length) return identity;
-	const spinner = masterActive(workers) ? `${SPINNER_FRAMES[frame % SPINNER_FRAMES.length]} ` : "";
-	const byRole = new Map<string, number>();
-	let idle = 0;
-	for (const worker of workers) {
-		if (worker.status === "idle") idle += 1;
-		else {
-			const initial = roleInitial(worker.role);
-			byRole.set(initial, (byRole.get(initial) ?? 0) + 1);
-		}
-	}
-	const counts = [...byRole].map(([initial, count]) => `${initial}${count}`);
-	if (idle) counts.push(`闲${idle}`);
-	return `${identity}${theme.fg("dim", ` · ${spinner}${counts.join("·")}`)}`;
-}
-/** 配置与档案入口保证角色非空；按 code point 取首字，避免拆开代理项。 */
-function roleInitial(role: string): string {
-	return String.fromCodePoint(role.codePointAt(0)!);
 }
 export function statusText(workers: WorkerRef[]): string {
 	return workers.length

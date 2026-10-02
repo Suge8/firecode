@@ -22,7 +22,6 @@ export interface ReviewSessionOptions {
 	cwd: string;
 	timeoutMs: number;
 	signal?: AbortSignal;
-	onEvent?: (event: AgentSessionEvent) => void;
 }
 
 export type ReviewSessionRunner = (
@@ -71,7 +70,6 @@ export async function runReviewSession(options: ReviewSessionOptions): Promise<R
 				? assistant.errorMessage || "model error"
 				: undefined;
 		}
-		options.onEvent?.(event);
 	});
 	let interrupted: "aborted" | "timeout" | undefined;
 	let wake!: () => void;
