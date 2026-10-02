@@ -4,9 +4,9 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有六条：Master 只读调 `review/outcome.ts`，bark 只读调
+状态，关掉任何一个不影响其余；跨模块接缝只有七条：Master 只读调 `review/outcome.ts`，bark 只读调
 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默。
+`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有）。
 
 ## 模块
 
@@ -22,7 +22,7 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | [ADR 0016](docs/adr/0016-claude-token-rotation-recovery.md) |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `flame-frames.ts` | 品牌火焰帧素材（任意高度缩放），供审查活动框与 working 火焰共用 | |
-| `deliver.ts` | Master 事件与观察员发言共用的统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
+| `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |
@@ -46,6 +46,8 @@ pi 的个人定制层：启动横幅、底部状态栏、工具行渲染、预�
 供应商规则加价。配置模板只是起始样例，不参与运行时读取。缺失运行配置时关闭可选功能，并在每次
 `session_start` 警告一次；运行中补上配置也需重启 Pi 才生效。改完本机运行配置后，把其中属于推荐配置的部分
 同步进 `config.example.jsonc`，个人化内容（自定义 instructions、私人扩展名）留在本机。
+
+`tools.replyLines`（非负整数，默认 3）是折叠态每轮显示的中间回复条数，0 表示只留最后一条回复。
 
 配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`（presets、review、master.roles、
 watcher），解析在 `config.ts` 的 `parseModelAtom` 一处收口；旧的分字段与两段式写法一律报配置问题。

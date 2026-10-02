@@ -25,8 +25,6 @@ const STATUS = {
 	ok: { glyph: "✓", color: "success", bg: "toolSuccessBg" },
 	err: { glyph: "✗", color: "error", bg: "toolErrorBg" },
 } as const satisfies Record<string, Status>;
-/** 过程摘要运行中的字形；摘要不铺工具背景色，与工具行区分。 */
-const SUMMARY_GLYPH = "✦";
 
 type Status = { glyph: string; color: ThemeColor; bg?: ThemeBg };
 type ThemeBg = Parameters<Theme["bg"]>[0];
@@ -115,23 +113,18 @@ export function paintBgLine(line: string, width: number, bgFn?: (text: string) =
 	return bgFn ? bgFn(padded) : padded;
 }
 
-export interface GroupSummary {
-	/** 按工具标签的调用计数，首次出现顺序 */
-	counts: readonly (readonly [label: string, calls: number])[];
-	running: number;
-	failures: number;
-	/** 折入段内的宿主提示条数（缓存、丢思考、压缩计费） */
-	notices: number;
-	activity?: string;
+/** 折叠摘要从工具行取当前动作词；未提供该能力的静态工具由通用参数摘要承担。 */
+export interface ActionLine extends Component {
+	readonly actionWord: string;
 }
 
-export interface GroupRenderer extends Component {
-	renderGroup(width: number, summary: GroupSummary): string[];
-}
-
-export class ToolLine implements GroupRenderer {
+export class ToolLine implements ActionLine {
 	constructor(private readonly options: ToolLineOptions) {}
 	invalidate(): void {}
+
+	get actionWord(): string {
+		return this.options.label;
+	}
 
 	render(width: number): string[] {
 		const { theme, ctx, meta } = this.options;
@@ -148,24 +141,6 @@ export class ToolLine implements GroupRenderer {
 		});
 	}
 
-	/** 折叠态只留动作词，不露目标；整段的统计走固定标记与右列，不冒充单工具耗时与大小。 */
-	renderGroup(width: number, summary: GroupSummary): string[] {
-		const { activity, counts, running, failures, notices } = summary;
-		const kind = running || activity ? "run" : failures ? "err" : "ok";
-		return renderLine(this.options.theme, width, {
-			status: kind === "run" ? { glyph: SUMMARY_GLYPH, color: "accent" } : { ...STATUS[kind], bg: undefined },
-			label: { text: activity ?? this.options.label, color: "toolTitle", bold: true },
-			value: [],
-			clip: "end",
-			tail: [
-				...(failures ? [{ text: ` · ${failures} 次失败`, color: "error" as const }] : []),
-				...(notices ? [{ text: ` · ⚠ ${notices}`, color: "warning" as const }] : []),
-			],
-			// 计数列整体去留：只显示一部分类别会误导
-			right: counts.length ? [{ text: counts.map(([label, calls]) => `${label} ${calls}`).join(" · "), color: "dim" }] : [],
-		});
-	}
-
 	private valueWithMeta(): Part[] {
 		const { value, meta, ctx } = this.options;
 		return [...value, ...(meta ?? []), ...(ctx.state.meta ?? [])];
@@ -179,12 +154,11 @@ type LineSpec = {
 	value: Part[];
 	clip: ClipSide;
 	error?: string;
-	tail?: Part[];
 	right: Part[];
 };
 
 function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
-	const { status, tail = [] } = spec;
+	const { status } = spec;
 	const safeWidth = Math.max(1, width - 2);
 	const head: Part[] = [
 		{ text: RAIL, color: "dim" },
@@ -192,11 +166,11 @@ function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
 		spec.label,
 		...(partsWidth(spec.value) ? [{ text: " " }] : []),
 	];
-	const fixedWidth = partsWidth(head) + partsWidth(tail);
+	const fixedWidth = partsWidth(head);
 	const bg = status.bg;
 	const bgFn = bg && typeof theme.bg === "function" ? (text: string) => theme.bg(bg, text) : undefined;
 	if (safeWidth <= fixedWidth) {
-		const clipped = paint(theme, clipParts([...head, ...tail], safeWidth, "end"));
+		const clipped = paint(theme, clipParts(head, safeWidth, "end"));
 		return [paintBgLine(clipped, width, bgFn)];
 	}
 
@@ -216,7 +190,7 @@ function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
 		value = clipParts(value, freeWidth, spec.clip);
 	}
 
-	const body = [...head, ...value, ...(errorPart ? [errorPart] : []), ...tail];
+	const body = [...head, ...value, ...(errorPart ? [errorPart] : [])];
 	let line = paint(theme, body);
 	if (right.length) {
 		const pad = Math.max(RIGHT_GAP, safeWidth - partsWidth(body) - rightVisible);

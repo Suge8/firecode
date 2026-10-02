@@ -177,15 +177,16 @@ test("tools.replyLines 默认 3，接受非负整数，类型错误与未知字�
 	const load = async (tools: string | undefined) => {
 		const configJsonc = tools === undefined ? "{}" : `{ "tools": ${tools} }`;
 		const { loadConfig } = await loadFirecodeModule("config.ts", { configJsonc });
+		const loaded = (loadConfig as () => { config: any; problems: string[] })();
 		await cleanupFirecodeModules();
-		return (loadConfig as () => { config: any; problems: string[] })();
+		return loaded;
 	};
 	expect((await load(undefined)).config.tools.replyLines).toBe(3);
 	expect((await load("{}")).config.tools.replyLines).toBe(3);
 	for (const value of [0, 5]) {
 		const loaded = await load(`{ "replyLines": ${value} }`);
 		expect(loaded.config.tools.replyLines).toBe(value);
-		expect(loaded.problems.filter((problem) => problem.includes("tools"))).toEqual([]);
+		expect(loaded.problems.filter((problem) => problem.startsWith("tools"))).toEqual([]);
 	}
 	for (const bad of ["-1", "1.5", '"3"', "null"]) {
 		const loaded = await load(`{ "replyLines": ${bad} }`);

@@ -13,14 +13,14 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
-import { deliver } from "../deliver.js";
+import { deliver, wrapEnvelope } from "../deliver.js";
 import { clip, formatDuration } from "../format.js";
 import { FLAME } from "../theme.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
-import { MASTER_EVENT_TYPE, masterEventDetails, sectionLine } from "./event-format.js";
+import { MASTER_EVENT_TYPE, sectionLine } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
@@ -208,11 +208,9 @@ export function registerMaster(
 		active.flushTimer = undefined;
 		if (!active.events.length) return;
 		const batch = active.events.splice(0);
-		const content = batch.map((event) => event.content).join("\n\n");
 		deliver(pi, active.ctx, {
 			customType: MASTER_EVENT_TYPE,
-			content: masterEventEnvelope(content),
-			details: masterEventDetails(batch.map((event) => event.content)),
+			content: batch.map((event) => masterEventEnvelope(event.content)).join("\n\n"),
 		}).then(() => {
 			if (!ownsRuntime(active)) return;
 			try {
@@ -997,7 +995,7 @@ function modelAtomText(atom: Pick<ModelAtom, "model" | "thinking">): string {
 }
 
 function masterEventEnvelope(content: string): string {
-	return `<firecode_master_event>\n${content}\n</firecode_master_event>`;
+	return wrapEnvelope("firecode_master_event", content);
 }
 
 function resumeCheckPrompt(): string {

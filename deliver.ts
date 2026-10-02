@@ -10,23 +10,55 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export interface Envelope<T> {
-	customType: string;
-	content: string;
-	details?: T;
+/**
+ * 机器消息的信封是唯一事实源：模型上下文里的来源标记、卡片与折叠界面的识别都从这里来。
+ * 一条消息可含多个信封（并发落定的事件各占一个）；整条文本恰好由信封构成才算机器消息。
+ */
+export const ENVELOPE_TAGS = ["firecode_master_event", "firecode_watcher"] as const;
+export type EnvelopeTag = (typeof ENVELOPE_TAGS)[number];
+
+export interface ParsedEnvelope {
+	tag: EnvelopeTag;
+	body: string;
 }
 
-export async function deliver<T>(
+export function wrapEnvelope(tag: EnvelopeTag, body: string): string {
+	return `<${tag}>\n${body}\n</${tag}>`;
+}
+
+const ENVELOPE = new RegExp(`<(${ENVELOPE_TAGS.join("|")})>\\n([\\s\\S]*?)\\n</\\1>\\s*`, "uy");
+
+export function parseEnvelopes(text: string): ParsedEnvelope[] | undefined {
+	const source = text.trim();
+	const found: ParsedEnvelope[] = [];
+	let end = 0;
+	for (;;) {
+		ENVELOPE.lastIndex = end;
+		const match = ENVELOPE.exec(source);
+		if (!match) break;
+		found.push({ tag: match[1] as EnvelopeTag, body: match[2] });
+		end = ENVELOPE.lastIndex;
+	}
+	return found.length && end === source.length ? found : undefined;
+}
+
+export interface Delivery {
+	customType: string;
+	/** 已按信封格式包好的正文，同时是卡片渲染的唯一数据源。 */
+	content: string;
+}
+
+export async function deliver(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	envelope: Envelope<T>,
+	envelope: Delivery,
 ): Promise<void> {
 	if (ctx.isIdle?.() === true) {
 		await pi.sendUserMessage(envelope.content);
 		return;
 	}
-	pi.sendMessage<T>(
-		{ customType: envelope.customType, content: envelope.content, display: true, details: envelope.details },
+	pi.sendMessage(
+		{ customType: envelope.customType, content: envelope.content, display: true },
 		{ deliverAs: "steer" },
 	);
 }

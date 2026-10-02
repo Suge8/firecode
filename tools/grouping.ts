@@ -1,7 +1,9 @@
 /** 过程分组的宿主适配：原始聊天树不变，渲染与鼠标命中共用同一份投影。 */
 import { AssistantMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
-import { projectProcessGroups, toggleToolDetails } from "./group-view.js";
+import { onFrame } from "../flame.js";
+import { projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
+import type { TurnClock } from "./turn-clock.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
 const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
@@ -16,11 +18,16 @@ function findChat(value: Component): Container | undefined {
 	return undefined;
 }
 
-export function installGroupPatch(ui: ExtensionUIContext): () => void {
+export interface GroupOptions {
+	replyLines: number;
+	clock: TurnClock;
+}
+
+export function installGroupPatch(ui: ExtensionUIContext, options: GroupOptions): () => void {
 	runtime[OWNER]?.();
 	let detach = () => {};
 	ui.setWidget("firecode-tui-capture", (tui) => {
-		detach = attach(tui, ui);
+		detach = attach(tui, ui, options);
 		return { render: () => [], invalidate() {} };
 	});
 	ui.setWidget("firecode-tui-capture", undefined);
@@ -33,11 +40,12 @@ export function installGroupPatch(ui: ExtensionUIContext): () => void {
 	return dispose;
 }
 
-function attach(tui: TUI, ui: ExtensionUIContext): () => void {
+function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => void {
 	const prototype = ToolExecutionComponent.prototype;
 	const originalExpand = prototype.setExpanded;
 	const originalAdd = Container.prototype.addChild;
 	let restoreChat = () => {};
+	let stopFrames: (() => void) | undefined;
 	let attached = false;
 	const belongsHere = (row: ToolExecutionComponent) => (row as unknown as { ui: TUI }).ui === tui;
 	const setExpanded: typeof originalExpand = function (this: ToolExecutionComponent, value) {
@@ -55,16 +63,30 @@ function attach(tui: TUI, ui: ExtensionUIContext): () => void {
 		const render = chat.render;
 		const mouse = chat.handleMouse;
 		const projection = new Container();
-		const toggle = (row: ToolExecutionComponent) => {
-			toggleToolDetails(row, originalExpand);
-			tui.requestRender();
+		const openTurns = new WeakSet<object>();
+		const env: ProjectionEnv = {
+			ui, clock: options.clock, replyLines: options.replyLines, headless: {},
+			toggleRow: (row) => {
+				toggleToolDetails(row, originalExpand);
+				tui.requestRender();
+			},
+			isOpen: (turn) => openTurns.has(turn),
+			toggleTurn: (turn) => {
+				if (!openTurns.delete(turn)) openTurns.add(turn);
+				tui.requestRender();
+			},
 		};
 		chat.render = (width) => {
-			projection.children = projectProcessGroups(chat.children, ui, toggle);
+			const { nodes, animating } = projectProcessGroups(chat.children, env);
+			projection.children = nodes;
+			// 动效只经全局时钟：有活的摘要才订阅，静止即取消。
+			if (animating && !stopFrames) stopFrames = onFrame(() => tui.requestRender());
+			else if (!animating && stopFrames) { stopFrames(); stopFrames = undefined; }
 			return projection.render(width);
 		};
 		chat.handleMouse = (event) => projection.handleMouse(event);
 		restoreChat = () => {
+			stopFrames?.();
 			chat.render = render;
 			chat.handleMouse = mouse;
 		};

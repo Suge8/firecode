@@ -493,12 +493,12 @@ test("运行中的摘要显示实时计时，子代理结果到达时短暂高�
 
 	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
 	expect(s.lines().find((line: string) => line.includes("已返回"))).toMatch(new RegExp(`^${FLAME} fix-auth 已返回 · 5.0s`));
-	s.setNow(8000);
-	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(new RegExp(`^${FLAME} 操作 · 7.0s`));
+	s.setNow(9000);
+	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(new RegExp(`^${FLAME} 操作 · 8.0s`));
 
 	s.complete(bash);
-	s.setNow(9000);
+	s.setNow(10000);
 	s.clock.finish();
 	s.setNow(20000);
-	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(/^✓ 8.0s · 运行 1 ▸/);
+	expect(s.lines().find((line: string) => line.includes("运行 1"))).toMatch(/^✓ 9.0s · 运行 1 ▸/);
 });
