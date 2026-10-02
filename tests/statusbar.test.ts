@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { FLAME, contextColor } from "../theme.js";
+import { contextColor } from "../theme.js";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);

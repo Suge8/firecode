@@ -35,18 +35,17 @@ test("上榜规则：运行、审查、待发落显示，已发落/已 ack 的�
 	expect((await lines([])).text).toEqual([]);
 	const { text } = await lines([
 		{ name: "a", tool: "read", started: NOW - 12_000 },
-		{ name: "b" },
 		{ name: "c", status: "reviewing", review: [2, 1, 3], started: NOW - 5_000 },
 		{ name: "d", status: "idle", disposition: "pending", started: NOW - 60_000, settled: [NOW - 30_000, "done"] },
 		{ name: "e", status: "idle", disposition: "pending", started: NOW - 20_000, settled: [NOW - 5_000, "failed"] },
 		{ name: "f", status: "idle" },
 	]);
-	expect(text.length).toBe(5);
+	expect(text.length).toBe(4);
 	expect(text[0]).toMatch(/^ {2}\S a {2}工程师 · read\s+12s $/u);
-	expect(text[1]).toContain("思考中");
-	expect(text[2]).toMatch(/c .*审查第 2 轮 · 1\/3 通过\s+5\.0s $/u);
-	expect(text[3]).toMatch(/✓ d .*已返回，待发落\s+30s $/u);
-	expect(text[4]).toMatch(/✗ e .*失败\s+15s $/u);
+	expect(text[1]).toMatch(/c .*审查第 2 轮 · 1\/3 通过\s+5\.0s $/u);
+	expect(text[2]).toMatch(/✓ d .*已返回，待发落\s+30s $/u);
+	expect(text[3]).toMatch(/✗ e .*失败\s+15s $/u);
+	expect((await lines([{ name: "b" }])).text[0]).toContain("思考中");
 });
 
 test("超过 4 行：待发落先留、其次审查、最后运行；保留行按启动顺序；末行 +N", async () => {
@@ -81,6 +80,6 @@ test("列表组件只在有动效时订阅时钟，静止后不再触发重绘",
 	list.sync();
 	const settledAt = renders;
 	await Bun.sleep(250);
-	expect(renders).toBe(settledAt + 1);
+	expect(renders).toBe(settledAt);
 	list.dispose();
 });
