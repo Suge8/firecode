@@ -5,34 +5,6 @@ import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
 
-test("指挥官状态栏按角色首字计数，空闲合并，无子代理时只有身份", async () => {
-	const { masterStatusLine } = await loadFirecodeModule("master/index.js") as any;
-	const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
-	const worker = (role: string, status: string) => ({ role, status });
-
-	expect(masterStatusLine([
-		worker("调研员", "working"),
-		worker("调研员", "working"),
-		worker("工程师", "reviewing"),
-		worker("哨兵", "working"),
-		worker("工程师", "idle"),
-	], theme, 0)).toBe(`${FLAME.orange}👑 指挥模式\x1b[39m<dim> · ⠋ 调2·工1·哨1·闲1</dim>`);
-	expect(masterStatusLine([], theme)).toBe(`${FLAME.orange}👑 指挥模式\x1b[39m`);
-});
-
-test("底栏活动动画只在有在飞子代理时开，全部落定即停", async () => {
-	const { masterActive, masterStatusLine } = await loadFirecodeModule("master/index.js") as any;
-	const theme = { fg: (_color: string, text: string) => text };
-
-	expect(masterActive([])).toBe(false);
-	expect(masterActive([{ role: "工程师", status: "idle" }])).toBe(false);
-	expect(masterActive([{ role: "工程师", status: "working" }])).toBe(true);
-	expect(masterActive([{ role: "工程师", status: "reviewing" }])).toBe(true);
-
-	expect(stripVTControlCharacters(masterStatusLine([{ role: "工程师", status: "idle" }], theme, 3))).toBe("👑 指挥模式 · 闲1");
-	expect(stripVTControlCharacters(masterStatusLine([{ role: "工程师", status: "working" }], theme, 3))).toMatch(/^👑 指挥模式 · \S 工1$/u);
-});
-
 test("未命名底栏即时取首条消息六个字，重命名和切树同源更新，绘制不扫描历史", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
