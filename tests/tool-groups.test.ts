@@ -586,3 +586,24 @@ test("review 的信封消息归入过程不切段", async () => {
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
 });
+
+test("首句以冒号结尾时并入下一非空行：↳ 行与中间回复共用同一规则", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	assistant(s, [{ type: "text", text: "标准输出：\n\nhello world\n后面的细节" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "Result:\nok" }, { type: "toolCall", id: "c2", name: "read", arguments: {} }], "toolUse");
+	s.complete(s.tool("read", { path: "b.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多")));
+	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("lint", "output:\nok。其余")));
+	assistant(s, [{ type: "text", text: "收口" }]);
+
+	const collapsed = s.lines().map((line: string) => line.trim());
+	expect(collapsed).toContain("标准输出：hello world");
+	expect(collapsed).toContain("Result: ok");
+
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines().map((line: string) => line.trim());
+	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
+	expect(expanded).toContain("↳ lint 已返回 · 8m output: ok。");
+});
