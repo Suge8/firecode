@@ -7,18 +7,18 @@ afterEach(cleanupFirecodeModules);
 const theme = { fg: (_color: string, text: string) => text };
 const NOW = 1_000_000;
 
-type Spec = { name: string; status?: string; disposition?: string; tool?: string; review?: [number, number, number]; started?: number; settled?: [number, "done" | "failed"] };
+type Spec = { name: string; status?: string; disposition?: string; tool?: string; args?: unknown; review?: [number, number, number]; started?: number; settled?: [number, "done" | "failed"] };
 
 function facts(specs: Spec[]) {
 	const workers = specs.map((spec) => ({
-		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`,
+		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p",
 		...(spec.disposition ? { disposition: spec.disposition } : {}),
 	}));
 	const byPath = <T>(pick: (spec: Spec) => T | undefined) =>
 		new Map(specs.flatMap((spec) => { const value = pick(spec); return value === undefined ? [] : [[`/s/${spec.name}`, value] as const]; }));
 	return {
 		workers,
-		currentTools: new Map(specs.flatMap((spec) => spec.tool ? [[`/s/${spec.name}`, new Map([["1", { tool: spec.tool, startedAt: NOW }]])] as const] : [])),
+		currentTools: new Map(specs.flatMap((spec) => spec.tool ? [[`/s/${spec.name}`, new Map([["1", { tool: spec.tool, args: spec.args, startedAt: NOW }]])] as const] : [])),
 		reviewProgress: byPath((spec) => spec.review && { kind: "review" as const, round: spec.review[0], settled: spec.review[1], total: spec.review[2] }),
 		runStartedAt: byPath((spec) => spec.started),
 		settled: byPath((spec) => spec.settled && { at: spec.settled[0], kind: spec.settled[1] }),
@@ -34,14 +34,14 @@ async function lines(specs: Spec[], width = 72) {
 test("上榜规则：运行、审查、待发落显示，已发落/已 ack 的空闲不显示，无子代理 0 行", async () => {
 	expect((await lines([])).text).toEqual([]);
 	const { text } = await lines([
-		{ name: "a", tool: "read", started: NOW - 12_000 },
+		{ name: "a", tool: "read", args: { path: "/p/src/a.ts" }, started: NOW - 12_000 },
 		{ name: "c", status: "reviewing", review: [2, 1, 3], started: NOW - 5_000 },
 		{ name: "d", status: "idle", disposition: "pending", started: NOW - 60_000, settled: [NOW - 30_000, "done"] },
 		{ name: "e", status: "idle", disposition: "pending", started: NOW - 20_000, settled: [NOW - 5_000, "failed"] },
 		{ name: "f", status: "idle" },
 	]);
 	expect(text.length).toBe(4);
-	expect(text[0]).toMatch(/^ {2}\S a {2}工程师 · read\s+12s $/u);
+	expect(text[0]).toMatch(/^ {2}\S a {2}工程师 · 读取 \.\/src\/a\.ts\s+12s $/u);
 	expect(text[1]).toMatch(/c .*审查第 2 轮 · 1\/3 通过\s+5\.0s $/u);
 	expect(text[2]).toMatch(/✓ d .*已返回，待发落\s+30s $/u);
 	expect(text[3]).toMatch(/✗ e .*失败\s+15s $/u);
@@ -82,4 +82,16 @@ test("列表组件只在有动效时订阅时钟，静止后不再触发重绘",
 	await Bun.sleep(250);
 	expect(renders).toBe(settledAt);
 	list.dispose();
+});
+
+test("当前动作与工具行同一套动作词 + 目标，不显示工具原名", async () => {
+	const { text } = await lines([
+		{ name: "e", tool: "edit", args: { path: "/p/tools/line.ts" } },
+		{ name: "b", tool: "bash", args: { command: "bun test" } },
+		{ name: "w", tool: "write", args: { file_path: "/p/x.md", content: "a\nb" } },
+	]);
+	expect(text[0]).toContain("工程师 · 修改 ./tools/line.ts");
+	expect(text[1]).toContain("工程师 · 操作 $ bun test");
+	expect(text[2]).toContain("工程师 · 写入 ./x.md");
+	expect(text.join("")).not.toMatch(/\b(edit|bash|write)\b/u);
 });
