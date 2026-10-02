@@ -470,10 +470,11 @@ test("review 结果卡在展开态同样是一行 ↳，点击展开原生卡片
 	s.complete(s.tool("read", { path: "a.ts" }));
 	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-review-card", content: "<firecode_review>\n审查通过\n共 2 轮，全部通过\n</firecode_review>", display: true, timestamp: 0 }));
 	s.ui.setToolsExpanded(true);
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 审查通过");
-	expect(s.lines().join("\n")).not.toContain("共 2 轮");
-	s.click(s.lines().findIndex((line: string) => line.trim() === "↳ 审查通过"));
-	expect(s.lines().join("\n")).toContain("共 2 轮，全部通过");
+	const row = "↳ 审查通过 共 2 轮，全部通过";
+	expect(s.lines().map((line: string) => line.trim())).toContain(row);
+	expect(s.lines().join("\n")).not.toContain("[firecode-review-card]");
+	s.click(s.lines().findIndex((line: string) => line.trim() === row));
+	expect(s.lines().join("\n")).toContain("[firecode-review-card]");
 });
 
 test("子代理计数是本轮涉及的不同子代理数，由工具渲染器声明，池查询不计数", async () => {

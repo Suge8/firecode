@@ -61,6 +61,7 @@ export type ToolLineOptions = {
 	meta?: Part[];
 	theme: Theme;
 	ctx: RenderContext;
+	countKey?: string | null;
 };
 
 function sanitizeDisplayText(text: string): string {
@@ -116,6 +117,8 @@ export function paintBgLine(line: string, width: number, bgFn?: (text: string) =
 /** 折叠摘要从工具行取当前动作词；未提供该能力的静态工具由通用参数摘要承担。 */
 export interface ActionLine extends Component {
 	readonly actionWord: string;
+	/** 摘要计数键：同一类别内按不同键去重计数；null 表示这次调用不计数；省略时每次调用计一次。 */
+	readonly countKey?: string | null;
 }
 
 export class ToolLine implements ActionLine {
@@ -124,6 +127,10 @@ export class ToolLine implements ActionLine {
 
 	get actionWord(): string {
 		return this.options.label;
+	}
+
+	get countKey(): string | null | undefined {
+		return this.options.countKey;
 	}
 
 	render(width: number): string[] {
