@@ -240,7 +240,7 @@ function onStart(
 	if (state.phase === "reviewing" || state.phase === "needs_fix" || state.phase === "awaiting_fix")
 		return { state, effects: [] };
 	const focus = event.focus.trim();
-	// 排队相不发卡：状态栏与活动条已各有一份排队提示，记录里只留开始/结果卡。
+	// 排队相不发卡：输入框边框与审查活动行已各有一份排队提示，记录里只留开始/结果卡。
 	if (event.busy)
 		return {
 			state: {
@@ -488,7 +488,7 @@ function settleRound(
 		return {
 			state: { ...base, phase: "needs_fix", pending, consecutiveFailures },
 			// 顾问可能裁定 stop，反馈永远不会投递：此时不能提前宣布「已交回修复」；
-			// 卡里也不写「顾问介入中」——持久记录会过时，实况由活动条与状态栏承担。
+			// 卡里也不写「顾问介入中」——持久记录会过时，实况由审查活动行与输入框边框承担。
 			effects: [failCard, { kind: "advance" }],
 		};
 	return {

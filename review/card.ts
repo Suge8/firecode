@@ -261,7 +261,7 @@ function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Lan
 	return spec("advisor", title, withFooter(body, footer), "neutral", "🧭");
 }
 
-/** 裁决词→人话文案的唯一映射：卡标题与活动条摘要共用，防两处文案漂移。 */
+/** 裁决词→人话文案的唯一映射：卡标题与审查活动行共用，防两处文案漂移。 */
 export function decisionText(verdict: "continue" | "narrow" | "stop", language: Language) {
 	return language === "en"
 		? { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" }[verdict]

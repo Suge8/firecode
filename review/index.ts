@@ -3,7 +3,7 @@
  *
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
- *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、活动条），
+ *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、审查活动行），
  *   会话结果一律回灌成事件交给 reducer。
  * - 运行时状态按会话隔离：pi 在同一进程内对同一 cwd 复用扩展模块实例，主会话与每个
  *   Worker 子会话共用本文件；`registerReview(pi)` 各自持有一份 ReviewRuntime，模块级不留
@@ -723,7 +723,7 @@ function releaseEditor(active: Controller) {
 	active.unlockEditor = undefined;
 }
 
-/** 活动条只读取当前审查状态，总结阶段由 UI 收成一行。 */
+/** 审查活动行只读取当前审查状态，总结阶段由 UI 收成一行。 */
 function activityView(rt: ReviewRuntime): ActivityView | undefined {
 	const active = rt.controller;
 	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;

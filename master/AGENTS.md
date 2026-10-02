@@ -26,7 +26,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 `subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数与每个 Worker 的「角色·状态」，展开后每个 Worker 一行以角色为主投影当前工具与耗时、审查轮次进度或落定相对时间，模型与思考档降为行尾次要信息。
 ## 活动列表
 
-`activity-list.ts` 在输入框上方（widget aboveEditor）逐行列出子代理，布局与火苗复用根级 `activity.ts` / `flame.ts`；底栏只发布纯文字“指挥官”。上榜：working（火苗 + 当前工具，无工具时“思考中”）、reviewing（审查第 N 轮 · k/n 通过）、待发落（有本进程落定事实或持久化 disposition 的空闲 Worker：✓ 已返回 / ✗ 失败或中断，文字转暗）；`ack`、续派或 `kill` 后不再列出。落定事实（时刻与成败）只在运行时记录，reload 后待发落行按已冷却的完成态显示且不带耗时。右侧耗时：运行中取本次运行起点，落定行冻结在落定时刻。
+`activity-list.ts` 在输入框上方（widget aboveEditor）逐行列出子代理，布局与火苗复用根级 `activity.ts` / `flame.ts`；输入框边框只显示 Master 发布的纯文字“指挥官”。上榜：working（火苗 + 当前工具，无工具时“思考中”）、reviewing（审查第 N 轮 · k/n 通过）、待发落（有本进程落定事实或持久化 disposition 的空闲 Worker：✓ 已返回 / ✗ 失败或中断，文字转暗）；`ack`、续派或 `kill` 后不再列出。落定事实（时刻与成败）只在运行时记录，reload 后待发落行按已冷却的完成态显示且不带耗时。右侧耗时：运行中取本次运行起点，落定行冻结在落定时刻。
 
 超过 `ACTIVITY_ROWS` 行时保留顺序为待发落、审查、运行，保留行仍按启动顺序，末行“… +N 个”。动画时钟只在有行在动（运行、审查、落定过渡未播完）时订阅 `flame.ts` 的 `onFrame`，全部静止即取消，Master 自身不持有计时器。
 

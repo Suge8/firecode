@@ -63,7 +63,7 @@ test("status 每个子代理一行以角色为主、模型短名次之", async (
 	])).toBe("侦察 调研员·工作 gpt-5.1-codex-mini\n验收 工程师·审查 claude-sonnet-4-5");
 });
 
-test("底栏身份只发布“指挥官”，子代理进出不改变它", async () => {
+test("边框身份只发布“指挥官”，子代理进出不改变它", async () => {
 	const harness = await setup();
 	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });

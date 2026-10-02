@@ -15,7 +15,7 @@ import {
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { clip, formatDuration } from "../format.js";
-import { FLAME } from "../theme.js";
+import { HEAT_COLORS, paint } from "../flame.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
@@ -1026,8 +1026,8 @@ function subagentsCallParts(args: Record<string, unknown>): Part[] {
 const renderSubagentsResult = makeResultRenderer(false);
 const STATUS_WORD = { working: "工作", idle: "空闲", reviewing: "审查" } satisfies Record<WorkerStatus, string>;
 const LIST_WIDGET_KEY = "firecode-master-list";
-/** 底栏身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
-const MASTER_IDENTITY = `${FLAME.orange}指挥官\x1b[39m`;
+/** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
+const MASTER_IDENTITY = paint(HEAT_COLORS.orange, "指挥官");
 
 function reviewProgressFromEntry(entry: unknown): ReviewProgress | undefined {
 	if (!entry || typeof entry !== "object") return undefined;
