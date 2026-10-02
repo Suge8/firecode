@@ -415,6 +415,12 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 const WORKER_RESULT = (name: string, body = "刷新改为单飞。更多细节") =>
 	`<firecode_master_event>\n子代理 ${name} 已停下\n回复：\n${body}\n耗时：本次运行 8m · 当前任务 19m\n</firecode_master_event>`;
 
+/** 宿主 addMessageToChat 在每条用户消息前先插一个 Spacer（空闲送达的信封用户消息也一样）。 */
+function hostUser(s: any, text: string) {
+	s.chat.addChild(new s.tui.Spacer(1));
+	s.chat.addChild(new s.host.UserMessageComponent(text));
+}
+
 function assistant(s: any, content: unknown[], stopReason = "stop") {
 	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(message);
@@ -429,7 +435,7 @@ test("空闲路径的信封用户消息不切段；展开后它与忙时 CustomM
 	registerMasterEventRenderer({ registerMessageRenderer: (_type: string, render: unknown) => { renderer = render; } });
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
-	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
+	hostUser(s, WORKER_RESULT("fix-auth"));
 	s.complete(s.tool("read", { path: "b.ts" }));
 	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"), display: true, timestamp: 0 }, renderer));
 	assistant(s, [{ type: "text", text: "全部收口" }]);
@@ -578,7 +584,7 @@ test("review 的信封消息归入过程不切段", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
-	s.chat.addChild(new s.host.UserMessageComponent("<firecode_review>\n第 1 轮未通过，请修复。\n</firecode_review>"));
+	hostUser(s, "<firecode_review>\n第 1 轮未通过，请修复。\n</firecode_review>");
 	s.complete(s.tool("read", { path: "b.ts" }));
 	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
 	expect(lines.filter((line: string) => /^✓ 读 2 ▸$/.test(line))).toHaveLength(1);
@@ -594,8 +600,8 @@ test("首句以冒号结尾时并入下一非空行：↳ 行与中间回复共�
 	s.complete(s.tool("read", { path: "a.ts" }));
 	assistant(s, [{ type: "text", text: "Result:\nok" }, { type: "toolCall", id: "c2", name: "read", arguments: {} }], "toolUse");
 	s.complete(s.tool("read", { path: "b.ts" }));
-	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多")));
-	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("lint", "output:\nok。其余")));
+	hostUser(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
+	hostUser(s, WORKER_RESULT("lint", "output:\nok。其余"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 
 	const collapsed = s.lines().map((line: string) => line.trim());
@@ -606,4 +612,16 @@ test("首句以冒号结尾时并入下一非空行：↳ 行与中间回复共�
 	const expanded = s.lines().map((line: string) => line.trim());
 	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
 	expect(expanded).toContain("↳ lint 已返回 · 8m output: ok。");
+});
+
+test("冒号并入下一行时跳过围栏行与空行；预览去掉行内 Markdown 标记", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	assistant(s, [{ type: "text", text: "说明：\n\n```\n**粗体** 与 `code` 与 [链接](http://x.test)\n```" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	hostUser(s, WORKER_RESULT("fix-auth", "命令输出：\n```text\ndone\n```\n**加粗**结尾"));
+	assistant(s, [{ type: "text", text: "收口" }]);
+	expect(s.lines().map((line: string) => line.trim())).toContain("说明：粗体 与 code 与 链接");
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令输出：done");
 });
