@@ -183,7 +183,11 @@ class UserBar implements Component {
 	render(width: number): string[] {
 		if (width <= 2) return this.message.render(width);
 		const bar = paint(HEAT_COLORS.orange, "▌");
-		return this.message.render(width - 1).map((line) => bar + line);
+		const lines = this.message.render(width - 1);
+		// 宿主上下各留一行背景内边距；竖条只贴正文行，段落间空行仍连续。
+		const padding = (index: number) => (index === 0 || index === lines.length - 1)
+			&& !stripVTControlCharacters(lines[index]).trim();
+		return lines.map((line, index) => (padding(index) ? " " : bar) + line);
 	}
 }
 
@@ -293,7 +297,8 @@ function foldedReplies(
 		if (middle.length > shown.length) out.push(new Line(`  ${theme.fg("dim", `+${middle.length - shown.length} 条`)}`));
 		for (const text of shown) out.push(new Line(`  ${theme.fg("muted", firstSentence(text))}`));
 	}
-	if (body) out.push(new Spacer(1), body);
+	// 宿主助手正文自带前导空行，不再另垫。
+	if (body) out.push(body);
 	return out;
 }
 
