@@ -88,7 +88,7 @@ _避免使用_：自动重发、心跳
 ## 对抗审查
 
 **fire-review**：
-独立于指挥官的对抗性审查能力，拥有自己的运行状态和结果；只能由会话外部投递 `/fire-review` 触发。修复反馈、总结提示与状态消息进入模型上下文时统一带 `<firecode_review>` 来源信封。
+独立于指挥官的对抗性审查能力，拥有自己的运行状态和结果；只能由会话外部投递 `/fire-review` 触发。修复反馈、总结提示与状态消息进入模型上下文时统一带 `<firecode_review>` 来源信封（格式与折叠识别的标签集合都在根级 `deliver.ts`）。
 _避免使用_：Master Review Gate、Worker Validator
 
 **审查者（Reviewer）**：

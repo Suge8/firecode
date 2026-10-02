@@ -301,7 +301,9 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 	const list: Component[] = [];
 	for (const item of segment) {
 		const machine = machineEntriesOf(item);
-		if (machine) list.push(...machine.map((entry) => new MachineRow(entry, env.ui.theme)));
+		// review 结果卡有自己的 details 渲染，展开态保持原生卡片。
+		if (machine && !(item instanceof CustomMessageComponent && machine.every((entry) => entry.tag === "firecode_review")))
+			list.push(...machine.map((entry) => new MachineRow(entry, env.ui.theme)));
 		else if (item instanceof ToolExecutionComponent) {
 			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
 			list.push(new ToolItem(item, env.ui, env.toggleRow));

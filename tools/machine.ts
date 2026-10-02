@@ -1,10 +1,11 @@
 /** 机器消息（指挥官事件、观察员发言）的一行投影：卡片与折叠展开态共用，数据只来自信封正文。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { parseEnvelopes } from "../deliver.js";
+import { parseEnvelopes, type EnvelopeTag } from "../deliver.js";
 import { clip, oneLine } from "../format.js";
 
 export interface MachineEntry {
+	tag: EnvelopeTag;
 	/** 一行标题；子代理结果归一为“<名字> 已返回/失败”。 */
 	title: string;
 	/** 子代理结果才有：名字与是否失败。 */
@@ -22,10 +23,10 @@ const RUN_TIME = /本次运行 (\S+)/u;
 const SENTENCE_END = /^.*?(?:[。！？]|[.!?](?=\s|$))/u;
 
 export function machineEntries(text: string): MachineEntry[] | undefined {
-	return parseEnvelopes(text)?.map(({ body }) => entryOf(body));
+	return parseEnvelopes(text)?.map(({ tag, body }) => ({ tag, ...entryOf(body) }));
 }
 
-function entryOf(body: string): MachineEntry {
+function entryOf(body: string): Omit<MachineEntry, "tag"> {
 	const [heading = "", ...rest] = body.split("\n");
 	const marker = rest.findIndex((line) => SECTION.test(line.trim()));
 	const failed = marker >= 0 && rest[marker].trim() === "错误：";
