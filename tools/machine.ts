@@ -1,6 +1,5 @@
 /** 机器消息（指挥官事件、观察员发言）的一行投影：卡片与折叠展开态共用，数据只来自信封正文。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
 import { parseEnvelopes } from "../deliver.js";
 import { clip, oneLine } from "../format.js";
 
@@ -51,12 +50,4 @@ export function machineLine(entry: MachineEntry, theme: Theme, width: number): s
 	const duration = entry.duration ? `${theme.fg("dim", " · ")}${theme.fg("muted", entry.duration)}` : "";
 	const preview = entry.preview ? ` ${theme.fg("muted", firstSentence(entry.preview))}` : "";
 	return clip(`${head}${duration}${preview}`, Math.max(1, width));
-}
-
-export class MachineRow implements Component {
-	constructor(private readonly entry: MachineEntry, private readonly theme: Theme) {}
-	invalidate(): void {}
-	render(width: number): string[] {
-		return [machineLine(this.entry, this.theme, width)];
-	}
 }

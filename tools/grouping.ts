@@ -1,8 +1,8 @@
 /** 过程分组的宿主适配：原始聊天树不变，渲染与鼠标命中共用同一份投影。 */
-import { AssistantMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, CustomMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
 import { onFrame } from "../flame.js";
-import { projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
+import { isMachineMessage, projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
 import type { TurnClock } from "./turn-clock.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
@@ -53,6 +53,13 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		originalExpand.call(this, belongsHere(this) ? false : value);
 	};
 	prototype.setExpanded = setExpanded;
+	// 机器消息的原生卡片只由点击那一行打开；全局展开不平铺它（其余 CustomMessage 照旧跟随全局）。
+	const messagePrototype = CustomMessageComponent.prototype;
+	const originalMessageExpand = messagePrototype.setExpanded;
+	const setMessageExpanded: typeof originalMessageExpand = function (this: CustomMessageComponent, value) {
+		originalMessageExpand.call(this, isMachineMessage(this) ? false : value);
+	};
+	messagePrototype.setExpanded = setMessageExpanded;
 
 	const discover = () => {
 		if (attached) return;
@@ -71,8 +78,10 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 				tui.requestRender();
 			},
 			isOpen: (turn) => openTurns.has(turn),
-			toggleTurn: (turn) => {
-				if (!openTurns.delete(turn)) openTurns.add(turn);
+			toggleOpen: (key) => {
+				const opening = !openTurns.delete(key);
+				if (opening) openTurns.add(key);
+				if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, opening);
 				tui.requestRender();
 			},
 		};
@@ -102,5 +111,6 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		restoreChat();
 		if (Container.prototype.addChild === addChild) Container.prototype.addChild = originalAdd;
 		if (prototype.setExpanded === setExpanded) prototype.setExpanded = originalExpand;
+		if (messagePrototype.setExpanded === setMessageExpanded) messagePrototype.setExpanded = originalMessageExpand;
 	};
 }

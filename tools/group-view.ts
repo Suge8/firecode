@@ -1,19 +1,21 @@
 import {
 	AssistantMessageComponent,
 	CustomMessageComponent,
+	getMarkdownTheme,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, Markdown, Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
+import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { firstSentence } from "./machine.js";
 import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
-import { MachineRow, machineEntries, type MachineEntry } from "./machine.js";
+import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
@@ -40,13 +42,27 @@ function actionLine(component: Component | undefined): ActionLine | undefined {
 }
 
 /** 机器消息：整条文本由信封构成，来自 CustomMessage 或空闲时投递的用户消息。 */
-function machineEntriesOf(component: Component): MachineEntry[] | undefined {
+function machineText(component: Component): string | undefined {
 	if (component instanceof CustomMessageComponent) {
 		const content = (component as unknown as { message: { content: unknown } }).message.content;
-		return machineEntries(typeof content === "string" ? content : contentText(content));
+		return typeof content === "string" ? content : contentText(content);
 	}
-	if (component instanceof UserMessageComponent) return machineEntries((component as unknown as { text: string }).text);
+	if (component instanceof UserMessageComponent) return (component as unknown as { text: string }).text;
 	return undefined;
+}
+
+function machineEntriesOf(component: Component): MachineEntry[] | undefined {
+	const text = machineText(component);
+	return text === undefined ? undefined : machineEntries(text);
+}
+
+/** 整条内容由信封构成的 CustomMessage 或用户消息。 */
+export function isMachineMessage(component: Component): boolean {
+	return machineEntriesOf(component) !== undefined;
+}
+
+function machineBodies(component: Component): string {
+	return parseEnvelopes(machineText(component) ?? "")?.map((envelope) => envelope.body).join("\n\n") ?? "";
 }
 
 function contentText(content: unknown): string {
@@ -57,6 +73,11 @@ function contentText(content: unknown): string {
 /** 只有人类用户消息是轮次边界。 */
 function isHuman(component: Component): boolean {
 	return component instanceof UserMessageComponent && !machineEntriesOf(component);
+}
+
+/** 宿主 CustomEntry（收尾统计等）：类不对扩展导出，按它独有的 hasContent 能力识别。 */
+function isEntry(component: Component): boolean {
+	return component instanceof Container && typeof (component as unknown as { hasContent?: unknown }).hasContent === "function";
 }
 
 /** 过程 = 模型的输出、动作与收件（含机器消息）；其余节点（错误、CustomEntry 等）是段边界。 */
@@ -104,7 +125,6 @@ function categoryOf(data: RowData): string {
 	if (READ_TOOLS.has(data.toolName)) return "读";
 	if (EDIT_TOOLS.has(data.toolName)) return "改";
 	if (data.toolName === "bash") return "运行";
-	if (data.toolName.startsWith("subagents")) return "子代理";
 	return data.toolDefinition?.label ?? data.toolName;
 }
 
@@ -115,6 +135,7 @@ type Facts = Pick<SummaryView, "tally" | "failures" | "notices" | "action" | "ar
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
 	const counts = new Map<string, number>();
+	const keyed = new Map<string, Set<string>>();
 	let running = 0;
 	let failures = 0;
 	let notices = 0;
@@ -130,14 +151,18 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		if (!(item instanceof ToolExecutionComponent)) continue;
 		const data = rowData(item);
 		const category = categoryOf(data);
-		counts.set(category, (counts.get(category) ?? 0) + 1);
+		const key = actionLine(data.callRendererComponent)?.countKey;
+		if (typeof key === "string") keyed.set(category, (keyed.get(category) ?? new Set()).add(key));
+		else if (key !== null) counts.set(category, (counts.get(category) ?? 0) + 1);
 		// 运行中的工具优先当“当前动作”；都完成时取最后一个
 		if (data.isPartial) running++;
 		if (data.isPartial || !latest?.isPartial) latest = data;
 		if (data.result?.isError) failures++;
 	}
 	const rank = (label: string) => (FIXED_CATEGORIES.includes(label) ? FIXED_CATEGORIES.indexOf(label) : FIXED_CATEGORIES.length);
-	const tally = [...counts].sort((a, b) => rank(a[0]) - rank(b[0])).map(([label, calls]) => `${label} ${calls}`);
+	const totals = new Map(counts);
+	for (const [category, keys] of keyed) totals.set(category, (totals.get(category) ?? 0) + keys.size);
+	const tally = [...totals].sort((a, b) => rank(a[0]) - rank(b[0])).map(([label, calls]) => `${label} ${calls}`);
 	const thought = segment.some((item) => item instanceof AssistantMessageComponent && hasThinking(item));
 	const word = latest && (actionLine(latest.callRendererComponent)?.actionWord ?? latest.toolDefinition?.label ?? latest.toolName);
 	return {
@@ -145,6 +170,37 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		failures, notices, running, arrival,
 		action: activity ? ACTIVITY_TEXT[activity] : word ?? "思考",
 	};
+}
+
+/** 机器消息：展开态一行 ↳，点击切换完整正文（信封用户消息）或原生卡片（CustomMessage）。 */
+class MachineItem implements Component {
+	private rows = 1;
+	constructor(
+		private readonly item: Component,
+		private readonly entries: readonly MachineEntry[],
+		private readonly env: ProjectionEnv,
+	) {}
+	invalidate(): void {}
+	render(width: number): string[] {
+		const rows = this.entries.map((entry) => machineLine(entry, this.env.ui.theme, width));
+		this.rows = rows.length;
+		return this.env.isOpen(this.item) ? [...rows, ...this.body(width)] : rows;
+	}
+	private body(width: number): string[] {
+		if (this.item instanceof CustomMessageComponent) return this.item.render(width);
+		const bodies = machineBodies(this.item);
+		return new Markdown(bodies, 1, 0, getMarkdownTheme()).render(width);
+	}
+	handleMouse(event: TuiMouseEvent) {
+		if (event.y >= this.rows) {
+			const inner = this.item as { handleMouse?: (e: TuiMouseEvent) => { handled: boolean } | undefined };
+			if (!this.env.isOpen(this.item)) return undefined;
+			return inner.handleMouse?.({ ...event, y: event.y - this.rows, height: event.height - this.rows });
+		}
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		this.env.toggleOpen(this.item);
+		return { handled: true };
+	}
 }
 
 class ToolItem implements Component {
@@ -197,9 +253,9 @@ export interface ProjectionEnv {
 	/** 折叠态每轮最多显示几条中间回复首句。 */
 	replyLines: number;
 	toggleRow: (row: ToolRow) => void;
-	/** 单轮展开状态以该轮的人类用户消息为键。 */
-	isOpen: (turn: object) => boolean;
-	toggleTurn: (turn: object) => void;
+	/** 展开状态以该轮的人类用户消息、或被点开的机器消息本身为键。 */
+	isOpen: (key: object) => boolean;
+	toggleOpen: (key: object) => void;
 	/** 第一条人类输入之前的过程所属的轮次键。 */
 	headless: object;
 }
@@ -227,6 +283,8 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 	const inSegment = (index: number) => {
 		const child = children[index];
 		if (isProcess(child)) return true;
+		// 收尾统计等 CustomEntry 属于本轮：有段可依附时不切段。
+		if (isEntry(child)) return segment.length > 0;
 		if (!segment.some(hasSubstance)) return false;
 		const notice = child instanceof Spacer ? children[index + 1] : child;
 		return noticeKind(notice, env.ui.theme) !== undefined;
@@ -269,11 +327,11 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
 			...facts, live, elapsed: clock.elapsed, sinceEnd, open,
-			toggle: globalOpen ? undefined : () => env.toggleTurn(turn),
+			toggle: globalOpen ? undefined : () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
 	if (open) nodes.push(...processList(segment, env));
-	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env));
+	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env), ...segment.filter(isEntry));
 	return { nodes, animating: hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd))) };
 }
 
@@ -305,9 +363,8 @@ function foldedReplies(
 function processList(segment: readonly Component[], env: ProjectionEnv): Component[] {
 	const list: Component[] = [];
 	for (const item of segment) {
-		// 只有整条由信封构成的用户消息投影成 ↳ 行；CustomMessage 一律交给它自己的渲染器。
-		const machine = item instanceof UserMessageComponent ? machineEntriesOf(item) : undefined;
-		if (machine) list.push(...machine.map((entry) => new MachineRow(entry, env.ui.theme)));
+		const machine = machineEntriesOf(item);
+		if (machine) list.push(new MachineItem(item, machine, env));
 		else if (item instanceof ToolExecutionComponent) {
 			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
 			list.push(new ToolItem(item, env.ui, env.toggleRow));

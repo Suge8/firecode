@@ -479,7 +479,7 @@ export function registerMaster(
 		description: "查看子代理池快照",
 		renderShell: "self",
 		renderCall: (_args, theme, ctx) =>
-			new ToolLine({ label: "子代理", value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx }),
+			new ToolLine({ label: "子代理", value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx, countKey: null }),
 		renderResult: (result, options, theme, context) => {
 			const details = result.details as { workers?: unknown } | undefined;
 			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
@@ -510,7 +510,7 @@ export function registerMaster(
 		description: "指挥官的七动作子代理接口：start 按角色新建，send 续派或切换角色，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，kill 收口移除；无 sleep/session。",
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
-			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx, countKey: typeof args.worker === "string" ? args.worker : undefined }),
 		renderResult: renderSubagentsResult,
 		parameters: Type.Object({
 			action: StringEnum(["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const, {
