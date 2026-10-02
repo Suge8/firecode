@@ -28,7 +28,7 @@ function entryOf(body: string): MachineEntry {
 	const [heading = "", ...rest] = body.split("\n");
 	const marker = rest.findIndex((line) => SECTION.test(line.trim()));
 	const failed = marker >= 0 && rest[marker].trim() === "错误：";
-	const preview = rest.slice(marker + 1).find((line) => line.trim() && !line.startsWith("耗时："))?.trim() ?? "";
+	const preview = rest.slice(marker + 1).filter((line) => line.trim() && !line.startsWith("耗时：")).join("\n").trim();
 	const name = RETURNED.exec(heading)?.[1];
 	return {
 		title: name === undefined ? heading : `${name} ${failed ? "失败" : "已返回"}`,
@@ -38,9 +38,19 @@ function entryOf(body: string): MachineEntry {
 	};
 }
 
+/**
+ * 一行预览用的首句，机器消息行、中间回复与事件卡共用这一份规则：
+ * 首句以冒号结尾（如“标准输出：”）本身没有信息，并入下一非空行的首句。
+ */
 export function firstSentence(text: string): string {
-	const flat = oneLine(text);
-	return SENTENCE_END.exec(flat)?.[0] ?? flat;
+	return sentenceOf(text.split("\n").map(oneLine).filter(Boolean));
+}
+
+function sentenceOf([head = "", ...rest]: string[]): string {
+	const sentence = SENTENCE_END.exec(head)?.[0] ?? head;
+	const colon = /[：:]$/u.exec(sentence)?.[0];
+	if (!colon || rest.length === 0) return sentence;
+	return `${sentence}${colon === ":" ? " " : ""}${sentenceOf(rest)}`;
 }
 
 /** “↳ <名字> 已返回 · 时长 首句”；不铺背景，可直接用 clip 截断。 */

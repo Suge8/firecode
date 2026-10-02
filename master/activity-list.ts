@@ -25,7 +25,7 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "disposition" | "cwd">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
@@ -33,16 +33,22 @@ export interface ActivityFacts {
 }
 
 interface Entry {
-	/** 保留优先级：待发落 0 → 审查 1 → 运行 2。 */
-	rank: number;
 	row: ActivityRow;
+	/** 正在动：运行、审查或落定过渡未播完，需要动画时钟。 */
+	moving: boolean;
+	/** 落定行的移除时刻。 */
+	expiresAt?: number;
 }
 
-/** 动作文本上限：长命令截断，免得整段动作在窄屏被整体丢弃。 */
+/** 落定行停留时长：完成短、失败长，给用户留出看清的时间。 */
+const DONE_LINGER_MS = 10_000;
+const FAILED_LINGER_MS = 30_000;
+/** 动作文本上限：长命令先截到这里，窄屏再由行布局按剩余宽度截短。 */
 const ACTION_MAX = 40;
+
 const duration = (ms: number) => formatDuration(Math.max(0, ms));
 
-function entryOf(facts: ActivityFacts, index: number, now: number): (Entry & { moving: boolean }) | undefined {
+function entryOf(facts: ActivityFacts, index: number, now: number): Entry | undefined {
 	const worker = facts.workers[index];
 	const path = worker.sessionPath;
 	const phase = phaseOf(index);
@@ -51,29 +57,30 @@ function entryOf(facts: ActivityFacts, index: number, now: number): (Entry & { m
 	if (worker.status === "working") {
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const elapsed = start === undefined ? "" : duration(now - start);
-		return { rank: 2, moving: true, row: { ...base, mark: flame(1, phase), action: tool ? clip(toolActionText(tool.tool, tool.args, worker.cwd ?? ""), ACTION_MAX, "end", "…") : "思考中", elapsed } };
+		return { moving: true, row: { ...base, mark: flame(1, phase), action: tool ? clip(toolActionText(tool.tool, tool.args, worker.cwd ?? ""), ACTION_MAX, "end", "…") : "思考中", elapsed } };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
 		const action = progress ? `审查第 ${progress.round} 轮 · ${progress.settled}/${progress.total} 通过` : "审查中";
 		const elapsed = start === undefined ? "" : duration(now - start);
-		return { rank: 1, moving: true, row: { ...base, mark: reviewMark(phase), action, tone: "review", elapsed } };
+		return { moving: true, row: { ...base, mark: reviewMark(phase), action, tone: "review", elapsed } };
 	}
-	// 待发落 = 有落定事实（本进程刚落定，投递前就要在列）或持久化的 disposition（reload 后事实已丢，按已冷却的完成态展示，不编造耗时）。
+	// 只列本进程内刚落定的：reload 后事实丢失，不展示历史。
 	const fact = facts.settled.get(path);
-	if (!fact && !worker.disposition) return undefined;
-	const kind = fact?.kind ?? "done";
-	const since = fact ? now - fact.at : Infinity;
-	const failed = kind === "failed";
+	if (!fact) return undefined;
+	const expiresAt = fact.at + (fact.kind === "failed" ? FAILED_LINGER_MS : DONE_LINGER_MS);
+	if (now >= expiresAt) return undefined;
+	const since = now - fact.at;
+	const failed = fact.kind === "failed";
 	return {
-		rank: 0,
 		moving: settling(since),
+		expiresAt,
 		row: {
 			...base,
-			mark: settleMark(kind, since, phase),
-			action: failed ? fact?.note ?? "失败" : "已返回，待发落",
+			mark: settleMark(fact.kind, since, phase),
+			action: failed ? fact.note ?? "失败" : "已返回",
 			...(failed ? { tone: "failed" as const } : {}),
-			elapsed: fact && start !== undefined ? duration(fact.at - start) : "",
+			elapsed: start !== undefined ? duration(fact.at - start) : "",
 			settled: true,
 		},
 	};
@@ -81,47 +88,53 @@ function entryOf(facts: ActivityFacts, index: number, now: number): (Entry & { m
 
 function collect(facts: ActivityFacts, now: number) {
 	const entries = facts.workers.flatMap((_, index) => entryOf(facts, index, now) ?? []);
-	return { entries, animating: entries.some((entry) => entry.moving) };
+	const expiries = entries.flatMap((entry) => entry.expiresAt ?? []);
+	return {
+		entries,
+		animating: entries.some((entry) => entry.moving),
+		/** 最近一个落定行还有多久移除；没有落定行时为 undefined。 */
+		nextExpiryMs: expiries.length ? Math.min(...expiries) - now : undefined,
+	};
 }
 
-/** 按保留规则裁到 ACTIVITY_ROWS：待发落最先，其次审查，最后运行；保留行仍按启动顺序。 */
-function visibleEntries(entries: Entry[]): { shown: Entry[]; hidden: number } {
-	if (entries.length <= ACTIVITY_ROWS) return { shown: entries, hidden: 0 };
-	const keep = new Set(
-		entries.map((entry, order) => ({ entry, order }))
-			.sort((a, b) => a.entry.rank - b.entry.rank || a.order - b.order)
-			.slice(0, ACTIVITY_ROWS - 1)
-			.map(({ entry }) => entry),
-	);
-	const shown = entries.filter((entry) => keep.has(entry));
-	return { shown, hidden: entries.length - shown.length };
-}
+/** 终端每 6 行容纳一条活动。 */
+const ROWS_PER_ACTIVITY = 6;
 
-/** animating：有行在动（运行、审查、落定过渡未播完），调用方据此决定是否订阅时钟。 */
-export function activityLines(facts: ActivityFacts, now: number, width: number, theme: Theme) {
+/** 可见行数：随终端高度放宽，全局展开显示全部；宿主拿不到高度时用下限。 */
+export function visibleRows(terminalRows: number | undefined, expanded: boolean): number {
+	if (expanded) return Infinity;
+	return Math.max(ACTIVITY_ROWS, Math.floor((terminalRows ?? 0) / ROWS_PER_ACTIVITY));
+}
+/** 行按启动顺序；超出上限时留前 limit-1 行，末行汇总其余。 */
+export function activityLines(facts: ActivityFacts, now: number, width: number, theme: Theme, limit = ACTIVITY_ROWS) {
 	const { entries, animating } = collect(facts, now);
-	const { shown, hidden } = visibleEntries(entries);
+	const shown = entries.length > limit ? entries.slice(0, limit - 1) : entries;
 	const nameWidth = Math.max(0, ...entries.map((entry) => visibleWidth(entry.row.name)));
 	const lines = shown.map((entry) => renderActivityRow(entry.row, width, nameWidth, theme));
-	if (hidden) lines.push(renderMoreRow(hidden, width, theme));
+	if (shown.length < entries.length) lines.push(renderMoreRow(entries.length - shown.length, width, theme));
 	return { lines, animating };
 }
 
 /** widget 组件：动画时钟只在有行在动时订阅，静止即取消。 */
 export class ActivityList {
 	private unsubscribe: (() => void) | undefined;
+	private expiry: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(
 		private readonly tui: { requestRender(): void },
 		private readonly theme: Theme,
 		private readonly facts: () => ActivityFacts,
+		private readonly limit: () => number,
 	) {}
 
-	/** 事实变化后调用：对齐订阅状态并重绘一次。 */
+	/** 事实变化后调用：对齐时钟订阅与落定行到期唤醒，并重绘一次。 */
 	sync(): void {
-		const animating = collect(this.facts(), Date.now()).animating;
+		const { animating, nextExpiryMs } = collect(this.facts(), Date.now());
 		if (animating && !this.unsubscribe) this.unsubscribe = onFrame(() => this.onFrame());
 		if (!animating) this.release();
+		clearTimeout(this.expiry);
+		this.expiry = nextExpiryMs === undefined ? undefined : setTimeout(() => this.sync(), nextExpiryMs + 1);
+		this.expiry?.unref?.();
 		this.tui.requestRender();
 	}
 
@@ -138,10 +151,11 @@ export class ActivityList {
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		return activityLines(this.facts(), Date.now(), width, this.theme).lines;
+		return activityLines(this.facts(), Date.now(), width, this.theme, this.limit()).lines;
 	}
 
 	dispose(): void {
+		clearTimeout(this.expiry);
 		this.release();
 	}
 }
