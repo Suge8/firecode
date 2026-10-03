@@ -47,20 +47,15 @@ const base = (pool: unknown) => ({
 });
 
 describe("review in-process session", () => {
-	test("returns the complete assistant output and forwards structured progress events", async () => {
+	test("returns the complete assistant output", async () => {
 		const body = `PASS\n${"完整结论 ".repeat(4000)}`;
 		const runtime = fakeRuntime(async (emit) => {
 			emit({ type: "tool_execution_start", toolName: "read", args: { path: "a.ts" } });
 			emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: body }] } });
 		});
-		const seen: string[] = [];
 		const { runReviewSession } = await runner();
-		const result = await runReviewSession({
-			...base(runtime.pool),
-			onEvent: (event: Event) => seen.push(String(event.type)),
-		});
+		const result = await runReviewSession(base(runtime.pool));
 		expect(result).toEqual({ kind: "output", text: body });
-		expect(seen).toEqual(["tool_execution_start", "message_end"]);
 		expect(runtime.pool.options).toMatchObject({
 			role: "reviewer",
 			tools: ["read", "bash"],

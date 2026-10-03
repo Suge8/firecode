@@ -90,7 +90,7 @@ export function registerWatcher(
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
 	const speak = (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
 		const card: WatcherCard = { note: advice.note, turnIndex };
-		return deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card), details: card });
+		return deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
 	};
 	const evaluate = async (owner: WatcherRuntime) => {
 		owner.evaluating = true;

@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Language } from "../config.js";
+import { wrapEnvelope } from "../deliver.js";
 import type { AdvisorResult, ReviewState, SummaryKind } from "./state.js";
 
 const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "prompts");
@@ -141,12 +142,9 @@ export function buildFixFeedback(input: FixFeedbackInput): string {
 					: "顾问建议";
 		parts.push("", `${label}${input.language === "en" ? ":" : "："}`, input.advisor.advice);
 	}
-	return reviewEnvelope(parts.join("\n"));
+	return wrapEnvelope("firecode_review", parts.join("\n"));
 }
 
-export function reviewEnvelope(content: string): string {
-	return `<firecode_review>\n${content}\n</firecode_review>`;
-}
 
 function narrowInstruction(language: Language, narrowed: boolean) {
 	if (!narrowed) return language === "en" ? FIX_INSTRUCTION_EN : FIX_INSTRUCTION_ZH;
@@ -182,7 +180,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
 	const content = material.trim()
 		? `${body}\n\n${summaryMaterialLabel(input.language, input.kind)}\n${material}`
 		: body;
-	return reviewEnvelope(content);
+	return wrapEnvelope("firecode_review", content);
 }
 
 function summaryMaterialLabel(language: Language, kind: SummaryKind): string {

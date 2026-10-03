@@ -67,6 +67,13 @@ export interface WatcherConfig extends ModelAtom {
 	context: WatcherContext;
 }
 
+/** tools 节：折叠态每轮最多显示几条中间回复（0 = 只留最后一条回复）。 */
+export interface ToolsConfig {
+	replyLines: number;
+}
+
+export const DEFAULT_REPLY_LINES = 3;
+
 export const FEATURES = [
 	"header",
 	"statusbar",
@@ -76,7 +83,6 @@ export const FEATURES = [
 	"stats",
 	"claudeSub",
 	"openaiNative",
-	"workingFlame",
 	"bark",
 	"review",
 	"master",
@@ -104,6 +110,7 @@ export interface FireCodeConfig {
 	review: ReviewConfig;
 	master: MasterConfig;
 	watcher: WatcherConfig;
+	tools: ToolsConfig;
 }
 
 export type LoadedConfig = {
@@ -255,7 +262,10 @@ export function loadConfig(): LoadedConfig {
 	const watcher = parseWatcherConfig(asRecord(raw.watcher), watcherProblems);
 	if (raw.watcher !== undefined || features.watcher !== false) problems.push(...watcherProblems);
 
-	cached = { config: { features, keys, presets, review, master, watcher }, problems };
+	if (raw.tools !== undefined && !isPlainObject(raw.tools)) problems.push("tools 必须是对象");
+	const tools = parseToolsConfig(asRecord(raw.tools), problems);
+
+	cached = { config: { features, keys, presets, review, master, watcher, tools }, problems };
 	return cached;
 }
 
@@ -442,6 +452,17 @@ function masterFallback(value: unknown, field: string, problems: string[]): Mode
 		return [];
 	}
 	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));
+}
+
+// ---- tools 节 ----
+
+function parseToolsConfig(raw: Record<string, unknown>, problems: string[]): ToolsConfig {
+	rejectUnknownKeys(raw, ["replyLines"], "tools", problems);
+	const value = raw.replyLines;
+	if (value === undefined) return { replyLines: DEFAULT_REPLY_LINES };
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return { replyLines: value };
+	problems.push("tools.replyLines 必须是非负整数");
+	return { replyLines: DEFAULT_REPLY_LINES };
 }
 
 // ---- watcher 节 ----

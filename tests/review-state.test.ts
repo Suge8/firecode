@@ -60,7 +60,7 @@ describe("fire-review reducer", () => {
 		const result = reduce(initialState("g"), { type: "START", focus: "x", busy: true }, LIMITS, 1000);
 		expect(result.state.phase).toBe("queued");
 		expect(result.state.round).toBe(0);
-		// 排队不发卡：状态栏与活动条已各有提示，记录只留开始/结果卡。
+		// 排队不发卡：输入框边框与审查活动行已各有提示，记录只留开始/结果卡。
 		expect(result.effects).toMatchObject([{ kind: "advance" }]);
 	});
 

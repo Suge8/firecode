@@ -1,24 +1,5 @@
-/** FireCode 品牌色与数值分级配色：所有阈值到颜色的映射集中在此。 */
+/** 数值分级配色：所有阈值到主题色的映射集中在此；品牌火焰色在 flame.ts。 */
 import type { ExtensionAPI, ThemeColor } from "@earendil-works/pi-coding-agent";
-
-export const ANSI = {
-	reset: "\x1b[0m",
-	bold: "\x1b[1m",
-} as const;
-
-const rgb = (red: number, green: number, blue: number) =>
-	`\x1b[38;2;${red};${green};${blue}m`;
-
-/** 火焰渐变：横幅按行取色，从底部暗红烧到芯部白金。 */
-export const FLAME = {
-	red: rgb(255, 47, 32),
-	orange: rgb(255, 119, 28),
-	gold: rgb(255, 195, 61),
-	white: rgb(255, 239, 184),
-	textTop: rgb(255, 112, 38),
-	textMid: rgb(255, 184, 62),
-	textCore: rgb(255, 236, 170),
-} as const;
 
 /** 阈值表：首个满足 `value >= at` 的档位胜出，表按 at 降序书写。 */
 type Threshold = { at: number; color: ThemeColor };

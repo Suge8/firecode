@@ -3,7 +3,7 @@
  *
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
- *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、活动条），
+ *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、审查活动行），
  *   会话结果一律回灌成事件交给 reducer。
  * - 运行时状态按会话隔离：pi 在同一进程内对同一 cwd 复用扩展模块实例，主会话与每个
  *   Worker 子会话共用本文件；`registerReview(pi)` 各自持有一份 ReviewRuntime，模块级不留
@@ -11,6 +11,7 @@
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
 import { randomUUID } from "node:crypto";
+import { wrapEnvelope } from "../deliver.js";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	getAgentDir,
@@ -21,7 +22,7 @@ import {
 import { loadConfig, type Language, type ReviewConfig } from "../config.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 import { InProcessSessionPool } from "../master/spawn.js";
-import { buildCard, CARD_TYPE, decisionText, registerCardRenderer } from "./card.js";
+import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
 	CHECKPOINT_TYPE,
@@ -33,20 +34,14 @@ import {
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import {
-	applySessionEvent,
-	initialProgress,
-	type ReviewerProgress,
-	settleProgress,
-} from "./progress.js";
-import {
 	type ActivityView,
 	hideActivity,
 	lockEditor,
+	reviewCounts,
 	showActivity,
-	unlockEditor,
 } from "./ui.js";
 import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
-import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt, reviewEnvelope } from "./prompt.js";
+import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
@@ -110,12 +105,8 @@ interface Controller {
 	actionController?: AbortController;
 	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
-	/** 审查会话实时进度：纯 UI 态，高频更新，不入 checkpoint。 */
-	progress: readonly ReviewerProgress[];
-	/** 当前 progress 属于审查者还是顾问：修复相据此决定是否展示裁决摘要。 */
-	progressKind?: "reviewers" | "advisor";
-	/** 编辑器是否已被审查接管（禁输入 + esc 取消）。 */
-	editorLocked?: boolean;
+	/** 审查接管了编辑器（禁输入 + esc 取消）时的解锁函数，还原成接管前的编辑器。 */
+	unlockEditor?: () => void;
 	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
 	occupancyHeld?: boolean;
 	/** 占用标签租约续期计时器；释放与 shutdown 时清除。 */
@@ -325,7 +316,6 @@ async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionCont
 		watchdog: undefined,
 		persistedStamp: null,
 		pendingCards: [],
-		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog(rt);
 	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier.
@@ -356,7 +346,6 @@ function handleSessionStart(rt: ReviewRuntime, ctx: ExtensionContext): Promise<v
 		watchdog: undefined,
 		persistedStamp: readStamp(ctx),
 		pendingCards: [],
-		progress: initialProgress(config.reviewers, config.language),
 	};
 	armWatchdog(rt);
 	syncOccupancy(rt, rt.controller);
@@ -516,8 +505,7 @@ async function handleShutdown(
 	if (active.ctx !== ctx) active.ctx = ctx;
 	if (reason === "quit") await dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 	else {
-		hideActivity(active.ctx);
-		releaseEditor(active);
+		clearUi(active);
 		await rt.queue;
 	}
 	if (rt.controller === active) rt.controller = undefined;
@@ -595,8 +583,7 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 					: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`,
 				"error",
 			);
-		releaseEditor(active);
-		hideActivity(active.ctx);
+		clearUi(active);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
 		let sealed = true;
@@ -697,7 +684,8 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 	try {
 		rt.pi.events.emit(OCCUPANCY_CHANNEL, {
 			active: held,
-			...(held ? { label: OCCUPANCY_LABEL } : {}),
+			// progress 是活的访问器：占用频道按计数配对，进度变化不能靠重发 true 传递。
+			...(held ? { label: OCCUPANCY_LABEL, progress: () => reviewCounts(activityView(rt)) } : {}),
 		});
 	} catch (error) {
 		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或会话生命周期。
@@ -711,35 +699,31 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 }
 
 /**
- * UI 投影：编辑器上方活动条 + esc 接管，全部从当前状态派生。
- * 活动条自己按帧重绘，因此进度变化不需要在这里通知。
+ * UI 投影：编辑器上方单行活动 + esc 接管，全部从当前状态派生。
+ * 活动行自己按帧重绘，因此耗时变化不需要在这里通知。
  */
 function syncUi(rt: ReviewRuntime): void {
 	const active = rt.controller;
 	if (!active) return;
 	const view = () => activityView(rt);
-	if (view()) {
-		showActivity(active.ctx, view);
-		// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
-		if (canCancelWithKey(rt)) {
-			if (!active.editorLocked) {
-				lockEditor(active.ctx, view, () => cancelByUser(rt));
-				active.editorLocked = true;
-			}
-		} else releaseEditor(active);
-		return;
-	}
+	if (!view()) return clearUi(active);
+	showActivity(active.ctx, view);
+	// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
+	if (!canCancelWithKey(rt)) return releaseEditor(active);
+	active.unlockEditor ??= lockEditor(active.ctx, () => cancelByUser(rt));
+}
+
+function clearUi(active: Controller) {
 	hideActivity(active.ctx);
 	releaseEditor(active);
 }
 
 function releaseEditor(active: Controller) {
-	if (!active.editorLocked) return;
-	unlockEditor(active.ctx);
-	active.editorLocked = false;
+	active.unlockEditor?.();
+	active.unlockEditor = undefined;
 }
 
-/** 活动条只读取当前审查状态，总结阶段由 UI 收成一行。 */
+/** 审查活动行只读取当前审查状态，总结阶段由 UI 收成一行。 */
 function activityView(rt: ReviewRuntime): ActivityView | undefined {
 	const active = rt.controller;
 	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;
@@ -747,8 +731,7 @@ function activityView(rt: ReviewRuntime): ActivityView | undefined {
 		phase: active.state.phase,
 		round: active.state.round,
 		startedAt: active.state.startedAt,
-		reviewers: active.progress,
-		progressKind: active.progressKind,
+		reviewers: active.state.active?.reviewers ?? [],
 		consecutiveFailures: active.state.consecutiveFailures,
 		language: active.config.language,
 	};
@@ -822,21 +805,6 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 	if (!state.active) return;
 	const currentActive = state.active;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	active.progressKind = "reviewers";
-	active.progress = initialProgress(
-		currentActive.reviewers.map((item) => ({ model: item.model })),
-		config.language,
-	);
-	for (const reviewer of currentActive.reviewers)
-		if (reviewer.status !== "running" && reviewer.result)
-			active.progress = settleProgress(
-				active.progress,
-				reviewer.index,
-				reviewer.status,
-				config.language,
-				reviewer.result.summary,
-				reviewer.result.details,
-			);
 	const evidence = buildEvidence(sessionEntries(rt), config.language);
 	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
 		language: config.language,
@@ -858,25 +826,7 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 					language: config.language,
 					signal: actionSignal,
 					runSession: rt.runSession,
-					onEvent: (event) => {
-						if (rt.controller !== active) return;
-						active.progress = applySessionEvent(
-							active.progress,
-							reviewer.index,
-							event,
-							config.language,
-						);
-					},
 				});
-				if (rt.controller === active)
-					active.progress = settleProgress(
-						active.progress,
-						result.index,
-						result.status,
-						config.language,
-						result.summary,
-						result.details,
-					);
 				if (!actionSignal.aborted)
 					await dispatch(rt, { type: "REVIEWER_SETTLED", index: result.index, result });
 			} catch (error) {
@@ -905,8 +855,6 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 	if (!state.pending) return;
 	const pending = state.pending;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	active.progressKind = "advisor";
-	active.progress = initialProgress([{ model: config.advisor.model }], config.language);
 	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {
 		language: config.language,
 		focus: state.focus,
@@ -922,20 +870,7 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 			language: config.language,
 			signal: actionSignal,
 			runSession: rt.runSession,
-			onEvent: (event) => {
-				if (rt.controller !== active) return;
-				active.progress = applySessionEvent(active.progress, 0, event, config.language);
-			},
 		});
-		if (rt.controller === active)
-			active.progress = settleProgress(
-				active.progress,
-				0,
-				"passed",
-				config.language,
-				advisorSummary(result, config.language),
-				result.advice,
-			);
 		if (!actionSignal.aborted)
 			await dispatch(rt, { type: "ADVISOR_SETTLED", result });
 	} catch (error) {
@@ -945,31 +880,6 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 			details: sessionErrorText("advisor", active.config.language, error),
 		});
 	}
-}
-
-/** 顾问落定后的一行摘要：裁决 + 「下一步方向」首句，与审查者摘要同一展示通道。
- * 建议正文以「核实结论」段开头，直取首行只会露出段标题星号，预览零信息量。 */
-function advisorSummary(result: AdvisorResult, language: Language) {
-	const label = decisionText(result.verdict, language);
-	const first = adviceHighlight(result.advice);
-	if (!first) return label;
-	return language === "en" ? `${label}: ${first}` : `${label}：${first}`;
-}
-
-const NEXT_DIRECTION_LABEL = /^\*{0,2}(?:下一步方向|Next direction)\*{0,2}\s*[:：]\s*/iu;
-
-function adviceHighlight(advice: string) {
-	const lines = advice.split(/\r?\n/u);
-	const index = lines.findIndex((line) => NEXT_DIRECTION_LABEL.test(line.trim()));
-	const source = index >= 0
-		? [lines[index].trim().replace(NEXT_DIRECTION_LABEL, ""), ...lines.slice(index + 1)]
-		: lines;
-	const first = source.map(stripBold).find((line) => line.trim())?.trim() ?? "";
-	return first.replace(/^[-*+]\s*/u, "").trim();
-}
-
-function stripBold(text: string) {
-	return text.replace(/\*\*([^*]+)\*\*/gu, "$1");
 }
 
 function sessionErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
@@ -1104,7 +1014,7 @@ function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): voi
 	const built = buildCard(card, active.config.language);
 	rt.pi.sendMessage({
 		customType: CARD_TYPE,
-		content: reviewEnvelope(built.content),
+		content: wrapEnvelope("firecode_review", built.content),
 		display: true,
 		details: built.details,
 	});

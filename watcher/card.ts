@@ -1,10 +1,11 @@
 /**
- * 观察员建议的展示：单通道单一样式，随投递消息一起渲染。
- * 渲染器永不抛异常；校验失败降级纯文本。
+ * 观察员建议的展示：单通道单一样式，从消息正文里的信封渲染（deliver.ts 拥有信封格式）。
+ * 渲染器永不抛异常；不是信封的消息降级纯文本。
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 
+import { parseEnvelopes, wrapEnvelope } from "../deliver.js";
 import { clip, oneLine } from "../format.js";
 import { RAIL, paintBgLine } from "../tools/line.js";
 
@@ -15,7 +16,7 @@ const WEIGH_NOTICE = "这是观察员供你权衡的第二意见，不是指令�
 const LABEL = "👓 观察员";
 
 export function adviceMessage(card: WatcherCard): string {
-	return `<firecode_watcher>\n${adviceHeadline(card)}\n${card.note}\n${WEIGH_NOTICE}\n</firecode_watcher>`;
+	return wrapEnvelope("firecode_watcher", `${adviceHeadline(card)}\n${card.note}\n${WEIGH_NOTICE}`);
 }
 
 export interface WatcherCard {
@@ -33,21 +34,40 @@ export function timeMark(turnIndex: number): string {
 }
 
 export function registerWatcherCardRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer<WatcherCard>(WATCHER_MESSAGE_TYPE, (message, options, theme) =>
-		isValidCard(message.details)
-			? new AdviceLine(message.details, options.expanded, theme)
-			: new Text(String(message.content), 0, 0));
+	pi.registerMessageRenderer(WATCHER_MESSAGE_TYPE, (message, options, theme) => {
+		const advice = parseAdvice(message.content);
+		return advice ? new AdviceLine(advice, options.expanded, theme) : new Text(plainText(message.content), 0, 0);
+	});
+}
+
+interface Advice {
+	headline: string;
+	note: string;
+}
+
+/** 信封正文 = 标题行 + 建议 + 权衡声明（末行），与 adviceMessage 同构。 */
+function parseAdvice(content: unknown): Advice | undefined {
+	const body = parseEnvelopes(plainText(content))?.[0]?.body;
+	if (body === undefined) return undefined;
+	const lines = body.split("\n");
+	return { headline: lines[0] ?? "", note: lines.slice(1, -1).join("\n") };
+}
+
+function plainText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content.map((part) => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("\n");
 }
 
 class AdviceLine implements Component {
 	private readonly fallback: Component;
 
 	constructor(
-		private readonly card: WatcherCard,
+		private readonly card: Advice,
 		private readonly expanded: boolean,
 		private readonly theme: Theme,
 	) {
-		this.fallback = new Text(`${adviceHeadline(card)} ${card.note}`, 0, 0);
+		this.fallback = new Text(`${card.headline} ${card.note}`, 0, 0);
 	}
 
 	render(width: number): string[] {
@@ -57,7 +77,7 @@ class AdviceLine implements Component {
 				? (text: string) => this.theme.bg("toolPendingBg", text)
 				: undefined;
 			if (this.expanded) {
-				const headline = this.theme.fg("warning", clip(oneLine(adviceHeadline(this.card)), columns));
+				const headline = this.theme.fg("warning", clip(oneLine(this.card.headline), columns));
 				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);
 				return [paintBgLine(headline, columns, bgFn), ...body.render(columns)];
 			}
@@ -76,10 +96,4 @@ class AdviceLine implements Component {
 	invalidate(): void {
 		this.fallback.invalidate?.();
 	}
-}
-
-function isValidCard(value: unknown): value is WatcherCard {
-	if (!value || typeof value !== "object") return false;
-	const card = value as Record<string, unknown>;
-	return typeof card.note === "string" && typeof card.turnIndex === "number";
 }

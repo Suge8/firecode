@@ -12,7 +12,6 @@ import { registerHerdrDisplay } from "./session/herdr-display.js";
 import { registerSessionName } from "./session/rename.js";
 import { registerBark } from "./session/bark.js";
 import { registerStats } from "./session/stats.js";
-import { registerWorkingFlame } from "./session/working-flame.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
 import { registerReview } from "./review/index.js";
@@ -28,7 +27,6 @@ const REGISTRARS: Record<Exclude<Feature, "review" | "master" | "watcher" | "sta
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
 	openaiNative: registerOpenAINative,
-	workingFlame: registerWorkingFlame,
 };
 
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
