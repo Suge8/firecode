@@ -1,4 +1,4 @@
-/** 一轮的摘要行：运行中是活的（火苗 + 当前动作 + 计时），落定后定格为 ✓ 时长 · 计数。纯渲染，不碰宿主组件。 */
+/** 一轮的摘要行：只承担运行状态、耗时入口与异常提醒。运行中是火苗 + 当前动作 + 计时，正常结束是灰色 ✓ 耗时，异常才追加失败数与宿主提示原文。纯渲染，不碰宿主组件。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
@@ -6,11 +6,9 @@ import { clip, formatDuration } from "../format.js";
 import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
 
 export interface SummaryView {
-	/** 已排好序的计数片段，如“读 3”“运行 1”。 */
-	tally: readonly string[];
 	failures: number;
-	/** 折入段内的宿主提示条数（缓存、丢思考、压缩计费） */
-	notices: number;
+	/** 折入段内的首条宿主提示原文（缓存、丢思考、压缩计费）。 */
+	notice?: string;
 	live: boolean;
 	/** 运行中的当前动作词；落定后不显示。 */
 	action?: string;
@@ -18,7 +16,6 @@ export interface SummaryView {
 	arrival?: { text: string; failed: boolean; age: number };
 	elapsed?: number;
 	sinceEnd?: number;
-	open: boolean;
 	/** 单轮展开/收起；全局展开时为空，点击无效。 */
 	toggle?: () => void;
 }
@@ -35,25 +32,17 @@ export class TurnSummary implements Component {
 			? flame(1, 0.05)
 			: settleMark(view.failures ? "failed" : "done", view.sinceEnd ?? Infinity);
 		const lead = action ? `${glyph} ${action}` : glyph;
-		const arrow = theme.fg("dim", view.open ? "▾" : "▸");
-		// 失败与提示是固定标记，永不丢；计时与计数从尾部逐个让位。
-		const fixed = [
-			...(view.failures ? [theme.fg("error", `${view.failures} 次失败`)] : []),
-			...(view.notices ? [theme.fg("warning", `⚠ ${view.notices}`)] : []),
-		];
-		const optional = [
-			...(view.elapsed === undefined ? [] : [theme.fg("muted", formatDuration(view.elapsed))]),
-			...view.tally.map((part) => theme.fg("muted", part)),
-		];
-		const build = (count: number) => {
-			const parts = [...fixed, ...optional.slice(0, count)];
-			return `${lead}${parts.map((part, index) => (index === 0 && !action ? " " : sep) + part).join("")} ${arrow}`;
-		};
-		for (let count = optional.length; count >= 0; count--) {
-			const line = build(count);
-			if (visibleWidth(line) <= width) return [line];
+		const elapsed = view.elapsed === undefined ? [] : [theme.fg("muted", formatDuration(view.elapsed))];
+		const failures = view.failures ? [theme.fg("error", `${view.failures} 次失败`)] : [];
+		const join = (parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !action ? " " : sep) + part).join("")}`;
+		// 窄屏先裁提示原文，仍放不下再丢耗时；失败数是固定标记。
+		for (const kept of [elapsed, []]) {
+			const base = [...kept, ...failures];
+			const room = width - visibleWidth(join(base)) - visibleWidth(sep) - 2;
+			if (view.notice && room >= 4) return [join([...base, theme.fg("warning", `⚠ ${clip(view.notice, room)}`)])];
+			if (!view.notice && visibleWidth(join(base)) <= width) return [join(base)];
 		}
-		return [clip(build(0), Math.max(1, width))];
+		return [clip(join([...failures]), Math.max(1, width))];
 	}
 
 	private actionText(): string {

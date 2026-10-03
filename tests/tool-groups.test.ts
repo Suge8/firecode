@@ -349,7 +349,7 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 		renderCall: () => new s.tui.MouseRegion(new s.tui.Text("确认操作", 0, 0), () => { clicked++; return { handled: true }; }),
 	}));
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().join("\n")).toContain("custom-self 1 · custom-default 1 · real-control 1");
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 	s.ui.setToolsExpanded(true);
 	for (const shell of ["self", "default"]) {
 		s.click(s.lines().findIndex((line: string) => line.startsWith("▏") && line.includes(`custom-${shell}`)));
@@ -393,7 +393,8 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	s.ui.setToolsExpanded(true);
 	const expanded = s.lines().join("\n");
 	for (const needle of ["Cache miss", "prefix_binding_mismatch", "Tool output: collapsed"]) expect(expanded).toContain(needle);
-	expect(expanded.indexOf("修好了")).toBeLessThan(expanded.indexOf("Cache miss"));
+	// 摘要行带首条提示原文，列表里的提示在回复之后。
+	expect(expanded.indexOf("修好了")).toBeLessThan(expanded.lastIndexOf("Cache miss"));
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(5);
 

@@ -12,6 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { firstSentence } from "./machine.js";
+import { oneLine } from "../format.js";
 import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
@@ -116,33 +117,20 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	});
 }
 
-const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const EDIT_TOOLS = new Set(["edit", "write"]);
-/** 摘要计数的类别；固定四类在前，其余工具按各自标签。 */
-const FIXED_CATEGORIES = ["读", "改", "运行", "子代理"];
-
-function categoryOf(data: RowData): string {
-	if (READ_TOOLS.has(data.toolName)) return "读";
-	if (EDIT_TOOLS.has(data.toolName)) return "改";
-	if (data.toolName === "bash") return "运行";
-	return data.toolDefinition?.label ?? data.toolName;
-}
-
 const ACTIVITY_TEXT = { thinking: "思考中", processing: "处理中" } as const;
 
-type Facts = Pick<SummaryView, "tally" | "failures" | "notices" | "action" | "arrival"> & { running: number };
+type Facts = Pick<SummaryView, "failures" | "notice" | "action" | "arrival"> & { running: number };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
-	const counts = new Map<string, number>();
-	const keyed = new Map<string, Set<string>>();
 	let running = 0;
 	let failures = 0;
-	let notices = 0;
+	let notice: string | undefined;
 	let latest: RowData | undefined;
 	let arrival: Facts["arrival"];
 	for (const item of segment) {
-		if (noticeKind(item, env.ui.theme) === "warning") notices++;
+		// 多条宿主提示只取首条原文，其余在展开态可见。
+		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters((item as unknown as { text: string }).text));
 		const entries = machineEntriesOf(item);
 		const returned = entries?.findLast((entry) => entry.returned)?.returned;
 		const age = entries ? env.clock.arrivalAge(item) : Infinity;
@@ -150,24 +138,14 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 			arrival = { text: `${returned.name} ${returned.failed ? "失败" : "已返回"}`, failed: returned.failed, age };
 		if (!(item instanceof ToolExecutionComponent)) continue;
 		const data = rowData(item);
-		const category = categoryOf(data);
-		const key = actionLine(data.callRendererComponent)?.countKey;
-		if (typeof key === "string") keyed.set(category, (keyed.get(category) ?? new Set()).add(key));
-		else if (key !== null) counts.set(category, (counts.get(category) ?? 0) + 1);
 		// 运行中的工具优先当“当前动作”；都完成时取最后一个
 		if (data.isPartial) running++;
 		if (data.isPartial || !latest?.isPartial) latest = data;
 		if (data.result?.isError) failures++;
 	}
-	const rank = (label: string) => (FIXED_CATEGORIES.includes(label) ? FIXED_CATEGORIES.indexOf(label) : FIXED_CATEGORIES.length);
-	const totals = new Map(counts);
-	for (const [category, keys] of keyed) totals.set(category, (totals.get(category) ?? 0) + keys.size);
-	const tally = [...totals].sort((a, b) => rank(a[0]) - rank(b[0])).map(([label, calls]) => `${label} ${calls}`);
-	const thought = segment.some((item) => item instanceof AssistantMessageComponent && hasThinking(item));
 	const word = latest && (actionLine(latest.callRendererComponent)?.actionWord ?? latest.toolDefinition?.label ?? latest.toolName);
 	return {
-		tally: tally.length || !thought || activity ? tally : ["思考"],
-		failures, notices, running, arrival,
+		failures, notice, running, arrival,
 		action: activity ? ACTIVITY_TEXT[activity] : word ?? "思考",
 	};
 }
@@ -344,7 +322,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	const nodes: Component[] = [];
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
-			...facts, live, elapsed: clock.elapsed, sinceEnd, open,
+			...facts, live, elapsed: clock.elapsed, sinceEnd,
 			toggle: globalOpen ? undefined : () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
