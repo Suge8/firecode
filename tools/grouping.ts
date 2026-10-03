@@ -70,22 +70,29 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		const render = chat.render;
 		const mouse = chat.handleMouse;
 		const projection = new Container();
-		const openTurns = new WeakSet<object>();
+		const overrides = new Set<object>();
+		let lastExpanded = ui.getToolsExpanded();
 		const env: ProjectionEnv = {
 			ui, clock: options.clock, replyLines: options.replyLines, headless: {},
 			toggleRow: (row) => {
 				toggleToolDetails(row, originalExpand);
 				tui.requestRender();
 			},
-			isOpen: (turn) => openTurns.has(turn),
+			isOpen: (key) => overrides.has(key),
 			toggleOpen: (key) => {
-				const opening = !openTurns.delete(key);
-				if (opening) openTurns.add(key);
+				const opening = !overrides.delete(key);
+				if (opening) overrides.add(key);
 				if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, opening);
 				tui.requestRender();
 			},
 		};
 		chat.render = (width) => {
+			// ctrl+o 永远是全部展开/全部折叠：全局档位一变，逐轮覆盖与被点开的原生卡片一并复位。
+			if (ui.getToolsExpanded() !== lastExpanded) {
+				lastExpanded = ui.getToolsExpanded();
+				for (const key of overrides) if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, false);
+				overrides.clear();
+			}
 			const { nodes, animating } = projectProcessGroups(chat.children, env);
 			projection.children = nodes;
 			// 动效只经全局时钟：有活的摘要才订阅，静止即取消。
