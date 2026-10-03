@@ -10,8 +10,8 @@ export interface SummaryView {
 	/** 折入段内的首条宿主提示原文（缓存、丢思考、压缩计费）。 */
 	notice?: string;
 	live: boolean;
-	/** 运行中的当前动作词；落定后不显示。 */
-	action?: string;
+	/** 运行中的当前动作（动作词 + 简短目标）；落定后不显示。 */
+	action?: { word: string; target?: string };
 	/** 子代理结果刚到达：短暂替换当前动作。 */
 	arrival?: { text: string; failed: boolean; age: number };
 	elapsed?: number;
@@ -20,6 +20,11 @@ export interface SummaryView {
 	toggle?: () => void;
 }
 
+/** 提示原文被目标挤压时至少保留的列数。 */
+const NOTICE_MIN = 12;
+/** 目标少于这个宽度就不显示，只留动作词。 */
+const MIN_TARGET = 4;
+
 export class TurnSummary implements Component {
 	constructor(private readonly view: SummaryView, private readonly theme: Theme) {}
 	invalidate(): void {}
@@ -27,22 +32,31 @@ export class TurnSummary implements Component {
 	render(width: number): string[] {
 		const { theme, view } = this;
 		const sep = theme.fg("dim", " · ");
-		const action = view.live ? this.actionText() : "";
+		const word = view.live ? this.actionText() : "";
+		const target = view.live && view.action?.target && !this.flashing() ? view.action.target : undefined;
 		const glyph = view.live
 			? flame(1, 0.05)
 			: settleMark(view.failures ? "failed" : "done", view.sinceEnd ?? Infinity);
-		const lead = action ? `${glyph} ${action}` : glyph;
+		const head = word ? `${glyph} ${word}` : glyph;
 		const elapsed = view.elapsed === undefined ? [] : [theme.fg("muted", formatDuration(view.elapsed))];
 		const failures = view.failures ? [theme.fg("error", `${view.failures} 次失败`)] : [];
-		const join = (parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !action ? " " : sep) + part).join("")}`;
-		// 窄屏先裁提示原文，仍放不下再丢耗时；失败数是固定标记。
+		const join = (lead: string, parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !word ? " " : sep) + part).join("")}`;
+		// 窄屏先裁目标（给提示原文留出最小空间），再裁提示原文，仍放不下再丢耗时；动作词与失败数是固定标记。
 		for (const kept of [elapsed, []]) {
 			const base = [...kept, ...failures];
-			const room = width - visibleWidth(join(base)) - visibleWidth(sep) - 2;
-			if (view.notice && room >= 4) return [join([...base, theme.fg("warning", `⚠ ${clip(view.notice, room)}`)])];
-			if (!view.notice && visibleWidth(join(base)) <= width) return [join(base)];
+			const noticeNeed = view.notice ? visibleWidth(sep) + 2 + Math.min(visibleWidth(view.notice), NOTICE_MIN) : 0;
+			const targetRoom = width - visibleWidth(join(head, base)) - noticeNeed - 1;
+			const lead = target && targetRoom >= MIN_TARGET ? `${head} ${theme.fg("muted", clip(target, targetRoom))}` : head;
+			const used = visibleWidth(join(lead, base));
+			if (!view.notice && used <= width) return [join(lead, base)];
+			const noticeRoom = width - used - visibleWidth(sep) - 2;
+			if (view.notice && noticeRoom >= 4) return [join(lead, [...base, theme.fg("warning", `⚠ ${clip(view.notice, noticeRoom)}`)])];
 		}
-		return [clip(join([...failures]), Math.max(1, width))];
+		return [clip(join(head, failures), Math.max(1, width))];
+	}
+
+	private flashing(): boolean {
+		return !!this.view.arrival && this.view.arrival.age < ARRIVAL_FLASH_MS;
 	}
 
 	private actionText(): string {
@@ -53,7 +67,7 @@ export class TurnSummary implements Component {
 			const settled = arrival.failed ? HEAT_COLORS.fail : HEAT_COLORS.gold;
 			return paint(mix(HEAT_COLORS.white, settled, fade), theme.bold(arrival.text));
 		}
-		return theme.fg("text", view.action ?? "处理中");
+		return theme.fg("text", view.action?.word ?? "处理中");
 	}
 
 	handleMouse(event: TuiMouseEvent) {

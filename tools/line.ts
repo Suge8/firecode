@@ -116,6 +116,8 @@ export function paintBgLine(line: string, width: number, bgFn?: (text: string) =
 /** 折叠摘要从工具行取当前动作词；未提供该能力的静态工具由通用参数摘要承担。 */
 export interface ActionLine extends Component {
 	readonly actionWord: string;
+	/** 当前动作的简短目标（纯文本），摘要行跟在动作词后面。 */
+	readonly actionTarget?: string;
 }
 
 export class ToolLine implements ActionLine {
@@ -124,6 +126,10 @@ export class ToolLine implements ActionLine {
 
 	get actionWord(): string {
 		return this.options.label;
+	}
+
+	get actionTarget(): string {
+		return this.options.value.map((part) => part.text).join("").trim();
 	}
 
 	render(width: number): string[] {

@@ -11,6 +11,7 @@ import { Container, Markdown, Spacer, Text, type Component, type TuiMouseEvent }
 import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
+import { toolTarget } from "./actions.js";
 import { firstSentence } from "./machine.js";
 import { oneLine } from "../format.js";
 import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
@@ -143,10 +144,16 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		if (data.isPartial || !latest?.isPartial) latest = data;
 		if (data.result?.isError) failures++;
 	}
-	const word = latest && (actionLine(latest.callRendererComponent)?.actionWord ?? latest.toolDefinition?.label ?? latest.toolName);
+	const line = latest && actionLine(latest.callRendererComponent);
+	const action = latest && (line
+		? { word: line.actionWord, target: line.actionTarget }
+		: {
+			word: latest.toolDefinition?.label ?? latest.toolName,
+			target: toolTarget(latest.toolName, latest.args, latest.cwd).value.map((part) => part.text).join("").trim(),
+		});
 	return {
 		failures, notice, running, arrival,
-		action: activity ? ACTIVITY_TEXT[activity] : word ?? "思考",
+		action: activity ? { word: ACTIVITY_TEXT[activity] } : action ?? { word: "思考" },
 	};
 }
 
