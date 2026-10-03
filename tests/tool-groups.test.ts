@@ -568,6 +568,50 @@ test("点击某一轮摘要只展开这一轮，ctrl+o 的全局档位不变", a
 	expect(s.lines().join("\n")).not.toContain("first.ts");
 });
 
+test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全部展开/全部折叠", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
+	s.complete(s.tool("read", { path: "first.ts" }));
+	s.chat.addChild(new s.host.UserMessageComponent("第二问"));
+	s.complete(s.tool("read", { path: "second.ts" }));
+	const summaryAt = (nth: number) => s.lines().map((line: string, index: number) => [line, index] as const)
+		.filter(([line]) => /^✓\s*$/.test(line))[nth][1];
+	const shown = () => ["first.ts", "second.ts"].filter((name) => s.lines().join("\n").includes(name));
+
+	// 点开第一轮 → ctrl+o 全局展开 → 再 ctrl+o 全局折叠：被点开的那一轮也折回去。
+	s.click(summaryAt(0));
+	expect(shown()).toEqual(["first.ts"]);
+	s.ui.setToolsExpanded(true);
+	expect(shown()).toEqual(["first.ts", "second.ts"]);
+	s.ui.setToolsExpanded(false);
+	expect(shown()).toEqual([]);
+
+	// 全局展开时点击摘要，单独折起该轮；下一次全局切换清空这个覆盖。
+	s.ui.setToolsExpanded(true);
+	expect(shown()).toEqual(["first.ts", "second.ts"]);
+	s.click(summaryAt(1));
+	expect(shown()).toEqual(["first.ts"]);
+	s.ui.setToolsExpanded(false);
+	expect(shown()).toEqual([]);
+	s.ui.setToolsExpanded(true);
+	expect(shown()).toEqual(["first.ts", "second.ts"]);
+});
+
+test("被点开的机器消息卡也随全局档位切换复位", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.complete(s.tool("read", { path: "a.ts" }));
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-review-card", content: "<firecode_review>\n审查通过\n共 2 轮，全部通过\n</firecode_review>", display: true, timestamp: 0 }));
+	s.ui.setToolsExpanded(true);
+	s.click(s.lines().findIndex((line: string) => line.trim().startsWith("↳ 审查通过")));
+	expect(s.lines().join("\n")).toContain("[firecode-review-card]");
+	s.ui.setToolsExpanded(false);
+	s.lines();
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().join("\n")).not.toContain("[firecode-review-card]");
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 审查通过 共 2 轮，全部通过");
+});
+
 test("运行中的摘要显示实时计时，子代理结果到达时短暂高亮已返回随后回到当前动作，落定后定格时长", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
