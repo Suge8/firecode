@@ -238,7 +238,7 @@ export interface ProjectionEnv {
 	/** 折叠态每轮最多显示几条中间回复首句。 */
 	replyLines: number;
 	toggleRow: (row: ToolRow) => void;
-	/** 展开状态以该轮的人类用户消息、或被点开的机器消息本身为键。 */
+	/** 相对全局档位被点击翻转过的键：该轮的人类用户消息，或被点开的机器消息本身；全局档位变化时清空。 */
 	isOpen: (key: object) => boolean;
 	toggleOpen: (key: object) => void;
 	/** 第一条人类输入之前的过程所属的轮次键。 */
@@ -320,7 +320,8 @@ function lastEntries(children: readonly Component[]): Set<Component> {
 function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv, closing: ReadonlySet<Component>) {
 	const { tail, reply } = tailReply(segment);
 	const globalOpen = env.ui.getToolsExpanded();
-	const open = globalOpen || env.isOpen(turn);
+	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
+	const open = globalOpen !== env.isOpen(turn);
 	const facts = scan(segment, reply?.activity, env);
 	const hasSummary = segment.some(hasSubstance) || !!reply?.activity;
 	const clock = env.clock.view(turn);
@@ -330,7 +331,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
 			...facts, live, elapsed: clock.elapsed, sinceEnd,
-			toggle: globalOpen ? undefined : () => env.toggleOpen(turn),
+			toggle: () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
 	if (open) nodes.push(...processList(segment, env));
