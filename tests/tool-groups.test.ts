@@ -71,12 +71,12 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	const bash = s.tool("bash", { command: "bun test" });
 	const summary = s.lines().filter(Boolean);
 	expect(summary).toHaveLength(1);
-	expect(summary[0]).toMatch(new RegExp(`^${FLAME} 操作\\s*$`));
+	expect(summary[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test\\s*$`));
 	expect(summary.join("\n")).not.toContain("private full result");
 
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().filter(Boolean)).toHaveLength(3);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作\\s*$`));
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test\\s*$`));
 	expect(s.lines().join("\n")).toContain("读取");
 	expect(s.lines().join("\n")).not.toContain("private full result");
 	const readLine = s.lines().findIndex((line: string) => line.includes("读取"));
@@ -132,7 +132,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 · 1 次失败\\s*$`));
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ long-running · 1 次失败\\s*$`));
 	const originalChildren = [...s.chat.children];
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
@@ -303,8 +303,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 子代理\\s*$`));
-	expect(s.lines().join("\n")).not.toContain("worker-one");
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 子代理 启动 worker-one`));
 	s.complete(start, "worker started");
 	const list = s.tool("subagents_list", {});
 	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
@@ -576,12 +575,12 @@ test("运行中的摘要显示实时计时，子代理结果到达时短暂高�
 	s.clock.begin();
 	const bash = s.tool("bash", { command: "bun test" });
 	s.setNow(6000);
-	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 · 5.0s\\s*$`));
+	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test · 5.0s\\s*$`));
 
 	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
 	expect(s.lines().find((line: string) => line.includes("已返回"))).toMatch(new RegExp(`^${FLAME} fix-auth 已返回 · 5.0s`));
 	s.setNow(9000);
-	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 · 8.0s\\s*$`));
+	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test · 8.0s\\s*$`));
 
 	s.complete(bash);
 	s.setNow(10000);
@@ -647,4 +646,19 @@ test("异常提醒：宿主提示原文按宽裁剪，与失败数同行；多�
 	expect(narrow).toMatch(/^✗ 1 次失败 · ⚠ Cache m/);
 	expect(s.tui.visibleWidth(narrow)).toBeLessThanOrEqual(30);
 	expect(s.lines().join("\n")).not.toMatch(/[▸▾]/);
+});
+
+test("运行中摘要的目标按宽度先裁，动作词与计时保留，放不下才丢目标", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("开工"));
+	s.setNow(0);
+	s.clock.begin();
+	s.tool("bash", { command: "bun test --coverage --reporter=junit" });
+	s.setNow(5000);
+	const at = (width: number) => s.lines(width).find((line: string) => line.includes("操作"))!;
+	expect(at(80)).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test --coverage --reporter=junit · 5.0s\\s*$`));
+	const clipped = at(30);
+	expect(clipped).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun.*… · 5.0s\\s*$`));
+	expect(s.tui.visibleWidth(clipped)).toBeLessThanOrEqual(30);
+	expect(at(14)).toMatch(new RegExp(`^${FLAME} 操作 · 5.0s\\s*$`));
 });
