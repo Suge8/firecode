@@ -18,6 +18,7 @@ import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult }
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
+import { type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
@@ -77,7 +78,7 @@ function isHuman(component: Component): boolean {
 	return component instanceof UserMessageComponent && !machineEntriesOf(component);
 }
 
-/** 宿主 CustomEntry（收尾统计等）：类不对扩展导出，按它独有的 hasContent 能力识别。 */
+/** 宿主 CustomEntry（轮记录等）：类不对扩展导出，按它独有的 hasContent 能力识别。 */
 function isEntry(component: Component): boolean {
 	return component instanceof Container && typeof (component as unknown as { hasContent?: unknown }).hasContent === "function";
 }
@@ -120,7 +121,7 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 const ACTIVITY_TEXT = { thinking: "思考中", processing: "处理中" } as const;
 
-type Facts = Pick<SummaryView, "failures" | "notice" | "action" | "arrival"> & { running: number };
+type Facts = Pick<SummaryView, "failures" | "notice" | "action" | "arrival"> & { running: number; round?: Round };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
@@ -129,9 +130,12 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 	let notice: string | undefined;
 	let latest: RowData | undefined;
 	let arrival: Facts["arrival"];
+	let round: Round | undefined;
 	for (const item of segment) {
 		// 多条宿主提示只取首条原文，其余在展开态可见。
 		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters((item as unknown as { text: string }).text));
+		// 同一轮多条轮记录（命令触发的再次进行）取后写的。
+		round = roundOf(item) ?? round;
 		const entries = machineEntriesOf(item);
 		const returned = entries?.findLast((entry) => entry.returned)?.returned;
 		const age = entries ? env.clock.arrivalAge(item) : Infinity;
@@ -152,7 +156,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 			target: toolTarget(latest.toolName, latest.args, latest.cwd).value.map((part) => part.text).join("").trim(),
 		});
 	return {
-		failures, notice, running, arrival,
+		failures, notice, running, arrival, round,
 		// 指挥官自己歇着、只在等子代理：没有当前动作，摘要行只留火苗（等待状态与计时只在边框）。
 		action: activity ? { word: ACTIVITY_TEXT[activity] } : running || env.clock.agentRunning ? action ?? { word: "思考" } : undefined,
 	};
@@ -265,10 +269,9 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 	let turn = env.headless;
 	let segment: Component[] = [];
 	env.clock.track(children.findLast(isHuman) ?? env.headless);
-	const closing = lastEntries(children);
 	const flush = (final: boolean) => {
 		if (!segment.length) return;
-		const view = renderSegment(segment, turn, final, env, closing);
+		const view = renderSegment(segment, turn, final, env);
 		nodes.push(...view.nodes);
 		animating ||= view.animating;
 		segment = [];
@@ -276,7 +279,7 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 	const inSegment = (index: number) => {
 		const child = children[index];
 		if (isProcess(child)) return true;
-		// 收尾统计等 CustomEntry 属于本轮：有段可依附时不切段。
+		// 轮记录等 CustomEntry 属于本轮：有段可依附时不切段。
 		if (isEntry(child)) return segment.length > 0;
 		// 宿主在用户消息（含空闲送达的信封）与提示前先插一个 Spacer：它跟着后面的节点走，
 		// 后面的节点属于本段，它就属于本段。
@@ -292,7 +295,8 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 			turn = child;
 			nodes.push(new UserBar(child));
 		} else if (inSegment(index)) segment.push(child);
-		else {
+		else if (!roundOf(child)) {
+			// 无段可依附的轮记录（这一段没有任何过程）没有摘要行可画，不让它的宿主壳空出一行。
 			flush(false);
 			nodes.push(child);
 		}
@@ -310,39 +314,25 @@ function tailReply(segment: readonly Component[]) {
 	return { tail, reply };
 }
 
-/** 每轮最后一条 CustomEntry（收尾统计）：折叠态只有它留在最后回复下方。 */
-function lastEntries(children: readonly Component[]): Set<Component> {
-	const last = new Set<Component>();
-	let current: Component | undefined;
-	for (const child of children) {
-		if (isHuman(child)) {
-			if (current) last.add(current);
-			current = undefined;
-		} else if (isEntry(child)) current = child;
-	}
-	if (current) last.add(current);
-	return last;
-}
-
-function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv, closing: ReadonlySet<Component>) {
+function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv) {
 	const { tail, reply } = tailReply(segment);
 	const globalOpen = env.ui.getToolsExpanded();
 	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
 	const open = globalOpen !== env.isOpen(turn);
 	const facts = scan(segment, reply?.activity, env);
 	const hasSummary = segment.some(hasSubstance) || !!reply?.activity;
-	const clock = env.clock.view(turn);
-	const live = final && (clock.live || facts.running > 0 || !!reply?.activity);
-	const sinceEnd = live ? undefined : clock.sinceEnd;
+	const live = final && (env.clock.live(turn) || facts.running > 0 || !!reply?.activity);
+	const round = live ? undefined : facts.round;
+	const sinceEnd = round && env.clock.now() - round.at;
 	const nodes: Component[] = [];
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
-			...facts, live, elapsed: clock.elapsed, sinceEnd,
+			...facts, live, round, sinceEnd,
 			toggle: () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
 	if (open) nodes.push(...processList(segment, env));
-	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env), ...segment.filter((item) => closing.has(item)));
+	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env));
 	return { nodes, animating: hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd))) };
 }
 
@@ -374,8 +364,9 @@ function foldedReplies(
 function processList(segment: readonly Component[], env: ProjectionEnv): Component[] {
 	const list: Component[] = [];
 	for (const [index, item] of segment.entries()) {
-		// 机器消息前的宿主 Spacer 已由列表自己的间距取代。
+		// 机器消息前的宿主 Spacer 已由列表自己的间距取代；轮记录零行，已在摘要行体现。
 		if (item instanceof Spacer && machineEntriesOf(segment[index + 1] ?? item)) continue;
+		if (roundOf(item)) continue;
 		const machine = machineEntriesOf(item);
 		if (machine) {
 			// 工具行之后空一行，免得 ↳ 行像是贴在上一个工具行底下。

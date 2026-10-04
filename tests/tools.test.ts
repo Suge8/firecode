@@ -11,7 +11,7 @@ afterEach(cleanupFirecodeModules);
 async function tools() {
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
 	const registered: Record<string, any> = {};
-	registerToolRendering({ on() {}, events: { on: () => () => {} }, registerTool: (tool: any) => { registered[tool.name] = tool; }, registerCommand() {} });
+	registerToolRendering({ on() {}, events: { on: () => () => {} }, registerTool: (tool: any) => { registered[tool.name] = tool; }, registerCommand() {}, registerEntryRenderer() {} });
 	expect(Object.keys(registered).sort()).toEqual(["bash", "edit", "read", "write"]);
 	return registered;
 }

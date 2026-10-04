@@ -1,8 +1,10 @@
-/** 一轮的摘要行：只承担运行状态、耗时入口与异常提醒。运行中是火苗 + 当前动作（实时计时只在边框），正常结束是灰色 ✓ 整段耗时，异常才追加失败数与宿主提示原文。纯渲染，不碰宿主组件。 */
+/** 一轮的摘要行：只承担运行状态、事后记录与异常提醒。运行中是火苗 + 当前动作（实时计时只在边框），落定后是 ✓ 整段耗时，中断/请求失败是 ✗ 加终态字样，异常才追加失败数与宿主提示原文。纯渲染，不碰宿主组件。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
+import type { Outcome } from "../busy.js";
 import { clip, formatDuration } from "../format.js";
+import type { Round } from "./round.js";
 import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
 
 export interface SummaryView {
@@ -14,7 +16,8 @@ export interface SummaryView {
 	action?: { word: string; target?: string };
 	/** 子代理结果刚到达：短暂替换当前动作。 */
 	arrival?: { text: string; failed: boolean; age: number };
-	elapsed?: number;
+	/** 落定后的轮记录：整段耗时与终态。 */
+	round?: Round;
 	sinceEnd?: number;
 	/** 单轮展开/收起；全局展开时为空，点击无效。 */
 	toggle?: () => void;
@@ -24,6 +27,7 @@ export interface SummaryView {
 const NOTICE_MIN = 12;
 /** 目标少于这个宽度就不显示，只留动作词。 */
 const MIN_TARGET = 4;
+const OUTCOME_TEXT: Record<Exclude<Outcome, "complete">, string> = { aborted: "已中断", error: "请求失败" };
 
 export class TurnSummary implements Component {
 	constructor(private readonly view: SummaryView, private readonly theme: Theme) {}
@@ -32,13 +36,14 @@ export class TurnSummary implements Component {
 	render(width: number): string[] {
 		const { theme, view } = this;
 		const sep = theme.fg("dim", " · ");
-		const word = view.live ? this.actionText() : "";
+		const outcome = this.outcomeText();
+		const word = view.live ? this.actionText() : outcome;
 		const target = view.live && view.action?.target && !this.flashing() ? view.action.target : undefined;
 		const glyph = view.live
 			? flame(1, 0.05)
-			: settleMark(view.failures ? "failed" : "done", view.sinceEnd ?? Infinity);
+			: settleMark(view.failures || outcome ? "failed" : "done", view.sinceEnd ?? Infinity);
 		const head = word ? `${glyph} ${word}` : glyph;
-		const elapsed = view.elapsed === undefined ? [] : [theme.fg("muted", formatDuration(view.elapsed))];
+		const elapsed = view.round === undefined ? [] : [theme.fg("muted", formatDuration(view.round.elapsed))];
 		const failures = view.failures ? [theme.fg("error", `${view.failures} 次失败`)] : [];
 		const join = (lead: string, parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !word ? " " : sep) + part).join("")}`;
 		// 窄屏先裁目标（给提示原文留出最小空间），再裁提示原文，仍放不下再丢耗时；动作词与失败数是固定标记。
@@ -57,6 +62,11 @@ export class TurnSummary implements Component {
 
 	private flashing(): boolean {
 		return !!this.view.arrival && this.view.arrival.age < ARRIVAL_FLASH_MS;
+	}
+
+	private outcomeText(): string {
+		const outcome = this.view.round?.outcome;
+		return outcome === undefined || outcome === "complete" ? "" : this.theme.fg("error", OUTCOME_TEXT[outcome]);
 	}
 
 	private actionText(): string {

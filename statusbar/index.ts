@@ -12,7 +12,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { type BusyView, IDLE, watchBusy } from "../busy.js";
+import { type BusyView, IDLE, type SettledRound, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { contextColor, thinkingColor } from "../theme.js";
@@ -54,7 +54,7 @@ const FAST_STATUS = "pi-openai-native-fast";
 /** 回合结束后落定标记与暖光的保留时长。 */
 const SETTLE_SHOW_MS = 1_000;
 
-type Settled = { endedAt: number; elapsed: number; failed: boolean };
+type Settled = SettledRound & { endedAt: number };
 
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
@@ -63,7 +63,6 @@ class Shell {
 	busy: BusyView = IDLE;
 	/** 刚歇下的那一段：定格过渡期间显示。 */
 	settled: Settled | undefined;
-	private failed = false;
 	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
 	review: (() => string) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
@@ -95,12 +94,8 @@ class Shell {
 	}
 
 	/** 歇下边沿：定格整段时长。 */
-	settle(elapsed: number): void {
-		this.settled = { endedAt: Date.now(), elapsed, failed: this.failed };
-	}
-
-	recordFailure(failed: boolean): void {
-		this.failed = failed;
+	settle(round: SettledRound): void {
+		this.settled = { ...round, endedAt: Date.now() };
 	}
 
 	top(): TopParts {
@@ -118,7 +113,7 @@ class Shell {
 			parts.glow = 1;
 		} else if (settled) {
 			const since = Date.now() - settled.endedAt;
-			parts.mark = settling(since) ? settleMark(settled.failed ? "failed" : "done", since) : "";
+			parts.mark = settling(since) ? settleMark(settled.outcome === "complete" ? "done" : "failed", since) : "";
 			parts.elapsed = this.theme?.fg("muted", formatDuration(settled.elapsed)) ?? "";
 			parts.glow = Math.max(0, 1 - since / SETTLE_SHOW_MS);
 		}
@@ -174,10 +169,6 @@ class ShellEditor extends CustomEditor {
 	}
 }
 
-function lastFailed(messages: readonly { role: string; stopReason?: string }[]): boolean {
-	return messages.findLast((message) => message.role === "assistant")?.stopReason === "error";
-}
-
 export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	if (subsession) return;
 	const shell = new Shell();
@@ -190,15 +181,14 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	});
 	pi.on("session_info_changed", (_event, ctx) => updateTitle(ctx));
 	pi.on("session_tree", (_event, ctx) => updateTitle(ctx));
-	pi.on("agent_end", (event) => shell.recordFailure(lastFailed(event.messages)));
 	watchBusy(pi, {
 		onChange: (view) => {
 			shell.sync(view);
 			shell.syncClock();
 			shell.requestRender();
 		},
-		onSettled: (_ctx, elapsed) => {
-			shell.settle(elapsed);
+		onSettled: (_ctx, round) => {
+			shell.settle(round);
 			shell.syncClock();
 			shell.requestRender();
 		},

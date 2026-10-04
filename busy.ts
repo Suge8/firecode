@@ -1,7 +1,7 @@
 /**
  * “会话进行中”的单一事实：指挥官回合在跑 || 有子代理在飞（working/reviewing，或已落定但结果事件尚未交给指挥官；已交出事件的未收割子代理不算）。
  * Master 是在飞子代理数的唯一发布者；上边框、本轮摘要与轮次时钟、Bark 都经 watchBusy 读同一个事实并消费同一个歇下边沿。
- * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段时长。
+ * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段时长与终态。
  * 频道名与 payload 只在本文件定义。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -33,11 +33,23 @@ export interface BusyView {
 }
 export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false };
 
+/** 本段最后一个指挥官回合的终态，与宿主 AgentActivityOutcome 同一判定：最后一条助手消息的 stopReason。 */
+export type Outcome = "complete" | "aborted" | "error";
+export interface SettledRound {
+	elapsed: number;
+	outcome: Outcome;
+}
+
 export interface BusyHandlers {
 	/** 任一来源变化后调用（含歇下那一次，先于 onSettled）。 */
 	onChange?(view: BusyView, ctx: ExtensionContext | undefined): void;
-	/** 会话歇下边沿：busy 由真变假时触发一次，带本段进行中的总时长。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */
-	onSettled(ctx: ExtensionContext | undefined, elapsed: number): void;
+	/** 会话歇下边沿：busy 由真变假时触发一次，带本段进行中的总时长与终态。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */
+	onSettled(ctx: ExtensionContext | undefined, round: SettledRound): void;
+}
+
+function outcomeOf(messages: readonly { role: string; stopReason?: string }[]): Outcome {
+	const stop = messages.findLast((message) => message.role === "assistant")?.stopReason;
+	return stop === "aborted" || stop === "error" ? stop : "complete";
 }
 
 /**
@@ -50,6 +62,7 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 	let inFlight = 0;
 	/** 本段起点；有值即进行中。 */
 	let since: number | undefined;
+	let outcome: Outcome = "complete";
 	let ctx: ExtensionContext | undefined;
 	const update = () => {
 		const now = Date.now();
@@ -58,8 +71,11 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 		const started = since;
 		if (!busy) since = undefined;
 		handlers.onChange?.({ agentRunning, inFlight, busy, since }, ctx);
-		if (!busy && started !== undefined) handlers.onSettled(ctx, now - started);
+		if (!busy && started !== undefined) handlers.onSettled(ctx, { elapsed: now - started, outcome });
 	};
+	pi.on("agent_end", (event) => {
+		outcome = outcomeOf(event.messages);
+	});
 	pi.on("agent_start", (_event, context) => {
 		ctx = context;
 		agentRunning = true;

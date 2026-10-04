@@ -9,20 +9,21 @@ async function harness() {
 	const handlers = new Map<string, Function[]>();
 	const bus = new Map<string, Function[]>();
 	let settled = 0;
-	let elapsed: number | undefined;
+	let result: any;
 	let view: any;
 	watchBusy({
 		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 		events: { on: (channel: string, fn: Function) => { bus.set(channel, [...(bus.get(channel) ?? []), fn]); return () => {}; } },
-	}, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, ms: number) => { settled++; elapsed = ms; } });
+	}, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, settledResult: unknown) => { settled++; result = settledResult; } });
 	let idle = true;
 	const ctx = { isIdle: () => idle };
 	return {
 		set idle(value: boolean) { idle = value; },
 		get settled() { return settled; },
-		get elapsed() { return elapsed; },
+		get result() { return result; },
 		get view() { return view; },
 		agentStart: () => handlers.get("agent_start")?.forEach((fn) => fn({}, ctx)),
+		agentEnd: (stopReason?: string) => handlers.get("agent_end")?.forEach((fn) => fn({ messages: stopReason ? [{ role: "assistant", stopReason }] : [] }, ctx)),
 		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
 		inFlight: (inFlight: number) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight })),
 	};
@@ -72,7 +73,7 @@ test("agent_settled 时宿主仍有排队/延后的动作（isIdle 为 false）�
 	expect(h.settled).toBe(1);
 });
 
-test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇下边沿报告整段时长", async () => {
+test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇下边沿报告整段时长与最后一个回合的终态", async () => {
 	const h = await harness();
 	try {
 		setSystemTime(new Date(1_000_000));
@@ -85,9 +86,24 @@ test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇�
 		expect(h.view.since).toBe(1_000_000);
 		h.inFlight(0);
 		setSystemTime(new Date(1_080_000));
+		h.agentEnd("stop");
 		h.agentSettled();
 		expect(h.view.since).toBeUndefined();
-		expect(h.elapsed).toBe(80_000);
+		expect(h.result).toEqual({ elapsed: 80_000, outcome: "complete" });
+
+		// Esc 中断但子代理还在飞：这一段没结束；结果回来、指挥官再跑完，终态取最后一个回合的。
+		setSystemTime(new Date(2_000_000));
+		h.agentStart();
+		h.inFlight(1);
+		h.agentEnd("aborted");
+		h.agentSettled();
+		expect(h.settled).toBe(1);
+		h.inFlight(0);
+		expect(h.result).toEqual({ elapsed: 0, outcome: "aborted" });
+		h.agentStart();
+		h.agentEnd("error");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 0, outcome: "error" });
 	} finally {
 		setSystemTime();
 	}

@@ -21,7 +21,11 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 	const clock = new (clockModule.TurnClock as any)(() => now);
 	host.initTheme("dark");
 	const tools = new Map<string, any>();
-	const api = { on() {}, events: { on: () => () => {}, emit() {} }, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {} };
+	let roundRenderer: Function | undefined;
+	const api = {
+		on() {}, events: { on: () => () => {}, emit() {} }, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {},
+		registerEntryRenderer: (_type: string, renderer: Function) => { roundRenderer = renderer; },
+	};
 	toolsModule.registerToolRendering(api);
 	if (withMaster) {
 		const { registerMaster } = await loadFirecodeModule("master/index.ts");
@@ -61,7 +65,17 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 	const originalRender = chat.render;
 	dispose = module.installGroupPatch(ui, { replyLines, clock });
 	const setNow = (value: number) => { now = value; };
-	return { clock, setNow, host, tui, chat, root, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	/** 宿主在歇下时把轮记录作为 CustomEntry 加进聊天树：Container(Spacer, 渲染器组件)，这里只模拟宿主的壳。 */
+	const settle = (elapsed: number, outcome = "complete", at = now) => {
+		const entry = new tui.Container();
+		entry.addChild(new tui.Spacer(1));
+		entry.addChild(roundRenderer!({ data: { elapsed, outcome }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
+		(entry as any).hasContent = () => true;
+		(entry as any).setExpanded = () => {};
+		chat.addChild(entry);
+		root.requestRender();
+	};
+	return { clock, setNow, settle, host, tui, chat, root, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -221,7 +235,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
-	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {} });
+	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {}, registerEntryRenderer() {} });
 	events.get("session_start")!({}, { mode: "rpc" });
 	events.get("session_shutdown")!();
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -480,56 +494,58 @@ test("review 结果卡在展开态同样是一行 ↳，点击展开原生卡片
 	expect(s.lines().join("\n")).toContain("[firecode-review-card]");
 });
 
-test("收尾统计这类 CustomEntry 属于本轮：不切段，其后的宿主提示照常折入摘要", async () => {
+test("轮记录是会话里的零行记录：摘要行落定读它显示整段耗时与终态，自己不占行，重载后依然有数；其后的宿主提示照常折入", async () => {
 	const s = await scene();
-	class Entry extends s.tui.Container {
-		constructor(text: string) { super(); this.addChild(new s.tui.Spacer(1)); this.addChild(new s.tui.Text(text, 0, 0)); }
-		hasContent() { return true; }
-		setExpanded() {}
-	}
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
 	assistant(s, [{ type: "text", text: "修好了" }]);
-	s.chat.addChild(new Entry("◷ 处理 3s"));
+	s.ui.setToolsExpanded(true);
+	const rowsBefore = s.lines().length;
+	s.settle(3_000, "complete", 0);
+	expect(s.lines().length).toBe(rowsBefore);
+	s.ui.setToolsExpanded(false);
 	s.chat.addChild(new s.tui.Spacer(1));
 	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss after 8m idle"), 1, 0));
-	s.chat.addChild(new s.tui.Spacer(1));
-	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("dim", "Tool output: collapsed"), 1, 0));
+	s.setNow(60_000);
 
 	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ ⚠ Cache miss after 8m idle"]);
-	expect(collapsed.slice(collapsed.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(["修好了", "◷ 处理 3s"]);
+	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 3.0s · ⚠ Cache miss after 8m idle"]);
+	expect(collapsed.slice(collapsed.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(["修好了"]);
 	s.ui.setToolsExpanded(true);
-	const expanded = s.lines().join("\n");
-	for (const needle of ["a.ts", "修好了", "◷ 处理 3s", "Cache miss", "Tool output: collapsed"]) expect(expanded).toContain(needle);
+	const expanded = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(expanded.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 3.0s · ⚠ Cache miss after 8m idle"]);
+	expect(expanded.join("\n")).toContain("a.ts");
+
+	// 中断与请求失败是终态，落定行红叉并写明。
+	s.chat.addChild(new s.host.UserMessageComponent("再来"));
+	s.complete(s.tool("read", { path: "b.ts" }));
+	s.settle(12_000, "aborted", 60_000);
+	s.chat.addChild(new s.host.UserMessageComponent("又来"));
+	s.complete(s.tool("read", { path: "c.ts" }));
+	s.settle(5_000, "error", 60_000);
+	s.setNow(120_000);
+	s.ui.setToolsExpanded(false);
+	const marks = s.lines().filter(Boolean).map((line: string) => line.trim()).filter((line: string) => /^[✓✗]/.test(line));
+	expect(marks).toEqual(["✓ 3.0s · ⚠ Cache miss after 8m idle", "✗ 已中断 · 12s", "✗ 请求失败 · 5.0s"]);
 });
 
-test("一轮被唤起多次时，折叠态只留最后一条收尾统计行，更早的随过程折起，展开态按序都在", async () => {
+test("同一轮不经人类输入再次进行（命令触发）会有两条记录：显示后写的那条；新一轮的记录属于新一轮", async () => {
 	const s = await scene();
-	class Entry extends s.tui.Container {
-		constructor(text: string) { super(); this.addChild(new s.tui.Spacer(1)); this.addChild(new s.tui.Text(text, 0, 0)); }
-		hasContent() { return true; }
-		setExpanded() {}
-	}
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
 	assistant(s, [{ type: "text", text: "第一次回复" }]);
-	s.chat.addChild(new Entry("◷ 处理 3s"));
-	hostUser(s, WORKER_RESULT("fix-auth"));
+	s.settle(3_000, "complete", 0);
 	s.complete(s.tool("read", { path: "b.ts" }));
 	assistant(s, [{ type: "text", text: "第二次回复" }]);
-	s.chat.addChild(new Entry("◷ 处理 9s"));
+	s.settle(9_000, "complete", 0);
 	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
-	s.chat.addChild(new Entry("◷ 处理 1s"));
+	s.complete(s.tool("read", { path: "c.ts" }));
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
 
 	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(collapsed.filter((line: string) => line.startsWith("◷"))).toEqual(["◷ 处理 9s", "◷ 处理 1s"]);
-	expect(collapsed.indexOf("◷ 处理 9s")).toBeGreaterThan(collapsed.indexOf("第二次回复"));
-	s.ui.setToolsExpanded(true);
-	const expanded = s.lines().join("\n");
-	const order = ["第一次回复", "◷ 处理 3s", "fix-auth", "第二次回复", "◷ 处理 9s"].map((needle) => expanded.indexOf(needle));
-	expect(order.every((position) => position >= 0)).toBe(true);
-	expect(order).toEqual([...order].sort((a, b) => a - b));
+	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 9.0s", "✓ 1.0s"]);
+	expect(collapsed.indexOf("✓ 9.0s")).toBeLessThan(collapsed.indexOf("第一次回复"));
 });
 
 test.each([
@@ -612,7 +628,7 @@ test("被点开的机器消息卡也随全局档位切换复位", async () => {
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 审查通过 共 2 轮，全部通过");
 });
 
-/** 把会话进行中的事实喂给轮次时钟；歇下边沿由 busy.ts 触发 settle(本段时长)。 */
+/** 把会话进行中的事实喂给轮次时钟；歇下边沿由 busy.ts 触发、tools 写入轮记录（见 scene 的 settle）。 */
 const feed = (s: any, agentRunning: boolean, inFlight = 0, since?: number) =>
 	s.clock.sync({ agentRunning, inFlight, busy: agentRunning || inFlight > 0, since });
 
@@ -633,7 +649,7 @@ test("运行中的摘要只有当前动作不跳计时，子代理结果到达�
 	s.complete(bash);
 	s.setNow(10000);
 	feed(s, false);
-	s.clock.settle(9000);
+	s.settle(9000);
 	s.setNow(20000);
 	expect(s.lines().find((line: string) => line.startsWith("✓"))).toMatch(/^✓ 9.0s\s*$/);
 });
@@ -736,7 +752,7 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要只�
 	feed(s, true, 0, 0);
 	s.setNow(80000);
 	feed(s, false, 0);
-	s.clock.settle(80000);
+	s.settle(80000);
 	s.setNow(90000);
 	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });

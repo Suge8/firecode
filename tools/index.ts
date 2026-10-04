@@ -18,6 +18,7 @@ import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { LABEL, toolTarget } from "./actions.js";
 import { diffMeta } from "./parts.js";
+import { ROUND_ENTRY, renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
 
@@ -67,9 +68,11 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
 	let clock = new TurnClock();
 	let busy: BusyView = IDLE;
+	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
 	watchBusy(pi, {
 		onChange: (view) => { busy = view; clock.sync(view); },
-		onSettled: (_ctx, elapsed) => clock.settle(elapsed),
+		// 轮记录只属于装了分组投影的 TUI 主会话；写成会话记录，摘要行落定时读它。
+		onSettled: (_ctx, round) => { if (dispose) pi.appendEntry(ROUND_ENTRY, round); },
 	});
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
