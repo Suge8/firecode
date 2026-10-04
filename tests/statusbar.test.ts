@@ -135,7 +135,7 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 			expect(visibleWidth(topBorder(width, { ...parts, ...over }, line))).toBeLessThanOrEqual(width);
 });
 
-test("上边框三态：处理中 / 等待 N 个子代理（计时自本轮人类输入连续累计）/ 全部落定且歇下才定格", async () => {
+test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变忙起连续累计，中途输入与结果唤醒都不重置）/ 全部落定且歇下才定格", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
 	const events = new Map<string, Function>();
 	const bus = new Map<string, Function>();
@@ -163,7 +163,6 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自本轮人�
 	const top = () => stripVTControlCharacters(editor.render(100)[0]);
 	try {
 		setSystemTime(new Date(1_000_000));
-		events.get("input")!({ source: "interactive" }, ctx);
 		events.get("agent_start")!({}, ctx);
 		setSystemTime(new Date(1_005_000));
 		expect(top()).toMatch(/处理中 5\.0s/u);
@@ -177,8 +176,11 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自本轮人�
 		expect(top()).not.toContain("处理中");
 		bus.get("firecode:workers")!({ inFlight: 1 });
 		expect(top()).toMatch(/等待 1 个子代理 1m5s/u);
+		// 等待期间用户补一句话：是给任务加话，不是开新一轮，计时不归零。
+		events.get("input")?.({ source: "interactive" }, ctx);
+		expect(top()).toMatch(/等待 1 个子代理 1m5s/u);
 
-		// 结果送达唤醒指挥官：回到处理中，计时仍从人类输入起连续累计。
+		// 结果送达唤醒指挥官：回到处理中，计时仍从会话变忙起连续累计。
 		setSystemTime(new Date(1_070_000));
 		events.get("agent_start")!({}, ctx);
 		expect(top()).toMatch(/处理中 1m10s/u);

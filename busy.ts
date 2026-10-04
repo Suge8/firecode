@@ -1,6 +1,7 @@
 /**
  * “会话进行中”的单一事实：指挥官回合在跑 || 有子代理在飞（working/reviewing，或已落定但结果事件尚未交给指挥官；已交出事件的未收割子代理不算）。
  * Master 是在飞子代理数的唯一发布者；上边框、本轮摘要与轮次时钟、Bark 都经 watchBusy 读同一个事实并消费同一个歇下边沿。
+ * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段时长。
  * 频道名与 payload 只在本文件定义。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,13 +28,16 @@ export interface BusyView {
 	inFlight: number;
 	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞。 */
 	busy: boolean;
+	/** 本段进行中的起点（Date.now）；当且仅当 busy 时存在。 */
+	since?: number;
 }
+export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false };
 
 export interface BusyHandlers {
 	/** 任一来源变化后调用（含歇下那一次，先于 onSettled）。 */
 	onChange?(view: BusyView, ctx: ExtensionContext | undefined): void;
-	/** 会话歇下边沿：busy 由真变假时触发一次。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */
-	onSettled(ctx: ExtensionContext | undefined): void;
+	/** 会话歇下边沿：busy 由真变假时触发一次，带本段进行中的总时长。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */
+	onSettled(ctx: ExtensionContext | undefined, elapsed: number): void;
 }
 
 /**
@@ -44,13 +48,17 @@ export interface BusyHandlers {
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 	let agentRunning = false;
 	let inFlight = 0;
-	let busy = false;
+	/** 本段起点；有值即进行中。 */
+	let since: number | undefined;
 	let ctx: ExtensionContext | undefined;
 	const update = () => {
-		const wasBusy = busy;
-		busy = agentRunning || inFlight > 0;
-		handlers.onChange?.({ agentRunning, inFlight, busy }, ctx);
-		if (wasBusy && !busy) handlers.onSettled(ctx);
+		const now = Date.now();
+		const busy = agentRunning || inFlight > 0;
+		if (busy) since ??= now;
+		const started = since;
+		if (!busy) since = undefined;
+		handlers.onChange?.({ agentRunning, inFlight, busy, since }, ctx);
+		if (!busy && started !== undefined) handlers.onSettled(ctx, now - started);
 	};
 	pi.on("agent_start", (_event, context) => {
 		ctx = context;

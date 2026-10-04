@@ -1,4 +1,4 @@
-/** 一轮的摘要行：只承担运行状态、耗时入口与异常提醒。运行中是火苗 + 当前动作 + 计时，正常结束是灰色 ✓ 耗时，异常才追加失败数与宿主提示原文。纯渲染，不碰宿主组件。 */
+/** 一轮的摘要行：只承担运行状态、耗时入口与异常提醒。运行中是火苗 + 当前动作（实时计时只在边框），正常结束是灰色 ✓ 整段耗时，异常才追加失败数与宿主提示原文。纯渲染，不碰宿主组件。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
@@ -10,7 +10,7 @@ export interface SummaryView {
 	/** 折入段内的首条宿主提示原文（缓存、丢思考、压缩计费）。 */
 	notice?: string;
 	live: boolean;
-	/** 运行中的当前动作（动作词 + 简短目标）；落定后不显示。 */
+	/** 运行中的当前动作（动作词 + 简短目标）；落定后或指挥官只在等子代理时没有，只画火苗。 */
 	action?: { word: string; target?: string };
 	/** 子代理结果刚到达：短暂替换当前动作。 */
 	arrival?: { text: string; failed: boolean; age: number };
@@ -67,7 +67,7 @@ export class TurnSummary implements Component {
 			const settled = arrival.failed ? HEAT_COLORS.fail : HEAT_COLORS.gold;
 			return paint(mix(HEAT_COLORS.white, settled, fade), theme.bold(arrival.text));
 		}
-		return theme.fg("text", view.action?.word ?? "处理中");
+		return view.action ? theme.fg("text", view.action.word) : "";
 	}
 
 	handleMouse(event: TuiMouseEvent) {
