@@ -192,9 +192,12 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 		expect(top()).toContain("1m20s");
 		expect(top()).not.toMatch(/处理中|等待/u);
 
-		// 歇下之后落定标记短暂保留，随后清空。
-		setSystemTime(new Date(1_082_000));
+		// 落定结果一直留在边框，直到下一轮开始。
+		setSystemTime(new Date(1_200_000));
+		expect(top()).toMatch(/✓ 1m20s/u);
+		events.get("agent_start")!({}, ctx);
 		expect(top()).not.toContain("1m20s");
+		expect(top()).toMatch(/处理中 0\.0s/u);
 	} finally {
 		setSystemTime();
 	}
@@ -238,6 +241,54 @@ test("闲时唤醒回合先于投递完成而结束：agent_settled 时仍显示
 		bus.get("firecode:workers")!({ inFlight: 0 });
 		expect(top()).toContain("11s");
 		expect(top()).not.toMatch(/处理中|等待/u);
+	} finally {
+		setSystemTime();
+	}
+});
+
+test("上边框落定态：均速跟在耗时后，中断与请求失败写明终态", async () => {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const events = new Map<string, Function[]>();
+	let editor: any;
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		isIdle: () => true,
+		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
+		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
+		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
+			setEditorComponent(factory: any) {
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
+			},
+		},
+	};
+	registerStatusBar({
+		on: (event: string, fn: Function) => events.set(event, [...(events.get(event) ?? []), fn]),
+		events: { on() {} },
+		getThinkingLevel: () => "off",
+	});
+	const emit = (name: string, event = {}) => events.get(name)?.forEach((fn) => fn(event, ctx));
+	emit("session_start");
+	const top = () => stripVTControlCharacters(editor.render(100)[0]);
+	const round = (at: number, output: number, stopReason: string) => {
+		setSystemTime(new Date(at));
+		emit("agent_start");
+		emit("before_provider_request");
+		setSystemTime(new Date(at + 10_000));
+		emit("message_end", { message: { role: "assistant", usage: { output }, stopReason } });
+		emit("agent_end", { messages: [{ role: "assistant", stopReason }] });
+		emit("agent_settled");
+		setSystemTime(new Date(at + 20_000));
+	};
+	try {
+		round(0, 420, "stop");
+		expect(top()).toMatch(/^─ ✓ 10s · 42 tps ─+$/u);
+		round(100_000, 100, "aborted");
+		expect(top()).toMatch(/^─ ✗ 已中断 10s ─+$/u);
+		round(200_000, 0, "error");
+		expect(top()).toMatch(/^─ ✗ 请求失败 10s ─+$/u);
 	} finally {
 		setSystemTime();
 	}

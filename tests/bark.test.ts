@@ -61,15 +61,17 @@ test("Bark 只在会话真正歇下时推送：有子代理在飞的等待期不
 		const pushes: string[] = [];
 		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
 		const { registerBark } = await loadFirecodeModule("session/bark.ts") as any;
-		const events = new Map<string, Function>();
+		// busy.ts 与 bark 都订阅 message_end：同名事件保留全部处理器。
+		const handlers = new Map<string, Function[]>();
+		const events = { get: (event: string) => (...args: unknown[]) => handlers.get(event)?.forEach((fn) => fn(...args)) };
 		const bus = new Map<string, Function>();
 		registerBark({
-			on: (event: string, fn: Function) => events.set(event, fn),
+			on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 			events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
 			getSessionName: () => "会话",
 		});
 		const ctx = { cwd: "/tmp/project", isIdle: () => true, sessionManager: { getSessionId: () => "sid" } };
-		events.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "已派发" }] } });
+		events.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "已派发" }], usage: { output: 3 }, stopReason: "stop" } });
 		const settle = async () => { events.get("agent_settled")!({}, ctx); await Bun.sleep(5); };
 
 		bus.get("firecode:workers")!({ inFlight: 2 });
@@ -96,17 +98,19 @@ test("闲时唤醒回合先于投递完成而结束：agent_settled 时不推，
 		const pushes: string[] = [];
 		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
 		const { registerBark } = await loadFirecodeModule("session/bark.ts") as any;
-		const events = new Map<string, Function>();
+		// busy.ts 与 bark 都订阅 message_end：同名事件保留全部处理器。
+		const handlers = new Map<string, Function[]>();
+		const events = { get: (event: string) => (...args: unknown[]) => handlers.get(event)?.forEach((fn) => fn(...args)) };
 		const bus = new Map<string, Function>();
 		registerBark({
-			on: (event: string, fn: Function) => events.set(event, fn),
+			on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 			events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
 			getSessionName: () => "会话",
 		});
 		const ctx = { cwd: "/tmp/project", isIdle: () => true, sessionManager: { getSessionId: () => "sid" } };
 		bus.get("firecode:workers")!({ inFlight: 1 });
 		events.get("agent_start")!({}, ctx);
-		events.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "结果已处理" }] } });
+		events.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "结果已处理" }], usage: { output: 3 }, stopReason: "stop" } });
 		events.get("agent_settled")!({}, ctx);
 		await Bun.sleep(5);
 		expect(pushes).toHaveLength(0);

@@ -1,10 +1,11 @@
 /**
  * “会话进行中”的单一事实：指挥官回合在跑 || 有子代理在飞（working/reviewing，或已落定但结果事件尚未交给指挥官；已交出事件的未收割子代理不算）。
  * Master 是在飞子代理数的唯一发布者；上边框、本轮摘要与轮次时钟、Bark 都经 watchBusy 读同一个事实并消费同一个歇下边沿。
- * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段时长与终态。
+ * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段事实：时长、终态、均速。
  * 频道名与 payload 只在本文件定义。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { formatDuration } from "./format.js";
 
 /** 进程内事件总线：在飞子代理数变化时发布 `{ inFlight }`，激活/停用同步。 */
 export const WORKERS_CHANNEL = "firecode:workers";
@@ -38,6 +39,33 @@ export type Outcome = "complete" | "aborted" | "error";
 export interface SettledRound {
 	elapsed: number;
 	outcome: Outcome;
+	/**
+	 * 均速（token/s）：指挥官各回合的输出 token 之和除以模型请求墙钟之和，等子代理与跑工具不算分母。
+	 * 任一请求失败、中断、未配对或压缩失败则整段不给，不出半截的数。
+	 */
+	tps?: number;
+}
+
+/** 终态字样；完成不写字。 */
+export const OUTCOME_TEXT: Record<Outcome, string> = { complete: "", aborted: "已中断", error: "请求失败" };
+const RATE_FORMAT = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3, useGrouping: false });
+
+/** 落定记录的展示片段（未着色）：耗时，有均速再跟一段。上边框与摘要行共用。 */
+export function roundTexts(round: SettledRound): string[] {
+	return [formatDuration(round.elapsed), ...(round.tps ? [`${RATE_FORMAT.format(round.tps)} tps`] : [])];
+}
+
+/** 本段的模型请求计时；requestMs 为 undefined 表示本段已无法给出均速。 */
+interface Requests {
+	startedAt?: number;
+	requestMs?: number;
+	outputTokens: number;
+}
+const FRESH: Requests = { requestMs: 0, outputTokens: 0 };
+
+function settledRound(elapsed: number, outcome: Outcome, { startedAt, requestMs, outputTokens }: Requests): SettledRound {
+	const valid = outcome === "complete" && startedAt === undefined && requestMs && outputTokens > 0;
+	return { elapsed, outcome, ...(valid ? { tps: (outputTokens * 1_000) / requestMs } : {}) };
 }
 
 export interface BusyHandlers {
@@ -63,19 +91,42 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 	/** 本段起点；有值即进行中。 */
 	let since: number | undefined;
 	let outcome: Outcome = "complete";
+	let requests = FRESH;
 	let ctx: ExtensionContext | undefined;
 	const update = () => {
 		const now = Date.now();
 		const busy = agentRunning || inFlight > 0;
-		if (busy) since ??= now;
+		if (busy && since === undefined) {
+			since = now;
+			requests = FRESH;
+		}
 		const started = since;
 		if (!busy) since = undefined;
 		handlers.onChange?.({ agentRunning, inFlight, busy, since }, ctx);
-		if (!busy && started !== undefined) handlers.onSettled(ctx, { elapsed: now - started, outcome });
+		if (!busy && started !== undefined) handlers.onSettled(ctx, settledRound(now - started, outcome, requests));
 	};
 	pi.on("agent_end", (event) => {
 		outcome = outcomeOf(event.messages);
 	});
+	pi.on("before_provider_request", () => {
+		// 上一次请求没有等到助手 message_end 就又发起：起止无法配对。
+		requests = { ...requests, startedAt: Date.now(), requestMs: requests.startedAt === undefined ? requests.requestMs : undefined };
+	});
+	pi.on("message_end", ({ message }) => {
+		if (message.role !== "assistant") return;
+		const duration = requests.startedAt === undefined ? 0 : Date.now() - requests.startedAt;
+		const output = message.usage.output;
+		const valid = requests.requestMs !== undefined && duration > 0 && Number.isFinite(output) && output > 0
+			&& (message.stopReason === "stop" || message.stopReason === "toolUse");
+		requests = valid
+			? { requestMs: requests.requestMs! + duration, outputTokens: requests.outputTokens + output }
+			: { requestMs: undefined, outputTokens: requests.outputTokens };
+	});
+	// 压缩的模型调用没有助手 message_end，不把它的起点借给下一条回复；压缩失败则本段不给均速。
+	const clearRequest = () => { requests = { ...requests, startedAt: undefined }; };
+	pi.on("session_before_compact", clearRequest);
+	pi.on("session_compact", clearRequest);
+	pi.on("session_compact_failed", () => { requests = { requestMs: undefined, outputTokens: requests.outputTokens }; });
 	pi.on("agent_start", (_event, context) => {
 		ctx = context;
 		agentRunning = true;
