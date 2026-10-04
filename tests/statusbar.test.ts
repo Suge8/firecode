@@ -18,6 +18,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	const statuses = new Map<string, string>([["pi-openai-native-fast", "fast"]]);
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
+		isIdle: () => true,
 		model: { id: "test-model", reasoning: true, contextWindow: 200_000 },
 		getContextUsage: () => ({ percent: 42.3, contextWindow: 200_000 }),
 		sessionManager: { getSessionName: () => name, getBranch: () => entries },
@@ -141,6 +142,7 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自本轮人�
 	let editor: any;
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
+		isIdle: () => true,
 		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
 		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
 		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
@@ -203,6 +205,7 @@ test("闲时唤醒回合先于投递完成而结束：agent_settled 时仍显示
 	let editor: any;
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
+		isIdle: () => true,
 		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
 		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
 		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },

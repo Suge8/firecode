@@ -13,8 +13,10 @@ async function harness() {
 		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 		events: { on: (channel: string, fn: Function) => { bus.set(channel, [...(bus.get(channel) ?? []), fn]); return () => {}; } },
 	}, { onSettled: () => { settled++; } });
-	const ctx = {};
+	let idle = true;
+	const ctx = { isIdle: () => idle };
 	return {
+		set idle(value: boolean) { idle = value; },
 		get settled() { return settled; },
 		agentStart: () => handlers.get("agent_start")?.forEach((fn) => fn({}, ctx)),
 		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
@@ -50,5 +52,31 @@ test("闲时唤醒回合先于投递完成而结束：在飞数在 agent_settled
 	h.agentSettled();
 	expect(h.settled).toBe(0);
 	h.inFlight(0);
+	expect(h.settled).toBe(1);
+});
+
+test("agent_settled 时宿主仍有排队/延后的动作（isIdle 为 false）不算回合结束：不歇下，紧接着的再次回合结束才歇下", async () => {
+	const h = await harness();
+	h.agentStart();
+	h.idle = false;
+	h.agentSettled();
+	expect(h.settled).toBe(0);
+	// 排队的动作随即开跑，又一次回合落定且这次真空闲。
+	h.agentStart();
+	h.idle = true;
+	h.agentSettled();
+	expect(h.settled).toBe(1);
+});
+
+test("在飞数归零时指挥官回合因 isIdle 为 false 仍算在跑：不歇下，等它真正落定", async () => {
+	const h = await harness();
+	h.inFlight(1);
+	h.agentStart();
+	h.idle = false;
+	h.agentSettled();
+	h.inFlight(0);
+	expect(h.settled).toBe(0);
+	h.idle = true;
+	h.agentSettled();
 	expect(h.settled).toBe(1);
 });
