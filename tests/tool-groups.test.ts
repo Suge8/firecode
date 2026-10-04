@@ -66,10 +66,10 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 	dispose = module.installGroupPatch(ui, { replyLines, clock });
 	const setNow = (value: number) => { now = value; };
 	/** 宿主在歇下时把轮记录作为 CustomEntry 加进聊天树：Container(Spacer, 渲染器组件)，这里只模拟宿主的壳。 */
-	const settle = (elapsed: number, outcome = "complete", at = now) => {
+	const settle = (elapsed: number, outcome = "complete", at = now, tps?: number) => {
 		const entry = new tui.Container();
 		entry.addChild(new tui.Spacer(1));
-		entry.addChild(roundRenderer!({ data: { elapsed, outcome }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
+		entry.addChild(roundRenderer!({ data: { elapsed, outcome, ...(tps ? { tps } : {}) }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
 		(entry as any).hasContent = () => true;
 		(entry as any).setExpanded = () => {};
 		chat.addChild(entry);
@@ -141,12 +141,12 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
 });
 
-test("摘要优先显示运行项且保留失败，切档不改聊天树", async () => {
+test("摘要优先显示运行项，工具失败不计数、不画红叉，切档不改聊天树", async () => {
 	const s = await scene();
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ long-running · 1 次失败\\s*$`));
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ long-running\\s*$`));
 	const originalChildren = [...s.chat.children];
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("ENOENT");
@@ -158,8 +158,7 @@ test("摘要优先显示运行项且保留失败，切档不改聊天树", async
 	}
 	s.complete(running);
 	s.ui.setToolsExpanded(false);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✗ 1 次失败\s*$/);
-	expect(s.lines(12).filter(Boolean)[0]).toMatch(/^✗ 1 次失败\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 });
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
@@ -296,7 +295,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	expect(s.lines().slice(2).join("\n")).toBe(collapsed.split("\n").slice(2).join("\n"));
 });
 
-test("思考期间仍保留已有工具失败，异常和截断诊断不会被思考折叠吞掉", async () => {
+test("思考期间异常和截断诊断不会被思考折叠吞掉", async () => {
 	const s = await scene();
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
@@ -304,7 +303,7 @@ test("思考期间仍保留已有工具失败，异常和截断诊断不会被�
 	const content = [{ type: "thinking", thinking: "不应直接显示的思考" }];
 	assistant.updateContent({ role: "assistant", content, stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中 · 1 次失败\\s*$`));
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
 	for (const [stopReason, diagnostic] of [["error", "Error: failed"], ["aborted", "failed"], ["length", "Response was truncated"]]) {
 		assistant.updateContent({ role: "assistant", content, stopReason, errorMessage: "failed" }, false);
 		expect(s.lines().join("\n")).toContain(diagnostic);
@@ -649,9 +648,24 @@ test("运行中的摘要只有当前动作不跳计时，子代理结果到达�
 	s.complete(bash);
 	s.setNow(10000);
 	feed(s, false);
-	s.settle(9000);
+	s.settle(9000, "complete", 10000, 58.13);
 	s.setNow(20000);
-	expect(s.lines().find((line: string) => line.startsWith("✓"))).toMatch(/^✓ 9.0s\s*$/);
+	expect(s.lines().find((line: string) => line.startsWith("✓"))).toMatch(/^✓ 9.0s · 58.1 tps\s*$/);
+});
+
+test("纯文字轮也有落定行：有轮记录就画，显示耗时与均速；中断的轮没有均速", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("快问"));
+	assistant(s, [{ type: "text", text: "快答" }]);
+	s.settle(8_000, "complete", 0, 42);
+	s.chat.addChild(new s.host.UserMessageComponent("再问"));
+	assistant(s, [{ type: "text", text: "答到一半" }], "aborted");
+	s.settle(3_000, "aborted", 0);
+	s.setNow(60_000);
+	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
+	expect(lines.filter((line: string) => /^[✓✗]/.test(line))).toEqual(["✓ 8.0s · 42 tps", "✗ 已中断 · 3.0s"]);
+	expect(lines.indexOf("✓ 8.0s · 42 tps")).toBeLessThan(lines.indexOf("快答"));
+	expect(lines.indexOf("✗ 已中断 · 3.0s")).toBeLessThan(lines.indexOf("答到一半"));
 });
 
 test("review 的信封消息归入过程不切段", async () => {
@@ -700,15 +714,15 @@ test("冒号并入下一行时跳过围栏行与空行；预览去掉行内 Mark
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令输出：done");
 });
 
-test("异常提醒：宿主提示原文按宽裁剪，与失败数同行；多条提示取首条", async () => {
+test("异常提醒：宿主提示原文按宽裁剪；多条提示取首条；工具失败不影响标记", async () => {
 	const s = await scene();
 	const note = (text: string) => { s.chat.addChild(new s.tui.Spacer(1)); s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", text), 1, 0)); };
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	note("Cache miss after 8m idle: 63k tokens re-billed");
 	note("Anthropic dropped 23 thinking blocks");
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✗ 1 次失败 · ⚠ Cache miss after 8m idle: 63k tokens re-billed\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ ⚠ Cache miss after 8m idle: 63k tokens re-billed\s*$/);
 	const narrow = s.lines(30).filter(Boolean)[0];
-	expect(narrow).toMatch(/^✗ 1 次失败 · ⚠ Cache m/);
+	expect(narrow).toMatch(/^✓ ⚠ Cache m/);
 	expect(s.tui.visibleWidth(narrow)).toBeLessThanOrEqual(30);
 	expect(s.lines().join("\n")).not.toMatch(/[▸▾]/);
 });

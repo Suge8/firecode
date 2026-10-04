@@ -23,6 +23,9 @@ async function harness() {
 		get result() { return result; },
 		get view() { return view; },
 		agentStart: () => handlers.get("agent_start")?.forEach((fn) => fn({}, ctx)),
+		request: () => handlers.get("before_provider_request")?.forEach((fn) => fn({}, ctx)),
+		response: (output: number, stopReason = "stop") => handlers.get("message_end")?.forEach((fn) => fn({ message: { role: "assistant", usage: { output }, stopReason } }, ctx)),
+		compact: (name: string, event = {}) => handlers.get(name)?.forEach((fn) => fn(event, ctx)),
 		agentEnd: (stopReason?: string) => handlers.get("agent_end")?.forEach((fn) => fn({ messages: stopReason ? [{ role: "assistant", stopReason }] : [] }, ctx)),
 		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
 		inFlight: (inFlight: number) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight })),
@@ -104,6 +107,70 @@ test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇�
 		h.agentEnd("error");
 		h.agentSettled();
 		expect(h.result).toEqual({ elapsed: 0, outcome: "error" });
+	} finally {
+		setSystemTime();
+	}
+});
+
+test("均速：整段内指挥官各回合的输出 token 之和除以请求墙钟之和，等子代理与工具不算分母；请求失败、压缩失败或未配对则整段不给", async () => {
+	const h = await harness();
+	try {
+		setSystemTime(new Date(0));
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(10_000));
+		h.response(800, "toolUse");
+		h.inFlight(2);
+		h.agentSettled();
+		// 等了 50 秒子代理，不计入分母。
+		setSystemTime(new Date(60_000));
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(80_000));
+		h.response(400);
+		h.inFlight(0);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 80_000, outcome: "complete", tps: 40 });
+
+		// 压缩的模型调用没有助手 message_end，不把它的起点借给下一条回复。
+		setSystemTime(new Date(100_000));
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(101_000));
+		h.response(100);
+		h.compact("session_before_compact");
+		h.request();
+		h.compact("session_compact");
+		h.request();
+		setSystemTime(new Date(103_000));
+		h.response(100);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 3_000, outcome: "complete", tps: 100 });
+
+		// 一次请求失败后续跑完成：不伪造整段均速。
+		setSystemTime(new Date(200_000));
+		h.agentStart();
+		h.request();
+		h.response(0, "error");
+		h.request();
+		setSystemTime(new Date(201_000));
+		h.response(100);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 1_000, outcome: "complete" });
+
+		// 压缩失败同样整段不给。
+		setSystemTime(new Date(300_000));
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(301_000));
+		h.response(100);
+		h.compact("session_compact_failed", { aborted: true });
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 1_000, outcome: "complete" });
 	} finally {
 		setSystemTime();
 	}
