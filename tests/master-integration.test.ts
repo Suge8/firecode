@@ -298,6 +298,43 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	expect(idleLine).toContain("落定 1m5s前");
 });
 
+test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，herdr:working 的 active 按 0↔正数配对，停用时收口", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "pub", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await settled;
+	await Bun.sleep(0);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
+	expect(counts()).toEqual([1, 0]);
+	expect(working()).toEqual([true, false]);
+
+	faux.setResponses([fauxAssistantMessage("再来一次")]);
+	const second = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "pub", prompt: "继续" });
+	await second;
+	await Bun.sleep(0);
+	expect(counts()).toEqual([1, 0, 1, 0]);
+	expect(working()).toEqual([true, false, true, false]);
+
+	// 停用时在飞数归零；已经归零不再重复发布。
+	await harness.command("");
+	expect(counts()).toEqual([1, 0, 1, 0]);
+	expect(working()).toEqual([true, false, true, false]);
+});
+
+test("停用 Master 时仍有子代理在飞：先发布归零并配对 herdr:working", async () => {
+	const harness = await setup();
+	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
+	await harness.execute({ action: "start", worker: "slow", prompt: "慢", role: "工程师", thinking: "low" });
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	expect(counts()).toEqual([1]);
+	await harness.command("");
+	expect(counts()).toEqual([1, 0]);
+	expect(harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active)).toEqual([true, false]);
+});
+
 test("主回合忙碌时，subagents 以队列语义完成 start→事件落定→list→kill", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
@@ -1253,6 +1290,7 @@ async function setup(activate = true, options: {
 	const appended: Array<[string, any]> = [];
 	const entries: any[] = [];
 	const userMessages: string[] = [];
+	const emitted: [string, any][] = [];
 	let onMessage: (() => void) | undefined;
 	let idle = false;
 	let releaseUserMessage = () => {};
@@ -1269,7 +1307,7 @@ async function setup(activate = true, options: {
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
 		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-		events: { on() {}, emit() {} },
+		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
@@ -1319,6 +1357,7 @@ async function setup(activate = true, options: {
 		statuses,
 		messages,
 		userMessages,
+		emitted,
 		appended,
 		entries,
 		pool,

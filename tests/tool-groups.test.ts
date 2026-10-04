@@ -706,3 +706,33 @@ test("运行中摘要的目标按宽度先裁，动作词与计时保留，放�
 	expect(s.tui.visibleWidth(clipped)).toBeLessThanOrEqual(30);
 	expect(at(14)).toMatch(new RegExp(`^${FLAME} 操作 · 5.0s\\s*$`));
 });
+
+test("会话进行中：指挥官回合结束而有子代理在飞时摘要保持运行态并显示等待数，全部落定才定格，耗时含等待", async () => {
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("派活"));
+	s.setNow(0);
+	s.clock.begin();
+	s.complete(s.tool("read", { path: "a.ts" }));
+	s.clock.setWaiting(2);
+	s.setNow(20000);
+	s.clock.finish();
+	s.setNow(65000);
+	const summary = () => s.lines().filter(Boolean).find((line: string) => /^(✓|✗|[⠀-⣿])/.test(line))!;
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 等待 2 个子代理 · 1m5s\\s*$`));
+
+	// 结果送达唤醒：回到当前动作，仍是同一段连续计时。
+	s.clock.setWaiting(1);
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 等待 1 个子代理 · 1m5s\\s*$`));
+	s.setNow(70000);
+	s.clock.begin();
+	const bash = s.tool("bash", { command: "bun test" });
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test · 1m10s\\s*$`));
+
+	// 最后一个子代理落定且指挥官歇下：定格，耗时含等待。
+	s.complete(bash);
+	s.clock.setWaiting(0);
+	s.setNow(80000);
+	s.clock.finish();
+	s.setNow(90000);
+	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
+});

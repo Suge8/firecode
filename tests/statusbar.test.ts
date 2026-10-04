@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { contextColor } from "../theme.js";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
@@ -131,4 +131,64 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 	for (let width = 0; width <= 120; width++)
 		for (const over of [{}, idle, { watcher: "" }, { master: "" }])
 			expect(visibleWidth(topBorder(width, { ...parts, ...over }, line))).toBeLessThanOrEqual(width);
+});
+
+test("上边框三态：处理中 / 等待 N 个子代理（计时自本轮人类输入连续累计）/ 全部落定且歇下才定格", async () => {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const events = new Map<string, Function>();
+	const bus = new Map<string, Function>();
+	let editor: any;
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
+		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
+		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
+			setEditorComponent(factory: any) {
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
+			},
+		},
+	};
+	registerStatusBar({
+		on: (event: string, fn: Function) => events.set(event, fn),
+		events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
+		getThinkingLevel: () => "off",
+	});
+	events.get("session_start")!({}, ctx);
+	const top = () => stripVTControlCharacters(editor.render(100)[0]);
+	try {
+		setSystemTime(new Date(1_000_000));
+		events.get("input")!({ source: "interactive" }, ctx);
+		events.get("agent_start")!({}, ctx);
+		setSystemTime(new Date(1_005_000));
+		expect(top()).toMatch(/处理中 5\.0s/u);
+
+		// 指挥官回合结束，两个子代理在飞：保持运行态，计时不重置、不定格。
+		bus.get("firecode:workers")!({ inFlight: 2 });
+		setSystemTime(new Date(1_065_000));
+		events.get("agent_end")!({ messages: [] }, ctx);
+		expect(top()).toMatch(/等待 2 个子代理 1m5s/u);
+		expect(top()).not.toContain("处理中");
+		bus.get("firecode:workers")!({ inFlight: 1 });
+		expect(top()).toMatch(/等待 1 个子代理 1m5s/u);
+
+		// 结果送达唤醒指挥官：回到处理中，计时仍从人类输入起连续累计。
+		setSystemTime(new Date(1_070_000));
+		events.get("agent_start")!({}, ctx);
+		expect(top()).toMatch(/处理中 1m10s/u);
+		bus.get("firecode:workers")!({ inFlight: 0 });
+		expect(top()).toMatch(/处理中 1m10s/u);
+		setSystemTime(new Date(1_080_000));
+		events.get("agent_end")!({ messages: [] }, ctx);
+		expect(top()).toContain("1m20s");
+		expect(top()).not.toMatch(/处理中|等待/u);
+
+		// 歇下之后落定标记短暂保留，随后清空。
+		setSystemTime(new Date(1_082_000));
+		expect(top()).not.toContain("1m20s");
+	} finally {
+		setSystemTime();
+	}
 });
