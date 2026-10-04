@@ -38,7 +38,7 @@ export interface BusyHandlers {
 
 /**
  * 会话进行中的唯一判定与歇下边沿：上边框、轮次时钟与 Bark 都只消费这里，不各自拼装。
- * 指挥官回合以 agent_start → agent_settled 为界（宿主 sendUserMessage 会 await 整个唤醒回合，
+ * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界（宿主 sendUserMessage 会 await 整个唤醒回合，
  * 所以投递完成、在飞数归零可能晚于 agent_settled，歇下必须在两个来源都满足的那一刻触发）。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
@@ -59,7 +59,8 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 	});
 	pi.on("agent_settled", (_event, context) => {
 		ctx = context;
-		agentRunning = false;
+		// 宿主在 agent_settled 期间可能已有排队/延后的动作（isIdle 为 false），紧接着会再 agent_start：不算回合结束。
+		agentRunning = context.isIdle() !== true;
 		update();
 	});
 	pi.events.on(WORKERS_CHANNEL, (data) => {
