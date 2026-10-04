@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
@@ -9,15 +9,19 @@ async function harness() {
 	const handlers = new Map<string, Function[]>();
 	const bus = new Map<string, Function[]>();
 	let settled = 0;
+	let elapsed: number | undefined;
+	let view: any;
 	watchBusy({
 		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 		events: { on: (channel: string, fn: Function) => { bus.set(channel, [...(bus.get(channel) ?? []), fn]); return () => {}; } },
-	}, { onSettled: () => { settled++; } });
+	}, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, ms: number) => { settled++; elapsed = ms; } });
 	let idle = true;
 	const ctx = { isIdle: () => idle };
 	return {
 		set idle(value: boolean) { idle = value; },
 		get settled() { return settled; },
+		get elapsed() { return elapsed; },
+		get view() { return view; },
 		agentStart: () => handlers.get("agent_start")?.forEach((fn) => fn({}, ctx)),
 		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
 		inFlight: (inFlight: number) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight })),
@@ -66,6 +70,27 @@ test("agent_settled 时宿主仍有排队/延后的动作（isIdle 为 false）�
 	h.idle = true;
 	h.agentSettled();
 	expect(h.settled).toBe(1);
+});
+
+test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇下边沿报告整段时长", async () => {
+	const h = await harness();
+	try {
+		setSystemTime(new Date(1_000_000));
+		h.agentStart();
+		h.inFlight(1);
+		expect(h.view.since).toBe(1_000_000);
+		setSystemTime(new Date(1_020_000));
+		h.agentSettled();
+		h.agentStart();
+		expect(h.view.since).toBe(1_000_000);
+		h.inFlight(0);
+		setSystemTime(new Date(1_080_000));
+		h.agentSettled();
+		expect(h.view.since).toBeUndefined();
+		expect(h.elapsed).toBe(80_000);
+	} finally {
+		setSystemTime();
+	}
 });
 
 test("在飞数归零时指挥官回合因 isIdle 为 false 仍算在跑：不歇下，等它真正落定", async () => {
