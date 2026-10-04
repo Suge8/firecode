@@ -91,10 +91,11 @@ function isProcess(component: Component): boolean {
 		|| (component instanceof UserMessageComponent && !isHuman(component));
 }
 
-/** 有实质的过程（工具或思考）才有摘要行；提示只折入有摘要行的段。 */
+/** 有实质的过程（工具或思考）或轮记录才有摘要行；提示只折入有摘要行的段。 */
 function hasSubstance(component: Component): boolean {
 	return component instanceof ToolExecutionComponent
-		|| (component instanceof AssistantMessageComponent && hasThinking(component));
+		|| (component instanceof AssistantMessageComponent && hasThinking(component))
+		|| roundOf(component) !== undefined;
 }
 
 /**
@@ -121,12 +122,11 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 const ACTIVITY_TEXT = { thinking: "思考中", processing: "处理中" } as const;
 
-type Facts = Pick<SummaryView, "failures" | "notice" | "action" | "arrival"> & { running: number; round?: Round };
+type Facts = Pick<SummaryView, "notice" | "action" | "arrival"> & { running: number; round?: Round };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
 	let running = 0;
-	let failures = 0;
 	let notice: string | undefined;
 	let latest: RowData | undefined;
 	let arrival: Facts["arrival"];
@@ -146,7 +146,6 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		// 运行中的工具优先当“当前动作”；都完成时取最后一个
 		if (data.isPartial) running++;
 		if (data.isPartial || !latest?.isPartial) latest = data;
-		if (data.result?.isError) failures++;
 	}
 	const line = latest && actionLine(latest.callRendererComponent);
 	const action = latest && (line
@@ -156,7 +155,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 			target: toolTarget(latest.toolName, latest.args, latest.cwd).value.map((part) => part.text).join("").trim(),
 		});
 	return {
-		failures, notice, running, arrival, round,
+		notice, running, arrival, round,
 		// 指挥官自己歇着、只在等子代理：没有当前动作，摘要行只留火苗（等待状态与计时只在边框）。
 		action: activity ? { word: ACTIVITY_TEXT[activity] } : running || env.clock.agentRunning ? action ?? { word: "思考" } : undefined,
 	};
