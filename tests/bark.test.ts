@@ -1,8 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBarkPayload, hasPendingDisposition } from "../session/bark.js";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 const worker = (disposition?: "pending" | "reminded") => ({
@@ -15,7 +14,8 @@ const worker = (disposition?: "pending" | "reminded") => ({
 	...(disposition ? { disposition } : {}),
 });
 
-test("有待拍板事件时升 timeSensitive 并带副标题，否则 active 无副标题", () => {
+test("有待拍板事件时升 timeSensitive 并带副标题，否则 active 无副标题", async () => {
+	const { buildBarkPayload } = await loadFirecodeModule("session/bark.ts") as any;
 	const base = { title: "s", body: "b", group: "g", sessionId: "sid" };
 	const urgent = buildBarkPayload({ ...base, awaitingDecision: true });
 	expect(urgent.level).toBe("timeSensitive");
@@ -28,6 +28,7 @@ test("有待拍板事件时升 timeSensitive 并带副标题，否则 active 无
 });
 
 test("v8 待发落 Worker 触发待拍板，空池、文件缺失与损坏均不触发", async () => {
+	const { hasPendingDisposition } = await loadFirecodeModule("session/bark.ts") as any;
 	const dir = await mkdtemp(join(tmpdir(), "firecode-bark-"));
 	try {
 		const path = join(dir, "state.json");
@@ -44,20 +45,19 @@ test("v8 待发落 Worker 触发待拍板，空池、文件缺失与损坏均不
 });
 
 const realFetch = globalThis.fetch;
-const realHome = process.env.HOME;
+const realAgentDir = process.env.PI_CODING_AGENT_DIR;
 afterEach(async () => {
 	globalThis.fetch = realFetch;
-	if (realHome === undefined) delete process.env.HOME;
-	else process.env.HOME = realHome;
+	if (realAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = realAgentDir;
 	await cleanupFirecodeModules();
 });
 
 test("Bark 只在会话真正歇下时推送：有子代理在飞的等待期不推，最后一个落定且指挥官歇下后推一次", async () => {
 	const home = await mkdtemp(join(tmpdir(), "firecode-bark-home-"));
 	try {
-		await mkdir(join(home, ".pi", "agent"), { recursive: true });
-		await writeFile(join(home, ".pi", "agent", "bark-key"), "https://bark.test/key/\n");
-		process.env.HOME = home;
+		await writeFile(join(home, "bark-key"), "https://bark.test/key/\n");
+		process.env.PI_CODING_AGENT_DIR = home;
 		const pushes: string[] = [];
 		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
 		const { registerBark } = await loadFirecodeModule("session/bark.ts") as any;

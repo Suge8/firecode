@@ -12,6 +12,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import { sessionBusy, subscribeInFlight } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { contextColor, thinkingColor } from "../theme.js";
@@ -59,6 +60,12 @@ type Turn = { startedAt: number } | { endedAt: number; elapsed: number; failed: 
 class Shell {
 	title = "新会话";
 	turn: Turn | undefined;
+	/** 本轮人类输入的时刻：指挥官被结果唤起多次，计时仍从这里连续累计。 */
+	roundStartedAt: number | undefined;
+	agentRunning = false;
+	/** Master 发布的在飞子代理数。 */
+	inFlight = 0;
+	private failed = false;
 	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
 	review: (() => string) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
@@ -84,7 +91,31 @@ class Shell {
 		return this.turn !== undefined && "endedAt" in this.turn && Date.now() - this.turn.endedAt >= SETTLE_SHOW_MS;
 	}
 
+	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞；全部落定且指挥官歇下才定格。 */
+	startRun(): void {
+		this.agentRunning = true;
+		if (!this.turn || !("startedAt" in this.turn)) this.turn = { startedAt: this.roundStartedAt ?? Date.now() };
+	}
+
+	endAgent(failed: boolean): void {
+		this.agentRunning = false;
+		this.failed = failed;
+		this.settleIfIdle();
+	}
+
+	setInFlight(count: number): void {
+		this.inFlight = count;
+		this.settleIfIdle();
+	}
+
+	private settleIfIdle(): void {
+		if (!this.turn || !("startedAt" in this.turn) || sessionBusy(this.agentRunning, this.inFlight)) return;
+		const endedAt = Date.now();
+		this.turn = { endedAt, elapsed: endedAt - this.turn.startedAt, failed: this.failed };
+	}
+
 	top(): TopParts {
+		if (this.settledExpired()) this.turn = undefined;
 		const turn = this.turn;
 		const review = this.review;
 		const status = (key: string) => this.statuses().get(key) ?? "";
@@ -94,7 +125,7 @@ class Shell {
 		};
 		if (turn && "startedAt" in turn) {
 			parts.mark = flame(3, phaseOf(0));
-			parts.word = this.theme?.fg("text", "处理中") ?? "";
+			parts.word = this.theme?.fg("text", this.agentRunning ? "处理中" : `等待 ${this.inFlight} 个子代理`) ?? "";
 			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - turn.startedAt)) ?? "";
 			parts.glow = 1;
 		} else if (turn) {
@@ -171,15 +202,23 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	});
 	pi.on("session_info_changed", (_event, ctx) => updateTitle(ctx));
 	pi.on("session_tree", (_event, ctx) => updateTitle(ctx));
+	pi.on("input", (event) => {
+		if (event.source === "extension") return;
+		shell.roundStartedAt = Date.now();
+		if (shell.turn && "startedAt" in shell.turn) shell.turn = { startedAt: shell.roundStartedAt };
+	});
 	pi.on("agent_start", () => {
-		shell.turn = { startedAt: Date.now() };
+		shell.startRun();
 		shell.syncClock();
 		shell.requestRender();
 	});
 	pi.on("agent_end", (event) => {
-		if (!shell.turn || !("startedAt" in shell.turn)) return;
-		const endedAt = Date.now();
-		shell.turn = { endedAt, elapsed: endedAt - shell.turn.startedAt, failed: lastFailed(event.messages) };
+		shell.endAgent(lastFailed(event.messages));
+		shell.syncClock();
+		shell.requestRender();
+	});
+	subscribeInFlight(pi, (count) => {
+		shell.setInFlight(count);
 		shell.syncClock();
 		shell.requestRender();
 	});
@@ -207,6 +246,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		shell.dispose();
 		shell.turn = undefined;
+		shell.roundStartedAt = undefined;
+		shell.agentRunning = false;
 		shell.review = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setEditorComponent(undefined);

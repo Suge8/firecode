@@ -21,7 +21,7 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 	const clock = new (clockModule.TurnClock as any)(() => now);
 	host.initTheme("dark");
 	const tools = new Map<string, any>();
-	const api = { on() {}, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {} };
+	const api = { on() {}, events: { on: () => () => {}, emit() {} }, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {} };
 	toolsModule.registerToolRendering(api);
 	if (withMaster) {
 		const { registerMaster } = await loadFirecodeModule("master/index.ts");
@@ -221,7 +221,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
-	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), registerTool() {}, registerCommand() {} });
+	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {} });
 	events.get("session_start")!({}, { mode: "rpc" });
 	events.get("session_shutdown")!();
 	expect(s.lines().filter(Boolean)).toHaveLength(1);

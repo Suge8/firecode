@@ -13,6 +13,9 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
+import {
+	HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload,
+} from "../busy.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { clip, formatDuration } from "../format.js";
 import { HEAT_COLORS, paint } from "../flame.js";
@@ -137,8 +140,19 @@ export function registerMaster(
 	const requireRuntimeOwner = (active: MasterRuntime): void => {
 		if (!ownsRuntime(active)) throw new Error("Master 会话已替换，取消旧会话动作");
 	};
+	// 在飞子代理数的唯一发布者；herdr:working 只在 0↔正数跃迁时发布，active 按计数配对。
+	let publishedInFlight = 0;
+	const publishInFlight = (count: number) => {
+		if (count === publishedInFlight) return;
+		const wasBusy = publishedInFlight > 0;
+		publishedInFlight = count;
+		pi.events.emit(WORKERS_CHANNEL, { inFlight: count } satisfies WorkersPayload);
+		if (wasBusy !== count > 0)
+			pi.events.emit(HERDR_WORKING_CHANNEL, { active: count > 0, label: HERDR_WORKING_LABEL } satisfies HerdrWorkingPayload);
+	};
 	const renderStatus = () => {
 		if (!runtime) return;
+		publishInFlight(runtime.store.state.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing").length);
 		runtime.ctx.ui.setStatus("master", MASTER_IDENTITY);
 		runtime.list?.sync();
 	};
@@ -192,6 +206,7 @@ export function registerMaster(
 	const deactivate = async () => {
 		const active = runtime;
 		runtime = undefined;
+		publishInFlight(0);
 		await pool.disposeAll();
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();

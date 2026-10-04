@@ -10,7 +10,7 @@
 | `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
 | `run-summary.ts` | 主会话处理段收尾：静态时长与均速或异常状态，仅展示、不进入模型上下文 |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
-| `bark.ts` | 任务落定时推 iPhone Bark 通知 |
+| `bark.ts` | 会话真正歇下（指挥官空闲且在飞子代理数为 0）时推 iPhone Bark 通知 |
 
 预设的 `model` 是模型原子（`provider/model/thinking`），模型与思考档一起切换：模型切换失败时思考档也不动。
 调 Pi 接口前才把 provider 与模型名拆开。
