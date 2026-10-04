@@ -86,7 +86,7 @@ test.each([
 		on() {},
 	});
 
-	expect(entryRenderers).toEqual(feature === "stats" ? ["firecode-run-summary"] : []);
+	expect(entryRenderers).toEqual([]);
 	expect(commands).toEqual(expectedCommands);
 	expect(shortcuts).toEqual(expectedShortcuts);
 });
