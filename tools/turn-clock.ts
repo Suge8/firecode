@@ -1,55 +1,46 @@
 /**
- * 轮次时钟：以一次人类输入为单位累计主会话的运行时长。
- * 来源是 busy.ts 的会话进行中视图与歇下边沿；重载后恢复的历史轮次没有记录，时长未知。
- * 运行区间 = 会话进行中：指挥官回合结束而子代理仍在飞时区间不闭合，所以等待期保持运行态、耗时含等待，
- * 歇下边沿才定格。时钟自己不判断歇下。
+ * 轮次时钟：把 busy.ts 的会话进行中事实投影到各轮摘要行。
+ * 运行中只知道“开着”（实时状态与计时只在边框）；歇下边沿把整段时长记到最后一轮名下定格。
+ * 重载后恢复的历史轮次没有记录，时长未知。
  */
-import type { BusyView } from "../busy.js";
+import { type BusyView, IDLE } from "../busy.js";
 
 /** 子代理结果到达后摘要行高亮多久。 */
 export const ARRIVAL_FLASH_MS = 2500;
 
 export interface TurnView {
-	/** 主会话正在跑且这是最后一轮。 */
+	/** 会话正在进行且这是最后一轮。 */
 	live: boolean;
-	/** 累计运行时长；未知时为 undefined。 */
+	/** 歇下时定格的整段时长；未知时为 undefined。 */
 	elapsed?: number;
 	/** 最近一次落定距今；从未观察到落定为 undefined。 */
 	sinceEnd?: number;
 }
 
 export class TurnClock {
-	private runStart?: number;
-	private agentRunning = false;
-	private inFlight = 0;
+	private busy: BusyView = IDLE;
 	private lastKey?: object;
-	private readonly spent = new WeakMap<object, number>();
+	private readonly total = new WeakMap<object, number>();
 	private readonly endedAt = new WeakMap<object, number>();
 	private readonly arrivals = new WeakMap<object, number>();
 
 	constructor(private readonly now: () => number = Date.now) {}
 
 	sync(view: BusyView): void {
-		this.agentRunning = view.agentRunning;
-		this.inFlight = view.inFlight;
-		if (view.busy) this.runStart ??= this.now();
+		this.busy = view;
 	}
 
-	/** 指挥官已歇下、只在等子代理：摘要显示“等待 N 个子代理”。 */
-	get waiting(): number {
-		return this.runStart !== undefined && !this.agentRunning ? this.inFlight : 0;
+	/** 指挥官自己的回合在跑；否则这一段只是在等子代理，摘要行没有当前动作可说。 */
+	get agentRunning(): boolean {
+		return this.busy.agentRunning;
 	}
 
-	/** 歇下边沿：运行区间记到最后一轮名下。 */
-	settle(): void {
+	/** 歇下边沿：整段时长记到最后一轮名下；同一轮不经人类输入再次进行（如命令触发的回合）则累加。 */
+	settle(elapsed: number): void {
 		const key = this.lastKey;
-		if (this.runStart === undefined) return;
-		if (key) {
-			const now = this.now();
-			this.spent.set(key, (this.spent.get(key) ?? 0) + now - this.runStart);
-			this.endedAt.set(key, now);
-		}
-		this.runStart = undefined;
+		if (!key) return;
+		this.total.set(key, (this.total.get(key) ?? 0) + elapsed);
+		this.endedAt.set(key, this.now());
 	}
 
 	/** 投影每次渲染声明当前最后一轮。 */
@@ -58,19 +49,18 @@ export class TurnClock {
 	}
 
 	view(key: object): TurnView {
-		const live = this.runStart !== undefined && key === this.lastKey;
-		const base = this.spent.get(key);
+		const live = this.busy.busy && key === this.lastKey;
 		const ended = this.endedAt.get(key);
 		return {
 			live,
-			elapsed: live ? (base ?? 0) + this.now() - this.runStart! : base,
+			elapsed: live ? undefined : this.total.get(key),
 			sinceEnd: !live && ended !== undefined ? this.now() - ended : undefined,
 		};
 	}
 
 	/** 机器消息距首次出现多久；只有运行中出现的才算“新到达”，恢复的历史永远是旧的。 */
 	arrivalAge(item: object): number {
-		if (!this.arrivals.has(item)) this.arrivals.set(item, this.runStart === undefined ? -Infinity : this.now());
+		if (!this.arrivals.has(item)) this.arrivals.set(item, this.busy.busy ? this.now() : -Infinity);
 		return this.now() - this.arrivals.get(item)!;
 	}
 }

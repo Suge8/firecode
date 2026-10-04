@@ -12,7 +12,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { type BusyView, watchBusy } from "../busy.js";
+import { type BusyView, IDLE, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { contextColor, thinkingColor } from "../theme.js";
@@ -54,17 +54,15 @@ const FAST_STATUS = "pi-openai-native-fast";
 /** 回合结束后落定标记与暖光的保留时长。 */
 const SETTLE_SHOW_MS = 1_000;
 
-type Turn = { startedAt: number } | { endedAt: number; elapsed: number; failed: boolean };
+type Settled = { endedAt: number; elapsed: number; failed: boolean };
 
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
 	title = "新会话";
-	turn: Turn | undefined;
-	/** 本轮人类输入的时刻：指挥官被结果唤起多次，计时仍从这里连续累计。 */
-	roundStartedAt: number | undefined;
-	agentRunning = false;
-	/** Master 发布的在飞子代理数。 */
-	inFlight = 0;
+	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数。 */
+	busy: BusyView = IDLE;
+	/** 刚歇下的那一段：定格过渡期间显示。 */
+	settled: Settled | undefined;
 	private failed = false;
 	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
 	review: (() => string) | undefined;
@@ -75,8 +73,8 @@ class Shell {
 
 	/** 时钟只在有动效要播时订阅：回合进行、落定过渡或审查进行。 */
 	syncClock(): void {
-		if (this.settledExpired()) this.turn = undefined;
-		const need = this.review !== undefined || this.turn !== undefined;
+		if (this.settledExpired()) this.settled = undefined;
+		const need = this.review !== undefined || this.busy.busy || this.settled !== undefined;
 		if (need && !this.stopClock) this.stopClock = onFrame(() => { this.syncClock(); this.requestRender(); });
 		if (!need && this.stopClock) { this.stopClock(); this.stopClock = undefined; }
 	}
@@ -88,21 +86,17 @@ class Shell {
 	}
 
 	private settledExpired(): boolean {
-		return this.turn !== undefined && "endedAt" in this.turn && Date.now() - this.turn.endedAt >= SETTLE_SHOW_MS;
+		return this.settled !== undefined && Date.now() - this.settled.endedAt >= SETTLE_SHOW_MS;
 	}
 
-	/** 会话进行中（busy.ts 判定）开始时起一轮，计时自本轮人类输入起。 */
 	sync(view: BusyView): void {
-		this.agentRunning = view.agentRunning;
-		this.inFlight = view.inFlight;
-		if (view.busy && (!this.turn || !("startedAt" in this.turn))) this.turn = { startedAt: this.roundStartedAt ?? Date.now() };
+		this.busy = view;
+		if (view.busy) this.settled = undefined;
 	}
 
-	/** 歇下边沿：定格。 */
-	settle(): void {
-		if (!this.turn || !("startedAt" in this.turn)) return;
-		const endedAt = Date.now();
-		this.turn = { endedAt, elapsed: endedAt - this.turn.startedAt, failed: this.failed };
+	/** 歇下边沿：定格整段时长。 */
+	settle(elapsed: number): void {
+		this.settled = { endedAt: Date.now(), elapsed, failed: this.failed };
 	}
 
 	recordFailure(failed: boolean): void {
@@ -110,23 +104,22 @@ class Shell {
 	}
 
 	top(): TopParts {
-		if (this.settledExpired()) this.turn = undefined;
-		const turn = this.turn;
-		const review = this.review;
+		if (this.settledExpired()) this.settled = undefined;
+		const { busy, settled, review } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: "", reviewShort: "", glow: 0,
 			watcher: status("watcher"), master: status("master"),
 		};
-		if (turn && "startedAt" in turn) {
+		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
-			parts.word = this.theme?.fg("text", this.agentRunning ? "处理中" : `等待 ${this.inFlight} 个子代理`) ?? "";
-			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - turn.startedAt)) ?? "";
+			parts.word = this.theme?.fg("text", busy.agentRunning ? "处理中" : `等待 ${busy.inFlight} 个子代理`) ?? "";
+			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - busy.since)) ?? "";
 			parts.glow = 1;
-		} else if (turn) {
-			const since = Date.now() - turn.endedAt;
-			parts.mark = settling(since) ? settleMark(turn.failed ? "failed" : "done", since) : "";
-			parts.elapsed = this.theme?.fg("muted", formatDuration(turn.elapsed)) ?? "";
+		} else if (settled) {
+			const since = Date.now() - settled.endedAt;
+			parts.mark = settling(since) ? settleMark(settled.failed ? "failed" : "done", since) : "";
+			parts.elapsed = this.theme?.fg("muted", formatDuration(settled.elapsed)) ?? "";
 			parts.glow = Math.max(0, 1 - since / SETTLE_SHOW_MS);
 		}
 		if (review) {
@@ -197,11 +190,6 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	});
 	pi.on("session_info_changed", (_event, ctx) => updateTitle(ctx));
 	pi.on("session_tree", (_event, ctx) => updateTitle(ctx));
-	pi.on("input", (event) => {
-		if (event.source === "extension") return;
-		shell.roundStartedAt = Date.now();
-		if (shell.turn && "startedAt" in shell.turn) shell.turn = { startedAt: shell.roundStartedAt };
-	});
 	pi.on("agent_end", (event) => shell.recordFailure(lastFailed(event.messages)));
 	watchBusy(pi, {
 		onChange: (view) => {
@@ -209,8 +197,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 			shell.syncClock();
 			shell.requestRender();
 		},
-		onSettled: () => {
-			shell.settle();
+		onSettled: (_ctx, elapsed) => {
+			shell.settle(elapsed);
 			shell.syncClock();
 			shell.requestRender();
 		},
@@ -238,9 +226,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	pi.on("model_select", () => shell.requestRender());
 	pi.on("session_shutdown", (_event, ctx) => {
 		shell.dispose();
-		shell.turn = undefined;
-		shell.roundStartedAt = undefined;
-		shell.agentRunning = false;
+		shell.busy = IDLE;
+		shell.settled = undefined;
 		shell.review = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setEditorComponent(undefined);
