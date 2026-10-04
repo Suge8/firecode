@@ -324,6 +324,38 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	expect(working()).toEqual([true, false, true, false]);
 });
 
+test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒的投递完成后才归零", async () => {
+	const harness = await setup(true, { deferUserMessage: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "late", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await Bun.sleep(0);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
+	// worker 已落定为 idle，事件正在前门投递：不能归零，否则会话会在唤醒前出现“歇下”缝隙。
+	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
+	expect(counts()).toEqual([1]);
+	expect(working()).toEqual([true]);
+
+	harness.releaseUserMessage();
+	await Bun.sleep(5);
+	expect(counts()).toEqual([1, 0]);
+	expect(working()).toEqual([true, false]);
+	await harness.command("");
+});
+
+test("事件投递失败等待重试期间仍计入在飞", async () => {
+	const harness = await setup(true, { failDeliveries: 1 });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "retry", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await Bun.sleep(100);
+	expect(harness.notices.some((notice) => notice.includes("投递失败"))).toBe(true);
+	expect(harness.messages).toHaveLength(0);
+	expect(harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight)).toEqual([1]);
+	await harness.command("");
+});
+
 test("停用 Master 时仍有子代理在飞：先发布归零并配对 herdr:working", async () => {
 	const harness = await setup();
 	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
@@ -1220,6 +1252,8 @@ async function setup(activate = true, options: {
 	shutdownProbe?: boolean;
 	autoActivate?: boolean;
 	deferUserMessage?: boolean;
+	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
+	failDeliveries?: number;
 	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
 } = {}) {
@@ -1291,6 +1325,7 @@ async function setup(activate = true, options: {
 	const entries: any[] = [];
 	const userMessages: string[] = [];
 	const emitted: [string, any][] = [];
+	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
 	let releaseUserMessage = () => {};
@@ -1312,7 +1347,11 @@ async function setup(activate = true, options: {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
 		},
-		sendMessage: (message: any, options: any) => { messages.push({ message, options }); onMessage?.(); },
+		sendMessage: (message: any, options: any) => {
+			if (failures > 0) { failures--; throw new Error("投递失败"); }
+			messages.push({ message, options });
+			onMessage?.();
+		},
 		sendUserMessage: async (content: string) => {
 			userMessages.push(content);
 			markUserMessageStarted();
