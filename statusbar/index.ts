@@ -12,7 +12,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { sessionBusy, subscribeInFlight } from "../busy.js";
+import { type BusyView, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { contextColor, thinkingColor } from "../theme.js";
@@ -91,27 +91,22 @@ class Shell {
 		return this.turn !== undefined && "endedAt" in this.turn && Date.now() - this.turn.endedAt >= SETTLE_SHOW_MS;
 	}
 
-	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞；全部落定且指挥官歇下才定格。 */
-	startRun(): void {
-		this.agentRunning = true;
-		if (!this.turn || !("startedAt" in this.turn)) this.turn = { startedAt: this.roundStartedAt ?? Date.now() };
+	/** 会话进行中（busy.ts 判定）开始时起一轮，计时自本轮人类输入起。 */
+	sync(view: BusyView): void {
+		this.agentRunning = view.agentRunning;
+		this.inFlight = view.inFlight;
+		if (view.busy && (!this.turn || !("startedAt" in this.turn))) this.turn = { startedAt: this.roundStartedAt ?? Date.now() };
 	}
 
-	endAgent(failed: boolean): void {
-		this.agentRunning = false;
-		this.failed = failed;
-		this.settleIfIdle();
-	}
-
-	setInFlight(count: number): void {
-		this.inFlight = count;
-		this.settleIfIdle();
-	}
-
-	private settleIfIdle(): void {
-		if (!this.turn || !("startedAt" in this.turn) || sessionBusy(this.agentRunning, this.inFlight)) return;
+	/** 歇下边沿：定格。 */
+	settle(): void {
+		if (!this.turn || !("startedAt" in this.turn)) return;
 		const endedAt = Date.now();
 		this.turn = { endedAt, elapsed: endedAt - this.turn.startedAt, failed: this.failed };
+	}
+
+	recordFailure(failed: boolean): void {
+		this.failed = failed;
 	}
 
 	top(): TopParts {
@@ -207,20 +202,18 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 		shell.roundStartedAt = Date.now();
 		if (shell.turn && "startedAt" in shell.turn) shell.turn = { startedAt: shell.roundStartedAt };
 	});
-	pi.on("agent_start", () => {
-		shell.startRun();
-		shell.syncClock();
-		shell.requestRender();
-	});
-	pi.on("agent_end", (event) => {
-		shell.endAgent(lastFailed(event.messages));
-		shell.syncClock();
-		shell.requestRender();
-	});
-	subscribeInFlight(pi, (count) => {
-		shell.setInFlight(count);
-		shell.syncClock();
-		shell.requestRender();
+	pi.on("agent_end", (event) => shell.recordFailure(lastFailed(event.messages)));
+	watchBusy(pi, {
+		onChange: (view) => {
+			shell.sync(view);
+			shell.syncClock();
+			shell.requestRender();
+		},
+		onSettled: () => {
+			shell.settle();
+			shell.syncClock();
+			shell.requestRender();
+		},
 	});
 	pi.events.on(REVIEW_OCCUPANCY_CHANNEL, (data) => {
 		const occupancy = data as { active?: boolean; progress?: () => string } | undefined;

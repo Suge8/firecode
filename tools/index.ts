@@ -12,7 +12,7 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { subscribeInFlight } from "../busy.js";
+import { watchBusy, type BusyView } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
@@ -66,17 +66,17 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
 	let dispose: (() => void) | undefined;
 	let clock = new TurnClock();
-	let inFlight = 0;
-	subscribeInFlight(pi, (count) => { inFlight = count; clock.setWaiting(count); });
-
-	pi.on("agent_start", () => clock.begin());
-	pi.on("agent_end", () => clock.finish());
+	let busy: BusyView = { agentRunning: false, inFlight: 0, busy: false };
+	watchBusy(pi, {
+		onChange: (view) => { busy = view; clock.sync(view); },
+		onSettled: () => clock.settle(),
+	});
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
 		clock = new TurnClock();
-		clock.setWaiting(inFlight);
+		clock.sync(busy);
 		dispose = installGroupPatch(ctx.ui, { replyLines: loadConfig().config.tools.replyLines, clock });
 		ctx.ui.setToolsExpanded(false);
 	});

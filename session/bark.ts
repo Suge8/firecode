@@ -12,7 +12,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { sessionBusy, subscribeInFlight } from "../busy.js";
+import { watchBusy } from "../busy.js";
 import { loadMasterState, masterStatePath } from "../master/state.js";
 
 // 与运行配置同一个 Pi Agent 目录（默认 ~/.pi/agent，含 PI_CODING_AGENT_DIR 覆写）。
@@ -64,8 +64,6 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 	if (subsession) return;
 
 	let lastAssistantText = "";
-	let inFlight = 0;
-	subscribeInFlight(pi, (count) => { inFlight = count; });
 
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;
@@ -73,9 +71,9 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 		if (text) lastAssistantText = text;
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
-		// 只在会话真正歇下时推送：指挥官空闲且没有子代理在飞。
-		if (sessionBusy(ctx.isIdle?.() !== true, inFlight)) return;
+	// 只在会话真正歇下的边沿推送一次（busy.ts：指挥官空闲且没有子代理在飞）。
+	watchBusy(pi, { onSettled: (ctx) => {
+		if (!ctx) return;
 		const sessionId = ctx.sessionManager.getSessionId();
 		const dirName = ctx.cwd ? path.basename(ctx.cwd) : "pi";
 		void sendBark(
@@ -88,7 +86,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 				awaitingDecision: hasPendingDisposition(masterStatePath(sessionId)),
 			}),
 		);
-	});
+	} });
 }
 
 async function sendBark(payload: BarkPayload): Promise<void> {

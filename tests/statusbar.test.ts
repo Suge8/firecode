@@ -73,6 +73,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	statuses.set("master", "指挥官");
 	expect(top()).toEndWith(" 观察员 指挥官 ─");
 	events.get("agent_end")!({ messages: [] }, ctx);
+	events.get("agent_settled")!({}, ctx);
 	expect(top()).not.toContain("处理中");
 	expect(top()).toContain("◈ 审查 2/2");
 	bus.get("herdr:blocked")!({ active: false });
