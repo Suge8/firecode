@@ -14,15 +14,15 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | --- | --- | --- |
 | `header.ts` | 会话启动横幅：半格像素火焰 + 字标分三档（≥83 / 52–82 / <52 列一行），启动点亮扫光约 1.5 秒后定格并退订动画时钟 | |
 | `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
-| `tools/` | 思考与工具的过程组/过程列表、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
-| `session/` | 预设、重命名、收尾统计、用量查询、Bark 通知、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
+| `tools/` | 思考与工具的过程组/过程列表、轮记录（整段耗时与终态的持久化事后记录）、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
+| `session/` | 预设、重命名、用量查询、Bark 通知、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、单行活动 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | [ADR 0016](docs/adr/0016-claude-token-rotation-recovery.md) |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
-| `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长）`watchBusy`；频道名与 payload 只在这里定义 | |
+| `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长与终态）`watchBusy`；频道名与 payload 只在这里定义 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |
@@ -34,7 +34,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示收尾使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 `tools/grouping.ts` 是与宿主耦合最紧的一处；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 

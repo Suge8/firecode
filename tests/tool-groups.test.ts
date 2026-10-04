@@ -235,7 +235,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
 	const events = new Map<string, Function>();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
-	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {} });
+	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {}, registerEntryRenderer() {} });
 	events.get("session_start")!({}, { mode: "rpc" });
 	events.get("session_shutdown")!();
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
