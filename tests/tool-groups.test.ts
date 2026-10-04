@@ -741,3 +741,14 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要保�
 	s.setNow(90000);
 	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });
+
+test("用户消息竖条不把 OSC 133 语义提示标记挤到行中：标记必须留在行首", async () => {
+	// 终端（libghostty 等）把行中的 133;A 当 fresh-line 执行 CR+LF，会把后半行写到下一行留下残影。
+	const s = await scene();
+	s.chat.addChild(new s.host.UserMessageComponent("第一段\n\n第二段"));
+	assistant(s, [{ type: "text", text: "收到" }]);
+	expect(s.chat.render(60).join("\n")).toContain("▌");
+	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
+	expect(marked.length).toBeGreaterThan(0);
+	for (const line of marked) expect(line).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/);
+});
