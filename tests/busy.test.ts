@@ -141,6 +141,7 @@ test("均速：整段内指挥官各回合的输出 token 之和除以请求墙�
 		h.response(100);
 		h.compact("session_before_compact");
 		h.request();
+		setSystemTime(new Date(102_000));
 		h.compact("session_compact");
 		h.request();
 		setSystemTime(new Date(103_000));
