@@ -5,7 +5,7 @@
 | `index.ts` | 包装默认四工具的展示与执行耗时；TUI 会话安装分组，退出释放 |
 | `grouping.ts` | 宿主适配：定位聊天容器，安装渲染/鼠标投影，分离全局展示与单工具正文 |
 | `group-view.ts` | 从原组件顺序派生轮、过程组与折叠/展开投影 |
-| `turn-summary.ts` `turn-clock.ts` | 摘要行渲染；以人类输入为单位累计运行时长（来自 agent_start/agent_end） |
+| `turn-summary.ts` `turn-clock.ts` | 摘要行渲染；以人类输入为单位累计运行时长（`busy.ts` 的会话进行中视图与歇下边沿；运行区间 = 会话进行中，等待期不闭合，时钟自己不判断歇下） |
 | `machine.ts` | 信封机器消息的一行投影，卡片与展开态共用 |
 | `assistant-view.ts` | 思考/正文投影，封装宿主助手组件的内部结构，不重建 Markdown |
 | `line.ts` `parts.ts` | 单工具行与着色片段；Master 复用纯渲染部分 |

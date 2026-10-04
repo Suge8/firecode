@@ -298,6 +298,75 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	expect(idleLine).toContain("落定 1m5s前");
 });
 
+test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，herdr:working 的 active 按 0↔正数配对，停用时收口", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "pub", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await settled;
+	await Bun.sleep(0);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
+	expect(counts()).toEqual([1, 0]);
+	expect(working()).toEqual([true, false]);
+
+	faux.setResponses([fauxAssistantMessage("再来一次")]);
+	const second = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "pub", prompt: "继续" });
+	await second;
+	await Bun.sleep(0);
+	expect(counts()).toEqual([1, 0, 1, 0]);
+	expect(working()).toEqual([true, false, true, false]);
+
+	// 停用时在飞数归零；已经归零不再重复发布。
+	await harness.command("");
+	expect(counts()).toEqual([1, 0, 1, 0]);
+	expect(working()).toEqual([true, false, true, false]);
+});
+
+test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒的投递完成后才归零", async () => {
+	const harness = await setup(true, { deferUserMessage: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "late", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await Bun.sleep(0);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
+	// worker 已落定为 idle，事件正在前门投递：不能归零，否则会话会在唤醒前出现“歇下”缝隙。
+	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
+	expect(counts()).toEqual([1]);
+	expect(working()).toEqual([true]);
+
+	harness.releaseUserMessage();
+	await Bun.sleep(5);
+	expect(counts()).toEqual([1, 0]);
+	expect(working()).toEqual([true, false]);
+	await harness.command("");
+});
+
+test("事件投递失败等待重试期间仍计入在飞", async () => {
+	const harness = await setup(true, { failDeliveries: 1 });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "retry", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await Bun.sleep(100);
+	expect(harness.notices.some((notice) => notice.includes("投递失败"))).toBe(true);
+	expect(harness.messages).toHaveLength(0);
+	expect(harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight)).toEqual([1]);
+	await harness.command("");
+});
+
+test("停用 Master 时仍有子代理在飞：先发布归零并配对 herdr:working", async () => {
+	const harness = await setup();
+	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
+	await harness.execute({ action: "start", worker: "slow", prompt: "慢", role: "工程师", thinking: "low" });
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	expect(counts()).toEqual([1]);
+	await harness.command("");
+	expect(counts()).toEqual([1, 0]);
+	expect(harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active)).toEqual([true, false]);
+});
+
 test("主回合忙碌时，subagents 以队列语义完成 start→事件落定→list→kill", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
@@ -1183,6 +1252,8 @@ async function setup(activate = true, options: {
 	shutdownProbe?: boolean;
 	autoActivate?: boolean;
 	deferUserMessage?: boolean;
+	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
+	failDeliveries?: number;
 	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
 } = {}) {
@@ -1253,6 +1324,8 @@ async function setup(activate = true, options: {
 	const appended: Array<[string, any]> = [];
 	const entries: any[] = [];
 	const userMessages: string[] = [];
+	const emitted: [string, any][] = [];
+	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
 	let releaseUserMessage = () => {};
@@ -1269,12 +1342,16 @@ async function setup(activate = true, options: {
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
 		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-		events: { on() {}, emit() {} },
+		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
 		},
-		sendMessage: (message: any, options: any) => { messages.push({ message, options }); onMessage?.(); },
+		sendMessage: (message: any, options: any) => {
+			if (failures > 0) { failures--; throw new Error("投递失败"); }
+			messages.push({ message, options });
+			onMessage?.();
+		},
 		sendUserMessage: async (content: string) => {
 			userMessages.push(content);
 			markUserMessageStarted();
@@ -1319,6 +1396,7 @@ async function setup(activate = true, options: {
 		statuses,
 		messages,
 		userMessages,
+		emitted,
 		appended,
 		entries,
 		pool,

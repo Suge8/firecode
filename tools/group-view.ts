@@ -153,7 +153,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		});
 	return {
 		failures, notice, running, arrival,
-		action: activity ? { word: ACTIVITY_TEXT[activity] } : action ?? { word: "思考" },
+		action: activity ? { word: ACTIVITY_TEXT[activity] } : env.clock.waiting ? { word: `等待 ${env.clock.waiting} 个子代理` } : action ?? { word: "思考" },
 	};
 }
 

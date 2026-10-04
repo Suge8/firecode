@@ -13,6 +13,9 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type MasterRole } from "../config.js";
+import {
+	HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload,
+} from "../busy.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { clip, formatDuration } from "../format.js";
 import { HEAT_COLORS, paint } from "../flame.js";
@@ -79,6 +82,8 @@ interface MasterRuntime {
 	store: MasterStore;
 	pool: InProcessSessionPool;
 	events: PendingMasterEvent[];
+	/** 已交给 deliver、尚未确认送达的事件：投递完成前对应子代理仍算在飞。 */
+	delivering: Set<PendingMasterEvent>;
 	currentTools: Map<string, Map<string, CurrentTool>>;
 	idleSince: Map<string, number>;
 	/** Worker 本次回合（start/send/review 投递）的起点，耗时信号的唯一来源。 */
@@ -137,8 +142,38 @@ export function registerMaster(
 	const requireRuntimeOwner = (active: MasterRuntime): void => {
 		if (!ownsRuntime(active)) throw new Error("Master 会话已替换，取消旧会话动作");
 	};
+	// 在飞子代理数的唯一发布者；herdr:working 只在 0↔正数跃迁时发布，active 按计数配对。
+	let publishedInFlight = 0;
+	const publishInFlight = (count: number) => {
+		if (count === publishedInFlight) return;
+		const wasBusy = publishedInFlight > 0;
+		publishedInFlight = count;
+		pi.events.emit(WORKERS_CHANNEL, { inFlight: count } satisfies WorkersPayload);
+		if (wasBusy !== count > 0)
+			pi.events.emit(HERDR_WORKING_CHANNEL, { active: count > 0, label: HERDR_WORKING_LABEL } satisfies HerdrWorkingPayload);
+	};
+	/**
+	 * 在飞 = working/reviewing + 已落定但结果事件还在队列或投递中（投递失败重试期间也算）：
+	 * 归零只发生在事件已交给指挥官之后，忙时 steer 由指挥官回合覆盖，闲时前门唤醒由 agent 回合覆盖。
+	 */
+	let syncScheduled = false;
+	const syncInFlight = () => {
+		// 落定先改 store、随后才入队事件：同一同步段内合并成一次计算，避免中间闪出一次归零。
+		if (syncScheduled) return;
+		syncScheduled = true;
+		queueMicrotask(() => {
+			syncScheduled = false;
+			if (!runtime) return;
+			const names = new Set<string>();
+			for (const worker of runtime.store.state.workers)
+				if (worker.status === "working" || worker.status === "reviewing") names.add(worker.name);
+			for (const event of [...runtime.events, ...runtime.delivering]) if (event.worker) names.add(event.worker);
+			publishInFlight(names.size);
+		});
+	};
 	const renderStatus = () => {
 		if (!runtime) return;
+		syncInFlight();
 		runtime.ctx.ui.setStatus("master", MASTER_IDENTITY);
 		runtime.list?.sync();
 	};
@@ -157,6 +192,7 @@ export function registerMaster(
 			store,
 			pool,
 			events: [],
+			delivering: new Set(),
 			currentTools: new Map(),
 			idleSince: new Map(),
 			runStartedAt: new Map(),
@@ -192,6 +228,7 @@ export function registerMaster(
 	const deactivate = async () => {
 		const active = runtime;
 		runtime = undefined;
+		publishInFlight(0);
 		await pool.disposeAll();
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
@@ -211,11 +248,13 @@ export function registerMaster(
 		active.flushTimer = undefined;
 		if (!active.events.length) return;
 		const batch = active.events.splice(0);
+		for (const event of batch) active.delivering.add(event);
 		deliver(pi, active.ctx, {
 			customType: MASTER_EVENT_TYPE,
 			content: batch.map((event) => masterEventEnvelope(event.content)).join("\n\n"),
 		}).then(() => {
 			if (!ownsRuntime(active)) return;
+			for (const event of batch) active.delivering.delete(event);
 			try {
 				pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
 			} catch (error) {
@@ -227,8 +266,10 @@ export function registerMaster(
 				if (worker?.status === "idle" && worker.disposition !== "reminded")
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
 			}
+			syncInFlight();
 		}, (error) => {
 			if (!ownsRuntime(active)) return;
+			for (const event of batch) active.delivering.delete(event);
 			active.events.unshift(...batch);
 			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
 			active.flushTimer = setTimeout(() => flushEvents(active), EVENT_RETRY_MS);
@@ -255,6 +296,7 @@ export function registerMaster(
 			}
 		}
 		active.events.push(event);
+		syncInFlight();
 		if (!active.flushTimer) {
 			active.flushTimer = setTimeout(() => flushEvents(active), 0);
 			active.flushTimer.unref?.();

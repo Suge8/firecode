@@ -1,22 +1,23 @@
 /**
- * Bark 通知：每轮任务彻底落定（agent_settled 且不再自动续跑）时，
+ * Bark 通知：会话真正歇下（agent_settled、指挥官空闲且在飞子代理数为 0）时，
  * 把最后一条回复推送到 iPhone 的 Bark App。
  *
  * - 子代理会话不发通知，通知统一由指挥官会话发出。
  * - 子代理池里有待发落消息时升 timeSensitive 并带副标题，可穿透专注模式；平时为默认 active。
  * - 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知，通知栏每会话只留最新一条。
- * - 推送地址在 ~/.pi/agent/bark-key（整行即 https://api.day.app/<key>/），
- *   缺失时静默停用；~/.pi/agent/bark-crypto.json 存在时走 AES-256-GCM 端到端加密。
+ * - 推送地址在 Pi Agent 目录（默认 ~/.pi/agent）的 bark-key（整行即 https://api.day.app/<key>/），
+ *   缺失时静默停用；同目录 bark-crypto.json 存在时走 AES-256-GCM 端到端加密。
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { watchBusy } from "../busy.js";
 import { loadMasterState, masterStatePath } from "../master/state.js";
 
-const KEY_FILE = path.join(os.homedir(), ".pi", "agent", "bark-key");
-const CRYPTO_FILE = path.join(os.homedir(), ".pi", "agent", "bark-crypto.json");
+// 与运行配置同一个 Pi Agent 目录（默认 ~/.pi/agent，含 PI_CODING_AGENT_DIR 覆写）。
+const keyFile = () => path.join(getAgentDir(), "bark-key");
+const cryptoFile = () => path.join(getAgentDir(), "bark-crypto.json");
 const MAX_BODY_LENGTH = 200;
 // pi.dev 的 logo 是白色透明背景 SVG，通知图标不支持矢量图；经 wsrv.nl 转黑底 PNG。
 const ICON_URL = "https://wsrv.nl/?url=pi.dev/logo.svg&w=256&h=256&output=png&bg=black";
@@ -70,8 +71,9 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 		if (text) lastAssistantText = text;
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
-		if (ctx.isIdle?.() !== true) return;
+	// 只在会话真正歇下的边沿推送一次（busy.ts：指挥官空闲且没有子代理在飞）。
+	watchBusy(pi, { onSettled: (ctx) => {
+		if (!ctx) return;
 		const sessionId = ctx.sessionManager.getSessionId();
 		const dirName = ctx.cwd ? path.basename(ctx.cwd) : "pi";
 		void sendBark(
@@ -84,7 +86,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 				awaitingDecision: hasPendingDisposition(masterStatePath(sessionId)),
 			}),
 		);
-	});
+	} });
 }
 
 async function sendBark(payload: BarkPayload): Promise<void> {
@@ -110,7 +112,7 @@ async function sendBark(payload: BarkPayload): Promise<void> {
 
 function readBarkUrl(): string | undefined {
 	try {
-		const url = fs.readFileSync(KEY_FILE, "utf8").trim();
+		const url = fs.readFileSync(keyFile(), "utf8").trim();
 		return url.length > 0 ? url : undefined;
 	} catch {
 		return undefined;
@@ -119,7 +121,7 @@ function readBarkUrl(): string | undefined {
 
 function readCryptoConfig(): { key: string; iv: string } | undefined {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(CRYPTO_FILE, "utf8"));
+		const parsed = JSON.parse(fs.readFileSync(cryptoFile(), "utf8"));
 		if (typeof parsed.key === "string" && typeof parsed.iv === "string") return parsed;
 	} catch {
 		// 未配置加密时走明文。

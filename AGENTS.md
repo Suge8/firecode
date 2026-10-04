@@ -4,9 +4,9 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有八条：Master 只读调 `review/outcome.ts`，bark 只读调
+状态，关掉任何一个不影响其余；跨模块接缝只有九条：Master 只读调 `review/outcome.ts`，bark 只读调
 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有）。
+`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度，statusbar、tools 与 bark 经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有）。
 
 ## 模块
 
@@ -22,6 +22,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | [ADR 0016](docs/adr/0016-claude-token-rotation-recovery.md) |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
+| `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定与“会话歇下”边沿 `watchBusy`；频道名与 payload 只在这里定义 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |

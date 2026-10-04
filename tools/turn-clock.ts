@@ -1,7 +1,11 @@
 /**
  * 轮次时钟：以一次人类输入为单位累计主会话的运行时长。
- * 来源只有 agent_start / agent_end 两个事件；重载后恢复的历史轮次没有记录，时长未知。
+ * 来源是 busy.ts 的会话进行中视图与歇下边沿；重载后恢复的历史轮次没有记录，时长未知。
+ * 运行区间 = 会话进行中：指挥官回合结束而子代理仍在飞时区间不闭合，所以等待期保持运行态、耗时含等待，
+ * 歇下边沿才定格。时钟自己不判断歇下。
  */
+import type { BusyView } from "../busy.js";
+
 /** 子代理结果到达后摘要行高亮多久。 */
 export const ARRIVAL_FLASH_MS = 2500;
 
@@ -16,6 +20,8 @@ export interface TurnView {
 
 export class TurnClock {
 	private runStart?: number;
+	private agentRunning = false;
+	private inFlight = 0;
 	private lastKey?: object;
 	private readonly spent = new WeakMap<object, number>();
 	private readonly endedAt = new WeakMap<object, number>();
@@ -23,14 +29,22 @@ export class TurnClock {
 
 	constructor(private readonly now: () => number = Date.now) {}
 
-	begin(): void {
-		this.runStart = this.now();
+	sync(view: BusyView): void {
+		this.agentRunning = view.agentRunning;
+		this.inFlight = view.inFlight;
+		if (view.busy) this.runStart ??= this.now();
 	}
 
-	/** 本次运行记到最后一轮名下。 */
-	finish(): void {
+	/** 指挥官已歇下、只在等子代理：摘要显示“等待 N 个子代理”。 */
+	get waiting(): number {
+		return this.runStart !== undefined && !this.agentRunning ? this.inFlight : 0;
+	}
+
+	/** 歇下边沿：运行区间记到最后一轮名下。 */
+	settle(): void {
 		const key = this.lastKey;
-		if (this.runStart !== undefined && key) {
+		if (this.runStart === undefined) return;
+		if (key) {
 			const now = this.now();
 			this.spent.set(key, (this.spent.get(key) ?? 0) + now - this.runStart);
 			this.endedAt.set(key, now);
