@@ -612,11 +612,14 @@ test("被点开的机器消息卡也随全局档位切换复位", async () => {
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 审查通过 共 2 轮，全部通过");
 });
 
+/** 把会话进行中的两个来源喂给轮次时钟；歇下边沿由 busy.ts 触发 settle()。 */
+const feed = (s: any, agentRunning: boolean, inFlight = 0) => s.clock.sync({ agentRunning, inFlight, busy: agentRunning || inFlight > 0 });
+
 test("运行中的摘要显示实时计时，子代理结果到达时短暂高亮已返回随后回到当前动作，落定后定格时长", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.setNow(1000);
-	s.clock.begin();
+	feed(s, true);
 	const bash = s.tool("bash", { command: "bun test" });
 	s.setNow(6000);
 	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test · 5.0s\\s*$`));
@@ -628,7 +631,8 @@ test("运行中的摘要显示实时计时，子代理结果到达时短暂高�
 
 	s.complete(bash);
 	s.setNow(10000);
-	s.clock.finish();
+	feed(s, false);
+	s.clock.settle();
 	s.setNow(20000);
 	expect(s.lines().find((line: string) => line.startsWith("✓"))).toMatch(/^✓ 9.0s\s*$/);
 });
@@ -696,7 +700,7 @@ test("运行中摘要的目标按宽度先裁，动作词与计时保留，放�
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.setNow(0);
-	s.clock.begin();
+	feed(s, true);
 	s.tool("bash", { command: "bun test --coverage --reporter=junit" });
 	s.setNow(5000);
 	const at = (width: number) => s.lines(width).find((line: string) => line.includes("操作"))!;
@@ -711,28 +715,29 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要保�
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("派活"));
 	s.setNow(0);
-	s.clock.begin();
+	feed(s, true);
 	s.complete(s.tool("read", { path: "a.ts" }));
-	s.clock.setWaiting(2);
+	feed(s, true, 2);
 	s.setNow(20000);
-	s.clock.finish();
+	feed(s, false, 2);
 	s.setNow(65000);
 	const summary = () => s.lines().filter(Boolean).find((line: string) => /^(✓|✗|[⠀-⣿])/.test(line))!;
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 等待 2 个子代理 · 1m5s\\s*$`));
 
 	// 结果送达唤醒：回到当前动作，仍是同一段连续计时。
-	s.clock.setWaiting(1);
+	feed(s, false, 1);
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 等待 1 个子代理 · 1m5s\\s*$`));
 	s.setNow(70000);
-	s.clock.begin();
+	feed(s, true, 1);
 	const bash = s.tool("bash", { command: "bun test" });
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test · 1m10s\\s*$`));
 
 	// 最后一个子代理落定且指挥官歇下：定格，耗时含等待。
 	s.complete(bash);
-	s.clock.setWaiting(0);
+	feed(s, true, 0);
 	s.setNow(80000);
-	s.clock.finish();
+	feed(s, false, 0);
+	s.clock.settle();
 	s.setNow(90000);
 	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });

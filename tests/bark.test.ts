@@ -87,3 +87,37 @@ test("Bark 只在会话真正歇下时推送：有子代理在飞的等待期不
 		await rm(home, { recursive: true, force: true });
 	}
 });
+
+test("闲时唤醒回合先于投递完成而结束：agent_settled 时不推，在飞数归零时恰好推一次", async () => {
+	const home = await mkdtemp(join(tmpdir(), "firecode-bark-home-"));
+	try {
+		await writeFile(join(home, "bark-key"), "https://bark.test/key/\n");
+		process.env.PI_CODING_AGENT_DIR = home;
+		const pushes: string[] = [];
+		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
+		const { registerBark } = await loadFirecodeModule("session/bark.ts") as any;
+		const events = new Map<string, Function>();
+		const bus = new Map<string, Function>();
+		registerBark({
+			on: (event: string, fn: Function) => events.set(event, fn),
+			events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
+			getSessionName: () => "会话",
+		});
+		const ctx = { cwd: "/tmp/project", isIdle: () => true, sessionManager: { getSessionId: () => "sid" } };
+		bus.get("firecode:workers")!({ inFlight: 1 });
+		events.get("agent_start")!({}, ctx);
+		events.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "结果已处理" }] } });
+		events.get("agent_settled")!({}, ctx);
+		await Bun.sleep(5);
+		expect(pushes).toHaveLength(0);
+
+		bus.get("firecode:workers")!({ inFlight: 0 });
+		await Bun.sleep(5);
+		expect(pushes).toHaveLength(1);
+		events.get("agent_settled")!({}, ctx);
+		await Bun.sleep(5);
+		expect(pushes).toHaveLength(1);
+	} finally {
+		await rm(home, { recursive: true, force: true });
+	}
+});
