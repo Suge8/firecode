@@ -215,6 +215,8 @@ class ToolItem implements Component {
 	}
 }
 
+const OSC133_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
+
 /** 人类输入：左侧橙色竖条，正文复用宿主用户消息。 */
 class UserBar implements Component {
 	constructor(private readonly message: Component) {}
@@ -228,7 +230,11 @@ class UserBar implements Component {
 		// 宿主上下各留一行背景内边距；竖条只贴正文行，段落间空行仍连续。
 		const padding = (index: number) => (index === 0 || index === lines.length - 1)
 			&& !stripVTControlCharacters(lines[index]).trim();
-		return lines.map((line, index) => (padding(index) ? " " : bar) + line);
+		return lines.map((line, index) => {
+			// OSC 133 语义标记必须留在行首：行中的 133;A 会被终端当 fresh-line 执行 CR+LF，把后半行挤到下一行留下残影。
+			const mark = OSC133_PREFIX.exec(line)?.[0] ?? "";
+			return mark + (padding(index) ? " " : bar) + line.slice(mark.length);
+		});
 	}
 }
 
