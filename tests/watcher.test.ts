@@ -31,7 +31,7 @@ afterEach(async () => {
 });
 
 test("建议卡收起只显示正文首行，展开显示完整建议", async () => {
-	const { registerWatcherCardRenderer, WATCHER_MESSAGE_TYPE } = await loadFirecodeModule("watcher/card.js") as any;
+	const { registerWatcherCardRenderer, adviceMessage, WATCHER_MESSAGE_TYPE } = await loadFirecodeModule("watcher/card.js") as any;
 	let render: any;
 	registerWatcherCardRenderer({
 		registerMessageRenderer: (type: string, renderer: any) => {
@@ -41,14 +41,14 @@ test("建议卡收起只显示正文首行，展开显示完整建议", async ()
 	const card = { note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
 	const theme = { fg: (_color: string, text: string) => text };
 
-	const collapsedLines = render({ details: card }, { expanded: false }, theme).render(60);
+	const collapsedLines = render({ content: adviceMessage(card) }, { expanded: false }, theme).render(60);
 	expect(collapsedLines.length).toBe(1);
 	const collapsed = collapsedLines.join("\n");
 	expect(collapsed).toContain("第一行建议");
 	expect(collapsed).not.toContain("第二行");
 	expect(collapsedLines.every((line: string) => visibleWidth(line) <= 60)).toBeTrue();
 
-	const expanded = render({ details: card }, { expanded: true }, theme).render(60).join("\n");
+	const expanded = render({ content: adviceMessage(card) }, { expanded: true }, theme).render(60).join("\n");
 	expect(expanded.replaceAll("\n", "")).toContain("第一行建议很长，需要按宽截断");
 	expect(expanded.replaceAll("\n", "")).toContain("第二行必须只在展开时出现");
 });
@@ -90,7 +90,7 @@ test("用户 esc 中断过的现场照常投递，投递选项不变", async () 
 
 	expect(harness.messages).toHaveLength(1);
 	expect(harness.messages[0].options).toEqual(QUEUE_OPTIONS);
-	expect(harness.messages[0].message.details).toEqual({ note: "迁移脚本会删表", turnIndex: 9 });
+	expect(harness.notes()).toEqual([{ note: "迁移脚本会删表", turnIndex: 9 }]);
 });
 
 test("fire-review 活跃期零评估，结束后合并补上", async () => {
@@ -538,7 +538,11 @@ async function setup(options: {
 		notices,
 		statuses,
 		set idle(value: boolean) { idle = value; },
-		notes: () => messages.map((entry) => entry.message.details),
+		// 建议只存在于信封正文：标题行、单行建议、权衡声明。
+		notes: () => messages.map(({ message }) => {
+			const [, headline, note] = String(message.content).split("\n");
+			return { note, turnIndex: Number(/第 (\d+) 回合/u.exec(headline)?.[1]) };
+		}),
 		registeredCommands: [...commands.keys()],
 		registeredEvents: [...handlers.keys()],
 		pi,

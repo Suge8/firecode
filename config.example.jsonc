@@ -11,7 +11,6 @@
 		"stats": true,
 		"claudeSub": true,
 		"openaiNative": true,
-		"workingFlame": true,
 		"bark": false,
 		"review": true,
 		"master": true,
@@ -30,6 +29,11 @@
 		"providers": {
 			"openai-codex": { "textVerbosity": "low", "priority": false }
 		}
+	},
+
+	// 折叠态每轮最多显示几条中间回复（各一行首句），更早的折成“+N 条”；0 = 只留最后一条回复。
+	"tools": {
+		"replyLines": 3
 	},
 
 	// 激活后每个主会话回合评估新增内容，会产生额外模型调用；需要开口时当场插话。

@@ -1,24 +1,19 @@
 /**
  * Master 事件卡：默认紧凑（每事件一行标题行），ctrl+o 展开完整内容。
- * content 给模型（完整事实），details 给渲染——两者刻意不对齐（先例：review/card.ts）。
- * 提取与校验的格式契约在 event-format.ts；旧会话无 details 的消息与校验失败一律降级
- * 完整内容；渲染器永不抛异常。
+ * 数据只来自消息正文里的信封（deliver.ts 是格式的唯一事实源）；渲染器永不抛异常。
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Text } from "@earendil-works/pi-tui";
 import { clip, oneLine } from "../format.js";
-import {
-	MASTER_EVENT_TYPE,
-	isValidMasterEventDetails,
-	type MasterEventDetails,
-} from "./event-format.js";
+import { parseEnvelopes } from "../deliver.js";
+import { firstSentence, machineEntries } from "../tools/machine.js";
+import { MASTER_EVENT_TYPE } from "./event-format.js";
 
 export function registerMasterEventRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer<MasterEventDetails>(
+	pi.registerMessageRenderer(
 		MASTER_EVENT_TYPE,
-		(message, options, theme) =>
-			new MasterEventCard(message.details, message.content, options.expanded, theme),
+		(message, options, theme) => new MasterEventCard(message.content, options.expanded, theme),
 	);
 }
 
@@ -26,19 +21,12 @@ class MasterEventCard implements Component {
 	private readonly card: Component;
 	private readonly fallback: Component;
 
-	constructor(
-		details: MasterEventDetails | undefined,
-		content: string | (string | unknown)[],
-		expanded: boolean,
-		theme: Theme,
-	) {
+	constructor(content: string | (string | unknown)[], expanded: boolean, theme: Theme) {
 		const text = plainContent(content);
 		this.fallback = new Text(text, 0, 0);
 		let card: Component | undefined;
 		try {
-			card = !expanded && isValidMasterEventDetails(details)
-				? compactCard(details, theme)
-				: fullCard(text, theme);
+			card = !expanded ? compactCard(text, theme) : fullCard(text, theme);
 		} catch {
 			card = undefined;
 		}
@@ -63,8 +51,12 @@ class MasterEventCard implements Component {
 	}
 }
 
-function compactCard(details: MasterEventDetails, theme: Theme): Component {
-	return card(theme, details.titles.map((title) => new CompactTitle(`◆ ${title}`)));
+/** 每个事件一行：标题 + 正文首句；不是信封的旧消息退化为完整内容。 */
+function compactCard(text: string, theme: Theme): Component {
+	const entries = machineEntries(text);
+	if (!entries) return fullCard(text, theme);
+	return card(theme, entries.map((entry) =>
+		new CompactTitle(`◆ ${entry.title}${entry.preview ? ` — ${firstSentence(entry.preview)}` : ""}`)));
 }
 
 /**
@@ -83,7 +75,8 @@ class CompactTitle implements Component {
 }
 
 function fullCard(text: string, theme: Theme): Component {
-	return card(theme, [new Markdown(text, 0, 0, getMarkdownTheme())]);
+	const bodies = parseEnvelopes(text)?.map((envelope) => envelope.body).join("\n\n") ?? text;
+	return card(theme, [new Markdown(bodies, 0, 0, getMarkdownTheme())]);
 }
 
 function card(theme: Theme, children: Component[]): Component {

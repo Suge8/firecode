@@ -23,13 +23,18 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 - `ack`：消除待发落标记；审查义务未履行时拒绝。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
 
-`subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数与每个 Worker 的「角色·状态」，展开后每个 Worker 一行以角色为主投影当前工具与耗时、审查轮次进度或落定相对时间，模型与思考档降为行尾次要信息。底栏以“👑 指挥模式”显示启用身份，角色计数同源于池状态（见 statusbar 细则）。
+`subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数与每个 Worker 的「角色·状态」，展开后每个 Worker 一行以角色为主投影当前工具与耗时、审查轮次进度或落定相对时间，模型与思考档降为行尾次要信息。
+## 活动列表
+
+`activity-list.ts` 在输入框上方（widget aboveEditor）逐行列出子代理，布局与火苗复用根级 `activity.ts` / `flame.ts`；底栏只发布纯文字“指挥官”。只列 working（火苗 + 与工具行同源的动作词和目标，见 `tools/actions.ts`；无工具时“思考中”）与 reviewing（审查第 N 轮 · k/n 通过）。落定后该行火苗冷却成 ✓ 停留 10 秒、✗ 停留 30 秒再移除（到期由一次性定时器唤醒，不靠帧时钟）；落定事实（时刻与成败）只在运行时记录，不看持久化 disposition，所以指挥官不 ack 也不会让待发落行常驻，reload 后也不展示历史落定行。右侧耗时：运行中取本次运行起点，落定行冻结在落定时刻。
+
+行一律按启动序：运行时在 `start` 同步段取单调序号（名字 → 序号，`kill` 或启动失败时删除），这是唯一排序依据——池数组顺序受并发 `start` 越过 await 的先后影响，不能当启动序；reload 恢复的没有序号，排最前并保持池内顺序。可见行数 `max(4, floor(终端高度/6))`，拿不到高度时 4，超出时末行“… +N 个”；全局展开（ctrl+o）显示全部。窄屏先截短动作文字（保留开头，带 …），放不下再丢角色。动画时钟只在有行在动（运行、审查、落定过渡未播完）时订阅 `flame.ts` 的 `onFrame`，全部静止即取消，Master 自身不持有帧计时器。
 
 同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回。
 
 ## 投递与义务
 
-落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息：主回合进行中投卡片、经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达；主回合歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，带完整 `before_agent_start` 仪式，见根 AGENTS.md 硬约束）。事件入队处统一在正文末尾追加一行耗时（reload 重放的 pending 事件已带落定时的耗时，不再追加）：Worker 本次运行（自最近一次 start/send/review 投递起，到落定或中断时刻止；续跑提醒取到中断时刻，不含此后的闲置；reload 后起点丢失则省略）与指挥官当前任务（自最近一条非 extension 来源的用户输入起，Master 事件不重置）；两个起点各只有运行时一处记录，格式复用 `formatDuration`，只追加在事件正文内，不触碰投递路径。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中；details 卡仍使用原始正文与分节格式，错误、回复和审查终态都能预览正文首句。
+落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息：主回合进行中投卡片、经宿主 steer 队列在句缝（当前 assistant 与工具结果之后）送达；主回合歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，带完整 `before_agent_start` 仪式，见根 AGENTS.md 硬约束）。事件入队处统一在正文末尾追加一行耗时（reload 重放的 pending 事件已带落定时的耗时，不再追加）：Worker 本次运行（自最近一次 start/send/review 投递起，到落定或中断时刻止；续跑提醒取到中断时刻，不含此后的闲置；reload 后起点丢失则省略）与指挥官当前任务（自最近一条非 extension 来源的用户输入起，Master 事件不重置）；两个起点各只有运行时一处记录，格式复用 `formatDuration`，只追加在事件正文内，不触碰投递路径。进入模型上下文的事件与复活自检统一包在 `<firecode_master_event>` 中，一条消息里每个事件各占一层信封（格式由根级 `deliver.ts` 拥有）。展示卡没有独立数据：折叠卡与折叠展开态的“↳ 名字 已返回”行都从信封正文解析标题、时长与首句（分节标记 `event-format.ts` 与 `tools/machine.ts` 同步）。
 
 `review:true` 是持久化到票上的审查义务，不自动开审；它在 `send`、reload、中断和失败后保留并阻止 `ack`，由审查通过或质量裁决停止消除。`kill` 随整票删除义务。
 

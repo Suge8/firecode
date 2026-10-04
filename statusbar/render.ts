@@ -1,63 +1,101 @@
-/** 状态栏纯布局：宽度变化只影响本次绘制。 */
-import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+/**
+ * 输入框边框纯布局：状态嵌进上下边框横线。所有片段由调用方预先着色，
+ * 本文件只按显示宽度逐级退让，宽窄布局不保存状态。
+ */
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { clip, formatTokens } from "../format.js";
-import { contextColor } from "../theme.js";
+import { clip } from "../format.js";
+import { HEAT_COLORS, type Rgb, mix, paint } from "../flame.js";
 
-type ForegroundTheme = {
-	fg(color: ThemeColor, text: string): string;
-};
+/** 回合进行时边框左端的暖光渐隐距离（列）。 */
+const GLOW_SPAN = 18;
+const LINE_BASE: Rgb = [78, 74, 70];
+const SEPARATOR = ` ${paint([88, 84, 79], "·")} `;
 
-export function renderContext(
-	theme: ForegroundTheme,
-	percent: number | null | undefined,
-	contextWindow: number,
-	compact = false,
-): string {
-	const percentText = percent == null ? "?" : `${percent.toFixed(1)}%`;
-	return `${theme.fg(contextColor(percent), percentText)}${
-		compact ? "" : theme.fg("dim", `/${formatTokens(contextWindow)}`)
-	}`;
+type Line = (text: string) => string;
+
+/**
+ * 一条边框：`─ 左 ───── 右 ─`。左端按 glow 渐变成暖橙；横线放不下（填充不足两格）返回空串。
+ * 左右为空时对应空位并入横线。
+ */
+function border(width: number, left: string, right: string, line: Line, glow: number): string {
+	const fill = width - 2 - (left ? visibleWidth(left) + 2 : 0) - (right ? visibleWidth(right) + 2 : 0);
+	if (fill < 2) return "";
+	const lit = (index: number) => glow * Math.max(0, 1 - index / GLOW_SPAN);
+	const dash = (index: number) => {
+		const k = lit(index);
+		return k > 0.02 ? paint(mix(LINE_BASE, HEAT_COLORS.orange, k), "─") : line("─");
+	};
+	let bar = "";
+	for (let index = 0; index < fill; index++) bar += dash(index + (left ? 0 : 1));
+	return `${dash(0)}${left ? ` ${left} ` : ""}${bar}${right ? ` ${right} ` : ""}${line("─")}`;
 }
 
-type FooterParts = {
-	title: string;
-	model: string;
-	fast: string;
-	context: string;
-	contextCompact: string;
+/** 依次尝试候选，取第一个放得下的；全都放不下就是一条纯横线。 */
+function firstFit(width: number, line: Line, candidates: Iterable<() => string>): string {
+	for (const candidate of candidates) {
+		const text = candidate();
+		if (text && visibleWidth(text) <= width) return text;
+	}
+	return line("─").repeat(Math.max(0, width));
+}
+
+export interface TopParts {
+	/** 火苗或落定标记；空表示没有回合。 */
+	mark: string;
+	word: string;
+	elapsed: string;
+	review: string;
+	reviewShort: string;
 	watcher: string;
 	master: string;
-	masterCompact: string;
-};
+	/** 0–1：回合进行时边框左端的暖光强度。 */
+	glow: number;
+}
 
-export function fitFooter(parts: FooterParts, width: number, separator: string): string {
-	const join = (values: string[]) => values.filter(Boolean).join(separator);
-	const model = (text: string) => [text, parts.fast].filter(Boolean).join(" · ");
-	const fit = (context: string, watcher: string, master: string): string | undefined => {
-		const rest = join([model(parts.model), context, watcher, master]);
-		const budget = width - visibleWidth(rest) - visibleWidth(separator);
-		if (budget < 1) return undefined;
-		return join([clip(parts.title, budget), rest]);
+/** 退让顺序：观察员 → 审查字样 → “处理中” → 审查计数 → 指挥官。 */
+export function topBorder(width: number, parts: TopParts, line: Line): string {
+	const left = (word: boolean, review: string) => {
+		const head = [parts.mark, word ? parts.word : "", parts.elapsed].filter(Boolean).join(" ");
+		return [head, review].filter(Boolean).join(SEPARATOR);
 	};
-	const full = fit(parts.context, parts.watcher, parts.master);
-	if (full !== undefined) return full;
-	const compact = fit(parts.context, "", parts.masterCompact);
-	if (compact !== undefined) return compact;
-	const percent = fit(parts.contextCompact, "", parts.masterCompact);
-	if (percent !== undefined) return percent;
+	const right = (...items: string[]) => items.filter(Boolean).join(" ");
+	const at = (word: boolean, review: string, ...items: string[]) =>
+		() => border(width, left(word, review), right(...items), line, parts.glow);
+	return firstFit(width, line, [
+		at(true, parts.review, parts.watcher, parts.master),
+		at(true, parts.review, parts.master),
+		at(true, parts.reviewShort, parts.master),
+		at(false, parts.reviewShort, parts.master),
+		at(false, "", parts.master),
+		at(false, ""),
+	]);
+}
 
-	const trimModel = (title: string, master: string): string | undefined => {
-		const fixed = join([title, model(""), parts.contextCompact, master]);
-		const budget = width - visibleWidth(fixed) - visibleWidth(parts.fast ? " · " : separator);
-		if (budget < 1) return undefined;
-		return join([title, model(clip(parts.model, budget)), parts.contextCompact, master]);
+export interface BottomParts {
+	title: string;
+	model: string;
+	/** 含前导斜杠，如 `/high`；模型不支持思考档时为空。 */
+	think: string;
+	fast: string;
+	percent: string;
+	/** 含前导斜杠，如 `/1M`。 */
+	capacity: string;
+}
+
+/** 退让顺序：标题 → 容量 → 模型名；Fast 与百分比始终保留。 */
+export function bottomBorder(width: number, parts: BottomParts, line: Line): string {
+	const right = (model: string, capacity: string) => {
+		const name = [model + (model ? parts.think : ""), parts.fast].filter(Boolean).join(" ");
+		return [name, `${parts.percent}${capacity}`].filter(Boolean).join(SEPARATOR);
 	};
-	const shortened = trimModel(clip(parts.title, 1), parts.masterCompact);
-	if (shortened !== undefined) return shortened;
-	const minimal = trimModel("", "");
-	if (minimal !== undefined) return minimal;
-	const fast = join([parts.fast, parts.contextCompact]);
-	if (visibleWidth(fast) <= width) return fast;
-	return visibleWidth(parts.contextCompact) <= width ? parts.contextCompact : "";
+	const at = (title: string, model: string, capacity: string) =>
+		() => border(width, title, right(model, capacity), line, 0);
+	function* candidates() {
+		for (let n = visibleWidth(parts.title); n >= 1; n--) yield at(clip(parts.title, n), parts.model, parts.capacity);
+		yield at("", parts.model, parts.capacity);
+		yield at("", parts.model, "");
+		for (let n = visibleWidth(parts.model) - 1; n >= 1; n--) yield at("", clip(parts.model, n), "");
+		yield at("", "", "");
+	}
+	return firstFit(width, line, candidates());
 }

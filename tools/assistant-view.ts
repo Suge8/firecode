@@ -55,3 +55,9 @@ export function assistantView(source: AssistantMessageComponent, expanded: boole
 	}
 	return { body, activity: expanded ? undefined : activity(data) };
 }
+
+/** 助手消息里的正文文字（不含思考与工具调用），中间回复的一行预览用它取首句。 */
+export function replyText(source: AssistantMessageComponent): string {
+	const message = (source as unknown as AssistantData).lastMessage;
+	return (message?.content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n").trim();
+}

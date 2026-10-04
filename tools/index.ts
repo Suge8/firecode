@@ -12,19 +12,13 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../config.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
-import { commandParts, diffMeta, pathValue } from "./parts.js";
+import { LABEL, toolTarget } from "./actions.js";
+import { diffMeta } from "./parts.js";
 import { clearDurations, executeTimed } from "./timing.js";
-
-const LABEL = { read: "读取", bash: "操作", edit: "修改", write: "写入" } as const;
-
-type ToolArgs = {
-	path?: string;
-	file_path?: string;
-	offset?: number;
-	limit?: number;
-};
+import { TurnClock } from "./turn-clock.js";
 
 type ToolMap = {
 	read: ReturnType<typeof createReadTool>;
@@ -54,16 +48,6 @@ function tools(cwd: string): ToolMap {
 	return value;
 }
 
-const argPath = (args: ToolArgs): string => args?.file_path ?? args?.path ?? "";
-
-/** read 的 offset/limit → `:12-40`、`:12+`。 */
-function rangeSuffix(args: ToolArgs): string {
-	if (args.offset === undefined && args.limit === undefined) return "";
-	const start = args.offset ?? 1;
-	if (args.limit === undefined) return `:${start}+`;
-	return `:${start}-${start + args.limit - 1}`;
-}
-
 function lineCount(text: string): number {
 	if (text === "") return 0;
 	const lines = text.split("\n").length;
@@ -80,12 +64,16 @@ function invoke<T extends (...args: never[]) => unknown>(
 export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
 	let dispose: (() => void) | undefined;
+	let clock = new TurnClock();
 
+	pi.on("agent_start", () => clock.begin());
+	pi.on("agent_end", () => clock.finish());
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
-		dispose = installGroupPatch(ctx.ui);
+		clock = new TurnClock();
+		dispose = installGroupPatch(ctx.ui, { replyLines: loadConfig().config.tools.replyLines, clock });
 		ctx.ui.setToolsExpanded(false);
 	});
 	pi.on("session_shutdown", () => {
@@ -104,8 +92,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({
 				label: LABEL.read,
-				value: pathValue(argPath(args), ctx.cwd, rangeSuffix(args)),
-				clip: "start",
+				...toolTarget("read", args, ctx.cwd),
 				theme,
 				ctx,
 			}),
@@ -121,8 +108,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({
 				label: LABEL.bash,
-				value: commandParts(args.command),
-				clip: "end",
+				...toolTarget("bash", args, ctx.cwd),
 				theme,
 				ctx,
 			}),
@@ -139,8 +125,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({
 				label: LABEL.edit,
-				value: pathValue(argPath(args), ctx.cwd),
-				clip: "start",
+				...toolTarget("edit", args, ctx.cwd),
 				theme,
 				ctx,
 			}),
@@ -164,8 +149,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		renderCall: (args, theme, ctx) =>
 			new ToolLine({
 				label: LABEL.write,
-				value: pathValue(argPath(args), ctx.cwd),
-				clip: "start",
+				...toolTarget("write", args, ctx.cwd),
 				meta: [{ text: ` +${lineCount(args.content ?? "")}`, color: "toolDiffAdded" }],
 				theme,
 				ctx,
