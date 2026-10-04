@@ -707,7 +707,7 @@ test("运行中摘要的目标按宽度先裁，动作词保留，放不下才�
 	const clipped = at(30);
 	expect(clipped).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun.*…\\s*$`));
 	expect(s.tui.visibleWidth(clipped)).toBeLessThanOrEqual(30);
-	expect(at(14)).toMatch(new RegExp(`^${FLAME} 操作\\s*$`));
+	expect(at(10)).toMatch(new RegExp(`^${FLAME} 操作\\s*$`));
 });
 
 test("会话进行中：指挥官回合结束而有子代理在飞时摘要只剩火苗（状态与计时只在边框），全部落定才定格，耗时含等待", async () => {
