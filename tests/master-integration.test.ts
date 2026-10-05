@@ -1312,6 +1312,34 @@ test("显式 observer 角色不注册 Master 工具面", async () => {
 	expect(handlers.has("tool_call")).toBe(true);
 });
 
+test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
+	const harness = await loadFirecodeModule("role-harness.js", {
+		configJsonc: JSON.stringify({
+			features: await featuresOnly("header", "tools", "presets", "rename", "stats"),
+			keys: { rename: "alt+r" },
+		}),
+		extraFiles: {
+			"role-harness.ts": [
+				'import firecode from "./index.js";',
+				'import { withSubsessionRole } from "./master/role.js";',
+				'export const register = (pi: unknown) => withSubsessionRole("worker", async () => firecode(pi as never));',
+			].join("\n"),
+		},
+	}) as { register: (pi: unknown) => Promise<void> };
+	const registered: string[] = [];
+	await harness.register({
+		registerMessageRenderer() {}, registerEntryRenderer: (name: string) => registered.push(`entry:${name}`),
+		registerShortcut: (key: string) => registered.push(`shortcut:${key}`),
+		registerFlag: (name: string) => registered.push(`flag:${name}`),
+		registerCommand: (name: string) => registered.push(`command:${name}`),
+		registerTool: (tool: { name: string }) => registered.push(`tool:${tool.name}`),
+		getActiveTools: () => [], setActiveTools() {},
+		on: () => () => {},
+		events: { on: () => () => {}, emit() {} },
+	});
+	expect(registered).toEqual([]);
+});
+
 test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
