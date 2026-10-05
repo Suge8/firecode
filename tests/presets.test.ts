@@ -152,3 +152,14 @@ test("清除预设后重开不复活；新会话（空记录）不继承上一�
 	expect(host.state.status).toBeUndefined();
 	expect(await host.instructions()).toBe("BASE");
 });
+
+test("预设的模型套用失败（找不到或没有凭据）就整套不套：不设预设名、不注入指令、不改工具与模型", async () => {
+	const host = await presetHost();
+	await host.emit("session_start");
+	delete host.models["test/deep"];
+	await host.preset("deep");
+	expect(host.state.status).toBeUndefined();
+	expect(await host.instructions()).toBe("BASE");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
+});
