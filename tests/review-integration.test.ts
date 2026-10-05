@@ -565,7 +565,7 @@ describe("registerReview wiring", () => {
 		);
 		editor.handleInput("\x1b");
 		await flush();
-		expect(ctx.notices).toContain("⏸ 审查已取消\n已按你的操作停止");
+		expect(ctx.notices).toContain("审查已取消\n已按你的操作停止");
 		expect(registered.sent.some((message) =>
 			(message as { details?: { kind?: string } }).details?.kind === "cancel"
 		)).toBe(false);
