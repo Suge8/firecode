@@ -12,6 +12,7 @@ const MIN_ACTION_WIDTH = 4;
 /** 角色是次要信息：动作文字保不住这么宽（约“操作 $ bun t…”）时丢角色。 */
 const ROLE_MIN_ACTION_WIDTH = 12;
 const SEP = " · ";
+const NOTE_MIN_ACTION_WIDTH = 8;
 
 export interface ActivityRow {
 	/** 已着色的单格标记：火苗、◈、‖、◌、✓、✗。 */
@@ -37,7 +38,8 @@ function middleRoom(row: ActivityRow, width: number, nameWidth: number): number 
 
 /** 这一行在给定宽度下是否值得保留角色；列表据此整表决定，列才对得齐。 */
 export function roleFits(row: ActivityRow, width: number, nameWidth: number): boolean {
-	return middleRoom(row, width, nameWidth) - visibleWidth(row.role) - SEP.length >= ROLE_MIN_ACTION_WIDTH;
+	const note = row.note ? visibleWidth(row.note) : 0;
+	return middleRoom(row, width, nameWidth) - visibleWidth(row.role) - SEP.length - note >= ROLE_MIN_ACTION_WIDTH;
 }
 
 export function renderActivityRow(
@@ -57,7 +59,9 @@ export function renderActivityRow(
 				: row.tone === "warning" ? theme.fg("warning", text)
 					: theme.fg(color("muted"), text);
 	const actionRoom = showRole ? room - visibleWidth(row.role) - SEP.length : room;
-	const note = row.note ? clip(row.note, actionRoom) : "";
+	// 有提醒时动作至少保留 NOTE_MIN_ACTION_WIDTH 列（看得出卡在哪条命令），余下给提醒，放不下再截提醒。
+	const reserved = row.note ? Math.min(actionRoom, NOTE_MIN_ACTION_WIDTH) : 0;
+	const note = row.note ? clip(row.note, Math.max(0, actionRoom - reserved)) : "";
 	const textRoom = actionRoom - visibleWidth(note);
 	const action = (textRoom >= MIN_ACTION_WIDTH ? paintAction(clip(row.action, textRoom)) : "") + (note && theme.fg("warning", note));
 	const middle = showRole ? `${theme.fg(color("muted"), row.role)}${theme.fg("dim", SEP)}${action}` : action;
