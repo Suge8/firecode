@@ -360,6 +360,44 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 	await harness.command("");
 });
 
+test("报告现场时序：最后一个子代理在指挥官空闲时返回，整段只歇下一次，且在唤醒回合落定之后", async () => {
+	const harness = await setup(true, { holdWake: true });
+	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
+	const rounds: any[] = [];
+	watchBusy(harness.pi, { onSettled: (_ctx: unknown, round: unknown) => rounds.push(round) });
+	try {
+		at(0);
+		// 指挥官回合派出子代理后歇着等。
+		await harness.emit("agent_start", {});
+		const finish = Promise.withResolvers<void>();
+		faux.setResponses([async () => { await finish.promise; return fauxAssistantMessage("完成"); }]);
+		await harness.execute({ action: "start", worker: "last", prompt: "执行", role: "工程师" });
+		harness.idle = true;
+		await harness.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+		await harness.emit("agent_settled", {});
+		expect(rounds).toEqual([]);
+
+		at(373);
+		finish.resolve();
+		await harness.userMessageStarted;
+		await Bun.sleep(5);
+		// 前门消息已发出、唤醒回合还没开始：不能歇下（报告里这里先写了一条整段记录）。
+		expect(rounds).toEqual([]);
+
+		harness.idle = false;
+		await harness.wake();
+		await Bun.sleep(5);
+		expect(rounds).toEqual([]);
+		at(376);
+		harness.idle = true;
+		await harness.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+		await harness.emit("agent_settled", {});
+		expect(rounds).toEqual([{ elapsed: 376_000, outcome: "complete" }]);
+	} finally {
+		await harness.command("");
+	}
+});
+
 test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
 	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
@@ -1523,6 +1561,7 @@ async function setup(activate = true, options: {
 	const entries: any[] = [];
 	const userMessages: string[] = [];
 	const emitted: [string, any][] = [];
+	const channels = new Map<string, any[]>();
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
@@ -1539,7 +1578,16 @@ async function setup(activate = true, options: {
 			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
 			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
 		},
-		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
+		events: {
+			on: (channel: string, handler: any) => {
+				channels.set(channel, [...(channels.get(channel) ?? []), handler]);
+				return () => {};
+			},
+			emit: (channel: string, payload: any) => {
+				emitted.push([channel, payload]);
+				for (const handler of channels.get(channel) ?? []) handler(payload);
+			},
+		},
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
@@ -1616,6 +1664,8 @@ async function setup(activate = true, options: {
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
 		wake,
+		pi,
+		ctx,
 		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
 		userTurn: (text: string) => turn(text),
 		command,

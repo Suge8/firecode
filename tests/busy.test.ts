@@ -17,9 +17,13 @@ async function harness() {
 	};
 	watchBusy(pi, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, settledResult: unknown) => { settled++; result = settledResult; } });
 	let idle = true;
-	const ctx = { isIdle: () => idle };
+	let aborted = false;
+	const ctx = { isIdle: () => idle, get signal() { return { aborted }; } };
 	return {
 		set idle(value: boolean) { idle = value; },
+		/** 宿主当前回合的中断信号（用户 Esc 等）。 */
+		set aborted(value: boolean) { aborted = value; },
+		review: (active: boolean) => bus.get("herdr:blocked")?.forEach((fn) => fn(active ? { active, label: "审查", progress: () => undefined } : { active })),
 		get settled() { return settled; },
 		get result() { return result; },
 		get view() { return view; },
@@ -230,4 +234,67 @@ test("每个 pi 只有一份状态机：多个消费者只订阅，宿主事件�
 	expect(h.settled).toBe(1);
 	expect(seen).toEqual([h.result, h.result]);
 	expect(seen[0]).toBe(seen[1]);
+});
+
+test("Esc 中断按宿主的中断信号判定：工具执行中被中断时宿主给的是 error 终态，仍记“已中断”；真实请求失败照旧", async () => {
+	const h = await harness();
+	h.agentStart();
+	h.aborted = true;
+	h.agentEnd("error");
+	h.agentSettled();
+	expect(h.result.outcome).toBe("aborted");
+
+	h.aborted = false;
+	h.agentStart();
+	h.agentEnd("error");
+	h.agentSettled();
+	expect(h.result.outcome).toBe("error");
+});
+
+test("主会话审查进行中算会话进行中：审查期间不歇下，视图标出审查，审查时长计入这一段", async () => {
+	const h = await harness();
+	try {
+		setSystemTime(new Date(0));
+		h.agentStart();
+		setSystemTime(new Date(10_000));
+		h.review(true);
+		h.agentSettled();
+		expect(h.settled).toBe(0);
+		expect(h.view).toMatchObject({ busy: true, review: true, agentRunning: false });
+		// 修复回合在审查期间照常开跑、落定，都不切段。
+		h.agentStart();
+		h.agentSettled();
+		expect(h.settled).toBe(0);
+		setSystemTime(new Date(240_000));
+		h.review(false);
+		expect(h.settled).toBe(1);
+		expect(h.result.elapsed).toBe(240_000);
+		expect(h.view).toMatchObject({ busy: false, review: false });
+	} finally {
+		setSystemTime();
+	}
+});
+
+test("输出 token 太少（不足 20）不给均速：1 个 token 的快答不显示无意义的 tps", async () => {
+	const h = await harness();
+	try {
+		setSystemTime(new Date(0));
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(1_000));
+		h.response(1);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result).toEqual({ elapsed: 1_000, outcome: "complete" });
+
+		h.agentStart();
+		h.request();
+		setSystemTime(new Date(2_000));
+		h.response(20);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.result.tps).toBe(20);
+	} finally {
+		setSystemTime();
+	}
 });
