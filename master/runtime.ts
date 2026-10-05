@@ -83,7 +83,7 @@ export class MasterRuntime {
 		});
 		ctx.ui.setWidget(LIST_WIDGET_KEY, (tui, theme) => {
 			this.list = new ActivityList(tui, theme, () => this.activityFacts(),
-				() => visibleRows(tui.terminal?.rows, ctx.ui.getToolsExpanded()));
+				() => visibleRows(tui.terminal?.rows));
 			return this.list;
 		}, { placement: "aboveEditor" });
 	}
@@ -102,6 +102,11 @@ export class MasterRuntime {
 		this.outbox.scheduleInFlight();
 		this.ctx.ui.setStatus("master", MASTER_IDENTITY);
 		this.list?.sync();
+	}
+
+	/** 新的一轮（人类输入）开始：活动列表的展开收起。 */
+	collapseList(): void {
+		this.list?.collapse();
 	}
 
 	liveOf(name: string): WorkerLive {

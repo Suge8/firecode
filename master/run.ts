@@ -5,7 +5,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { MasterRole, ModelAtom } from "../config.js";
 import { wrapEnvelope } from "../deliver.js";
-import { clip, textOf } from "../format.js";
+import { clip, firstSentence, textOf } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { masterEvent, type MasterEvent } from "./event-format.js";
 import { assembleWorkerPrompt } from "./prompt.js";
@@ -162,7 +162,8 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	const idle: WorkerRef = { ...current, status: "idle" };
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: idle });
-	active.markIdle(idle, { kind: failure ? "failed" : "done" });
+	// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
+	active.markIdle(idle, failure ? { kind: "failed", note: firstSentence(failure) } : { kind: "done", note: firstSentence(terminal!.text) });
 	const obligation = current.reviewNeeded === true;
 	const event: MasterEvent = failure
 		? masterEvent.failed(identity.name, failure, obligation)

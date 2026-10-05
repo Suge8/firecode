@@ -143,6 +143,10 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		},
 	});
 
+	pi.on("input", (event) => {
+		if (event.source !== "extension") runtime?.collapseList();
+	});
+
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
 		return {
