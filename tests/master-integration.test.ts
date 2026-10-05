@@ -1145,6 +1145,28 @@ test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个�
 	await harness.command("");
 });
 
+test("resume 后空闲子代理按档案里的创建时间列出（池数组顺序受并发 start 影响，不可靠）；start 把创建时间写进档案", async () => {
+	const harness = await setup(false);
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	const archived = [["mid", 3], ["zeta", 1], ["alpha", 2]] as const;
+	await writeFile(path, JSON.stringify({ version: 8, workers: archived.map(([name, createdAt]) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), createdAt,
+	})) }));
+	await harness.command("");
+	harness.clickActivity("3 个空闲");
+	expect(harness.activity().slice(1).map((line) => line.match(/ (zeta|alpha|mid) /u)?.[1])).toEqual(["zeta", "alpha", "mid"]);
+
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "fresh", prompt: "执行", role: "工程师" });
+	await delivered;
+	const saved = JSON.parse(await readFile(path, "utf8")).workers.find((worker: any) => worker.name === "fresh");
+	expect(typeof saved.createdAt).toBe("number");
+	await harness.command("");
+});
+
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
 	const harness = await setup();
 	let release!: () => void;
