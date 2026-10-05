@@ -23,7 +23,7 @@ const MAX_BODY_LENGTH = 200;
 // pi.dev 的 logo 是白色透明背景 SVG，通知图标不支持矢量图；经 wsrv.nl 转黑底 PNG。
 const ICON_URL = "https://wsrv.nl/?url=pi.dev/logo.svg&w=256&h=256&output=png&bg=black";
 
-export interface BarkPayload {
+interface BarkPayload {
 	title: string;
 	subtitle?: string;
 	body: string;
@@ -33,7 +33,7 @@ export interface BarkPayload {
 	icon: string;
 }
 
-export function buildBarkPayload(input: {
+function buildBarkPayload(input: {
 	title: string;
 	body: string;
 	group: string;
@@ -52,7 +52,7 @@ export function buildBarkPayload(input: {
 }
 
 /** 只读旁路判定：状态文件损坏由 Master 自己报告与恢复，通知不放大故障，一律按无待拍板降级。 */
-export function hasPendingDisposition(statePath: string): boolean {
+function hasPendingDisposition(statePath: string): boolean {
 	try {
 		return loadMasterState(statePath)?.workers.some((worker) => worker.disposition !== undefined) ?? false;
 	} catch {

@@ -62,7 +62,7 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 	review: TEST_REVIEW_CONFIG,
 });
 
-export async function copyFirecodeSource(destination: string): Promise<void> {
+async function copyFirecodeSource(destination: string): Promise<void> {
 	await cp(SOURCE_DIR, destination, {
 		recursive: true,
 		filter: (source) => {

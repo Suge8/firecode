@@ -31,7 +31,7 @@ export function createReviewSessionRunner(pool: InProcessSessionPool): ReviewSes
 	return (options) => runReviewSession({ ...options, pool });
 }
 
-export async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSessionResult> {
+async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSessionResult> {
 	if (options.signal?.aborted) return { kind: "aborted" };
 	let spawned: Awaited<ReturnType<InProcessSessionPool["spawn"]>>;
 	try {

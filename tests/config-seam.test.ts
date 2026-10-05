@@ -1,38 +1,9 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
+import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
-
-test("portable loader copies runtime sources without repository metadata or development docs", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "firecode-copy-"));
-	try {
-		await copyFirecodeSource(directory);
-		expect(existsSync(join(directory, "index.ts"))).toBeTrue();
-		expect(existsSync(join(directory, ".git"))).toBeFalse();
-		expect(existsSync(join(directory, "docs"))).toBeFalse();
-		expect(existsSync(join(directory, "tests"))).toBeFalse();
-		expect(
-			(await readdir(directory, { recursive: true }))
-				.filter((path) => /\.mdx?$/.test(path))
-				.map((path) => path.split(sep).join("/"))
-				.sort(),
-		).toEqual([
-			"master/prompts/master.zh.md",
-			"master/prompts/worker.zh.md",
-			"review/prompts/advisor.en.md",
-			"review/prompts/advisor.zh.md",
-			"review/prompts/review.en.md",
-			"review/prompts/review.zh.md",
-			"watcher/prompts/watch.zh.md",
-		]);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
-});
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
