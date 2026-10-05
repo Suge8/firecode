@@ -12,7 +12,7 @@ import {
 	createWriteTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { IDLE, watchBusy, type BusyView } from "../busy.js";
+import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
@@ -66,11 +66,11 @@ function invoke<T extends (...args: never[]) => unknown>(
 export function registerToolRendering(pi: ExtensionAPI): void {
 	const initial = tools(process.cwd());
 	let dispose: (() => void) | undefined;
-	let clock = new TurnClock();
-	let busy: BusyView = IDLE;
+	// 时钟只投影 busy.ts 的唯一状态机；拆会话会重载扩展，不跨会话复用。
+	const clock = new TurnClock();
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
 	watchBusy(pi, {
-		onChange: (view) => { busy = view; clock.sync(view); },
+		onChange: (view) => clock.sync(view),
 		// 轮记录只属于装了分组投影的 TUI 主会话；写成会话记录，摘要行落定时读它。
 		onSettled: (_ctx, round) => { if (dispose) pi.appendEntry(ROUND_ENTRY, round); },
 	});
@@ -78,8 +78,6 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
-		clock = new TurnClock();
-		clock.sync(busy);
 		dispose = installGroupPatch(ctx.ui, { replyLines: loadConfig().config.tools.replyLines, clock });
 		ctx.ui.setToolsExpanded(false);
 	});

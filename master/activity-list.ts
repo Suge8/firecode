@@ -1,11 +1,11 @@
 /**
- * 输入框上方的子代理活动列表：出问题的（失败、卡住）置顶，然后在跑与审查，最后一行合计已完成。
+ * 输入框上方的子代理活动列表：需要处理的（失败、被中断、卡住）置顶，然后在跑与审查，最后一行合计已完成。
  * 行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟；落定事实只在运行时，reload 后不展示历史。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { type ActivityRow as Row, renderActivityRow, roleFits } from "../activity.js";
-import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark, type Settle } from "../flame.js";
+import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";
 import type { WorkerRef } from "./state.js";
@@ -17,10 +17,11 @@ export interface ReviewProgress {
 	total: number;
 }
 
-/** 本次运行的落定事实：落定时刻、成败与行上的说明。失败留到 ack 或 kill，完成留到 kill。 */
+/** 本次运行的落定事实：落定时刻、结局与行上的说明。失败与被中断留到 ack 或 kill，完成留到 kill。 */
 export interface SettledFact {
 	at: number;
-	kind: Settle;
+	/** 被中断不是失败：会话与义务都在，等指挥官续派或收口。 */
+	kind: "done" | "failed" | "interrupted";
 	note?: string;
 }
 
@@ -44,6 +45,7 @@ type Line = { row: Row } | { label: string; mark?: string; toggle: Toggle };
 const STUCK_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 const STUCK_GLYPH = "◌";
+const INTERRUPTED_GLYPH = "‖";
 /** 可见行数下限；终端每 6 行再容纳一条在跑的行。 */
 const MIN_ROWS = 4;
 const ROWS_PER_ACTIVITY = 6;
@@ -60,6 +62,7 @@ export function visibleRows(terminalRows: number | undefined, expanded: boolean)
 
 interface Groups {
 	failed: Row[];
+	interrupted: Row[];
 	stuck: Row[];
 	running: Row[];
 	done: Row[];
@@ -70,7 +73,7 @@ interface Groups {
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
 	const indexes = facts.workers.map((_, index) => index).sort((a, b) => launch(a) - launch(b) || a - b);
-	const groups: Groups = { failed: [], stuck: [], running: [], done: [], animating: false };
+	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], animating: false };
 	for (const index of indexes) {
 		const worker = facts.workers[index];
 		const path = worker.sessionPath;
@@ -81,7 +84,7 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 			groups.animating = true;
 			const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
 			if (silent >= STUCK_MS) {
-				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action: `${Math.floor(silent / MINUTE_MS)} 分钟无动静`, tone: "stuck" });
+				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action: `${Math.floor(silent / MINUTE_MS)} 分钟无动静`, tone: "warning" });
 				continue;
 			}
 			const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
@@ -102,6 +105,10 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 			groups.done.push({ ...settledRow, mark: DONE_MARK, action: fact.note ?? "已返回" });
 			continue;
 		}
+		if (fact.kind === "interrupted") {
+			groups.interrupted.push({ ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: "被中断", tone: "warning" });
+			continue;
+		}
 		groups.failed.push({ ...settledRow, mark: FAILED_MARK, action: fact.note ?? "失败", tone: "failed" });
 	}
 	return groups;
@@ -114,9 +121,9 @@ interface Folding {
 	showDone: boolean;
 }
 
-/** 出问题的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“… +N 个在跑”。 */
-function layout({ failed, stuck, running, done }: Groups, folding: Folding): Line[] {
-	const lines: Line[] = [...failed, ...stuck].map((row) => ({ row }));
+/** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“… +N 个在跑”。 */
+function layout({ failed, interrupted, stuck, running, done }: Groups, folding: Folding): Line[] {
+	const lines: Line[] = [...failed, ...interrupted, ...stuck].map((row) => ({ row }));
 	const overflow = running.length > folding.limit;
 	if (!overflow || folding.expanded || folding.showAllRunning) {
 		lines.push(...running.map((row) => ({ row })));

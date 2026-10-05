@@ -3,8 +3,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type EnvelopeTag, parseEnvelopes } from "../deliver.js";
 import { clip, firstSentence } from "../format.js";
 
-export { firstSentence };
-
 export interface MachineEntry {
 	/** 一行标题：Master 事件与审查卡是信封正文第一行原样，观察员固定为“观察员”。 */
 	title: string;

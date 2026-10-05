@@ -24,6 +24,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起 | |
 | `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长、终态与均速）`watchBusy`；频道名与 payload 只在这里定义 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
+| `activity.ts` | 子代理活动列表的单行布局（标记、名字列、角色 · 动作、耗时与退让），只有 `master/activity-list.ts` 使用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置 | |
 

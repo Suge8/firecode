@@ -5,9 +5,9 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Text } from "@earendil-works/pi-tui";
-import { clip, oneLine } from "../format.js";
+import { clip, firstSentence, oneLine } from "../format.js";
 import { parseEnvelopes } from "../deliver.js";
-import { firstSentence, machineEntries } from "../tools/machine.js";
+import { machineEntries } from "../tools/machine.js";
 import { MASTER_EVENT_TYPE } from "./event-format.js";
 
 export function registerMasterEventRenderer(pi: ExtensionAPI): void {

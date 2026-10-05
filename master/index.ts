@@ -24,7 +24,7 @@ import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { ActivityList, visibleRows, type ReviewProgress, type SettledFact } from "./activity-list.js";
-import { MASTER_EVENT_TYPE, sectionLine } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent, withElapsed } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
@@ -293,7 +293,7 @@ export function registerMaster(
 		const replay = options.replayId !== undefined;
 		// 重放的 pending 事件正文已带落定当时的耗时，不再追加。
 		const sessionPath = active.store.state.workers.find((candidate) => candidate.name === worker)?.sessionPath;
-		const body = replay ? content : withElapsed(active, content, sessionPath, options.runEndedAt);
+		const body = replay ? content : withElapsedOf(active, content, sessionPath, options.runEndedAt);
 		const event: PendingMasterEvent = { id: options.replayId ?? crypto.randomUUID(), content: body, ...(worker ? { worker } : {}) };
 		if (!replay) {
 			try {
@@ -325,7 +325,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, `${worker.name} 待续跑\n上次回合被外部中断后无人接手，请 send 续派或 kill 收口`, worker.name, { runEndedAt: worker.interruptedAt });
+			enqueueEvent(active, masterEvent.resumeReminder(worker.name), worker.name, { runEndedAt: worker.interruptedAt });
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -430,18 +430,18 @@ export function registerMaster(
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
 			const stranded = session.clearQueue().steering;
 			if (stranded.length)
-				enqueueEvent(active, `${worker.name} 补充说明未送达\n回合结束时有 ${stranded.length} 条补充说明未送达，请重发：\n${stranded.join("\n---\n")}`, worker.name);
+				enqueueEvent(active, masterEvent.stranded(worker.name, stranded), worker.name);
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
 				interruptedRuns.delete(worker.sessionPath);
 				const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 				if (!current || current.sessionPath !== worker.sessionPath) return;
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
-				active.settled.set(worker.sessionPath, { at: interrupted.interruptedAt!, kind: "failed", note: "被中断" });
+				active.settled.set(worker.sessionPath, { at: interrupted.interruptedAt!, kind: "interrupted" });
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				markWorkerIdle(active, worker.sessionPath);
-				enqueueEvent(active, `${worker.name} 被中断\n会话与审查义务均已保留`, worker.name);
+				enqueueEvent(active, masterEvent.interrupted(worker.name), worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
 			}
@@ -489,7 +489,7 @@ export function registerMaster(
 			const switched = commit(active, current, (latest) => ({ ...latest, ...fallback, status: "working" }));
 			const from = modelAtomText(current);
 			const to = modelAtomText(fallback);
-			enqueueEvent(active, `${current.name} 已切换模型\n已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
+			enqueueEvent(active, masterEvent.modelSwitched(current.name, from, to, reason), current.name);
 			await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
 		} catch (error) {
 			const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
@@ -618,8 +618,8 @@ export function registerMaster(
 					const { disposition: _disposition, ...rest } = target;
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
 				}
-				// ack 发落失败行；完成的留在“✓ N 个已完成”里直到 kill。
-				if (active.settled.get(target.sessionPath)?.kind === "failed") active.settled.delete(target.sessionPath);
+				// ack 发落失败与被中断的行；完成的留在“✓ N 个已完成”里直到 kill。
+				if (active.settled.get(target.sessionPath)?.kind !== "done") active.settled.delete(target.sessionPath);
 				renderStatus();
 				return toolResult({ acked: true });
 			}
@@ -652,7 +652,7 @@ export function registerMaster(
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
-							enqueueEvent(active, reviewOutcomeText(target.name, outcome, session.messages), target.name);
+							enqueueEvent(active, masterEvent.review(target.name, outcome, latestAssistantText(session.messages)), target.name);
 						},
 						(error) => {
 							if (!ownsRuntime(active)) return;
@@ -662,7 +662,7 @@ export function registerMaster(
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
-							enqueueEvent(active, `${target.name} 审查未完成\n${sectionLine("reason")}\n${String(error)}`, target.name);
+							enqueueEvent(active, masterEvent.reviewIncomplete(target.name, String(error)), target.name);
 						},
 					);
 					return toolResult({ reviewing: true });
@@ -870,20 +870,20 @@ function settleWorker(
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 	active.currentTools.delete(identity.sessionPath);
 	markWorkerIdle(active, identity.sessionPath);
-	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
+	const obligation = current.reviewNeeded === true;
 	return failure
-		? `${identity.name} 失败\n${sectionLine("error")}\n${failure}${obligation}`
-		: `${identity.name} 已返回\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
+		? masterEvent.failed(identity.name, failure, obligation)
+		: masterEvent.returned(identity.name, terminal!.text, obligation);
 }
 
-/** 事件末尾追加耗时行；起点缺失（reload 后）的部分省略，不用当前时刻冒充。 */
-function withElapsed(active: MasterRuntime, content: string, sessionPath?: string, runEndedAt?: number): string {
+/** 两个起点各只有运行时一处记录；reload 后缺失的部分省略。 */
+function withElapsedOf(active: MasterRuntime, content: string, sessionPath?: string, runEndedAt?: number): string {
 	const now = Date.now();
-	const parts: string[] = [];
 	const runStartedAt = sessionPath ? active.runStartedAt.get(sessionPath) : undefined;
-	if (runStartedAt !== undefined) parts.push(`本次运行 ${formatDuration((runEndedAt ?? now) - runStartedAt)}`);
-	if (active.taskStartedAt !== undefined) parts.push(`当前任务 ${formatDuration(now - active.taskStartedAt)}`);
-	return parts.length ? `${content}\n耗时：${parts.join(" · ")}` : content;
+	return withElapsed(content, {
+		...(runStartedAt === undefined ? {} : { run: (runEndedAt ?? now) - runStartedAt }),
+		...(active.taskStartedAt === undefined ? {} : { task: now - active.taskStartedAt }),
+	});
 }
 
 function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
@@ -952,20 +952,6 @@ function reviewSettledFact(outcome: ReviewOutcome): SettledFact {
 
 function reviewRunId(outcome: ReviewOutcome): string | undefined {
 	return "runId" in outcome ? outcome.runId : undefined;
-}
-
-function reviewOutcomeText(
-	name: string,
-	outcome: ReviewOutcome,
-	messages: Array<{ role: string; content?: unknown }>,
-): string {
-	const reply = `${sectionLine("finalReply")}\n${latestAssistantText(messages) || "（无回复）"}`;
-	if (outcome.status === "passed") return `${name} 审查通过（${outcome.rounds} 轮）\n${reply}`;
-	if (outcome.status === "stopped")
-		return `${name} 审查停止（${outcome.rounds} 轮）\n${outcome.advisorAdvice ? `${sectionLine("advice")}\n${outcome.advisorAdvice}\n` : ""}${reply}`;
-	if (outcome.status === "failed") return `${name} 审查未完成\n${sectionLine("reason")}\n${outcome.reason}\n${reply}`;
-	if (outcome.status === "error") return `${name} 审查未完成\n${sectionLine("reason")}\n审查读取失败：${outcome.message}`;
-	return `${name} 审查未完成`;
 }
 
 function captureWorkerTerminal(

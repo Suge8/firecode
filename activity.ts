@@ -14,13 +14,13 @@ const ROLE_MIN_ACTION_WIDTH = 12;
 const SEP = " · ";
 
 export interface ActivityRow {
-	/** 已着色的单格标记：火苗、◈、◌、✓、✗。 */
+	/** 已着色的单格标记：火苗、◈、‖、◌、✓、✗。 */
 	mark: string;
 	name: string;
 	role: string;
 	action: string;
-	/** 当前动作的语气：审查金色，失败红色，卡住黄色。 */
-	tone?: "review" | "failed" | "stuck";
+	/** 当前动作的语气：审查金色，失败红色，被中断与卡住黄色。 */
+	tone?: "review" | "failed" | "warning";
 	elapsed: string;
 	/** 已落定的行文字退为暗色，只有标记保留颜色。 */
 	settled?: boolean;
@@ -52,7 +52,7 @@ export function renderActivityRow(
 	const paintAction = (text: string) =>
 		row.tone === "review" ? paint(HEAT_COLORS.gold, text)
 			: row.tone === "failed" ? theme.fg("error", text)
-				: row.tone === "stuck" ? theme.fg("warning", text)
+				: row.tone === "warning" ? theme.fg("warning", text)
 					: theme.fg(color("muted"), text);
 	const actionRoom = showRole ? room - visibleWidth(row.role) - SEP.length : room;
 	const action = actionRoom >= MIN_ACTION_WIDTH ? paintAction(clip(row.action, actionRoom)) : "";
