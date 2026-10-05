@@ -10,6 +10,7 @@ import {
 	createEditTool,
 	createReadTool,
 	createWriteTool,
+	defineTool,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { watchBusy } from "../busy.js";
@@ -18,7 +19,7 @@ import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { LABEL, toolTarget } from "./actions.js";
 import { diffMeta } from "./parts.js";
-import { ROUND_ENTRY, renderRound, ROUND_RECORDED_CHANNEL } from "./round.js";
+import { ROUND_ENTRY, renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
 
@@ -63,21 +64,98 @@ function invoke<T extends (...args: never[]) => unknown>(
 	return Reflect.apply(execute, undefined, args) as ReturnType<T>;
 }
 
-export function registerToolRendering(pi: ExtensionAPI): void {
+const EDIT_RESULT = makeResultRenderer(false);
+let definitions: ReturnType<typeof buildDefinitions> | undefined;
+
+/**
+ * 默认四工具的展示包装（执行仍是宿主工具，按调用 cwd 取实例）：主会话注册它们，子代理全过程视图拿同一份定义渲染子会话的工具行。
+ */
+export function toolDefinitions() {
+	return definitions ??= buildDefinitions();
+}
+
+function buildDefinitions() {
 	const initial = tools(process.cwd());
+	return {
+		read: defineTool({
+			...initial.read,
+			label: LABEL.read,
+			renderShell: "self",
+			execute: (id, params, signal, update, ctx) =>
+				executeTimed(id, () => invoke(tools(ctx.cwd).read.execute, [id, params, signal, update, ctx])),
+			renderCall: (args, theme, ctx) =>
+				new ToolLine({
+					label: LABEL.read,
+					...toolTarget("read", args, ctx.cwd),
+					theme,
+					ctx,
+				}),
+			renderResult: makeResultRenderer(true),
+		}),
+		bash: defineTool({
+			...initial.bash,
+			label: LABEL.bash,
+			renderShell: "self",
+			execute: (id, params, signal, update, ctx) =>
+				executeTimed(id, () => invoke(tools(ctx.cwd).bash.execute, [id, params, signal, update, ctx])),
+			renderCall: (args, theme, ctx) =>
+				new ToolLine({
+					label: LABEL.bash,
+					...toolTarget("bash", args, ctx.cwd),
+					theme,
+					ctx,
+				}),
+			renderResult: makeResultRenderer(true),
+		}),
+		edit: defineTool({
+			...initial.edit,
+			label: LABEL.edit,
+			renderShell: "self",
+			execute: (id, params, signal, update, ctx) =>
+				executeTimed(id, () => invoke(tools(ctx.cwd).edit.execute, [id, params, signal, update, ctx])),
+			renderCall: (args, theme, ctx) =>
+				new ToolLine({
+					label: LABEL.edit,
+					...toolTarget("edit", args, ctx.cwd),
+					theme,
+					ctx,
+				}),
+			renderResult(result, options, theme, ctx) {
+				const details = result.details as { diff?: unknown } | undefined;
+				const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
+				ctx.state.meta = diff ? diffMeta(diff) : undefined;
+				const display = options.expanded && diff
+					? { ...result, content: [...result.content, { type: "text" as const, text: diff }] }
+					: result;
+				return EDIT_RESULT(display, options, theme, ctx);
+			},
+		}),
+		write: defineTool({
+			...initial.write,
+			label: LABEL.write,
+			renderShell: "self",
+			execute: (id, params, signal, update, ctx) =>
+				executeTimed(id, () => invoke(tools(ctx.cwd).write.execute, [id, params, signal, update, ctx])),
+			renderCall: (args, theme, ctx) =>
+				new ToolLine({
+					label: LABEL.write,
+					...toolTarget("write", args, ctx.cwd),
+					meta: [{ text: ` +${lineCount(args.content ?? "")}`, color: "toolDiffAdded" }],
+					theme,
+					ctx,
+				}),
+			renderResult: makeResultRenderer(false),
+		}),
+	};
+}
+
+export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
 	// 时钟只投影 busy.ts 的唯一状态机；拆会话会重载扩展，不跨会话复用。
 	const clock = new TurnClock();
+	// 轮记录由根级轮记录器写（每个会话都有）；这里只把它渲染成零行标记，供摘要行读。
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
-	watchBusy(pi, {
-		onChange: (view) => clock.sync(view),
-		// 轮记录只属于装了分组投影的 TUI 主会话；写成会话记录，摘要行落定时读它，写入后发布给输入框外壳。
-		onSettled: (_ctx, round) => {
-			if (!dispose) return;
-			pi.appendEntry(ROUND_ENTRY, round);
-			pi.events.emit(ROUND_RECORDED_CHANNEL, undefined);
-		},
-	});
+	watchBusy(pi, { onChange: (view) => clock.sync(view) });
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
@@ -92,79 +170,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		clearDurations();
 	});
 
-	pi.registerTool({
-		...initial.read,
-		label: LABEL.read,
-		renderShell: "self",
-		execute: (id, params, signal, update, ctx) =>
-			executeTimed(id, () => invoke(tools(ctx.cwd).read.execute, [id, params, signal, update, ctx])),
-		renderCall: (args, theme, ctx) =>
-			new ToolLine({
-				label: LABEL.read,
-				...toolTarget("read", args, ctx.cwd),
-				theme,
-				ctx,
-			}),
-		renderResult: makeResultRenderer(true),
-	});
-
-	pi.registerTool({
-		...initial.bash,
-		label: LABEL.bash,
-		renderShell: "self",
-		execute: (id, params, signal, update, ctx) =>
-			executeTimed(id, () => invoke(tools(ctx.cwd).bash.execute, [id, params, signal, update, ctx])),
-		renderCall: (args, theme, ctx) =>
-			new ToolLine({
-				label: LABEL.bash,
-				...toolTarget("bash", args, ctx.cwd),
-				theme,
-				ctx,
-			}),
-		renderResult: makeResultRenderer(true),
-	});
-
-	const editResult = makeResultRenderer(false);
-	pi.registerTool({
-		...initial.edit,
-		label: LABEL.edit,
-		renderShell: "self",
-		execute: (id, params, signal, update, ctx) =>
-			executeTimed(id, () => invoke(tools(ctx.cwd).edit.execute, [id, params, signal, update, ctx])),
-		renderCall: (args, theme, ctx) =>
-			new ToolLine({
-				label: LABEL.edit,
-				...toolTarget("edit", args, ctx.cwd),
-				theme,
-				ctx,
-			}),
-		renderResult(result, options, theme, ctx) {
-			const details = result.details as { diff?: unknown } | undefined;
-			const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
-			ctx.state.meta = diff ? diffMeta(diff) : undefined;
-			const display = options.expanded && diff
-				? { ...result, content: [...result.content, { type: "text" as const, text: diff }] }
-				: result;
-			return editResult(display, options, theme, ctx);
-		},
-	});
-
-	pi.registerTool({
-		...initial.write,
-		label: LABEL.write,
-		renderShell: "self",
-		execute: (id, params, signal, update, ctx) =>
-			executeTimed(id, () => invoke(tools(ctx.cwd).write.execute, [id, params, signal, update, ctx])),
-		renderCall: (args, theme, ctx) =>
-			new ToolLine({
-				label: LABEL.write,
-				...toolTarget("write", args, ctx.cwd),
-				meta: [{ text: ` +${lineCount(args.content ?? "")}`, color: "toolDiffAdded" }],
-				theme,
-				ctx,
-			}),
-		renderResult: makeResultRenderer(false),
-	});
+	for (const definition of Object.values(toolDefinitions())) pi.registerTool(definition);
 
 	pi.registerCommand("tool-status", {
 		description: "显示当前已加载/启用工具",

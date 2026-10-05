@@ -16,7 +16,7 @@ import { firstSentence, oneLine, textOf } from "../format.js";
 import { ToolLine, resultText, type ActionLine } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
-import { customMessageOf, isEntry, isToolOutputEcho, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
+import { customMessageOf, isEntry, isToolOutputEcho, openCard, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { combineRounds, type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
@@ -156,7 +156,10 @@ class MachineItem implements Component {
 		return this.env.isOpen(this.item) ? [...rows, ...this.body(width)] : rows;
 	}
 	private body(width: number): string[] {
-		if (this.item instanceof CustomMessageComponent) return this.item.render(width);
+		if (this.item instanceof CustomMessageComponent) {
+			openCard(this.item);
+			return this.item.render(width);
+		}
 		const bodies = machineBodies(this.item);
 		return new Markdown(bodies, 1, 0, getMarkdownTheme()).render(width);
 	}
@@ -176,7 +179,7 @@ class ToolItem implements Component {
 	private leadingRows = 0;
 	constructor(
 		private readonly row: ToolRow,
-		private readonly ui: ExtensionUIContext,
+		private readonly ui: ProjectionUI,
 		private readonly toggle: (row: ToolRow) => void,
 	) {}
 	invalidate(): void {}
@@ -211,19 +214,24 @@ class UserBar implements Component {
 		if (width <= 2) return this.message.render(width);
 		const bar = paint(HEAT_COLORS.orange, "▌");
 		const lines = this.message.render(width - 1);
-		// 宿主上下各留一行背景内边距；竖条只贴正文行，段落间空行仍连续。
-		const padding = (index: number) => (index === 0 || index === lines.length - 1)
-			&& !stripVTControlCharacters(lines[index]).trim();
+		// 宿主上下各留一行背景内边距：去掉，竖条从第一行正文开始、到最后一行正文结束（主会话与子代理视图同一组件）。
+		// 去掉的内边距行上若带 OSC 133 语义标记，挪到相邻正文行的行首：行中的 133;A 会被终端当 fresh-line 执行 CR+LF，留下残影。
+		const blank = (line: string | undefined) => line !== undefined && !stripVTControlCharacters(line).trim();
+		const head = blank(lines[0]) ? OSC133_PREFIX.exec(lines.shift()!)?.[0] ?? "" : "";
+		const tail = lines.length > 1 && blank(lines.at(-1)) ? OSC133_PREFIX.exec(lines.pop()!)?.[0] ?? "" : "";
 		return lines.map((line, index) => {
-			// OSC 133 语义标记必须留在行首：行中的 133;A 会被终端当 fresh-line 执行 CR+LF，把后半行挤到下一行留下残影。
+			const carried = (index === 0 ? head : "") + (index === lines.length - 1 ? tail : "");
 			const mark = OSC133_PREFIX.exec(line)?.[0] ?? "";
-			return mark + (padding(index) ? " " : bar) + line.slice(mark.length);
+			return carried + mark + bar + line.slice(mark.length);
 		});
 	}
 }
 
+/** 投影只用到宿主 UI 的主题与全局展开档位；主会话传 ctx.ui，子代理全过程视图传自己的一份。 */
+export type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded">;
+
 export interface ProjectionEnv {
-	ui: ExtensionUIContext;
+	ui: ProjectionUI;
 	clock: TurnClock;
 	/** 折叠态每轮最多显示几条中间回复首句。 */
 	replyLines: number;

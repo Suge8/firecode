@@ -37,6 +37,8 @@ export interface ActivityFacts {
 type Toggle = "running" | "done" | "idle";
 /** 一行输出：子代理行，或可点击的折叠行。 */
 type Line = { row: Row } | { label: string; mark?: string; toggle: Toggle };
+/** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
+type Target = { toggle: Toggle } | { open: string };
 
 /** working 子代理这么久没有任何输出（模型 token 或工具事件）就追加“N 分钟无输出”。 */
 const STUCK_MS = 5 * 60_000;
@@ -77,11 +79,21 @@ interface Groups {
 	animating: boolean;
 }
 
-function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
+/** 启动序：本进程内的 start 序号，重载恢复的没有序号、排最前并按创建时间。 */
+function launchSorted(facts: ActivityFacts): number[] {
 	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
 	const created = (index: number) => facts.workers[index].createdAt ?? Infinity;
-	const indexes = facts.workers.map((_, index) => index)
+	return facts.workers.map((_, index) => index)
 		.sort((a, b) => launch(a) - launch(b) || created(a) - created(b) || a - b);
+}
+
+/** 子代理按启动序的名字：全过程视图按它换子代理，位置不随状态分组跳动。 */
+export function launchOrder(facts: ActivityFacts): string[] {
+	return launchSorted(facts).map((index) => facts.workers[index].name);
+}
+
+function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
+	const indexes = launchSorted(facts);
 	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
 	for (const index of indexes) {
 		const worker = facts.workers[index];
@@ -176,14 +188,15 @@ export class ActivityList {
 	private showDone = false;
 	private showIdle = false;
 	private moving = true;
-	/** 上一次渲染每行对应的折叠开关，供点击命中。 */
-	private toggles: (Toggle | undefined)[] = [];
+	/** 上一次渲染每行对应的点击目标。 */
+	private targets: (Target | undefined)[] = [];
 
 	constructor(
 		private readonly tui: { requestRender(): void },
 		private readonly theme: Theme,
 		private readonly facts: () => ActivityFacts,
 		private readonly limit: () => number,
+		private readonly open: (name: string) => void = () => {},
 	) {}
 
 	/** 事实变化后调用：对齐时钟订阅并重绘一次。 */
@@ -217,14 +230,19 @@ export class ActivityList {
 			showDone: this.showDone,
 			showIdle: this.showIdle,
 		}, this.theme);
-		this.toggles = lines.map((line) => ("toggle" in line ? line.toggle : undefined));
+		this.targets = lines.map((line) => ("toggle" in line ? { toggle: line.toggle } : { open: line.row.name }));
 		return renderLines(lines, width, this.theme);
 	}
 
 	handleMouse(event: TuiMouseEvent) {
 		if (event.type !== "click" || event.button !== "left") return undefined;
-		const toggle = this.toggles[event.y];
-		if (!toggle) return undefined;
+		const target = this.targets[event.y];
+		if (!target) return undefined;
+		if ("open" in target) {
+			this.open(target.open);
+			return { handled: true };
+		}
+		const { toggle } = target;
 		if (toggle === "running") this.showAllRunning = !this.showAllRunning;
 		else if (toggle === "done") this.showDone = !this.showDone;
 		else this.showIdle = !this.showIdle;

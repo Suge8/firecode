@@ -5,6 +5,7 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, wrapEnvelope } from "../deliver.js";
+import { roundFromEntry } from "../tools/round.js";
 import { MASTER_EVENT_TYPE, withElapsed, type MasterEvent } from "./event-format.js";
 import type { MasterRuntime } from "./runtime.js";
 
@@ -131,10 +132,20 @@ export class Outbox {
 		});
 	}
 
-	/** 本次运行起点只有运行时一处记录；reload 后缺失则省略。 */
+	/**
+	 * 本次运行耗时 = 这次运行（start/send/review 起点之后）在子代理会话里写下的轮记录之和：fallback 续跑或审查里的
+	 * 修复回合各自成段，合起来才是这次运行。子代理排除了 FireCode（没有轮记录器）或 reload 后起点丢失时省略。
+	 * 读得到：宿主在 prompt 结束前发 agent_settled，审查则先写终态 checkpoint 再释放占用，记录都早于这里的读取。
+	 */
 	private withElapsed(produced: MasterEvent, worker?: string): string {
-		const runStartedAt = worker === undefined ? undefined : this.active.live.get(worker)?.runStartedAt;
-		return withElapsed(produced, runStartedAt === undefined ? {} : { run: Date.now() - runStartedAt });
+		const live = worker === undefined ? undefined : this.active.live.get(worker);
+		const since = live?.runStartedAt;
+		const branch = live?.observed?.session.sessionManager.getBranch() ?? [];
+		const rounds = since === undefined ? [] : branch.flatMap((entry) => {
+			const round = roundFromEntry(entry);
+			return round && round.at >= since ? [round] : [];
+		});
+		return withElapsed(produced, rounds.length ? { run: rounds.reduce((total, round) => total + round.elapsed, 0) } : {});
 	}
 }
 

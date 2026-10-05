@@ -22,12 +22,15 @@ interface RoundMarker extends Component {
 	round: Round;
 }
 
+/** 零行标记：投影按 roundOf 识别。会话里的轮记录经宿主渲染成它，没有轮记录的会话（子代理）也可按运行边界直接造。 */
+export function roundMarker(round: Round): Component {
+	const marker: RoundMarker = { round, render: () => [], invalidate() {} };
+	return marker;
+}
+
 /** 本模块写的 entry 一定带 data；类型上的 data? 只是宿主给所有 CustomEntry 的通用形状。 */
-export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>): RoundMarker => ({
-	round: { ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) },
-	render: () => [],
-	invalidate() {},
-});
+export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>) =>
+	roundMarker({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
 
 /** 一轮里更早的非完成终态的短标记。 */
 const EARLIER_TEXT = { aborted: "中断过", error: "请求失败过" } as const;
@@ -63,6 +66,13 @@ export type BranchEntry =
 const isHumanEntry = (entry: BranchEntry) => entry.type === "message" && "message" in entry
 	&& entry.message.role === "user" && !parseEnvelopes(textOf(entry.message.content));
 
+/** 会话条目若是轮记录，给出它（带落定时刻）；子代理全过程视图与 Master 的本次运行耗时都按它读子代理会话。 */
+export function roundFromEntry(entry: unknown): Round | undefined {
+	const record = entry as { type?: unknown; customType?: unknown; data?: unknown; timestamp?: unknown };
+	if (record?.type !== "custom" || record.customType !== ROUND_ENTRY || typeof record.timestamp !== "string") return undefined;
+	return { ...(record.data as SettledRound), at: Date.parse(record.timestamp) };
+}
+
 /**
  * 当前分支最近一轮的落定事实：最近一条人类消息之后的全部轮记录，按 combineRounds 合成。
  * 输入框上边框落定态读它，与摘要行是同一份记录、同一条合成规则。
@@ -72,8 +82,8 @@ export function latestTurnRecord(branch: readonly BranchEntry[]): TurnRecord | u
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index];
 		if (isHumanEntry(entry)) break;
-		if (entry.type === "custom" && "customType" in entry && entry.customType === ROUND_ENTRY)
-			rounds.unshift({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
+		const round = roundFromEntry(entry);
+		if (round) rounds.unshift(round);
 	}
 	return combineRounds(rounds);
 }

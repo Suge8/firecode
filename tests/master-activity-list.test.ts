@@ -46,11 +46,13 @@ function facts(specs: Spec[]) {
 async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; paint?: typeof theme; now?: number } = {}) {
 	const { ActivityList } = await loadFirecodeModule("master/activity-list.ts") as any;
 	let renders = 0;
+	const opened: string[] = [];
 	const component = new ActivityList(
 		{ requestRender: () => renders++ },
 		options.paint ?? theme,
 		() => facts(typeof specs === "function" ? specs() : specs),
 		() => options.limit ?? 4,
+		(name: string) => opened.push(name),
 	);
 	const realNow = Date.now;
 	const at = <T>(fn: () => T) => {
@@ -60,6 +62,7 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 	};
 	return {
 		component,
+		opened,
 		get renders() { return renders; },
 		text: (width = 72): string[] => at(() => component.render(width)).map((line: string) => stripVTControlCharacters(line)),
 		raw: (width = 72): string[] => at(() => component.render(width)),
@@ -180,8 +183,9 @@ test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个�
 	expect(names(view.text()).at(-1)).toBe("✓ 2 个已完成");
 	expect(view.text().some((line) => line.includes("done-a"))).toBe(false);
 
-	// 普通行不响应点击，交还宿主做文字选择。
-	expect(view.click(0)).toBeUndefined();
+	// 子代理行（含展开后的已完成行）点击打开它的全过程视图。
+	expect(view.click(0)).toMatchObject({ handled: true });
+	expect(view.opened).toEqual(["run-0"]);
 });
 
 test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样排版（标记字形、缩进），展开行不重复“空闲”，按启动序、没有启动序的按档案创建时间", async () => {

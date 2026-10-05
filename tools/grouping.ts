@@ -3,7 +3,7 @@ import { AssistantMessageComponent, CustomMessageComponent, ToolExecutionCompone
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
 import { onFrame } from "../flame.js";
 import { isMachineMessage, projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
-import { assistantFacts, captureTui, findChat, HostShapeError, patchMethod, rowUiOf, scrollViewOf, toolFacts } from "./host.js";
+import { assistantFacts, captureTui, findChat, HostShapeError, isCardOpened, patchMethod, rowUiOf, scrollViewOf, toolFacts } from "./host.js";
 import type { TurnClock } from "./turn-clock.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
@@ -71,9 +71,9 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 	restores.push(patchMethod(ToolExecutionComponent.prototype, "setExpanded", function (this: ToolExecutionComponent, value) {
 		originalExpand.call(this, belongsHere(this) ? false : value);
 	}));
-	// 机器消息的原生卡片只由点击那一行打开；全局展开不平铺它（其余 CustomMessage 照旧跟随全局）。
+	// 机器消息的原生卡片只由投影点开（host.ts 的 openCard）；全局展开不平铺它（其余 CustomMessage 照旧跟随全局）。
 	restores.push(patchMethod(CustomMessageComponent.prototype, "setExpanded", function (this: CustomMessageComponent, value) {
-		const target = guarded(() => (isMachineMessage(this) ? false : value), () => value);
+		const target = guarded(() => (isMachineMessage(this) && !isCardOpened(this) ? false : value), () => value);
 		originalMessageExpand.call(this, target);
 	}));
 
@@ -101,17 +101,14 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 			isOpen: (key) => overrides.has(key),
 			toggleOpen: (key) => {
 				holdViewport();
-				const opening = !overrides.delete(key);
-				if (opening) overrides.add(key);
-				if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, opening);
+				if (!overrides.delete(key)) overrides.add(key);
 				tui.requestRender();
 			},
 		};
 		chat.render = (width) => {
-			// ctrl+o 永远是全部展开/全部折叠：全局档位一变，逐轮覆盖与被点开的原生卡片一并复位。
+			// ctrl+o 永远是全部展开/全部折叠：全局档位一变，逐轮覆盖（含被点开的机器消息卡）一并复位。
 			if (ui.getToolsExpanded() !== lastExpanded) {
 				lastExpanded = ui.getToolsExpanded();
-				for (const key of overrides) if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, false);
 				overrides.clear();
 			}
 			return guarded(() => {

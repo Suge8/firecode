@@ -19,6 +19,7 @@ test("missing runtime config disables optional behavior and warns on each sessio
 		registerMessageRenderer: (name: string) => renderers.push(name),
 		on: (name: string, handler: (...args: unknown[]) => void) =>
 			events.set(name, [...(events.get(name) ?? []), handler]),
+		events: { on: () => () => {}, emit() {} },
 	};
 
 	(registerFirecode as (pi: unknown) => void)(pi);
@@ -55,6 +56,7 @@ test.each([
 		registerMessageRenderer() {},
 		registerEntryRenderer: (name: string) => entryRenderers.push(name),
 		on() {},
+		events: { on: () => () => {}, emit() {} },
 	});
 
 	expect(entryRenderers).toEqual([]);
