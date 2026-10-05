@@ -14,6 +14,11 @@ import {
 import { takeDuration } from "./timing.js";
 
 export const RAIL = "▏ ";
+/**
+ * 聊天行右侧留出的列：宿主全屏模式把滚动条画在最后一列，按列切掉它时会丢掉行尾的颜色复位，
+ * 所以行宽到倒数第二列为止，末尾再空一格与滚动条隔开。
+ */
+export const CHAT_GUTTER = 2;
 /** 右侧列与主体之间至少留出的空隙，不够就先丢弃右侧列 */
 const RIGHT_GAP = 2;
 const MIN_VALUE_WIDTH = 8;
@@ -165,7 +170,7 @@ type LineSpec = {
 
 function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
 	const { status } = spec;
-	const safeWidth = Math.max(1, width - 2);
+	const safeWidth = Math.max(1, width - CHAT_GUTTER);
 	const head: Part[] = [
 		{ text: RAIL, color: "dim" },
 		{ text: `${status.glyph} `, color: status.color, bold: true },

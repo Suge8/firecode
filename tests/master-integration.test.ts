@@ -1108,9 +1108,9 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 	await harness.execute({ action: "ack", worker: "broken" });
 	await harness.execute({ action: "ack", worker: "fine" });
 	// 发落后的失败行离开置顶组，子代理仍在池里，合进“N 个空闲”。
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u), expect.stringMatching(/^ +1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u), expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
 	await harness.execute({ action: "kill", worker: "fine" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
 });
 
 test("活动列表：已完成展开显示结果首句，下一轮人类输入时自动收起；ctrl+o 不展开活动列表", async () => {
@@ -1142,6 +1142,28 @@ test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个�
 	})) }));
 	await harness.command("");
 	expect(harness.activity()).toEqual([expect.stringMatching(/2 个空闲/u)]);
+	await harness.command("");
+});
+
+test("resume 后空闲子代理按档案里的创建时间列出（池数组顺序受并发 start 影响，不可靠）；start 把创建时间写进档案", async () => {
+	const harness = await setup(false);
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	const archived = [["mid", 3], ["zeta", 1], ["alpha", 2]] as const;
+	await writeFile(path, JSON.stringify({ version: 8, workers: archived.map(([name, createdAt]) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), createdAt,
+	})) }));
+	await harness.command("");
+	harness.clickActivity("3 个空闲");
+	expect(harness.activity().slice(1).map((line) => line.match(/ (zeta|alpha|mid) /u)?.[1])).toEqual(["zeta", "alpha", "mid"]);
+
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "fresh", prompt: "执行", role: "工程师" });
+	await delivered;
+	const saved = JSON.parse(await readFile(path, "utf8")).workers.find((worker: any) => worker.name === "fresh");
+	expect(typeof saved.createdAt).toBe("number");
 	await harness.command("");
 });
 
@@ -1312,7 +1334,7 @@ test("中断事件带耗时", async () => {
 	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
 	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 

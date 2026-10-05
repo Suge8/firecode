@@ -552,7 +552,7 @@ test("轮记录是会话里的零行记录：摘要行落定读它显示整段�
 	expect(marks).toEqual(["✓ 3.0s · ⚠ Cache miss after 8m idle", "✗ 已中断 · 12s", "✗ 请求失败 · 5.0s"]);
 });
 
-test("同一轮不经人类输入再次进行（命令触发）会有两条记录：显示后写的那条；新一轮的记录属于新一轮", async () => {
+test("同一轮不经人类输入再次进行（命令触发）会有两条记录：耗时累加、终态取最后一条；新一轮的记录属于新一轮", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
@@ -567,8 +567,22 @@ test("同一轮不经人类输入再次进行（命令触发）会有两条记�
 	s.setNow(60_000);
 
 	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 9.0s", "✓ 1.0s"]);
-	expect(collapsed.indexOf("✓ 9.0s")).toBeLessThan(collapsed.indexOf("第一次回复"));
+	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 12s", "✓ 1.0s"]);
+	expect(collapsed.indexOf("✓ 12s")).toBeLessThan(collapsed.indexOf("第一次回复"));
+});
+
+test("一轮里先被 Esc 中断、又跑了一段（如 /fire-review）：不丢信息——耗时累加、终态取最后、更早的中断以“中断过 N 次”追加，多段不给均速", async () => {
+	const s = await scene();
+	hostUser(s, "写一篇散文");
+	assistant(s, [{ type: "thinking", thinking: "构思" }, { type: "text", text: "冬天……" }], "aborted");
+	s.settle(6_200, "aborted", 0);
+	s.complete(s.tool("read", { path: "draft.md" }));
+	assistant(s, [{ type: "text", text: "审查已通过。" }]);
+	s.settle(326_000, "complete", 0, 77.9);
+	s.setNow(600_000);
+	const summary = s.lines().find((line: string) => /^[✓✗]/.test(line))!.trimEnd();
+	expect(summary).toBe("✓ 5m32s · 中断过 1 次");
+	expect(s.chat.render(100).join("\n")).toContain(s.ui.theme.fg("warning", "中断过 1 次"));
 });
 
 test.each([
@@ -1066,7 +1080,7 @@ test("宿主形状不符出现在全局展开补丁里时同样整体退回原�
 	expect(host.CustomMessageComponent.prototype.setExpanded).toBe(pristine);
 });
 
-test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮（折叠态一行、展开态全文）；歇下之后的人类消息才开新一轮", async () => {
+test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮，折叠态与展开态都是带竖条的全文、上下留白；歇下之后的人类消息才开新一轮", async () => {
 	const s = await scene();
 	hostUser(s, "原问题");
 	s.setNow(0);
@@ -1084,12 +1098,19 @@ test("补话不切轮：与上一条人类消息之间没有轮记录的人类�
 	s.settle(5_000, "complete", 0);
 	s.setNow(60_000);
 
-	const folded = s.lines().map((line: string) => line.trimEnd()).filter(Boolean);
+	const all = s.lines().map((line: string) => line.trimEnd());
+	const folded = all.filter(Boolean);
 	expect(folded.filter((line: string) => /^✓/.test(line))).toEqual(["✓ 5.0s"]);
 	const at = (needle: string) => folded.findIndex((line: string) => line.includes(needle));
+	// 补话是人类原话：与普通用户消息同样的竖条全文，不截成首句。
 	expect(folded[at("补一句")]).toBe("▌ 补一句：顺便说下几点");
-	expect(folded.join("\n")).not.toContain("第二行细节");
-	expect([at("原问题"), at("✓ 5.0s"), at("补一句"), at("现在十点。")]).toEqual([...[at("原问题"), at("✓ 5.0s"), at("补一句"), at("现在十点。")]].sort((a, b) => a - b));
+	expect(folded[at("第二行细节")]).toBe("▌ 第二行细节");
+	expect([at("原问题"), at("✓ 5.0s"), at("先看看。"), at("补一句"), at("第二行细节"), at("现在十点。")])
+		.toEqual([at("原问题"), at("✓ 5.0s"), at("先看看。"), at("补一句"), at("第二行细节"), at("现在十点。")].sort((a, b) => a - b));
+	const row = (needle: string) => all.findIndex((line: string) => line.includes(needle));
+	// 上下留白：与前一条中间回复、后一条回复之间都至少隔一行空白。
+	expect(all.slice(row("先看看。") + 1, row("补一句")).some((line: string) => !line.replace(/▌/u, "").trim())).toBe(true);
+	expect(all.slice(row("第二行细节") + 1, row("现在十点。")).some((line: string) => !line.replace(/▌/u, "").trim())).toBe(true);
 
 	s.click(s.lines().findIndex((line: string) => line.startsWith("✓")));
 	const expanded = s.lines().join("\n");
@@ -1175,4 +1196,31 @@ test("收尾不拼帧：歇下那一刻摘要行直接是 ✓ 加定格文字，
 		s.setNow(now);
 		expect(s.lines().find((line: string) => line.includes("3.0s"))).toMatch(/^✓ 3\.0s · 40 tps/u);
 	}
+});
+
+test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一格空：宿主按列切掉末列画滚动条时不丢颜色复位", async () => {
+	const { sliceByColumn } = await import(PI_TUI_URL);
+	const s = await scene();
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	hostUser(s, WORKER_RESULT("fix-auth", "这是一段很长很长的结果说明，".repeat(8)));
+	s.chat.addChild(new s.tui.Spacer(1));
+	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss after 8m idle: 63k tokens re-billed and more and more text"), 1, 0));
+	assistant(s, [{ type: "text", text: "收口" }]);
+	s.settle(3_000, "complete", 0);
+	s.setNow(60_000);
+	const width = 60;
+	const kept = (needle: string) => {
+		const row = s.chat.render(width).find((line: string) => stripVTControlCharacters(line).includes(needle))!;
+		expect(stripVTControlCharacters(row)).toContain("…");
+		// 宿主画滚动条时只保留前 width-1 列。
+		return sliceByColumn(row, 0, width - 1, true);
+	};
+	const summary = kept("✓ 3.0s");
+	expect(summary.endsWith("\x1b[39m")).toBe(true);
+	expect(s.tui.visibleWidth(stripVTControlCharacters(summary))).toBeLessThanOrEqual(width - 2);
+	s.ui.setToolsExpanded(true);
+	const machine = kept("↳ fix-auth");
+	expect(machine.endsWith("\x1b[39m")).toBe(true);
+	expect(s.tui.visibleWidth(stripVTControlCharacters(machine))).toBeLessThanOrEqual(width - 2);
 });

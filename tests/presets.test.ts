@@ -38,7 +38,8 @@ const PRESET_CONFIG = JSON.stringify({
 	keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u", fast: "ctrl+f" },
 	presets: {
 		deep: { model: "test/deep/high", tools: ["read", "bash"], instructions: "深度模式指令" },
-		quick: { model: "test/quick/low" },
+		quick: { model: "test/quick/low", instructions: "快速模式指令" },
+		plain: { model: "test/plain/low" },
 	},
 });
 
@@ -49,6 +50,7 @@ async function presetHost() {
 		"test/base": { provider: "test", id: "base" },
 		"test/deep": { provider: "test", id: "deep" },
 		"test/quick": { provider: "test", id: "quick" },
+		"test/plain": { provider: "test", id: "plain" },
 	};
 	const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 	const handlers = new Map<string, Function[]>();
@@ -164,4 +166,18 @@ test("预设的模型套用失败（找不到或没有凭据）就整套不套�
 	expect(await host.instructions()).toBe("BASE");
 	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
 	expect(host.state.model).toEqual({ provider: "test", id: "base" });
+});
+
+test("只改模型与思考档的预设不发布名字（边框已显示模型）；改了工具集或附加指令的才发布", async () => {
+	const host = await presetHost();
+	await host.emit("session_start");
+	await host.preset("plain");
+	expect(host.state.model).toEqual({ provider: "test", id: "plain" });
+	expect(host.state.status).toBeUndefined();
+	await host.preset("quick");
+	expect(host.state.status).toBe("Quick");
+	await host.preset("deep");
+	expect(host.state.status).toBe("Deep");
+	await host.preset("plain");
+	expect(host.state.status).toBeUndefined();
 });

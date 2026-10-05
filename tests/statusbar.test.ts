@@ -300,9 +300,10 @@ test("上边框落定态：均速跟在耗时后，中断与请求失败写明�
 		round(0, 420, "stop");
 		expect(top()).toMatch(/^─ ✓ 10s · 42 tps ─+$/u);
 		round(100_000, 100, "aborted");
-		expect(top()).toMatch(/^─ ✗ 已中断 10s ─+$/u);
+		// 与摘要行同一写法：终态字样与耗时之间是“ · ”。
+		expect(top()).toMatch(/^─ ✗ 已中断 · 10s ─+$/u);
 		round(200_000, 0, "error");
-		expect(top()).toMatch(/^─ ✗ 请求失败 10s ─+$/u);
+		expect(top()).toMatch(/^─ ✗ 请求失败 · 10s ─+$/u);
 	} finally {
 		setSystemTime();
 	}
@@ -365,9 +366,10 @@ test("主会话审查算会话进行中：上边框是火苗加计时与审查�
 		setSystemTime(new Date(1_062_000));
 		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
 		expect(shell.top(40)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
-		// 修复回合：指挥官在跑，照常“处理中”，审查进度并排。
+		// 修复回合指挥官在跑，措辞与只等审查时一致：审查期间的状态都由审查进度说明，不另写“处理中”。
 		shell.view({ busy: true, since: 1_000_000, review: true, agentRunning: true });
-		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 处理中 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
+		shell.review({ stage: "fixing", round: 2, passed: 0, total: 0, blocked: 0 });
+		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 修复中 ─+ 指挥官 ─$`, "u"));
 	} finally {
 		setSystemTime();
 	}
@@ -381,8 +383,10 @@ test("歇下那一刻上边框直接是 ✓ 加定格文字，不先出一帧冷
 	expect(shell.top()).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
 });
 
-test("预设名显示在下边框标题之后、模型之前，不带图标", async () => {
+test("预设名显示在下边框标题之后、模型之前，不带图标；显不显示由预设模块发不发布决定，外壳原样显示", async () => {
 	const shell = await shellWithBusy();
 	shell.statuses.set("preset", "Deep");
 	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Deep · test-model · 1\.0%\/1M ─$/u);
+	shell.statuses.set("preset", "\x1b[38;5;4mModel\x1b[39m");
+	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Model · test-model · 1\.0%\/1M ─$/u);
 });

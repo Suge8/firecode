@@ -743,7 +743,7 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 	if (!state.active) return;
 	const currentActive = state.active;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	const evidence = buildEvidence(sessionEntries(rt), config.language);
+	const evidence = buildEvidence(sessionEntries(rt), config.language, { sessionFile: active.ctx.sessionManager.getSessionFile() });
 	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
 		language: config.language,
 		scope: scopeText(config.language),

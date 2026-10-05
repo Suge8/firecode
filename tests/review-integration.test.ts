@@ -54,6 +54,7 @@ function makeSessionManager() {
 		entries,
 		getBranch: () => [...entries],
 		getEntries: () => [...entries],
+		getSessionFile: () => "/tmp/review-session.jsonl",
 		appendCustomEntry: (customType: string, data?: unknown) => {
 			entries.push({ type: "custom", customType, data });
 		},

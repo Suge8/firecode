@@ -173,8 +173,9 @@ export interface SummaryPromptInput {
 
 /** 质量裁决终态后投给执行模型的总结回合提示：人话收尾，带反循环禁令。 */
 export function buildSummaryPrompt(input: SummaryPromptInput): string {
-	const material = input.material.length > SUMMARY_MATERIAL_LIMIT
-		? `${input.material.slice(0, SUMMARY_MATERIAL_LIMIT)}\n…`
+	const omitted = input.material.length - SUMMARY_MATERIAL_LIMIT;
+	const material = omitted > 0
+		? `${input.material.slice(0, SUMMARY_MATERIAL_LIMIT)}\n${input.language === "en" ? `[material truncated: ${omitted} characters omitted]` : `[材料截断：省略 ${omitted} 字]`}`
 		: input.material;
 	const body = summaryInstruction(input.language, input.kind, input.rounds);
 	const content = material.trim()

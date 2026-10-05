@@ -3,8 +3,8 @@
  * 行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟；落定事实只在运行时，reload 后不展示历史。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
-import { type ActivityRow as Row, renderActivityRow, roleFits } from "../activity.js";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } from "../activity.js";
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";
@@ -20,14 +20,17 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "createdAt">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
-	/** 名字 → 启动序号（start 调用到达的先后）；池数组顺序受并发 start 的 await 影响，不能当启动序。重载恢复的没有记录，排最前并保持池内相对顺序。 */
+	/**
+	 * 名字 → 启动序号（start 调用到达的先后）；池数组顺序受并发 start 的 await 影响，不能当启动序。
+	 * 重载恢复的没有序号，排最前并按档案里的创建时间。
+	 */
 	launchOrder: ReadonlyMap<string, number>;
 }
 
@@ -47,9 +50,11 @@ const ROWS_PER_ACTIVITY = 6;
 const duration = (ms: number) => formatDuration(Math.max(0, ms));
 const DONE_MARK = paint(HEAT_COLORS.green, "✓");
 const IDLE_GLYPH = "·";
-/** 名字列至多占行宽的这一份（窄屏不让长名字挤掉动作），且不少于 MIN_NAME_WIDTH。 */
-const NAME_WIDTH_SHARE = 5;
-const MIN_NAME_WIDTH = 9;
+
+/** 卡住提醒的全写法与窄屏短写法。 */
+function silentNote(minutes: number): { full: string; short: string } {
+	return { full: ` · ${minutes} 分钟无输出`, short: ` · ${minutes}m 无输出` };
+}
 const FAILED_MARK = paint(HEAT_COLORS.fail, "✗");
 
 /**
@@ -74,7 +79,9 @@ interface Groups {
 
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
-	const indexes = facts.workers.map((_, index) => index).sort((a, b) => launch(a) - launch(b) || a - b);
+	const created = (index: number) => facts.workers[index].createdAt ?? Infinity;
+	const indexes = facts.workers.map((_, index) => index)
+		.sort((a, b) => launch(a) - launch(b) || created(a) - created(b) || a - b);
 	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
 	for (const index of indexes) {
 		const worker = facts.workers[index];
@@ -89,7 +96,7 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 			const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
 			// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
 			if (silent >= STUCK_MS)
-				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action, note: ` · ${Math.floor(silent / MINUTE_MS)} 分钟无输出` });
+				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) });
 			else groups.running.push({ ...base, mark: flame(1, phase), action });
 			continue;
 		}
@@ -102,7 +109,8 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 		}
 		const fact = facts.settled.get(path);
 		if (!fact) {
-			groups.idle.push({ ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "空闲", settled: true });
+			// 组名已经说了“空闲”，展开行只列谁。
+			groups.idle.push({ ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "", settled: true });
 			continue;
 		}
 		const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
@@ -127,7 +135,7 @@ interface Folding {
 }
 
 /** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“… +N 个在跑”。 */
-function layout({ failed, interrupted, stuck, running, done, idle }: Groups, folding: Folding): Line[] {
+function layout({ failed, interrupted, stuck, running, done, idle }: Groups, folding: Folding, theme: Theme): Line[] {
 	const lines: Line[] = [...failed, ...interrupted, ...stuck].map((row) => ({ row }));
 	const overflow = running.length > folding.limit;
 	if (!overflow || folding.showAllRunning) {
@@ -142,7 +150,7 @@ function layout({ failed, interrupted, stuck, running, done, idle }: Groups, fol
 		if (folding.showDone) lines.push(...done.map((row) => ({ row })));
 	}
 	if (idle.length) {
-		lines.push({ label: `${idle.length} 个空闲`, toggle: "idle" });
+		lines.push({ label: `${idle.length} 个空闲`, mark: theme.fg("dim", IDLE_GLYPH), toggle: "idle" });
 		if (folding.showIdle) lines.push(...idle.map((row) => ({ row })));
 	}
 	return lines;
@@ -150,8 +158,7 @@ function layout({ failed, interrupted, stuck, running, done, idle }: Groups, fol
 
 function renderLines(lines: Line[], width: number, theme: Theme): string[] {
 	const rows = lines.flatMap((line) => ("row" in line ? [line.row] : []));
-	const longest = Math.max(0, ...rows.map((row) => visibleWidth(row.name)));
-	const nameWidth = Math.min(longest, Math.max(MIN_NAME_WIDTH, Math.floor(width / NAME_WIDTH_SHARE)));
+	const nameWidth = nameWidthFor(rows, width);
 	// 退让整表一致：任何一行放不下“角色 · 动作”就全表丢角色，列才对得齐。
 	const showRole = rows.every((row) => roleFits(row, width, nameWidth));
 	return lines.map((line) => {
@@ -208,7 +215,7 @@ export class ActivityList {
 			showAllRunning: this.showAllRunning,
 			showDone: this.showDone,
 			showIdle: this.showIdle,
-		});
+		}, this.theme);
 		this.toggles = lines.map((line) => ("toggle" in line ? line.toggle : undefined));
 		return renderLines(lines, width, this.theme);
 	}
