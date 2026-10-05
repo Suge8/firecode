@@ -7,36 +7,23 @@ import {
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Markdown, Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { toolTarget } from "./actions.js";
 import { firstSentence, oneLine, textOf } from "../format.js";
-import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
+import { ToolLine, resultText, type ActionLine } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
+import { customMessageOf, isEntry, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
-/** 宿主工具行内部字段只在工具分组接缝读取，结果与单工具展开仍归宿主所有。 */
-export type ToolRow = ToolExecutionComponent;
-type RowData = {
-	toolName: string;
-	toolCallId: string;
-	args: unknown;
-	cwd: string;
-	expanded: boolean;
-	isPartial: boolean;
-	rendererState: RowState;
-	toolDefinition?: { label?: string };
-	callRendererComponent?: Component;
-	resultRendererComponent?: Component;
-	result?: ToolResult & { isError: boolean };
-};
-const rowData = (row: ToolRow): RowData => row as unknown as RowData;
+type RowData = ToolFacts;
+const rowData = toolFacts;
 
 function actionLine(component: Component | undefined): ActionLine | undefined {
 	return component && "actionWord" in component && typeof component.actionWord === "string"
@@ -46,10 +33,9 @@ function actionLine(component: Component | undefined): ActionLine | undefined {
 /** 机器消息：整条文本由信封构成，来自 CustomMessage 或空闲时投递的用户消息。 */
 function machineText(component: Component): string | undefined {
 	if (component instanceof CustomMessageComponent) {
-		const content = (component as unknown as { message: { content: unknown } }).message.content;
-		return textOf(content);
+		return textOf(customMessageOf(component).content);
 	}
-	if (component instanceof UserMessageComponent) return (component as unknown as { text: string }).text;
+	if (component instanceof UserMessageComponent) return userTextOf(component);
 	return undefined;
 }
 
@@ -57,7 +43,7 @@ function machineEntriesOf(component: Component): MachineEntry[] | undefined {
 	const text = machineText(component);
 	if (text === undefined) return undefined;
 	const details = component instanceof CustomMessageComponent
-		? (component as unknown as { message: { details?: unknown } }).message.details
+		? customMessageOf(component).details
 		: undefined;
 	return machineEntries(text, details);
 }
@@ -74,11 +60,6 @@ function machineBodies(component: Component): string {
 /** 只有人类用户消息是轮次边界。 */
 function isHuman(component: Component): boolean {
 	return component instanceof UserMessageComponent && !machineEntriesOf(component);
-}
-
-/** 宿主 CustomEntry（轮记录等）：类不对扩展导出，按它独有的 hasContent 能力识别。 */
-function isEntry(component: Component): boolean {
-	return component instanceof Container && typeof (component as unknown as { hasContent?: unknown }).hasContent === "function";
 }
 
 /** 过程 = 模型的输出、动作与收件（含机器消息）；其余节点（错误、CustomEntry 等）是段边界。 */
@@ -102,7 +83,7 @@ function hasSubstance(component: Component): boolean {
  */
 function noticeKind(component: Component | undefined, theme: Theme): "warning" | "dim" | undefined {
 	if (!(component instanceof Text)) return;
-	const text = (component as unknown as { text: string }).text;
+	const text = textComponentText(component);
 	const plain = stripVTControlCharacters(text);
 	return (["warning", "dim"] as const).find((color) => theme.fg(color, plain) === text);
 }
@@ -120,7 +101,7 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 const ACTIVITY_TEXT = { thinking: "思考中", replying: "回复中" } as const satisfies Record<AssistantActivity, string>;
 
-type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures"> & { running: number; round?: Round };
+type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures"> & { round?: Round };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
@@ -131,7 +112,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 	const failed = new Set<string>();
 	for (const item of segment) {
 		// 多条宿主提示只取首条原文，其余在展开态可见。
-		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters((item as unknown as { text: string }).text));
+		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters(textComponentText(item as Text)));
 		// 同一轮多条轮记录（命令触发的再次进行）取后写的。
 		round = roundOf(item) ?? round;
 		const entries = machineEntriesOf(item);
@@ -141,7 +122,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		if (settled && age < ARRIVAL_FLASH_MS) arrival = { text: settled.title, failed: settled.alarm, age };
 		if (item instanceof ToolExecutionComponent && rowData(item).isPartial) running.push(rowData(item));
 	}
-	return { notice, running: running.length, arrival, round, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
+	return { notice, arrival, round, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
 }
 
 /**
@@ -317,7 +298,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
 	const open = globalOpen !== env.isOpen(turn);
 	const facts = scan(segment, reply?.activity, env);
-	const live = final && (env.clock.live(turn) || facts.running > 0 || !!reply?.activity);
+	const live = final && env.clock.live(turn);
 	// 进行中的轮一律有摘要行：纯文字轮从开始到歇下都占着这一行，回复不跳。
 	const hasSummary = live || segment.some(hasSubstance);
 	const round = live ? undefined : facts.round;
