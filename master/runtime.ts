@@ -48,8 +48,10 @@ export interface WorkerLive {
 	/** interrupt 标记的回合：它落定时按中断处理。 */
 	interruptedRun?: symbol;
 	interruptTimer?: NodeJS.Timeout;
-	/** 本次运行（start/send/review 投递）的起点，耗时信号的唯一来源。 */
+	/** 本次运行（start/send/review 投递）的起点：活动列表的实时耗时，以及从子代理会话里挑出属于这次运行的轮记录。 */
 	runStartedAt?: number;
+	/** 这次运行里用户在子代理全过程视图直接说的话；落定事件据此注明来源。 */
+	viewPrompts: string[];
 	/** 最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
 	lastOutputAt?: number;
 	currentTools: Map<string, CurrentTool>;
@@ -114,13 +116,13 @@ export class MasterRuntime {
 
 	liveOf(name: string): WorkerLive {
 		let live = this.live.get(name);
-		if (!live) this.live.set(name, live = { currentTools: new Map() });
+		if (!live) this.live.set(name, live = { currentTools: new Map(), viewPrompts: [] });
 		return live;
 	}
 
 	/** start 同步段占名并取序号。 */
 	reserve(name: string): WorkerLive {
-		const live: WorkerLive = { currentTools: new Map(), starting: true, launch: ++this.launchSeq };
+		const live: WorkerLive = { currentTools: new Map(), viewPrompts: [], starting: true, launch: ++this.launchSeq };
 		this.live.set(name, live);
 		return live;
 	}
@@ -172,6 +174,7 @@ export class MasterRuntime {
 		clearTimeout(live.interruptTimer);
 		live.interruptTimer = undefined;
 		live.runStartedAt = Date.now();
+		live.viewPrompts = [];
 	}
 
 	/** 每个 Worker 只挂一个会话订阅；换了会话（释放后重开）才重挂。 */

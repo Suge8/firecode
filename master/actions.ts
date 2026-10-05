@@ -106,8 +106,13 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 	const requestedCwd = optionalString(params.cwd);
 	const prompt = requiredString(params.prompt, "prompt");
 	validateDelegationText(prompt);
-	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd)
-		return steer(active, target, prompt, params.review === true);
+	// 子代理全过程视图的补话走同一入口，只多一个来源标记：这次运行的落定事件据此注明是用户在视图里直接派的。
+	const fromView = params.origin === "view";
+	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
+		const result = await steer(active, target, prompt, params.review === true);
+		if (fromView) live.viewPrompts.push(prompt);
+		return result;
+	}
 	if (target.status === "working") throw new Error(`${target.name} 正在工作；切换 role/thinking/cwd 需先 interrupt`);
 	if (target.status !== "idle") throw new Error(`${target.name} 正在审查，等落定再 send`);
 	const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
@@ -142,6 +147,7 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 			...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),
 		}));
 		active.beginRun(target.name);
+		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
 		return toolResult({ sent: true });
 	} finally {

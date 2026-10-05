@@ -105,7 +105,7 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef): void {
 	const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
-	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true), identity.name);
+	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true, takeViewPrompts(active, identity)), identity.name);
 }
 
 /**
@@ -173,8 +173,8 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 	active.markIdle(idle, failure ? { kind: "failed", note: firstSentence(failure) } : { kind: "done", note: firstSentence(terminal!.text) });
 	const obligation = current.reviewNeeded === true;
 	const event: MasterEvent = failure
-		? masterEvent.failed(identity.name, failure, obligation)
-		: masterEvent.returned(identity.name, terminal!.text, obligation);
+		? masterEvent.failed(identity.name, failure, obligation, takeViewPrompts(active, identity))
+		: masterEvent.returned(identity.name, terminal!.text, obligation, takeViewPrompts(active, identity));
 	active.outbox.enqueue(event, identity.name);
 }
 
@@ -204,6 +204,14 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
 		},
 	);
+}
+
+/** 这次运行里视图说过的话交给落定事件后清空：下一次运行另算。 */
+function takeViewPrompts(active: MasterRuntime, worker: WorkerRef): string[] {
+	const live = active.liveOf(worker.name);
+	const prompts = live.viewPrompts;
+	live.viewPrompts = [];
+	return prompts;
 }
 
 export function reviewRunId(outcome: ReviewOutcome): string | undefined {

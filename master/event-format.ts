@@ -31,13 +31,22 @@ const lines = (...parts: (string | undefined)[]) => parts.filter((part) => part 
 const settled = (...parts: (string | undefined)[]): MasterEvent => ({ body: lines(...parts), settled: true });
 const notice = (...parts: (string | undefined)[]): MasterEvent => ({ body: lines(...parts), settled: false });
 
+/**
+ * 一次运行里用户在子代理全过程视图直接说的话（按顺序）。有就在标题结果词后注明来源、正文先列原话：
+ * 指挥官据此知道这次运行不是它派的，只记下不向用户复述；成败、发落、在飞数与普通 send 完全相同。
+ */
+export type ViewPrompts = readonly string[];
+const VIEW_MARK = "（你在子代理视图里直接派的）";
+const runTitle = (name: string, word: string, view: ViewPrompts) => `${name} ${word}${view.length ? VIEW_MARK : ""}`;
+const youSaid = (view: ViewPrompts) => view.map((prompt) => `你说：${prompt}`);
+
 export const masterEvent = {
-	returned: (name: string, reply: string, obligation = false) =>
-		settled(`${name} 已返回`, SECTIONS.reply, reply, obligation ? OBLIGATION : undefined),
-	failed: (name: string, error: string, obligation = false) =>
-		settled(`${name} 失败`, SECTIONS.error, error, obligation ? OBLIGATION : undefined),
-	interrupted: (name: string, obligation: boolean) =>
-		settled(`${name} 被中断`, obligation ? "会话与审查义务均已保留，可 send 续派" : "会话已保留，可 send 续派"),
+	returned: (name: string, reply: string, obligation = false, view: ViewPrompts = []) =>
+		settled(runTitle(name, "已返回", view), ...youSaid(view), SECTIONS.reply, reply, obligation ? OBLIGATION : undefined),
+	failed: (name: string, error: string, obligation = false, view: ViewPrompts = []) =>
+		settled(runTitle(name, "失败", view), ...youSaid(view), SECTIONS.error, error, obligation ? OBLIGATION : undefined),
+	interrupted: (name: string, obligation: boolean, view: ViewPrompts = []) =>
+		settled(runTitle(name, "被中断", view), ...youSaid(view), obligation ? "会话与审查义务均已保留，可 send 续派" : "会话已保留，可 send 续派"),
 	reviewIncomplete: (name: string, reason: string, reply?: string) =>
 		settled(`${name} 审查未完成`, SECTIONS.error, reason, ...(reply === undefined ? [] : [SECTIONS.finalReply, reply || "（无回复）"])),
 	/** 审查终态；reply 是 Worker 最后一条回复。停止与未完成是失败：原因进“错误：”分节，顾问意见在其后。 */
@@ -64,7 +73,7 @@ export const masterEvent = {
 		notice(`${name} 已切换模型`, `已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`),
 };
 
-/** 落定类正文末尾追加 Worker 本次运行耗时；起点缺失（reload 后）或非落定事件不追加，不用当前时刻冒充。 */
+/** 落定类正文末尾追加 Worker 本次运行耗时（子代理会话写下的轮记录给出）；没有记录或非落定事件不追加，不用别处的计时冒充。 */
 export function withElapsed(event: MasterEvent, { run }: { run?: number }): string {
 	return run === undefined || !event.settled ? event.body : `${event.body}\n耗时：本次运行 ${formatDuration(run)}`;
 }
