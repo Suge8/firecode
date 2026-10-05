@@ -764,7 +764,7 @@ test("主回合空闲时，并发落定合并走前门用户消息，投递前�
 	]);
 });
 
-test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 send 自动注入现场自检", async () => {
+test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待续跑”，首次 send 自动注入现场自检", async () => {
 	const harness = await setup(true, { interruptResumeMs: 10 });
 	let resumedPrompt = "";
 	faux.setResponses([
@@ -787,12 +787,9 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	await delivered;
 	at(400);
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 被中断");
+	// 中断是指挥官自己发起的，它知道现场：过了提醒时限也不补发“待续跑”。
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 待续跑");
-	// 续跑提醒不是落定类事件：不带“本次运行”，不触发到达高亮。
-	expect(elapsedTail(harness.messages.at(-1).message.content)).toBe("耗时：当前任务 6m40s");
-	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(reminded.disposition).toBe("reminded");
+	expect(harness.messages.map((entry: any) => titleOf(entry.message.content))).toEqual(["interrupted 被中断"]);
 
 	faux.setResponses([(context: any) => {
 		resumedPrompt = context.messages.filter((message: any) => message.role === "user")
@@ -809,6 +806,23 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(resumedPrompt).toContain("</firecode_master_event>");
 	const listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed.interruptedAt).toBeUndefined();
+});
+
+test("会话重载打断的回合：恢复后补挂续跑提醒，提醒说清是重载打断而不是“外部中断后无人接手”", async () => {
+	const harness = await setup(false, { interruptResumeMs: 10 });
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, JSON.stringify({ version: 8, workers: [{
+		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"),
+	}] }));
+	await harness.command("");
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	const content = harness.messages.at(-1).message.content as string;
+	expect(titleOf(content)).toBe("reloaded 待续跑");
+	expect(content).toContain("重载");
+	expect(content).not.toMatch(/外部中断|无人接手/u);
+	await harness.command("");
 });
 
 test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也不报错", async () => {
@@ -1198,7 +1212,7 @@ const elapsedTail = (content: string) => content.split("\n").at(-2);
 /** 信封正文第一行：给人看的“<名字> <结果词>”标题。 */
 const titleOf = (content: string) => content.split("\n")[1];
 
-test("落定事件末尾带 Worker 本次运行与指挥官任务耗时，Master 事件不重置任务起点", async () => {
+test("落定事件末尾只带 Worker 本次运行耗时，对人没有意义的“当前任务”不再出现", async () => {
 	const harness = await setup();
 	const settle = async (prompt: string, action: "start" | "send", settleAt: number) => {
 		faux.setResponses([() => { at(settleAt); return fauxAssistantMessage("完成"); }]);
@@ -1210,16 +1224,9 @@ test("落定事件末尾带 Worker 本次运行与指挥官任务耗时，Master
 	at(0);
 	await harness.emit("input", { source: "interactive" });
 	at(20);
-	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s · 当前任务 1m25s");
-
-	at(100);
-	await harness.emit("input", { source: "extension" });
+	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s");
 	at(110);
-	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s · 当前任务 2m10s");
-
-	at(200);
-	await harness.emit("input", { source: "interactive" });
-	expect(elapsedTail(await settle("再续", "send", 205))).toBe("耗时：本次运行 5.0s · 当前任务 5.0s");
+	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s");
 });
 
 test("中断事件带耗时", async () => {
@@ -1238,15 +1245,16 @@ test("中断事件带耗时", async () => {
 	await delivered;
 	const content = harness.messages.at(-1).message.content as string;
 	expect(titleOf(content)).toBe("clock 被中断");
-	expect(content).toContain("会话与审查义务均已保留");
+	// 没有审查义务就不提审查义务。
+	expect(content).not.toContain("审查义务");
 	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
 	expect(harness.activity()).toEqual([]);
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 40s");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
-test("审查终态事件带审查自身耗时与任务耗时", async () => {
+test("审查终态事件带审查自身耗时", async () => {
 	const harness = await setup(true, { review: true, mockReview: true });
 	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("审查完成")]);
 	at(0);
@@ -1262,7 +1270,7 @@ test("审查终态事件带审查自身耗时与任务耗时", async () => {
 	await delivered;
 	const content = harness.messages.at(-1).message.content as string;
 	expect(content).toContain("审查通过");
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 1m20s");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
 test("crash 恢复只重投 pending 减 ack 的差集", async () => {

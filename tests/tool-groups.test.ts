@@ -884,7 +884,7 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 		"↳ fix-auth 审查通过（2 轮） · 14m 修好了 refresh 竞态。",
 		"↳ perf-probe 失败 · 2m 429 Too Many Requests",
 		"↳ lint 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停",
-		"↳ fix-auth 被中断 会话与审查义务均已保留",
+		"↳ fix-auth 被中断",
 		"↳ 审查未通过 刷新竞态未修",
 		"↳ 审查未完成 所有审查者均未给出有效结论",
 		"↳ 第 2 轮审查通过 验证命令 exit 0，核心逻辑已核对。",
@@ -984,11 +984,11 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	const cases = [
 		{ title: "fix-auth 已返回", body: masterEvent.returned("fix-auth", "刷新改为单飞。更多细节"), row: "↳ fix-auth 已返回 · 8m 刷新改为单飞。", red: false },
 		{ title: "perf 失败", body: masterEvent.failed("perf", "429 Too Many Requests"), row: "↳ perf 失败 · 8m 429 Too Many Requests", red: true },
-		{ title: "lint 被中断", body: masterEvent.interrupted("lint"), row: "↳ lint 被中断 · 8m 会话与审查义务均已保留", red: false },
+		{ title: "lint 被中断", body: masterEvent.interrupted("lint", false), row: "↳ lint 被中断 · 8m", red: false },
 		{ title: "docs 审查通过（2 轮）", body: masterEvent.review("docs", { status: "passed", runId: "r", rounds: 2 }, "## 交付\n- 修好了。"), row: "↳ docs 审查通过（2 轮） · 8m 修好了。", red: false },
 		{ title: "ui 审查停止（3 轮）", body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停", red: true },
 		{ title: "api 审查未完成", body: masterEvent.review("api", { status: "failed", runId: "r", rounds: 1, reason: "审查会话超时。" }, "实现完成。"), row: "↳ api 审查未完成 · 8m 审查会话超时。", red: true },
-		{ title: undefined, body: masterEvent.modelSwitched("bench", "a/x/high", "b/y/high", "429"), row: "↳ bench 已切换模型 已切换 a/x/high→b/y/high（429），正在同一会话自动续跑", red: false },
+		{ title: undefined, body: masterEvent.modelSwitched("bench", "a/x/high", "b/y/high", "429"), row: "↳ bench 已切换模型", red: false },
 	];
 	const summaryOf = (s: any) => stripVTControlCharacters(s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!).trimEnd();
 	for (const { title, body } of cases) {
