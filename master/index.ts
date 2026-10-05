@@ -1,12 +1,9 @@
 import { existsSync, statSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import {
-	getAgentDir,
 	isToolCallEventType,
-	ModelRuntime,
 	type AgentSession,
 	type AgentSessionEvent,
 	type ExtensionAPI,
@@ -17,7 +14,7 @@ import {
 	HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload,
 } from "../busy.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
-import { clip, formatDuration } from "../format.js";
+import { clip, formatDuration, textOf } from "../format.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
@@ -57,7 +54,6 @@ interface PendingMasterEvent {
 }
 
 interface MasterDependencies {
-	resolveModel?: (id: string) => Promise<Model<any>>;
 	pool?: InProcessSessionPool;
 	interruptResumeMs?: number;
 }
@@ -369,7 +365,7 @@ export function registerMaster(
 		requireRuntimeOwner(active);
 		const hot = active.pool.getSession(worker.sessionPath);
 		if (hot) return hot;
-		const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(worker.model);
+		const model = await active.pool.resolveModel(worker.model);
 		requireRuntimeOwner(active);
 		const spawned = await active.pool.spawn({
 			cwd: worker.cwd ?? process.cwd(),
@@ -481,7 +477,7 @@ export function registerMaster(
 			return;
 		}
 		try {
-			const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(fallback.model);
+			const model = await active.pool.resolveModel(fallback.model);
 			requireRuntimeOwner(active);
 			await session.setModel(model);
 			requireRuntimeOwner(active);
@@ -720,7 +716,7 @@ export function registerMaster(
 					const cwd = await resolveSendCwd(target, requestedCwd);
 					if (cwd !== target.cwd) await active.pool.dispose(target.sessionPath);
 					const nextModel = selection
-						? await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model)
+						? await active.pool.resolveModel(selection.model)
 						: undefined;
 					requireRuntimeOwner(active);
 					const session = await openWorkerSession(active, { ...target, cwd });
@@ -804,7 +800,7 @@ export function registerMaster(
 				active.runStartedAt.set(sessionPath, Date.now());
 				startingNames.delete(name);
 				try {
-					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(selection.model);
+					const model = await active.pool.resolveModel(selection.model);
 					requireRuntimeOwner(active);
 					const spawned = await active.pool.spawn({
 						cwd,
@@ -960,7 +956,7 @@ function captureWorkerTerminal(
 	const message = messages.findLast((candidate) => candidate.role === "assistant");
 	if (!message) return undefined;
 	return {
-		text: assistantText(message.content),
+		text: textOf(message.content),
 		...(message.stopReason ? { stopReason: message.stopReason } : {}),
 		...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
 	};
@@ -983,29 +979,9 @@ function faultSummary(terminal: WorkerTerminal): string {
 
 function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
 	const message = messages.findLast((candidate) => candidate.role === "assistant");
-	return assistantText(message?.content);
+	return textOf(message?.content);
 }
 
-function assistantText(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part): part is { type: "text"; text: string } =>
-			!!part && typeof part === "object" && (part as { type?: unknown }).type === "text"
-			&& typeof (part as { text?: unknown }).text === "string")
-		.map((part) => part.text)
-		.join("\n");
-}
-
-async function resolveConfiguredModel(id: string): Promise<Model<any>> {
-	const runtime = await ModelRuntime.create({
-		authPath: `${getAgentDir()}/auth.json`,
-		modelsPath: `${getAgentDir()}/models.json`,
-	});
-	const slash = id.indexOf("/");
-	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-	if (!model) throw new Error(`找不到模型：${id}`);
-	return model;
-}
 
 function reviewGateError(): string | undefined {
 	const loaded = loadConfig();
@@ -1207,7 +1183,7 @@ async function readWorkerTrace(worker: WorkerRef): Promise<string> {
 		try {
 			const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
 			if (entry.type !== "message" || !entry.message?.role) continue;
-			const text = messageText(entry.message.content);
+			const text = textOf(entry.message.content);
 			if (text) lines.push(`${entry.message.role}: ${text}`);
 		} catch {
 			// 正在追加的尾行可暂时不完整；近况保留此前完整记录。
@@ -1216,16 +1192,6 @@ async function readWorkerTrace(worker: WorkerRef): Promise<string> {
 	return `子代理 ${worker.name} 近况（${worker.status}）\n${lines.join("\n").slice(-4_000)}`;
 }
 
-function messageText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part): part is { type: "text"; text: string } =>
-			!!part && typeof part === "object" && (part as { type?: unknown }).type === "text"
-			&& typeof (part as { text?: unknown }).text === "string")
-		.map((part) => part.text)
-		.join("\n");
-}
 function toolResult(value: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
 }

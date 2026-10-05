@@ -6,6 +6,18 @@ const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** 压平换行与连续空白，用于把任意文本塞进单行 UI。 */
+/** 消息 content 里的正文：字符串原样；块数组只取 text 块，按行拼接。全插件只此一处。 */
+export function textOf(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } =>
+			typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text"
+			&& typeof (part as { text?: unknown }).text === "string")
+		.map((part) => part.text)
+		.join("\n");
+}
+
 export function oneLine(value = ""): string {
 	return value
 		.replace(/[\r\n\t]+/g, " ")

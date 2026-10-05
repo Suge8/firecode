@@ -2,10 +2,7 @@
  * Watcher 观察员：每个 turn 结束后异步评估主会话增量，要么沉默，要么发一条建议。
  * 与 Master、fire-review 各自独立注册；观察过程不落盘。
  */
-import type { Model } from "@earendil-works/pi-ai";
 import {
-	getAgentDir,
-	ModelRuntime,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -22,12 +19,10 @@ import {
 import { createObserver, type Advice, type Observer } from "./observer.js";
 import { renderTurn } from "./transcript.js";
 
-/** review 模块发布的占用频道；观察员只订阅，不参与审查状态机。 */
 /** 观察会话自身上下文占比超过此值即重建。 */
 const CONTEXT_RESET_PERCENT = 70;
 
 interface WatcherDependencies {
-	resolveModel?: (id: string) => Promise<Model<any>>;
 	pool?: InProcessSessionPool;
 	createObserver?: typeof createObserver;
 }
@@ -102,7 +97,7 @@ export function registerWatcher(
 				let observer = owner.observer;
 				if (!observer) {
 					const cwd = owner.ctx.cwd;
-					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(config.model);
+					const model = await pool.resolveModel(config.model);
 					if (runtime !== owner) return;
 					observer = await spawnObserver({ cwd, model, thinking: config.thinking, pool });
 					if (runtime !== owner) {
@@ -174,14 +169,3 @@ export function registerWatcher(
 	pi.on("session_shutdown", () => deactivate());
 }
 
-async function resolveConfiguredModel(id: string): Promise<Model<any>> {
-	const runtime = await ModelRuntime.create({
-		authPath: `${getAgentDir()}/auth.json`,
-		modelsPath: `${getAgentDir()}/models.json`,
-	});
-	const slash = id.indexOf("/");
-	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-	// 扩展注册的 provider 在无扩展子会话里不可解析（实测），必须明确引导而不是静默失败。
-	if (!model) throw new Error(`找不到模型：${id}；观察员只能使用内置 provider 的模型`);
-	return model;
-}

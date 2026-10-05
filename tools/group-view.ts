@@ -12,7 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { toolTarget } from "./actions.js";
-import { firstSentence, oneLine } from "../format.js";
+import { firstSentence, oneLine, textOf } from "../format.js";
 import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
@@ -47,7 +47,7 @@ function actionLine(component: Component | undefined): ActionLine | undefined {
 function machineText(component: Component): string | undefined {
 	if (component instanceof CustomMessageComponent) {
 		const content = (component as unknown as { message: { content: unknown } }).message.content;
-		return typeof content === "string" ? content : contentText(content);
+		return textOf(content);
 	}
 	if (component instanceof UserMessageComponent) return (component as unknown as { text: string }).text;
 	return undefined;
@@ -69,11 +69,6 @@ export function isMachineMessage(component: Component): boolean {
 
 function machineBodies(component: Component): string {
 	return parseEnvelopes(machineText(component) ?? "")?.map((envelope) => envelope.body).join("\n\n") ?? "";
-}
-
-function contentText(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	return content.flatMap((part) => (part?.type === "text" ? [String(part.text)] : [])).join("\n");
 }
 
 /** 只有人类用户消息是轮次边界。 */

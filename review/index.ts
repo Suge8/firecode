@@ -12,10 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { wrapEnvelope } from "../deliver.js";
-import type { Model } from "@earendil-works/pi-ai";
 import {
-	getAgentDir,
-	ModelRuntime,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -117,7 +114,6 @@ interface ReviewRuntime {
 
 interface ReviewDependencies {
 	pool?: InProcessSessionPool;
-	resolveModel?: (id: string) => Promise<Model<any>>;
 	runSession?: ReviewSessionRunner;
 }
 
@@ -136,10 +132,7 @@ export function registerReview(
 	registerCardRenderer(pi);
 	const rt: ReviewRuntime = {
 		pi,
-		runSession: dependencies.runSession ?? createReviewSessionRunner(
-			dependencies.pool ?? new InProcessSessionPool(),
-			dependencies.resolveModel ?? resolveConfiguredModel,
-		),
+		runSession: dependencies.runSession ?? createReviewSessionRunner(dependencies.pool ?? new InProcessSessionPool()),
 		controller: undefined,
 		queue: Promise.resolve(),
 	};
@@ -742,16 +735,6 @@ async function runEffects(rt: ReviewRuntime, effects: ReviewEffect[]) {
 	}
 }
 
-async function resolveConfiguredModel(id: string): Promise<Model<any>> {
-	const runtime = await ModelRuntime.create({
-		authPath: `${getAgentDir()}/auth.json`,
-		modelsPath: `${getAgentDir()}/models.json`,
-	});
-	const slash = id.indexOf("/");
-	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-	if (!model) throw new Error(`找不到模型：${id}；审查会话只能使用内置 provider 的模型`);
-	return model;
-}
 
 function reviewerModelConfig(model: ReviewConfig["advisor"], config: ReviewConfig): ReviewModelConfig {
 	return {

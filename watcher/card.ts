@@ -6,7 +6,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 
 import { parseEnvelopes, wrapEnvelope } from "../deliver.js";
-import { clip, oneLine } from "../format.js";
+import { clip, oneLine, textOf } from "../format.js";
 import { RAIL, paintBgLine } from "../tools/line.js";
 
 export const WATCHER_MESSAGE_TYPE = "firecode-watcher-note";
@@ -36,7 +36,7 @@ export function timeMark(turnIndex: number): string {
 export function registerWatcherCardRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(WATCHER_MESSAGE_TYPE, (message, options, theme) => {
 		const advice = parseAdvice(message.content);
-		return advice ? new AdviceLine(advice, options.expanded, theme) : new Text(plainText(message.content), 0, 0);
+		return advice ? new AdviceLine(advice, options.expanded, theme) : new Text(textOf(message.content), 0, 0);
 	});
 }
 
@@ -47,16 +47,10 @@ interface Advice {
 
 /** 信封正文 = 标题行 + 建议 + 权衡声明（末行），与 adviceMessage 同构。 */
 function parseAdvice(content: unknown): Advice | undefined {
-	const body = parseEnvelopes(plainText(content))?.[0]?.body;
+	const body = parseEnvelopes(textOf(content))?.[0]?.body;
 	if (body === undefined) return undefined;
 	const lines = body.split("\n");
 	return { headline: lines[0] ?? "", note: lines.slice(1, -1).join("\n") };
-}
-
-function plainText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content.map((part) => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("\n");
 }
 
 class AdviceLine implements Component {

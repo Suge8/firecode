@@ -1416,6 +1416,10 @@ async function setup(activate = true, options: {
 	const pool = new (spawnModule as any).InProcessSessionPool({
 		agentDir,
 		modelRuntime,
+		resolveModel: async (id: string) => {
+			await (globalThis as any).__modelGate;
+			return id === "test/worker-2" ? alternateModel : fauxModel;
+		},
 		...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
 	});
 	const module = await loadFirecodeModule("master/index.js", {
@@ -1498,10 +1502,6 @@ async function setup(activate = true, options: {
 		},
 	};
 	module.registerMaster(pi, {
-		resolveModel: async (id: string) => {
-			await (globalThis as any).__modelGate;
-			return id === "test/worker-2" ? alternateModel : fauxModel;
-		},
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
 	});

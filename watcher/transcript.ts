@@ -4,6 +4,7 @@
  */
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import type { WatcherContext } from "../config.js";
+import { textOf } from "../format.js";
 
 const RESULT_BUDGET = 400;
 
@@ -18,7 +19,7 @@ export function renderTurn(turn: TurnEndEvent, context: WatcherContext): string 
 		if (part.type === "toolCall") lines.push(toolCallLine(part, context));
 	}
 	for (const result of turn.toolResults) {
-		const text = clipText(plainText(result.content), RESULT_BUDGET);
+		const text = clipText(textOf(result.content), RESULT_BUDGET);
 		lines.push(`${result.isError ? "✗" : "→"} ${result.toolName}：${text || "（无输出）"}`);
 	}
 	return `<turn index="${turn.turnIndex}">\n${lines.join("\n")}\n</turn>`;
@@ -43,16 +44,6 @@ const BODY_KEYS = new Set(["content", "oldText", "newText", "old_text", "new_tex
 
 function blocks(content: unknown): Array<Record<string, any>> {
 	return Array.isArray(content) ? content.filter((part) => !!part && typeof part === "object") : [];
-}
-
-function plainText(output: unknown): string {
-	if (typeof output === "string") return output;
-	if (Array.isArray(output))
-		return output
-			.map((part) => (part && typeof part === "object" && "text" in part ? String((part as any).text) : ""))
-			.filter(Boolean)
-			.join("\n");
-	return "";
 }
 
 function oneLine(text: string): string {

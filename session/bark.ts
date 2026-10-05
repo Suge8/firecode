@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { watchBusy } from "../busy.js";
 import { loadMasterState, masterStatePath } from "../master/state.js";
+import { textOf } from "../format.js";
 
 // 与运行配置同一个 Pi Agent 目录（默认 ~/.pi/agent，含 PI_CODING_AGENT_DIR 覆写）。
 const keyFile = () => path.join(getAgentDir(), "bark-key");
@@ -67,7 +68,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;
-		const text = extractText(event.message);
+		const text = textOf(event.message.content).trim();
 		if (text) lastAssistantText = text;
 	});
 
@@ -134,15 +135,6 @@ function encryptPayload(payload: unknown, key: string, iv: string): string {
 	const cipher = crypto.createCipheriv("aes-256-gcm", Buffer.from(key, "utf8"), Buffer.from(iv, "utf8"));
 	const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
 	return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-}
-
-function extractText(message: { content?: unknown }): string {
-	const blocks = Array.isArray(message?.content) ? message.content : [];
-	return blocks
-		.filter((block: any) => block?.type === "text" && typeof block.text === "string")
-		.map((block: any) => block.text as string)
-		.join("\n")
-		.trim();
 }
 
 /** 去掉 markdown 标记，通知栏显示纯文字。 */

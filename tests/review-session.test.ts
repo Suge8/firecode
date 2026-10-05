@@ -16,6 +16,7 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	};
 	const pool = {
 		options: undefined as Record<string, unknown> | undefined,
+		resolveModel: async () => ({ id: "model" }),
 		async spawn(options: Record<string, unknown>) {
 			this.options = options;
 			return {
@@ -36,7 +37,6 @@ async function runner() {
 
 const base = (pool: unknown) => ({
 	pool,
-	resolveModel: async () => ({ id: "model" }),
 	role: "reviewer",
 	model: "provider/model",
 	thinking: "high",
