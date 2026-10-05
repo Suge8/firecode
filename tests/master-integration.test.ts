@@ -1107,9 +1107,10 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 
 	await harness.execute({ action: "ack", worker: "broken" });
 	await harness.execute({ action: "ack", worker: "fine" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u)]);
+	// 发落后的失败行离开置顶组，子代理仍在池里，合进“N 个空闲”。
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u), expect.stringMatching(/^ +1 个空闲/u)]);
 	await harness.execute({ action: "kill", worker: "fine" });
-	expect(harness.activity()).toEqual([]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
 });
 
 test("活动列表：已完成展开显示结果首句，下一轮人类输入时自动收起；ctrl+o 不展开活动列表", async () => {
@@ -1311,7 +1312,7 @@ test("中断事件带耗时", async () => {
 	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
-	expect(harness.activity()).toEqual([]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
 	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
