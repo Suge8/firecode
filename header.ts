@@ -1,6 +1,7 @@
 /**
- * 会话启动横幅：半格方块像素火焰 + 字标，按终端宽度分三档。启动时字标自左向右点亮、扫光一道，
- * 约 1.5 秒后定格并退订动画时钟——横幅会滚出视口，定格后不再触发重绘。
+ * 会话启动横幅：半格方块像素火焰 + 字标，按终端宽度分三档，三档都带同一行副标题（pi 版本 · 工作目录，
+ * 放不下从开头裁、保留目录尾部）。启动时字标自左向右点亮、扫光一道，约 1.5 秒后定格并退订动画时钟——
+ * 横幅会滚出视口，定格后不再触发重绘。
  */
 import { homedir } from "node:os";
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
@@ -17,6 +18,9 @@ const TINY_FLAME_PHASE = 0.4;
 /** 副标题从这一深底色淡入成灰；终端底色不可知，取深色主题的近似底色。 */
 const FADE_FROM: Rgb = [20, 19, 18];
 const RULE: Rgb = [60, 57, 53];
+/** 单行档副标题至少留这么宽才显示（省略号加几个字），右侧横线至少留这么长。 */
+const TINY_SUBTITLE_MIN = 8;
+const TINY_RULE_MIN = 3;
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 const ease = (k: number) => 1 - (1 - clamp(k)) ** 3;
@@ -111,24 +115,32 @@ function sideBySide(left: string[], right: string[], gap: number, rightTop = 0):
 	});
 }
 
-function large(t: number, subtitle: string): string[] {
-	const word = halfBlocks(wordmark(2, t));
-	const text = clip(subtitle, visibleWidth(word[0]), "start");
-	const line = paint(mix(FADE_FROM, HEAT_COLORS.ash, ease((t - 0.4) / 0.6)), text);
-	return sideBySide(halfBlocks(roundFlame(10, 16, t)), [...word, "", line], 3, 2);
+/** 副标题：从深底色淡入成灰；宽度不够从开头裁，保留目录尾部。 */
+function subtitleLine(subtitle: string, width: number, t: number): string {
+	return paint(mix(FADE_FROM, HEAT_COLORS.ash, ease((t - 0.4) / 0.6)), clip(subtitle, width, "start"));
 }
 
-const mid = (t: number) => sideBySide(halfBlocks(roundFlame(6, 8, t)), halfBlocks(wordmark(1, t)), 2);
+function large(t: number, subtitle: string): string[] {
+	const word = halfBlocks(wordmark(2, t));
+	return sideBySide(halfBlocks(roundFlame(10, 16, t)), [...word, "", subtitleLine(subtitle, visibleWidth(word[0]), t)], 3, 2);
+}
 
-/** 一行档：火苗 + 渐变字标逐字亮起 + 向右渐隐的横线。 */
-function tiny(width: number, t: number, glyph: string): string {
+function mid(t: number, subtitle: string): string[] {
+	const word = halfBlocks(wordmark(1, t));
+	return sideBySide(halfBlocks(roundFlame(6, 8, t)), [...word, subtitleLine(subtitle, visibleWidth(word[0]), t)], 2);
+}
+
+/** 一行档：火苗 + 渐变字标逐字亮起 + 副标题 + 向右渐隐的横线；太窄时只留横线。 */
+function tiny(width: number, t: number, glyph: string, subtitle: string): string {
 	const sweep = ((t - REVEAL_END) / (SWEEP_END - REVEAL_END)) * 14 - 3;
 	const letters = [...WORD].map((char, index) => {
 		if (t <= (index / WORD.length) * REVEAL_END) return " ";
 		const shine = t > REVEAL_END && t < SWEEP_END ? clamp(1 - Math.abs(index - sweep) / 2) : 0;
 		return paint(mix(mix(HEAT_COLORS.orange, HEAT_COLORS.gold, index / (WORD.length - 1)), HEAT_COLORS.white, shine), char);
 	}).join("");
-	const head = `${glyph} \x1b[1m${letters}\x1b[22m `;
+	const word = `${glyph} \x1b[1m${letters}\x1b[22m `;
+	const room = width - visibleWidth(word) - 1 - TINY_RULE_MIN;
+	const head = room >= TINY_SUBTITLE_MIN ? `${word}${subtitleLine(subtitle, room, t)} ` : word;
 	const length = width - visibleWidth(head);
 	const reveal = clamp((t - 0.2) / REVEAL_END);
 	let rule = "";
@@ -146,8 +158,8 @@ function center(lines: string[], width: number): string[] {
 
 function banner(width: number, t: number, glyph: string, subtitle: string): string[] {
 	if (width >= LARGE_MIN_WIDTH) return ["", ...center(large(t, subtitle), width), ""];
-	if (width >= MID_MIN_WIDTH) return ["", ...center(mid(t), width), ""];
-	return [tiny(width, t, glyph), ""];
+	if (width >= MID_MIN_WIDTH) return ["", ...center(mid(t, subtitle), width), ""];
+	return [tiny(width, t, glyph, subtitle), ""];
 }
 
 function createBanner(tui: TUI, subtitle: string) {

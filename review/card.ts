@@ -11,6 +11,7 @@
 import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
+import { HEAT_COLORS, paint } from "../flame.js";
 import { formatDuration } from "../format.js";
 import type { CardData, StopReason } from "./state.js";
 
@@ -29,6 +30,28 @@ const CARD_KINDS = new Set([
 	"advisor",
 ]);
 const CARD_TONES = new Set(["success", "warning", "error", "neutral", "accent"]);
+
+/**
+ * 卡标题前的单色字形与它的语义色，按卡种类一处定义：构建时写进 details.icon，渲染时按种类上色。
+ * 字形与全局体系一致（✓ ✗ ◌ ‖ 与审查的盲文点阵），颜色只表达结论：通过绿、失败与未完成红、取消灰，
+ * 审查过程中的中性卡（开始、顾问指引）用审查的金色——品牌火焰不用于中性状态。
+ */
+const MARKS = {
+	start: { glyph: "⠿", color: "review" },
+	advisor: { glyph: "⠿", color: "review" },
+	pass: { glyph: "✓", color: "success" },
+	fail: { glyph: "✗", color: "error" },
+	stop: { glyph: "✗", color: "error" },
+	timeout: { glyph: "◌", color: "error" },
+	error: { glyph: "◌", color: "error" },
+	cancel: { glyph: "‖", color: "muted" },
+} as const satisfies Record<CardData["kind"], { glyph: string; color: "review" | "success" | "error" | "muted" }>;
+
+function paintMark(details: CardDetails, theme: Theme): string {
+	const mark = MARKS[details.kind as CardData["kind"]];
+	if (!mark) return details.icon;
+	return mark.color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(mark.color, details.icon);
+}
 
 export type CardDetails = {
 	version: typeof VERSION;
@@ -101,7 +124,7 @@ class ReviewCard implements Component {
 function nativeCard(details: CardDetails, theme: Theme): Component {
 	// 全家卡统一：无垂直内边距；消息间距由宿主 CustomMessageComponent 提供，不再叠加。
 	const box = new Box(1, 0, (text) => theme.bg(backgroundFor(details.tone), text));
-	box.addChild(new Text(`${details.icon} ${details.title}`, 0, 0));
+	box.addChild(new Text(`${paintMark(details, theme)} ${details.title}`, 0, 0));
 	box.addChild(new Spacer(1));
 	box.addChild(new Markdown(details.lines.join("\n"), 0, 0, getMarkdownTheme()));
 	return box;
@@ -157,7 +180,7 @@ function started(card: Extract<CardData, { kind: "start" }>, language: Language)
 			? `Models: ${card.models.map(shortModel).join(", ")}`
 			: `模型：${card.models.map(shortModel).join("、")}`,
 	];
-	return spec("start", title, lines, "neutral", "🔥");
+	return spec("start", title, lines, "neutral");
 }
 
 function shortModel(model: string) {
@@ -169,7 +192,7 @@ function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): 
 	const lines = withFooter(formatReviewResultLines(card.summary), [
 		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1, language),
 	]);
-	return spec("pass", title, lines, "success", "✅");
+	return spec("pass", title, lines, "success");
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
@@ -187,7 +210,6 @@ function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): 
 		title,
 		withFooter(formatReviewResultLines(card.details), footer),
 		"warning",
-		"❌",
 	);
 }
 
@@ -202,16 +224,16 @@ function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language):
 			language,
 		);
 		const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
-		return spec("stop", title, withFooter(body, footer), "warning", "❌");
+		return spec("stop", title, withFooter(body, footer), "warning");
 	}
 	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
 	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
-	return spec("stop", title, withFooter(body, footer), "warning", "❌");
+	return spec("stop", title, withFooter(body, footer), "warning");
 }
 
 function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Language): BuiltCard {
 	const title = language === "en" ? "Review cancelled" : "审查已取消";
-	return spec("cancel", title, [reasonText(card.reason, language)], "neutral", "⏸");
+	return spec("cancel", title, [reasonText(card.reason, language)], "neutral");
 }
 
 function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
@@ -220,7 +242,7 @@ function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Langu
 		language === "en" ? "Blocker: review timed out" : "卡点：审查超时",
 		language === "en" ? "Reason: overall time limit exceeded" : "原因：超过总体时限",
 	];
-	return spec("timeout", title, lines, "warning", "🛑");
+	return spec("timeout", title, lines, "warning");
 }
 
 /** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
@@ -249,7 +271,7 @@ function errored(card: Extract<CardData, { kind: "error" }>, language: Language)
 			? []
 			: ["", elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)]),
 	];
-	return spec("error", title, lines, "warning", "🛑");
+	return spec("error", title, lines, "warning");
 }
 
 /** 顾问卡与审查结果卡同构：裁决进标题，正文用粗体模型分节行开头。 */
@@ -258,7 +280,7 @@ function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Lan
 	const title = language === "en" ? `Advisor guidance · ${decision}` : `顾问指引 · ${decision}`;
 	const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
 	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
-	return spec("advisor", title, withFooter(body, footer), "neutral", "🧭");
+	return spec("advisor", title, withFooter(body, footer), "neutral");
 }
 
 /** 裁决词→人话文案的唯一映射：卡标题与审查活动行共用，防两处文案漂移。 */
@@ -303,7 +325,7 @@ function elapsedLine(
 	const elapsed = showTotal && totalMs !== undefined
 		? `${formatDuration(ms)} / ${language === "en" ? "total" : "总"} ${formatDuration(totalMs)}`
 		: formatDuration(ms);
-	return language === "en" ? `⏱ Elapsed: ${elapsed}` : `⏱ 用时：${elapsed}`;
+	return language === "en" ? `Elapsed: ${elapsed}` : `用时：${elapsed}`;
 }
 
 function formatReviewResultLines(review: string) {
@@ -364,14 +386,13 @@ const REDUNDANT_REVIEW_LINES = new Set([
 ]);
 
 function spec(
-	kind: CardDetails["kind"],
+	kind: CardData["kind"],
 	title: string,
 	lines: string[],
 	tone: CardDetails["tone"],
-	icon: string,
 ): BuiltCard {
 	return {
 		content: `${title}\n${lines.join("\n")}`,
-		details: { version: VERSION, kind, title, lines, tone, icon },
+		details: { version: VERSION, kind, title, lines, tone, icon: MARKS[kind].glyph },
 	};
 }
