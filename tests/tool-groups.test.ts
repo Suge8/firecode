@@ -1030,9 +1030,9 @@ test("摘要行“运行中”只认会话进行中：会话已歇下时残留�
 
 test("宿主组件形状不符时不安装过程分组：明确提示，聊天树保持原生渲染", async () => {
 	const s = await scene();
-	const row = new s.host.ToolExecutionComponent("read", "id", { path: "a.ts" }, {}, undefined, undefined, "/project");
-	// 模拟宿主升级后私有字段改名：工具行不再有 isPartial。
-	delete (row as any).isPartial;
-	expect(() => s.chat.addChild(row)).toThrow(/过程分组已停用.*isPartial/u);
+	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	// 模拟宿主升级后私有字段改名：助手消息不再有 isStreaming。
+	delete (message as any).isStreaming;
+	expect(() => s.chat.addChild(message)).toThrow(/过程分组已停用.*isStreaming/u);
 	expect(s.chat.render).toBe(s.originalRender);
 });
