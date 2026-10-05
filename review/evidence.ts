@@ -153,7 +153,8 @@ function assistantBody(content: unknown, render: Render): string {
 	return [body, trail].filter(Boolean).join("\n");
 }
 
-function toolCallLine(part: Record<string, unknown> | undefined, { language, failedCalls }: Render): string {
+function toolCallLine(part: Record<string, unknown> | undefined, render: Render): string {
+	const { language, failedCalls } = render;
 	if (part?.type !== "toolCall" || typeof part.name !== "string" || !part.name) return "";
 	const args = asRecord(part.arguments);
 	const target =
@@ -168,16 +169,19 @@ function toolCallLine(part: Record<string, unknown> | undefined, { language, fai
 				? " (failed)"
 				: "（失败）"
 			: "";
-	return `${`[${part.name}] ${clipLine(target, language)}`.trimEnd()}${failed}`;
+	return `${`[${part.name}] ${clipLine(target, render)}`.trimEnd()}${failed}`;
 }
 
 /** 单行轨迹上限：防超长 bash 命令撑大证据块；路径不受影响。 */
 const TOOL_LINE_MAX_CHARS = 200;
 
-function clipLine(text: string, language: Language) {
+function clipLine(text: string, { language, sessionFile }: Render) {
 	const single = text.replace(/\s+/gu, " ").trim();
 	if (single.length <= TOOL_LINE_MAX_CHARS) return single;
-	const note = language === "en" ? `…[truncated, ${single.length} chars]` : `…[截断，原文 ${single.length} 字]`;
+	const where = sessionFile ?? (language === "en" ? "the session file" : "会话文件");
+	const note = language === "en"
+		? `…[truncated, ${single.length} chars; full original in ${where}]`
+		: `…[截断，原文 ${single.length} 字，完整原文在 ${where}]`;
 	return `${single.slice(0, TOOL_LINE_MAX_CHARS)}${note}`;
 }
 
