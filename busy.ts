@@ -1,11 +1,13 @@
 /**
- * “会话进行中”的单一事实：指挥官回合在跑 || 有子代理在飞（working/reviewing，或已落定但结果事件尚未交给指挥官；已交出事件的未收割子代理不算）。
+ * “会话进行中”的单一事实：指挥官回合在跑 || 有子代理在飞（working/reviewing，或已落定但结果事件尚未交给指挥官；已交出事件的未收割子代理不算）
+ * || 主会话 /fire-review 进行中（review 的占用频道）。
  * Master 是在飞子代理数的唯一发布者；上边框、本轮摘要与轮次时钟、Bark 都经 watchBusy 读同一个事实并消费同一个歇下边沿。
  * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段事实：时长、终态、均速。
  * 频道名与 payload 只在本文件定义。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "./format.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "./review/occupancy.js";
 
 /** 进程内事件总线：在飞子代理数变化时发布 `{ inFlight }`，激活/停用同步。 */
 export const WORKERS_CHANNEL = "firecode:workers";
@@ -31,12 +33,17 @@ export interface BusyView {
 	inFlight: number;
 	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞。 */
 	busy: boolean;
+	/** 主会话 /fire-review 进行中（含修复与总结回合之间的等待）。 */
+	review: boolean;
 	/** 本段进行中的起点（Date.now）；当且仅当 busy 时存在。 */
 	since?: number;
 }
-export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false };
+export const IDLE: BusyView = { agentRunning: false, inFlight: 0, review: false, busy: false };
 
-/** 本段最后一个指挥官回合的终态，与宿主 AgentActivityOutcome 同一判定：最后一条助手消息的 stopReason。 */
+/**
+ * 本段最后一个指挥官回合的终态：宿主的回合中断信号（ctx.signal.aborted）为真即“已中断”——工具执行中被 Esc 时
+ * 宿主给的终态是 error（“The operation was aborted.”），不能只看 stopReason；其余按最后一条助手消息的 stopReason。
+ */
 export type Outcome = "complete" | "aborted" | "error";
 export interface SettledRound {
 	elapsed: number;
@@ -64,9 +71,11 @@ interface Requests {
 	outputTokens: number;
 }
 const FRESH: Requests = { requestMs: 0, outputTokens: 0 };
+/** 输出 token 少于这个数时均速没有意义（1 个 token 的快答算出来的 tps 只是噪声）。 */
+const MIN_RATE_TOKENS = 20;
 
 function settledRound(elapsed: number, outcome: Outcome, { startedAt, requestMs, outputTokens }: Requests): SettledRound {
-	const valid = outcome === "complete" && startedAt === undefined && requestMs && outputTokens > 0;
+	const valid = outcome === "complete" && startedAt === undefined && requestMs && outputTokens >= MIN_RATE_TOKENS;
 	return { elapsed, outcome, ...(valid ? { tps: (outputTokens * 1_000) / requestMs } : {}) };
 }
 
@@ -107,6 +116,7 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): void {
 	let agentRunning = false;
 	let inFlight = 0;
+	let review = false;
 	/** 本段起点；有值即进行中。 */
 	let since: number | undefined;
 	let outcome: Outcome = "complete";
@@ -116,14 +126,14 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 	const update = (teardown = false) => {
 		if (closed) return;
 		const now = Date.now();
-		const busy = agentRunning || inFlight > 0;
+		const busy = agentRunning || inFlight > 0 || review;
 		if (busy && since === undefined) {
 			since = now;
 			requests = FRESH;
 		}
 		const started = since;
 		if (!busy) since = undefined;
-		const view = { agentRunning, inFlight, busy, since };
+		const view = { agentRunning, inFlight, review, busy, since };
 		for (const subscriber of subscribers) subscriber.onChange?.(view, ctx);
 		if (busy || started === undefined || teardown) return;
 		const round = settledRound(now - started, outcome, requests);
@@ -132,8 +142,8 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 	pi.on("session_shutdown", () => {
 		closed = true;
 	});
-	pi.on("agent_end", (event) => {
-		outcome = outcomeOf(event.messages);
+	pi.on("agent_end", (event, context) => {
+		outcome = context.signal?.aborted ? "aborted" : outcomeOf(event.messages);
 	});
 	pi.on("before_provider_request", () => {
 		// 上一次请求没有等到助手 message_end 就又发起：起止无法配对。
@@ -163,6 +173,11 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 		ctx = context;
 		// 宿主在 agent_settled 期间可能已有排队/延后的动作（isIdle 为 false），紧接着会再 agent_start：不算回合结束。
 		agentRunning = context.isIdle() !== true;
+		update();
+	});
+	// 主会话审查算会话进行中：审查与修复、总结回合同属这一段，审查时长计入轮记录。
+	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
+		review = (data as OccupancyPayload).active;
 		update();
 	});
 	pi.events.on(WORKERS_CHANNEL, (data) => {
