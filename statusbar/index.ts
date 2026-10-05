@@ -17,7 +17,7 @@ import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, se
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
-import { type BranchEntry, latestTurnRecord } from "../tools/round.js";
+import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 
 /** 展示标题的上限（列）：实际宽度由下边框布局按终端宽度逐级裁。 */
@@ -55,10 +55,11 @@ class Shell {
 	title = "新会话";
 	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数。 */
 	busy: BusyView = IDLE;
-	/** 最近一次歇下的时刻：落定态留到下一轮开始，内容每次从会话分支的轮记录读（与摘要行同一份事实）。 */
-	settledAt: number | undefined;
-	/** 当前会话分支（session_start 时接上）。 */
-	branch: () => readonly BranchEntry[] = () => [];
+	/**
+	 * 最近一轮的落定事实（分支轮记录按与摘要行同一条规则合成）与落定时刻，留到下一轮开始。
+	 * 只在轮记录写入、开会话、切分支时算一次，绘制只读它：读分支是整条回溯。at 为空是开会话时恢复的，不播落定过渡。
+	 */
+	settled: { record: TurnRecord; at?: number } | undefined;
 	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
 	review: (() => ReviewProgress | undefined) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
@@ -68,7 +69,7 @@ class Shell {
 
 	/** 时钟只在有动效要播时订阅：回合进行、落定过渡或审查进行。 */
 	syncClock(): void {
-		const need = this.review !== undefined || this.busy.busy || (this.settledAt !== undefined && settling(Date.now() - this.settledAt));
+		const need = this.review !== undefined || this.busy.busy || (this.settled?.at !== undefined && settling(Date.now() - this.settled.at));
 		if (need && !this.stopClock) this.stopClock = onFrame(() => { this.syncClock(); this.requestRender(); });
 		if (!need && this.stopClock) { this.stopClock(); this.stopClock = undefined; }
 	}
@@ -81,17 +82,17 @@ class Shell {
 
 	sync(view: BusyView): void {
 		this.busy = view;
-		if (view.busy) this.settledAt = undefined;
+		if (view.busy) this.settled = undefined;
 	}
 
-	/** 歇下边沿：定格整段时长。 */
-	settle(): void {
-		this.settledAt = Date.now();
+	showRecord(branch: readonly BranchEntry[], at?: number): void {
+		if (this.busy.busy) return;
+		const record = latestTurnRecord(branch);
+		this.settled = record && { record, at };
 	}
 
 	top(): TopParts {
-		const { busy, settledAt, review, theme } = this;
-		const record = settledAt === undefined ? undefined : latestTurnRecord(this.branch());
+		const { busy, settled, review, theme } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: [], glow: 0,
@@ -103,8 +104,9 @@ class Shell {
 			parts.word = word && (this.theme?.fg("text", word) ?? "");
 			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - busy.since)) ?? "";
 			parts.glow = 1;
-		} else if (settledAt !== undefined && record && theme) {
-			const since = Date.now() - settledAt;
+		} else if (settled && theme) {
+			const { record } = settled;
+			const since = settled.at === undefined ? Infinity : Date.now() - settled.at;
 			const text = OUTCOME_TEXT[record.round.outcome];
 			parts.mark = settleMark(text ? "failed" : "done", since);
 			// 与摘要行同一写法：终态字样、耗时、均速之间都是“ · ”；终态字样不随窄屏退让。
@@ -198,18 +200,25 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 		if (event.message.role === "user") updateTitle(ctx, event.message);
 	});
 	pi.on("session_info_changed", (_event, ctx) => updateTitle(ctx));
-	pi.on("session_tree", (_event, ctx) => updateTitle(ctx));
 	watchBusy(pi, {
 		onChange: (view) => {
 			shell.sync(view);
 			shell.syncClock();
 			shell.requestRender();
 		},
-		onSettled: () => {
-			shell.settle();
-			shell.syncClock();
-			shell.requestRender();
-		},
+		// 落定态不在歇下边沿取：那一刻轮记录可能还没写进分支（订阅顺序不定），等 tools 写入后的发布。
+		onSettled() {},
+	});
+	let branch: () => readonly BranchEntry[] = () => [];
+	const showRecord = (at?: number) => {
+		shell.showRecord(branch(), at);
+		shell.syncClock();
+		shell.requestRender();
+	};
+	pi.events.on(ROUND_RECORDED_CHANNEL, () => showRecord(Date.now()));
+	pi.on("session_tree", (_event, ctx) => {
+		updateTitle(ctx);
+		showRecord();
 	});
 	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
 		const occupancy = data as OccupancyPayload;
@@ -219,7 +228,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	});
 	pi.on("session_start", (_event, ctx) => {
 		updateTitle(ctx);
-		shell.branch = () => ctx.sessionManager.getBranch();
+		branch = () => ctx.sessionManager.getBranch();
+		showRecord();
 		// 宿主内嵌的 Working 指示由外壳的火苗取代，可见性只在这里管理。
 		ctx.ui.setWorkingVisible(false);
 		// 独立底栏 0 行；借它拿到状态订阅与主题。
@@ -236,7 +246,7 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		shell.dispose();
 		shell.busy = IDLE;
-		shell.settledAt = undefined;
+		shell.settled = undefined;
 		shell.review = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setEditorComponent(undefined);
