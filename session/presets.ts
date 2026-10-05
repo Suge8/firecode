@@ -66,10 +66,16 @@ export function registerPresets(pi: ExtensionAPI): void {
 		type: "string",
 	});
 
+	/**
+	 * 预设名只在它带来边框看不见的改动（工具集、附加指令）时发布：模型与思考档已显示在输入框下边框，
+	 * 只改这两样的预设再报名字就是同一信息说两遍。
+	 */
 	const updateStatus = (ctx: ExtensionContext) =>
 		ctx.ui.setStatus(
 			"preset",
-			activeName ? ctx.ui.theme.fg("accent", title(activeName)) : undefined,
+			activeName && (activePreset?.tools?.length || activePreset?.instructions)
+				? ctx.ui.theme.fg("accent", title(activeName))
+				: undefined,
 		);
 
 	const noPresetsHint = (ctx: ExtensionContext) =>

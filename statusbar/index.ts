@@ -123,7 +123,7 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
-			preset: presetLabel(this.statuses().get(PRESET_STATUS), model?.id),
+			preset: this.statuses().get(PRESET_STATUS) ?? "",
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(thinkingColor(thinking as never), `/${thinking}`) : "",
 			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
@@ -137,18 +137,6 @@ class Shell {
 function activityWord(busy: BusyView): string {
 	if (busy.review) return "";
 	return busy.agentRunning ? "处理中" : `等待 ${busy.inFlight} 个子代理`;
-}
-
-const letters = (text: string) => stripVTControlCharacters(text).toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-
-/**
- * 预设名只在它补充了模型名之外的信息时显示：名字已含在模型名里（如 Sonnet 之于 claude-sonnet-5-5）就是同一信息说两遍，省略。
- * 只比字母数字、不分大小写与分隔符。
- */
-function presetLabel(preset: string | undefined, modelId: string | undefined): string {
-	if (!preset) return "";
-	const name = letters(preset);
-	return name && modelId && letters(modelId).includes(name) ? "" : preset;
 }
 
 const STAGE_TEXT: Record<Exclude<ReviewStage, "reviewing">, string> = {
