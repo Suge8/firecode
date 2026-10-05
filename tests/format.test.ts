@@ -39,3 +39,27 @@ test("耗时在分秒边界进位，小时保留余分秒且不转换成天", as
 		[90_061_000, "25h1m1s"],
 	]) expect(formatDuration(milliseconds)).toBe(expected);
 });
+
+test("一行预览的首句认 Markdown：跳过标题、列表符、序号、引用与表格行，序号与缩写的点不算句末", async () => {
+	const { firstSentence } = await loadFirecodeModule("format.ts") as any;
+	for (const [text, expected] of [
+		["## 交付\n- 修好了 refresh 竞态。", "修好了 refresh 竞态。"],
+		["### 1. 根因\n刷新没有单飞。", "刷新没有单飞。"],
+		["1. 第一步：读代码。\n2. 第二步", "第一步：读代码。"],
+		["- 改动 a.ts\n- 改动 b.ts", "改动 a.ts"],
+		["> 引用一句。后面", "引用一句。"],
+		["| 列 | 值 |\n|---|---|\n| a | b |\n结论在这里。", "结论在这里。"],
+		["e.g. this works. Next", "e.g. this works."],
+		["Done. All tests pass.", "Done."],
+		["版本 v0.6.1 已发布。下一步", "版本 v0.6.1 已发布。"],
+		["**结论**：没问题。", "结论：没问题。"],
+		["改动如下：\n- a.ts\n- b.ts", "改动如下：a.ts"],
+		["## 交付", "交付"],
+	]) expect(firstSentence(text)).toBe(expected);
+});
+
+test("容量取整的百万与千不带小数：1M、200k，非整保留一位", async () => {
+	const { formatTokens } = await loadFirecodeModule("format.ts") as any;
+	for (const [tokens, expected] of [[1_000_000, "1M"], [1_500_000, "1.5M"], [200_000, "200k"], [2_000, "2k"], [1_234, "1.2k"]])
+		expect(formatTokens(tokens)).toBe(expected);
+});

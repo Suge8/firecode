@@ -12,6 +12,7 @@ import {
 import { loadConfig, type WatcherConfig } from "../config.js";
 import { deliver } from "../deliver.js";
 import { InProcessSessionPool } from "../master/spawn.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "../review/occupancy.js";
 import {
 	adviceMessage,
 	registerWatcherCardRenderer,
@@ -22,7 +23,6 @@ import { createObserver, type Advice, type Observer } from "./observer.js";
 import { renderTurn } from "./transcript.js";
 
 /** review 模块发布的占用频道；观察员只订阅，不参与审查状态机。 */
-const REVIEW_OCCUPANCY_CHANNEL = "herdr:blocked";
 /** 观察会话自身上下文占比超过此值即重建。 */
 const CONTEXT_RESET_PERCENT = 70;
 
@@ -162,8 +162,8 @@ export function registerWatcher(
 	});
 
 	// fire-review 活跃期静默：不与对抗审查的反馈打架，增量留着审查完合并评估。
-	pi.events.on(REVIEW_OCCUPANCY_CHANNEL, (data) => {
-		reviewActive = Boolean((data as { active?: boolean } | undefined)?.active);
+	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
+		reviewActive = (data as OccupancyPayload).active;
 		const active = runtime;
 		if (reviewActive || !active || active.evaluating || !active.pending.length) return;
 		void evaluate(active);

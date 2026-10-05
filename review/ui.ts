@@ -1,121 +1,20 @@
 /**
- * /fire-review 的活动 UI：编辑器上方的单行审查活动与 esc 取消接管。
+ * /fire-review 的界面接管：esc 取消的只读编辑器与终端标题。
  *
- * 只读 executor 传入的快照函数，自身不持状态；动效经 flame.ts 的全局时钟，
- * dispose 时退订。Working 指示的可见性归输入框外壳（statusbar）统一管理，这里不碰。
+ * 审查进度不在这里画：它经占用频道（occupancy.ts）发布，由输入框外壳嵌进上边框，界面只此一处。
+ * Working 指示的可见性归输入框外壳（statusbar）统一管理，这里不碰。
  */
 import { basename } from "node:path";
 import {
 	CustomEditor,
 	type ExtensionContext,
 	type KeybindingsManager,
-	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, type EditorComponent, type EditorTheme, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { type ActivityRow, renderActivityRow } from "../activity.js";
+import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import type { Language } from "../config.js";
-import { onFrame, phaseOf, reviewMark } from "../flame.js";
-import { clip, formatDuration } from "../format.js";
-import type { Phase, ReviewerStatus } from "./state.js";
+import { clip } from "../format.js";
 
-const WIDGET_KEY = "fire-review";
 let reviewTitleActive = false;
-
-/** 活动行渲染所需的一切；executor 每次状态变化后重新提供。 */
-export interface ActivityView {
-	phase: Phase;
-	round: number;
-	startedAt: number;
-	/** 本轮各审查者的状态（来自 reducer）；只有审查相的票数可数。 */
-	reviewers: readonly { status: ReviewerStatus }[];
-	consecutiveFailures?: number;
-	language: Language;
-}
-
-type ViewSource = () => ActivityView | undefined;
-
-const WORDS = {
-	zh: {
-		name: "本轮改动", role: "审查", round: (n: number) => `第 ${n} 轮`, queued: "完成后自动审查",
-		passed: (k: number, n: number) => `${k}/${n} 位审查者通过`, blocked: (m: number) => `，${m} 位阻断`,
-		advisor: (fails: number) => (fails > 0 ? `顾问介入中 · 连续 ${fails} 轮未过` : "顾问介入中"),
-		fixing: "修复中", summarizing: "总结中",
-	},
-	en: {
-		name: "This change", role: "Review", round: (n: number) => `Round ${n}`, queued: "Runs after the turn",
-		passed: (k: number, n: number) => `${k}/${n} reviewers passed`, blocked: (m: number) => `, ${m} blocking`,
-		advisor: (fails: number) => (fails > 0 ? `Advisor consulting · ${fails} straight fails` : "Advisor consulting"),
-		fixing: "Repairing", summarizing: "Summarizing",
-	},
-} as const;
-
-const countStatus = (view: ActivityView, status: ReviewerStatus) =>
-	view.reviewers.filter((reviewer) => reviewer.status === status).length;
-
-/** 输入框外壳显示的审查进度如 `2/3`；没有可数票数的阶段（排队、顾问、修复、总结）为空串。 */
-export function reviewCounts(view: ActivityView | undefined): string {
-	return view?.phase === "reviewing" ? `${countStatus(view, "passed")}/${view.reviewers.length}` : "";
-}
-
-function activityRow(view: ActivityView): ActivityRow {
-	const words = WORDS[view.language];
-	const blocked = view.phase === "reviewing" ? countStatus(view, "failed") : 0;
-	const round = words.round(view.round);
-	const action = {
-		queued: words.queued,
-		reviewing: `${round} · ${words.passed(countStatus(view, "passed"), view.reviewers.length)}${blocked ? words.blocked(blocked) : ""}`,
-		needs_fix: `${round} · ${words.advisor(view.consecutiveFailures ?? 0)}`,
-		awaiting_fix: `${round} · ${words.fixing}`,
-		summarizing: words.summarizing,
-	}[view.phase as "queued"] ?? round;
-	return {
-		mark: reviewMark(phaseOf(0)),
-		name: words.name,
-		role: words.role,
-		action,
-		tone: blocked ? "failed" : "review",
-		elapsed: view.startedAt ? formatDuration(Math.max(0, Date.now() - view.startedAt)) : "",
-	};
-}
-
-class ActivityLine implements Component {
-	private readonly stop: () => void;
-
-	constructor(
-		private readonly view: ViewSource,
-		private readonly theme: Theme,
-		requestRender: () => void,
-	) {
-		this.stop = onFrame(requestRender);
-	}
-
-	invalidate(): void {}
-	dispose(): void { this.stop(); }
-
-	render(width: number): string[] {
-		const view = this.view();
-		if (!view || width <= 0) return [];
-		const row = activityRow(view);
-		return [renderActivityRow(row, width, visibleWidth(row.name), this.theme)];
-	}
-}
-
-export function showActivity(ctx: ExtensionContext, view: ViewSource): void {
-	if (ctx.hasUI === false) return;
-	setReviewTitle(ctx, view());
-	if (typeof ctx.ui.setWidget !== "function") return;
-	ctx.ui.setWidget(
-		WIDGET_KEY,
-		(tui: TUI, theme: Theme) => new ActivityLine(view, theme, () => tui.requestRender()),
-		{ placement: "aboveEditor" },
-	);
-}
-
-export function hideActivity(ctx: ExtensionContext): void {
-	if (ctx.hasUI === false) return;
-	restoreReviewTitle(ctx);
-	if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget(WIDGET_KEY, undefined);
-}
 
 /**
  * 审查等模型结论时（排队/审查中/顾问仲裁）接管编辑器：禁止输入，esc/Ctrl+C 随时取消。
@@ -164,20 +63,21 @@ class ReviewEditor extends CustomEditor {
 	}
 }
 
-function setReviewTitle(ctx: ExtensionContext, view: ActivityView | undefined) {
-	if (!view || !ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
+/** 审查期间终端标题写明“审查中 R轮次 · 会话名”，结束后还原。 */
+export function showReviewTitle(ctx: ExtensionContext, round: number, language: Language) {
+	if (!ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
 	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };
 	const rawName = manager.getSessionName?.();
 	const rawCwd = manager.getCwd?.();
 	const who = typeof rawName === "string" && rawName
 		? rawName
 		: typeof rawCwd === "string" ? basename(rawCwd) : "";
-	const label = view.language === "en" ? "Reviewing" : "审查中";
+	const label = language === "en" ? "Reviewing" : "审查中";
 	reviewTitleActive = true;
-	ctx.ui.setTitle(`${label}${view.round > 0 ? ` R${view.round}` : ""}${who ? ` · ${who}` : ""}`);
+	ctx.ui.setTitle(`${label}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
 }
 
-function restoreReviewTitle(ctx: ExtensionContext) {
+export function hideReviewTitle(ctx: ExtensionContext) {
 	if (!reviewTitleActive || !ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
 	reviewTitleActive = false;
 	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };

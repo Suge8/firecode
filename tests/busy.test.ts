@@ -11,10 +11,11 @@ async function harness() {
 	let settled = 0;
 	let result: any;
 	let view: any;
-	watchBusy({
+	const pi = {
 		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 		events: { on: (channel: string, fn: Function) => { bus.set(channel, [...(bus.get(channel) ?? []), fn]); return () => {}; } },
-	}, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, settledResult: unknown) => { settled++; result = settledResult; } });
+	};
+	watchBusy(pi, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, settledResult: unknown) => { settled++; result = settledResult; } });
 	let idle = true;
 	const ctx = { isIdle: () => idle };
 	return {
@@ -28,7 +29,11 @@ async function harness() {
 		compact: (name: string, event = {}) => handlers.get(name)?.forEach((fn) => fn(event, ctx)),
 		agentEnd: (stopReason?: string) => handlers.get("agent_end")?.forEach((fn) => fn({ messages: stopReason ? [{ role: "assistant", stopReason }] : [] }, ctx)),
 		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
-		inFlight: (inFlight: number) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight })),
+		inFlight: (inFlight: number, teardown?: boolean) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight, ...(teardown ? { teardown } : {}) })),
+		shutdown: () => handlers.get("session_shutdown")?.forEach((fn) => fn({ reason: "quit" }, ctx)),
+		watch: (onSettled: Function) => watchBusy(pi, { onSettled }),
+		handlers,
+		bus,
 	};
 }
 
@@ -188,4 +193,41 @@ test("在飞数归零时指挥官回合因 isIdle 为 false 仍算在跑：不�
 	h.idle = true;
 	h.agentSettled();
 	expect(h.settled).toBe(1);
+});
+
+test("拆会话不是歇下：退出/new/resume 后 Master 停用发布的归零不触发边沿", async () => {
+	const h = await harness();
+	h.agentStart();
+	h.inFlight(2);
+	h.agentSettled();
+	h.shutdown();
+	h.inFlight(0);
+	expect(h.settled).toBe(0);
+});
+
+test("停用 Master 遗弃在飞子代理不是歇下：teardown 归零只结束本段，不触发边沿", async () => {
+	const h = await harness();
+	h.agentStart();
+	h.inFlight(2);
+	h.agentSettled();
+	h.inFlight(0, true);
+	expect(h.settled).toBe(0);
+	expect(h.view.busy).toBe(false);
+	// 之后的新一段照常歇下。
+	h.agentStart();
+	h.agentSettled();
+	expect(h.settled).toBe(1);
+});
+
+test("每个 pi 只有一份状态机：多个消费者只订阅，宿主事件与在飞频道不重复安装，全部收到同一份歇下事实", async () => {
+	const h = await harness();
+	const seen: unknown[] = [];
+	h.watch((_ctx: unknown, round: unknown) => seen.push(round));
+	h.watch((_ctx: unknown, round: unknown) => seen.push(round));
+	for (const list of [...h.handlers.values(), ...h.bus.values()]) expect(list).toHaveLength(1);
+	h.agentStart();
+	h.agentSettled();
+	expect(h.settled).toBe(1);
+	expect(seen).toEqual([h.result, h.result]);
+	expect(seen[0]).toBe(seen[1]);
 });

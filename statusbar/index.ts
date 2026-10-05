@@ -14,32 +14,27 @@ import {
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, OUTCOME_TEXT, type SettledRound, roundTexts, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
-import { formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
+import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 
-const TITLE_CHARACTERS = 6;
-const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const cleanTitle = (text: string) => oneLine(stripVTControlCharacters(text).replace(/[\x00-\x1f\x7f-\x9f]/g, " "));
+/** 展示标题的上限（列）：实际宽度由下边框布局按终端宽度逐级裁。 */
+const TITLE_MAX_WIDTH = 60;
+/** 去掉终端控制序列与控制字符，保留换行供首句规则识别 Markdown 结构。 */
+const sanitize = (text: string) => stripVTControlCharacters(text).replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, " ");
 
 function userTitle(message: MessageStartEvent["message"]): string | undefined {
 	if (message.role !== "user") return undefined;
 	const content = message.content;
-	const text = cleanTitle(typeof content === "string" ? content : content
-		.filter((block) => block.type === "text").map((block) => block.text).join(" "));
-	if (!text) return undefined;
-	let title = "";
-	let count = 0;
-	for (const { segment } of characters.segment(text)) {
-		if (count++ === TITLE_CHARACTERS) return `${title}…`;
-		title += segment;
-	}
-	return title;
+	const text = typeof content === "string" ? content : content
+		.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+	return clip(firstSentence(sanitize(text)), TITLE_MAX_WIDTH) || undefined;
 }
 
 function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["message"]): string {
 	const name = ctx.sessionManager.getSessionName();
-	if (name) return cleanTitle(name);
+	if (name) return oneLine(sanitize(name));
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message") continue;
 		const title = userTitle(entry.message);
@@ -48,8 +43,6 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 	return (incoming && userTitle(incoming)) || "新会话";
 }
 
-/** review 发布的占用频道：外壳借它显示审查进度，不另开频道。 */
-const REVIEW_OCCUPANCY_CHANNEL = "herdr:blocked";
 const FAST_STATUS = "pi-openai-native-fast";
 /** 落定后暖光渐隐的时长；落定结果本身一直留到下一轮开始。 */
 const GLOW_FADE_MS = 1_000;
@@ -64,7 +57,7 @@ class Shell {
 	/** 最近歇下的那一段：留到下一轮开始。 */
 	settled: Settled | undefined;
 	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
-	review: (() => string) | undefined;
+	review: (() => ReviewProgress | undefined) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
 	theme: Theme | undefined;
 	requestRender = () => {};
@@ -97,7 +90,7 @@ class Shell {
 		const { busy, settled, review, theme } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
-			mark: "", word: "", elapsed: "", review: "", reviewShort: "", glow: 0,
+			mark: "", word: "", elapsed: "", review: [], glow: 0,
 			watcher: status("watcher"), master: status("master"),
 		};
 		if (busy.since !== undefined) {
@@ -113,11 +106,7 @@ class Shell {
 			parts.elapsed = roundTexts(settled).map((part) => theme.fg("muted", part)).join(theme.fg("dim", " · "));
 			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
 		}
-		if (review) {
-			const counts = review();
-			parts.review = `${reviewMark(phaseOf(2))} ${paint(HEAT_COLORS.gold, `审查${counts ? ` ${counts}` : ""}`)}`;
-			parts.reviewShort = `${reviewMark(phaseOf(2))}${counts ? ` ${paint(HEAT_COLORS.gold, counts)}` : ""}`;
-		}
+		if (review && theme) parts.review = reviewTiers(review(), theme);
 		return parts;
 	}
 
@@ -137,6 +126,26 @@ class Shell {
 			capacity: fg("dim", `/${formatTokens(window)}`),
 		};
 	}
+}
+
+const STAGE_TEXT = { queued: "排队中", advisor: "顾问介入", fixing: "修复中", summarizing: "总结中" } as const;
+
+/** 审查进度的退让档：`审查 第2轮 1/3 · 1 阻断` → 丢轮次 → 丢“审查” → 只留计数；字形始终在。 */
+function reviewTiers(progress: ReviewProgress | undefined, theme: Theme): string[] {
+	const gold = (text: string) => paint(HEAT_COLORS.gold, text);
+	const mark = reviewMark(phaseOf(2));
+	if (!progress) return [`${mark} ${gold("审查")}`, mark];
+	const counting = progress.stage === "reviewing";
+	const body = gold(counting ? `${progress.passed}/${progress.total}` : STAGE_TEXT[progress.stage]);
+	const blocked = counting && progress.blocked ? `${gold(" · ")}${theme.fg("error", `${progress.blocked} 阻断`)}` : "";
+	const round = progress.round > 0 ? gold(` 第${progress.round}轮`) : "";
+	const tiers = [
+		`${mark} ${gold("审查")}${round} ${body}${blocked}`,
+		`${mark} ${gold("审查")} ${body}${blocked}`,
+		`${mark} ${body}${blocked}`,
+		`${mark} ${body}`,
+	];
+	return tiers.filter((tier, index) => tier !== tiers[index - 1]);
 }
 
 class ShellEditor extends CustomEditor {
@@ -189,9 +198,9 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 			shell.requestRender();
 		},
 	});
-	pi.events.on(REVIEW_OCCUPANCY_CHANNEL, (data) => {
-		const occupancy = data as { active?: boolean; progress?: () => string } | undefined;
-		shell.review = occupancy?.active ? (occupancy.progress ?? (() => "")) : undefined;
+	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
+		const occupancy = data as OccupancyPayload;
+		shell.review = occupancy.active ? occupancy.progress : undefined;
 		shell.syncClock();
 		shell.requestRender();
 	});

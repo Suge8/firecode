@@ -1,4 +1,5 @@
 /** 内置工具的动作词与目标：工具行渲染与 Master 活动列表共用的唯一来源。 */
+import { homedir } from "node:os";
 import type { ClipSide } from "../format.js";
 import { commandParts, genericArgsParts, pathValue, type Part } from "./parts.js";
 
@@ -21,6 +22,17 @@ export function rangeSuffix(args: ToolArgs): string {
 	return `:${start}-${start + args.limit - 1}`;
 }
 
+const CD_PREFIX = /^\s*cd\s+(?:"([^"]*)"|'([^']*)'|(\S+))\s*&&\s*/u;
+const trimSlash = (path: string) => path.replace(/(?<=.)\/+$/u, "");
+
+/** agent 的命令常以“cd 到当前工作目录 &&”开头，这段前缀没有信息量（同路径显示 ./ 的思路）；cd 到别处保留。 */
+function withoutCwdPrefix(command: string, cwd: string): string {
+	const match = CD_PREFIX.exec(command);
+	if (!match || !cwd) return command;
+	const target = (match[1] ?? match[2] ?? match[3]).replace(/^~(?=\/|$)/u, homedir());
+	return trimSlash(target) === trimSlash(cwd) ? command.slice(match[0].length) : command;
+}
+
 /** 工具调用的目标片段与过长时的保留侧（路径留尾、命令留头）。 */
 export function toolTarget(tool: string, args: unknown, cwd: string): { value: Part[]; clip: ClipSide } {
 	const input = (args ?? {}) as ToolArgs & { command?: string };
@@ -28,7 +40,7 @@ export function toolTarget(tool: string, args: unknown, cwd: string): { value: P
 		case "read": return { value: pathValue(argPath(input), cwd, rangeSuffix(input)), clip: "start" };
 		case "edit":
 		case "write": return { value: pathValue(argPath(input), cwd), clip: "start" };
-		case "bash": return { value: commandParts(input.command ?? ""), clip: "end" };
+		case "bash": return { value: commandParts(withoutCwdPrefix(input.command ?? "", cwd)), clip: "end" };
 		default: return { value: genericArgsParts(args), clip: "end" };
 	}
 }

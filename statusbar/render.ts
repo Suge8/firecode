@@ -44,15 +44,15 @@ export interface TopParts {
 	mark: string;
 	word: string;
 	elapsed: string;
-	review: string;
-	reviewShort: string;
+	/** 审查进度由长到短的退让档（已着色）；空数组表示没有审查。 */
+	review: readonly string[];
 	watcher: string;
 	master: string;
 	/** 0–1：回合进行时边框左端的暖光强度。 */
 	glow: number;
 }
 
-/** 退让顺序：观察员 → 审查字样 → “处理中” → 审查计数 → 指挥官。 */
+/** 退让顺序：观察员 → 审查进度逐档缩短 → “处理中” → 审查进度最短档 → 指挥官。 */
 export function topBorder(width: number, parts: TopParts, line: Line): string {
 	const left = (word: boolean, review: string) => {
 		const head = [parts.mark, word ? parts.word : "", parts.elapsed].filter(Boolean).join(" ");
@@ -61,11 +61,11 @@ export function topBorder(width: number, parts: TopParts, line: Line): string {
 	const right = (...items: string[]) => items.filter(Boolean).join(" ");
 	const at = (word: boolean, review: string, ...items: string[]) =>
 		() => border(width, left(word, review), right(...items), line, parts.glow);
+	const [full = "", ...shorter] = parts.review;
 	return firstFit(width, line, [
-		at(true, parts.review, parts.watcher, parts.master),
-		at(true, parts.review, parts.master),
-		at(true, parts.reviewShort, parts.master),
-		at(false, parts.reviewShort, parts.master),
+		at(true, full, parts.watcher, parts.master),
+		...[full, ...shorter].map((review) => at(true, review, parts.master)),
+		at(false, parts.review.at(-1) ?? "", parts.master),
 		at(false, "", parts.master),
 		at(false, ""),
 	]);
