@@ -17,7 +17,7 @@
 | `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
 
 所有子会话只经 `spawn.ts` 创建：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
-系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在子会话里不可见。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
+系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在模型解析时不可见。这份 ModelRuntime 同时交给池里建出的每个子会话，所以某个子会话里扩展注册的 provider 对同池其他子会话也可见（宿主跨会话复用服务也是如此）。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
 
 Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
 
@@ -48,7 +48,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 
 ## 在飞数发布
 
-Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（发件箱的 deliver 完成后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖；闲时前门唤醒的 deliver 订阅下一次 `agent_start`，唤醒回合真正开始才完成——宿主扩展的 `sendUserMessage` 返回 void、不等回合（`tests/delivery-contract.test.ts` 钉住），扣减时指挥官回合已在跑，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发带 `teardown` 的归零——遗弃在飞子代理不是歇下，busy.ts 只结束本段、不发歇下边沿。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
+Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（发件箱的 deliver 完成后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖；闲时前门唤醒的 deliver 以宿主记录这条信封消息本身为送达；下一个回合的第一条消息不是它（前门被宿主拒绝、用户自己开了回合）就在该回合改走 steer 补投（ADR 0017）。宿主扩展的 `sendUserMessage` 返回 void、不等回合（`tests/delivery-contract.test.ts` 钉住），两种情况扣减时指挥官回合都已在跑，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙，事件也不会被 ack 后静默丢失。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发带 `teardown` 的归零——遗弃在飞子代理不是歇下，busy.ts 只结束本段、不发歇下边沿。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
 
 ## 投递与义务
 
