@@ -502,7 +502,10 @@ async function setup(options: {
 	const pi = {
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerMessageRenderer() {},
-		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		on: (name: string, handler: any) => {
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+		},
 		events: {
 			on: (name: string, handler: any) => channels.set(name, [...(channels.get(name) ?? []), handler]),
 			emit: (name: string, data: any) => { for (const handler of channels.get(name) ?? []) handler(data); },
@@ -512,7 +515,12 @@ async function setup(options: {
 			messages.push({ message, options: sendOptions });
 			settle();
 		},
-		sendUserMessage: async (content: string) => { userMessages.push(content); settle(); },
+		// 与宿主一致：返回 void、不等唤醒回合，回合稍后才 agent_start。
+		sendUserMessage: (content: string) => {
+			userMessages.push(content);
+			settle();
+			setTimeout(() => { for (const handler of [...(handlers.get("agent_start") ?? [])]) handler({}, context.ctx); }, 0);
+		},
 	};
 	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);

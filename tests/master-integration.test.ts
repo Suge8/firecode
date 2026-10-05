@@ -676,7 +676,8 @@ test("主回合空闲时，并发落定合并走前门用户消息，投递前�
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	release();
 	await delivered;
-	await Bun.sleep(0);
+	// 前门消息发出后，唤醒回合稍后才开始；ack 在回合开始之后写。
+	await Bun.sleep(5);
 	expect(harness.messages).toEqual([]);
 	expect(harness.userMessages).toHaveLength(1);
 	expect(harness.userMessages[0]).toContain("结果 A");
