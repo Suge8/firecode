@@ -4,7 +4,7 @@
  */
 export type Rgb = readonly [number, number, number];
 
-/** 火焰色板：heat 从余烬烧到白金；ash 是冷却后的灰，与主题中性色无关以免冷却过程跳色。 */
+/** 火焰色板：heat 从余烬烧到白金；ash 是横幅副标题淡入的终色灰。 */
 export const HEAT_COLORS = {
 	ember: [110, 30, 22],
 	red: [255, 47, 32],
@@ -13,13 +13,11 @@ export const HEAT_COLORS = {
 	white: [255, 239, 184],
 	ash: [128, 123, 115],
 	green: [124, 196, 120],
-	failDim: [150, 52, 44],
 	fail: [226, 78, 66],
 } as const satisfies Record<string, Rgb>;
 
 const FPS = 12;
 const FRAME_MS = 1000 / FPS;
-const COOL_MS = 600;
 const SETTLE_MS = 400;
 /** 一格火苗与三格火苗的火舌高度轮廓（每格两个点列）。 */
 const PROFILE = { 1: [0.75, 1], 3: [0.3, 0.6, 0.9, 1, 0.7, 0.35] } as const;
@@ -93,16 +91,16 @@ export function flicker(phase: number, t = frameSeconds()): number {
 
 /**
  * 盲文火苗：每个点列是一根随时钟起伏的火舌，火尖随风摆，顶行只留一个点保持尖顶。
- * phase 让并列的火苗错开；cool 0→1 把火势压低并褪成灰。
+ * phase 让并列的火苗错开。
  */
-export function flame(cells: 1 | 3, phase: number, cool = 0): string {
+export function flame(cells: 1 | 3, phase: number): string {
 	const profile = PROFILE[cells];
 	const columns = cells * 2;
 	const t = frameSeconds();
-	const sway = Math.round(Math.sin(Math.PI * 2 * (0.7 * t + phase)) * 0.6 * (1 - cool));
+	const sway = Math.round(Math.sin(Math.PI * 2 * (0.7 * t + phase)) * 0.6);
 	const heights = Array.from({ length: columns }, (_, index) => {
 		const base = profile[Math.min(columns - 1, Math.max(0, index - sway))];
-		return Math.round(clamp(base * (0.7 + 0.45 * flicker(phase + index * 0.37, t)) * (1 - 0.6 * cool)) * 4);
+		return Math.round(clamp(base * (0.7 + 0.45 * flicker(phase + index * 0.37, t))) * 4);
 	});
 	const peak = Math.max(...heights);
 	let topSeen = false;
@@ -118,7 +116,7 @@ export function flame(cells: 1 | 3, phase: number, cool = 0): string {
 			for (let row = 0; row < height; row++) bits |= DOT[side][3 - row];
 		}
 		const core = cells === 1 ? 0.5 : 1 - Math.abs(cell - (cells - 1) / 2) / cells;
-		const color = mix(heat(0.35 + 0.45 * core + 0.2 * flicker(phase + cell, t)), HEAT_COLORS.ash, cool);
+		const color = heat(0.35 + 0.45 * core + 0.2 * flicker(phase + cell, t));
 		out += paint(color, String.fromCodePoint(0x2800 + bits));
 	}
 	return out;
@@ -126,20 +124,18 @@ export function flame(cells: 1 | 3, phase: number, cool = 0): string {
 
 export type Settle = "done" | "failed";
 
-/** 落定标记：火苗先在 0.6 秒内冷却（失败则沉到暗红），再落成 ✓/✗ 并在 0.4 秒内转到终色。 */
-export function settleMark(kind: Settle, sinceMs: number, phase = 0): string {
-	if (sinceMs < COOL_MS) {
-		const k = easeOut(sinceMs / COOL_MS);
-		return kind === "done" ? flame(1, phase, k) : paint(mix(HEAT_COLORS.orange, HEAT_COLORS.failDim, k), "⣴");
-	}
-	const k = easeOut((sinceMs - COOL_MS) / SETTLE_MS);
+/**
+ * 落定标记：歇下那一刻就是 ✓/✗（与定格文字同帧出现，不留冷却中的火苗残帧），颜色在 0.4 秒内从火焰橙转到终色。
+ */
+export function settleMark(kind: Settle, sinceMs: number): string {
+	const k = easeOut(sinceMs / SETTLE_MS);
 	return kind === "done"
-		? paint(mix(HEAT_COLORS.ash, HEAT_COLORS.green, k), "✓")
-		: paint(mix(HEAT_COLORS.failDim, HEAT_COLORS.fail, k), "✗");
+		? paint(mix(HEAT_COLORS.orange, HEAT_COLORS.green, k), "✓")
+		: paint(mix(HEAT_COLORS.orange, HEAT_COLORS.fail, k), "✗");
 }
 
 /** 落定过渡是否仍在播放；调用方据此决定是否继续订阅时钟。 */
-export const settling = (sinceMs: number) => sinceMs < COOL_MS + SETTLE_MS;
+export const settling = (sinceMs: number) => sinceMs < SETTLE_MS;
 
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 

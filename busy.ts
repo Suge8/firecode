@@ -33,6 +33,8 @@ export interface BusyView {
 	busy: boolean;
 	/** 本段进行中的起点（Date.now）；当且仅当 busy 时存在。 */
 	since?: number;
+	/** 主会话 /fire-review 进行中：算会话进行中，审查时长计入这一段。 */
+	review: boolean;
 }
 export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false };
 

@@ -12,7 +12,8 @@ import {
 	UserMessageComponent,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component, type TUI } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import { Container, ScrollView, Text, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { RowState, ToolResult } from "./line.js";
 
 export class HostShapeError extends Error {
@@ -81,9 +82,18 @@ export function userTextOf(component: UserMessageComponent): string {
 	return checked<{ text: string }>(component, { text: "string" }, "UserMessageComponent").text;
 }
 
-/** 宿主整行单色提示的原文（带颜色转义）。 */
+/** 宿主整行单色提示的原文（带颜色转义）。宿主的 ThemedText 首次渲染前 text 还是空串，原文由私有的 build 现算。 */
 export function textComponentText(component: Text): string {
+	const build = (component as unknown as { build?: unknown }).build;
+	if (typeof build === "function") return String(build.call(component));
 	return checked<{ text: string }>(component, { text: "string" }, "Text").text;
+}
+
+/** 宿主对 ctrl+o 的状态回显；在过程分组里 ctrl+o 就是“全部展开/全部折叠”，这句回显只是噪声。 */
+const TOOL_OUTPUT_ECHO = /^Tool output: (?:expanded|collapsed)$/;
+
+export function isToolOutputEcho(component: Component | undefined): boolean {
+	return component instanceof Text && TOOL_OUTPUT_ECHO.test(stripVTControlCharacters(textComponentText(component)).trim());
 }
 
 /** 宿主 CustomEntry（轮记录等）：类不对扩展导出，按它独有的 hasContent 能力识别。 */
@@ -100,14 +110,33 @@ export function captureTui(ui: ExtensionUIContext, use: (tui: TUI) => void): voi
 	ui.setWidget("firecode-tui-capture", undefined);
 }
 
+/** 聊天容器 = 直接装着用户消息、助手消息或工具行的容器（宿主只在聊天里构造用户消息组件）。 */
 export function findChat(value: Component): Container | undefined {
 	if (!(value instanceof Container)) return undefined;
-	if (value.children.some((child) => child instanceof ToolExecutionComponent || child instanceof AssistantMessageComponent)) return value;
+	if (value.children.some(isChatChild)) return value;
 	for (const child of value.children) {
 		const found = findChat(child);
 		if (found) return found;
 	}
 	return undefined;
+}
+
+export function isChatChild(child: Component): boolean {
+	return child instanceof ToolExecutionComponent || child instanceof AssistantMessageComponent || child instanceof UserMessageComponent;
+}
+
+/** 装着聊天容器的滚动视图（全屏模式下跟随末尾的那个）；主屏模式没有，返回 undefined。 */
+export function scrollViewOf(root: Component, target: Component): ScrollView | undefined {
+	const contains = (node: Component): boolean => node === target || (node instanceof Container && node.children.some(contains));
+	const visit = (node: Component): ScrollView | undefined => {
+		if (!(node instanceof Container)) return undefined;
+		for (const child of node.children) {
+			if (!contains(child)) continue;
+			return visit(child) ?? (child instanceof ScrollView ? child : undefined);
+		}
+		return undefined;
+	};
+	return visit(root);
 }
 
 /** 原型补丁的安装与精确还原：只还原仍是自己装上的那一层。 */
