@@ -1112,6 +1112,38 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 	expect(harness.activity()).toEqual([]);
 });
 
+test("活动列表：已完成展开显示结果首句，下一轮人类输入时自动收起；ctrl+o 不展开活动列表", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("刷新改为单飞。更多细节"), fauxAssistantMessage("清掉 4 处 lint。")]);
+	for (const worker of ["fix-auth", "lint"]) {
+		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action: "start", worker, prompt: "执行", role: "工程师" });
+		await delivered;
+	}
+	harness.toolsExpanded = true;
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 2 个已完成/u)]);
+	harness.clickActivity("2 个已完成");
+	const opened = harness.activity();
+	expect(opened[1]).toMatch(/fix-auth .*刷新改为单飞。/u);
+	expect(opened[2]).toMatch(/lint .*清掉 4 处 lint。/u);
+	await harness.emit("input", { source: "interactive" });
+	expect(harness.activity()).toHaveLength(1);
+	await harness.command("");
+});
+
+test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个空闲”", async () => {
+	const harness = await setup(false);
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, JSON.stringify({ version: 8, workers: ["writer", "slow"].map((name) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`),
+	})) }));
+	await harness.command("");
+	expect(harness.activity()).toEqual([expect.stringMatching(/2 个空闲/u)]);
+	await harness.command("");
+});
+
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
 	const harness = await setup();
 	let release!: () => void;
@@ -1654,6 +1686,14 @@ async function setup(activate = true, options: {
 	const wake = () => turn(userMessages.at(-1)!);
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
+	const components = new Map<any, any>();
+	let toolsExpanded = false;
+	const activityList = () => {
+		const factory = [...widgets.values()][0];
+		if (!factory) return undefined;
+		if (!components.has(factory)) components.set(factory, factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme));
+		return components.get(factory);
+	};
 	let sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
@@ -1668,7 +1708,7 @@ async function setup(activate = true, options: {
 			notify: (message: string) => notices.push(message),
 			setStatus: (key: string, text: string | undefined) => { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
 			setWidget: (key: string, factory: any) => { if (factory) widgets.set(key, factory); else widgets.delete(key); },
-			getToolsExpanded: () => false,
+			getToolsExpanded: () => toolsExpanded,
 			theme: {
 				fg: (_color: string, text: string) => text,
 				bg: (_color: string, text: string) => text,
@@ -1695,11 +1735,15 @@ async function setup(activate = true, options: {
 		appended,
 		entries,
 		pool,
-		/** 输入框上方活动列表当前的纯文本行。 */
-		activity: () => {
-			const factory = [...widgets.values()][0];
-			return factory ? factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme).render(80).map((line: string) => stripVTControlCharacters(line)) as string[] : [];
+		/** 输入框上方活动列表当前的纯文本行（与宿主一致：组件只建一次，点击状态保留）。 */
+		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line)) as string[] ?? [],
+		/** 点活动列表里含 label 的那一行。 */
+		clickActivity: (label: string) => {
+			const list = activityList();
+			const y = list.render(80).findIndex((line: string) => stripVTControlCharacters(line).includes(label));
+			return list.handleMouse({ type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width: 80, height: 20, shift: false, alt: false, ctrl: false });
 		},
+		set toolsExpanded(value: boolean) { toolsExpanded = value; },
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
