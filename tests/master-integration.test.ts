@@ -817,9 +817,97 @@ test("子代理视图里的补话走 send 同一入口：落定事件标题注�
 	expect(content).toContain("你说：把标题改短");
 	expect(content).toContain("回复：\n按你说的改好了");
 	expect(content).toMatch(/耗时：本次运行 /u);
+	// 指挥官回合在跑：照常经 steer 队列在句缝送达。
+	expect(harness.messages.at(-1).options).toMatchObject({ deliverAs: "steer" });
 	await Bun.sleep(0);
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ status: "idle", disposition: "pending" });
+});
+
+const inFlightCounts = (harness: { emitted: [string, any][] }) =>
+	harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+
+test("视图里直接派的运行指挥官并不在等：不计入在飞数（主会话不因此进入进行中），指挥官歇透时结果作为会话记录追加、不唤醒", async () => {
+	const harness = await setup();
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("初始完成"), fauxAssistantMessage("按你说的改好了")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "viewed", prompt: "初始化", role: "工程师" });
+	await delivered;
+	await Bun.sleep(5);
+	expect(inFlightCounts(harness)).toEqual([1, 0]);
+	const wakes = harness.userMessages.length;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "viewed", prompt: "把标题改短", origin: "view" });
+	await delivered;
+	await Bun.sleep(5);
+	expect(inFlightCounts(harness)).toEqual([1, 0]);
+	expect(harness.userMessages).toHaveLength(wakes);
+	const { message, options } = harness.messages.at(-1);
+	expect(titleOf(message.content)).toBe("viewed 已返回（你在子代理视图里直接派的）");
+	expect(options?.deliverAs).toBeUndefined();
+	expect(options?.triggerTurn).toBeFalsy();
+	// 发落规则不变：结果交给指挥官后同样待发落。
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle", disposition: "pending" });
+});
+
+test("视图派的运行进行中指挥官又 send 给同一子代理：来源转为指挥官，从此算在飞，落定照常唤醒指挥官", async () => {
+	const harness = await setup();
+	harness.idle = true;
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	faux.setResponses([
+		fauxAssistantMessage("初始完成"),
+		async () => { await gate; return fauxAssistantMessage("第一段"); },
+		fauxAssistantMessage("按补充改好了"),
+	]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "shared", prompt: "初始化", role: "工程师" });
+	await delivered;
+	await Bun.sleep(5);
+	const wakes = harness.userMessages.length;
+
+	await harness.execute({ action: "send", worker: "shared", prompt: "视图里说的", origin: "view" });
+	await Bun.sleep(5);
+	expect(inFlightCounts(harness)).toEqual([1, 0]);
+	await harness.execute({ action: "send", worker: "shared", prompt: "指挥官补充" });
+	await Bun.sleep(5);
+	expect(inFlightCounts(harness)).toEqual([1, 0, 1]);
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	release();
+	await delivered;
+	await Bun.sleep(5);
+	expect(harness.userMessages).toHaveLength(wakes + 1);
+	expect(titleOf(harness.userMessages.at(-1)!)).toBe("shared 已返回（你在子代理视图里直接派的）");
+	expect(harness.userMessages.at(-1)).toContain("你说：视图里说的");
+	expect(inFlightCounts(harness)).toEqual([1, 0, 1, 0]);
+});
+
+test("子代理被 kill 时通知订阅方（全过程视图据此显示已移除）；之后视图补话报明确错误", async () => {
+	process.env.PI_CODING_AGENT_DIR = directory = await mkdtemp(join(tmpdir(), "firecode-master-kill-"));
+	const [{ MasterRuntime }, { ACTION_HANDLERS }] = await Promise.all([
+		loadFirecodeModule("master/runtime.js"),
+		loadFirecodeModule("master/actions.js"),
+	]) as any[];
+	const ctx = {
+		sessionManager: { getSessionId: () => "kill-notify" },
+		ui: { setWidget() {}, setStatus() {}, notify() {} },
+		isIdle: () => true,
+	};
+	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
+	const active = new MasterRuntime({ pi: { events: { emit() {} } }, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
+	active.store.dispatch({ type: "UPSERT_WORKER", worker: {
+		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
+	} });
+	const removed: string[] = [];
+	active.onWorkerRemoved((name: string) => removed.push(name));
+	await ACTION_HANDLERS.kill(active, { worker: "quick" }, ctx);
+	expect(removed).toEqual(["quick"]);
+	await expect(ACTION_HANDLERS.send(active, { worker: "quick", prompt: "还在吗", origin: "view" }, ctx)).rejects.toThrow("子代理不存在：quick");
+	active.close();
 });
 
 test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待续跑”，首次 send 自动注入现场自检", async () => {
@@ -871,8 +959,8 @@ test("会话重载打断的回合：恢复后补挂续跑提醒，提醒说清�
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
-	await writeFile(path, JSON.stringify({ version: 8, workers: [{
-		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"),
+	await writeFile(path, JSON.stringify({ version: 9, workers: [{
+		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"), launch: 1,
 	}] }));
 	await harness.command("");
 	await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1166,22 +1254,22 @@ test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个�
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
-	await writeFile(path, JSON.stringify({ version: 8, workers: ["writer", "slow"].map((name) => ({
-		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`),
+	await writeFile(path, JSON.stringify({ version: 9, workers: ["writer", "slow"].map((name, index) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), launch: index + 1,
 	})) }));
 	await harness.command("");
 	expect(harness.activity()).toEqual([expect.stringMatching(/2 个空闲/u)]);
 	await harness.command("");
 });
 
-test("resume 后空闲子代理按档案里的创建时间列出（池数组顺序受并发 start 影响，不可靠）；start 把创建时间写进档案", async () => {
+test("恢复后按档案里的启动序列出子代理（并行 start 的落盘先后不可靠）；新 start 的启动序接在已有之后", async () => {
 	const harness = await setup(false);
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
 	const archived = [["mid", 3], ["zeta", 1], ["alpha", 2]] as const;
-	await writeFile(path, JSON.stringify({ version: 8, workers: archived.map(([name, createdAt]) => ({
-		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), createdAt,
+	await writeFile(path, JSON.stringify({ version: 9, workers: archived.map(([name, launch]) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), launch,
 	})) }));
 	await harness.command("");
 	harness.clickActivity("3 个空闲");
@@ -1192,7 +1280,7 @@ test("resume 后空闲子代理按档案里的创建时间列出（池数组顺�
 	await harness.execute({ action: "start", worker: "fresh", prompt: "执行", role: "工程师" });
 	await delivered;
 	const saved = JSON.parse(await readFile(path, "utf8")).workers.find((worker: any) => worker.name === "fresh");
-	expect(typeof saved.createdAt).toBe("number");
+	expect(saved.launch).toBe(4);
 	await harness.command("");
 });
 

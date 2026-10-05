@@ -12,10 +12,8 @@ const MINUTE = 60_000;
 
 type Spec = {
 	name: string;
-	/** null：没有启动序（resume 恢复的）。 */
-	launch?: number | null;
-	/** 档案里的创建时间。 */
-	created?: number;
+	/** 档案里的启动序；省略时按列出顺序。 */
+	launch?: number;
 	status?: string;
 	tool?: string;
 	args?: unknown;
@@ -26,15 +24,13 @@ type Spec = {
 };
 
 function facts(specs: Spec[]) {
-	const workers = specs.map((spec) => ({
-		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p",
-		...(spec.created === undefined ? {} : { createdAt: spec.created }),
+	const workers = specs.map((spec, index) => ({
+		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p", launch: spec.launch ?? index,
 	}));
 	const byPath = <T>(pick: (spec: Spec) => T | undefined) =>
 		new Map(specs.flatMap((spec) => { const value = pick(spec); return value === undefined ? [] : [[`/s/${spec.name}`, value] as const]; }));
 	return {
 		workers,
-		launchOrder: new Map(specs.flatMap((spec, index) => spec.launch === null ? [] : [[spec.name, spec.launch ?? index] as const])),
 		currentTools: new Map(specs.flatMap((spec) => spec.tool ? [[`/s/${spec.name}`, new Map([["1", { tool: spec.tool, args: spec.args, startedAt: NOW }]])] as const] : [])),
 		reviewProgress: byPath((spec) => spec.review && { kind: "review" as const, round: spec.review[0], settled: spec.review[1], total: spec.review[2] }),
 		runStartedAt: byPath((spec) => spec.started ?? (spec.status === "idle" ? undefined : NOW - 10_000)),
@@ -188,12 +184,12 @@ test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个�
 	expect(view.opened).toEqual(["run-0"]);
 });
 
-test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样排版（标记字形、缩进），展开行不重复“空闲”，按启动序、没有启动序的按档案创建时间", async () => {
+test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样排版（标记字形、缩进），展开行不重复“空闲”，按档案里的启动序", async () => {
 	const view = await list([
 		{ name: "run-a", output: NOW - 1_000 },
-		{ name: "p6", status: "idle", launch: null, created: 6 },
-		{ name: "p1", status: "idle", launch: null, created: 1 },
-		{ name: "p3", status: "idle", launch: null, created: 3 },
+		{ name: "p6", status: "idle", launch: 6 },
+		{ name: "p1", status: "idle", launch: 1 },
+		{ name: "p3", status: "idle", launch: 3 },
 	], { now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
 	expect(view.text()[1]).toMatch(/^ {2}\S 3 个空闲$/u);

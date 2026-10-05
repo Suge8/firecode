@@ -11,6 +11,7 @@ const worker = (disposition?: "pending" | "reminded") => ({
 	thinking: "medium",
 	status: "idle",
 	sessionPath: "/tmp/w1.jsonl",
+	launch: 1,
 	...(disposition ? { disposition } : {}),
 });
 
@@ -73,7 +74,7 @@ test("子代理池有待发落事件时升 timeSensitive 并带“待拍板”�
 		emit("message_end", reply("要你决定"));
 		emit("agent_settled", {}, ctx);
 	};
-	const pool = (disposition?: "pending") => JSON.stringify({ version: 8, workers: [worker(disposition)] });
+	const pool = (disposition?: "pending") => JSON.stringify({ version: 9, workers: [worker(disposition)] });
 	const cases: Array<[string | undefined, string, string | undefined]> = [
 		[pool("pending"), "timeSensitive", "待拍板"],
 		[pool(), "active", undefined],

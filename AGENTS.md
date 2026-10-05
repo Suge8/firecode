@@ -22,7 +22,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `round-recorder.ts` | 轮记录器：会话歇下时把整段时长、终态与均速写成 `firecode-round` CustomEntry 并发布“已写入”；不属于任何可关的功能，主会话与每个子代理会话都注册、与界面无关，记录格式与读取在 `tools/round.ts` |
-| `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起并以宿主记录这条消息为送达，没进回合就改走 steer 补投 | |
+| `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起并以宿主记录这条消息为送达，没进回合就改走 steer 补投；指挥官没在等的结果走“告知不唤醒”（忙时同样 steer，歇透时直接追加为会话记录） | |
 | `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞 \|\| 主会话审查进行中）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长、终态与均速）`watchBusy`；频道名与 payload 只在这里定义 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
 | `activity.ts` | 子代理活动列表的单行布局（标记、名字列、角色 · 动作、耗时与退让），只有 `master/activity-list.ts` 使用 | |
@@ -36,7 +36,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（唯一例外：review 的修复反馈与总结提示走 followUp 侧门，见 review/AGENTS.md 已知暴露）：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起，以宿主记录这条消息为送达、没进回合就 steer 补投（宿主的扩展 `sendUserMessage` 返回 void、不等回合）。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（唯一例外：review 的修复反馈与总结提示走 followUp 侧门，见 review/AGENTS.md 已知暴露）：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起，以宿主记录这条消息为送达、没进回合就 steer 补投（宿主的扩展 `sendUserMessage` 返回 void、不等回合）；只告知不唤醒的结果歇透时以不带 `triggerTurn` 的 `sendMessage` 追加（宿主当场写入会话树、追加在末尾，不是下面的回合中追加）。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
