@@ -176,7 +176,7 @@ class ToolItem implements Component {
 	private leadingRows = 0;
 	constructor(
 		private readonly row: ToolRow,
-		private readonly ui: ExtensionUIContext,
+		private readonly ui: ProjectionUI,
 		private readonly toggle: (row: ToolRow) => void,
 	) {}
 	invalidate(): void {}
@@ -222,8 +222,11 @@ class UserBar implements Component {
 	}
 }
 
+/** 投影只用到宿主 UI 的主题与全局展开档位；主会话传 ctx.ui，子代理全过程视图传自己的一份。 */
+export type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded">;
+
 export interface ProjectionEnv {
-	ui: ExtensionUIContext;
+	ui: ProjectionUI;
 	clock: TurnClock;
 	/** 折叠态每轮最多显示几条中间回复首句。 */
 	replyLines: number;

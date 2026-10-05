@@ -37,6 +37,8 @@ export interface ActivityFacts {
 type Toggle = "running" | "done" | "idle";
 /** 一行输出：子代理行，或可点击的折叠行。 */
 type Line = { row: Row } | { label: string; mark?: string; toggle: Toggle };
+/** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
+type Target = { toggle: Toggle } | { open: string };
 
 /** working 子代理这么久没有任何输出（模型 token 或工具事件）就追加“N 分钟无输出”。 */
 const STUCK_MS = 5 * 60_000;
@@ -128,6 +130,12 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 	return groups;
 }
 
+/** 全部展开时的行序（需要处理的、在跑、已完成、空闲）：全过程视图按它换子代理。 */
+export function displayOrder(facts: ActivityFacts, theme: Theme): string[] {
+	const { failed, interrupted, stuck, running, done, idle } = group(facts, Date.now(), theme);
+	return [...failed, ...interrupted, ...stuck, ...running, ...done, ...idle].map((row) => row.name);
+}
+
 interface Folding {
 	limit: number;
 	showAllRunning: boolean;
@@ -176,14 +184,15 @@ export class ActivityList {
 	private showDone = false;
 	private showIdle = false;
 	private moving = true;
-	/** 上一次渲染每行对应的折叠开关，供点击命中。 */
-	private toggles: (Toggle | undefined)[] = [];
+	/** 上一次渲染每行对应的点击目标。 */
+	private targets: (Target | undefined)[] = [];
 
 	constructor(
 		private readonly tui: { requestRender(): void },
 		private readonly theme: Theme,
 		private readonly facts: () => ActivityFacts,
 		private readonly limit: () => number,
+		private readonly open: (name: string) => void = () => {},
 	) {}
 
 	/** 事实变化后调用：对齐时钟订阅并重绘一次。 */
@@ -217,14 +226,19 @@ export class ActivityList {
 			showDone: this.showDone,
 			showIdle: this.showIdle,
 		}, this.theme);
-		this.toggles = lines.map((line) => ("toggle" in line ? line.toggle : undefined));
+		this.targets = lines.map((line) => ("toggle" in line ? { toggle: line.toggle } : { open: line.row.name }));
 		return renderLines(lines, width, this.theme);
 	}
 
 	handleMouse(event: TuiMouseEvent) {
 		if (event.type !== "click" || event.button !== "left") return undefined;
-		const toggle = this.toggles[event.y];
-		if (!toggle) return undefined;
+		const target = this.targets[event.y];
+		if (!target) return undefined;
+		if ("open" in target) {
+			this.open(target.open);
+			return { handled: true };
+		}
+		const { toggle } = target;
 		if (toggle === "running") this.showAllRunning = !this.showAllRunning;
 		else if (toggle === "done") this.showDone = !this.showDone;
 		else this.showIdle = !this.showIdle;

@@ -22,12 +22,15 @@ interface RoundMarker extends Component {
 	round: Round;
 }
 
+/** 零行标记：投影按 roundOf 识别。会话里的轮记录经宿主渲染成它，没有轮记录的会话（子代理）也可按运行边界直接造。 */
+export function roundMarker(round: Round): Component {
+	const marker: RoundMarker = { round, render: () => [], invalidate() {} };
+	return marker;
+}
+
 /** 本模块写的 entry 一定带 data；类型上的 data? 只是宿主给所有 CustomEntry 的通用形状。 */
-export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>): RoundMarker => ({
-	round: { ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) },
-	render: () => [],
-	invalidate() {},
-});
+export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>) =>
+	roundMarker({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
 
 /** 一轮里更早的非完成终态的短标记。 */
 const EARLIER_TEXT = { aborted: "中断过", error: "请求失败过" } as const;

@@ -4,16 +4,21 @@
  * 每个读取点都校验形状：字段改名或换型时抛 HostShapeError，分组安装与渲染据此整体退回原生显示并明确提示，
  * 不悄悄画错。形状只对首批真实实例自检：构造假实例探测要 TUI 引用且有副作用。向上游要投影钩子是长期方向。
  */
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	AssistantMessageComponent,
 	CustomMessageComponent,
+	getMarkdownTheme,
 	ToolExecutionComponent,
 	UserMessageComponent,
+	type AgentSessionEvent,
 	type ExtensionUIContext,
+	type MessageRenderer,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
-import { Container, ScrollView, Text, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Container, ScrollView, Spacer, Text, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { RowState, ToolResult } from "./line.js";
 
 export class HostShapeError extends Error {
@@ -147,4 +152,168 @@ export function patchMethod<T extends object, K extends keyof T>(target: T, key:
 	return () => {
 		if (target[key] === replacement) target[key] = original;
 	};
+}
+
+/**
+ * 独立的工具行 TUI 句柄：除 requestRender 外全部委托给真实 TUI。主会话的分组补丁按“工具行属于主 TUI”识别自己的行，
+ * 不在主聊天里的投影（子代理全过程视图）用它建工具行，单工具展开与重绘都归调用方。
+ */
+export function detachedTui(tui: TUI, requestRender: () => void): TUI {
+	return Object.create(tui, { requestRender: { value: requestRender } }) as TUI;
+}
+
+/** 镜像建组件要的外部来源：工具行的 TUI 句柄与工作目录、工具渲染定义、自定义消息渲染器。 */
+export interface MirrorSources {
+	ui: TUI;
+	cwd: string;
+	toolDefinition(name: string): ToolDefinition | undefined;
+	messageRenderer(customType: string): MessageRenderer | undefined;
+}
+
+/** 宿主 CustomEntryComponent 的壳（类不导出）：Container 带 hasContent 能力，里面放一个零行标记；isEntry 按同一能力识别。 */
+function entryShell(marker: Component): Container {
+	const shell = new Container();
+	shell.addChild(new Spacer(1));
+	shell.addChild(marker);
+	(shell as unknown as { hasContent: () => boolean }).hasContent = () => true;
+	return shell;
+}
+
+const ABORTED_TEXT = "Operation aborted";
+
+/**
+ * 宿主把会话消息与运行事件变成聊天组件的逻辑（interactive-mode 的 addMessageToChat、renderSessionItems 与事件分支）是私有的；
+ * 子代理全过程视图要同一套组件喂给过程组投影，这里是它的最小镜像：user / assistant（含 toolCall 工具行）/ toolResult / custom，
+ * 历史回放与运行中事件两条入口。每建一个助手或工具组件都过形状自检，宿主改了就抛 HostShapeError，由调用方整体提示，不画错。
+ * 不镜像的（bashExecution、压缩与分支摘要、技能块、缓存提示）在子代理会话里不出现或无关。
+ */
+export class ChatMirror {
+	readonly chat = new Container();
+	private readonly pending = new Map<string, ToolExecutionComponent>();
+	private streaming: AssistantMessageComponent | undefined;
+
+	constructor(private readonly sources: MirrorSources) {}
+
+	/** 已落盘的一条消息（历史回放）。 */
+	replay(message: AgentMessage): void {
+		if (message.role === "assistant") {
+			this.chat.addChild(this.assistant(message));
+			for (const call of message.content) {
+				if (call.type !== "toolCall") continue;
+				const row = this.toolRow(call.name, call.id, call.arguments);
+				if (message.stopReason === "aborted" || message.stopReason === "error")
+					row.updateResult({ content: [{ type: "text", text: message.stopReason === "aborted" ? ABORTED_TEXT : message.errorMessage || "Error" }], isError: true });
+				else this.pending.set(call.id, row);
+			}
+			return;
+		}
+		if (message.role === "toolResult") {
+			this.pending.get(message.toolCallId)?.updateResult(message);
+			this.pending.delete(message.toolCallId);
+			return;
+		}
+		this.add(message);
+	}
+
+	/** 运行中的会话事件；返回是否改了聊天树或组件（调用方据此重绘）。 */
+	handle(event: AgentSessionEvent): boolean {
+		switch (event.type) {
+			case "message_start":
+				if (event.message.role === "assistant") {
+					this.streaming = this.assistant(event.message, true);
+					this.chat.addChild(this.streaming);
+				} else this.add(event.message);
+				return true;
+			case "message_update":
+				if (event.message.role !== "assistant") return false;
+				// 回合中途打开视图时错过了这条消息的 message_start：在第一次更新时补建。
+				if (!this.streaming) {
+					this.streaming = this.assistant(event.message, true);
+					this.chat.addChild(this.streaming);
+				}
+				this.streaming.updateContent(event.message, true);
+				for (const call of event.message.content) {
+					if (call.type !== "toolCall") continue;
+					const row = this.pending.get(call.id);
+					if (row) row.updateArgs(call.arguments);
+					else this.pending.set(call.id, this.toolRow(call.name, call.id, call.arguments));
+				}
+				return true;
+			case "message_end":
+				if (!this.streaming || event.message.role !== "assistant") return false;
+				this.streaming.updateContent(event.message, false);
+				if (event.message.stopReason === "aborted" || event.message.stopReason === "error") {
+					const text = event.message.stopReason === "aborted" ? ABORTED_TEXT : event.message.errorMessage || "Error";
+					for (const row of this.pending.values()) row.updateResult({ content: [{ type: "text", text }], isError: true });
+					this.pending.clear();
+				} else for (const row of this.pending.values()) row.setArgsComplete();
+				this.streaming = undefined;
+				return true;
+			case "tool_execution_start": {
+				if (event.parentToolCallId) return false;
+				const row = this.pending.get(event.toolCallId) ?? this.toolRow(event.toolName, event.toolCallId, event.args);
+				this.pending.set(event.toolCallId, row);
+				row.markExecutionStarted();
+				return true;
+			}
+			case "tool_execution_update":
+				this.pending.get(event.toolCallId)?.updateResult({ ...event.partialResult, isError: false }, true);
+				return this.pending.has(event.toolCallId);
+			case "tool_execution_end": {
+				const row = this.pending.get(event.toolCallId);
+				row?.updateResult({ ...event.result, isError: event.isError });
+				this.pending.delete(event.toolCallId);
+				return row !== undefined;
+			}
+			case "agent_end":
+				if (this.streaming) this.chat.removeChild(this.streaming);
+				this.streaming = undefined;
+				this.pending.clear();
+				return true;
+			case "entry_appended":
+				if (event.entry.type !== "custom_message" || !event.entry.display) return false;
+				this.add({
+					role: "custom", customType: event.entry.customType, content: event.entry.content,
+					display: true, details: event.entry.details, timestamp: Date.parse(event.entry.timestamp),
+				});
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	/** 扩展记录（如轮记录标记）以宿主 CustomEntry 的同一形态放进聊天树。 */
+	addEntry(marker: Component): void {
+		this.chat.addChild(entryShell(marker));
+	}
+
+	private add(message: AgentMessage): void {
+		if (message.role === "custom") {
+			const custom = message as ConstructorParameters<typeof CustomMessageComponent>[0];
+			if (!custom.display) return;
+			this.chat.addChild(new CustomMessageComponent(custom, this.sources.messageRenderer(custom.customType), getMarkdownTheme()));
+			return;
+		}
+		if (message.role !== "user") return;
+		const text = typeof message.content === "string"
+			? message.content
+			: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+		if (!text) return;
+		if (this.chat.children.length) this.chat.addChild(new Spacer(1));
+		this.chat.addChild(new UserMessageComponent(text, getMarkdownTheme()));
+	}
+
+	private assistant(message: AssistantMessage, streaming = false): AssistantMessageComponent {
+		const component = new AssistantMessageComponent(message, true, getMarkdownTheme());
+		if (streaming) component.updateContent(message, true);
+		assistantFacts(component);
+		return component;
+	}
+
+	private toolRow(name: string, id: string, args: unknown): ToolExecutionComponent {
+		const row = new ToolExecutionComponent(name, id, args, {}, this.sources.toolDefinition(name), this.sources.ui, this.sources.cwd);
+		toolFacts(row);
+		this.chat.addChild(row);
+		return row;
+	}
 }

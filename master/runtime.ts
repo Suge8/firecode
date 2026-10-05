@@ -8,6 +8,7 @@ import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewProgress } from "../review/outcome.js";
 import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from "./activity-list.js";
 import { Outbox } from "./outbox.js";
+import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "./spawn.js";
 import { MasterStore, masterStatePath, type MasterState, type WorkerRef } from "./state.js";
 
@@ -72,6 +73,8 @@ export class MasterRuntime {
 	private list?: ActivityList;
 	private closedValue = false;
 	private readonly stopReleaseWatch: () => void;
+	/** 子代理会话被接上订阅（冷启动或重开）时通知：全过程视图据此在第一条事件之前接上自己的订阅。 */
+	private readonly sessionListeners = new Set<(name: string) => void>();
 
 	constructor(readonly setup: MasterSetup, public ctx: ExtensionContext, restored?: MasterState) {
 		this.outbox = new Outbox(this);
@@ -83,7 +86,7 @@ export class MasterRuntime {
 		});
 		ctx.ui.setWidget(LIST_WIDGET_KEY, (tui, theme) => {
 			this.list = new ActivityList(tui, theme, () => this.activityFacts(),
-				() => visibleRows(tui.terminal?.rows));
+				() => visibleRows(tui.terminal?.rows), (name) => void openWorkerView(this, name));
 			return this.list;
 		}, { placement: "aboveEditor" });
 	}
@@ -181,6 +184,12 @@ export class MasterRuntime {
 			if (!this.closedValue && this.live.get(worker.name) === live) listener(live, event);
 		});
 		live.observed = { session, sessionPath: worker.sessionPath, unsubscribe };
+		for (const notify of this.sessionListeners) notify(worker.name);
+	}
+
+	onWorkerSession(listener: (name: string) => void): () => void {
+		this.sessionListeners.add(listener);
+		return () => this.sessionListeners.delete(listener);
 	}
 
 	close(): void {
@@ -202,8 +211,8 @@ export class MasterRuntime {
 		live.observed = undefined;
 	}
 
-	/** 活动列表的输入：档案加运行时事实的一次投影。 */
-	private activityFacts(): ActivityFacts {
+	/** 活动列表的输入：档案加运行时事实的一次投影（全过程视图按同一顺序换子代理）。 */
+	activityFacts(): ActivityFacts {
 		const workers = this.store.state.workers;
 		const byPath = <T>(pick: (live: WorkerLive) => T | undefined) => new Map(workers.flatMap((worker) => {
 			const live = this.live.get(worker.name);
