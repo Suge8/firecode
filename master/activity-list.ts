@@ -20,18 +20,13 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "createdAt">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "launch">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
-	/**
-	 * 名字 → 启动序号（start 调用到达的先后）；池数组顺序受并发 start 的 await 影响，不能当启动序。
-	 * 重载恢复的没有序号，排最前并按档案里的创建时间。
-	 */
-	launchOrder: ReadonlyMap<string, number>;
 }
 
 type Toggle = "running" | "done" | "idle";
@@ -79,12 +74,9 @@ interface Groups {
 	animating: boolean;
 }
 
-/** 启动序：本进程内的 start 序号，重载恢复的没有序号、排最前并按创建时间。 */
+/** 按档案里的启动序。 */
 function launchSorted(facts: ActivityFacts): number[] {
-	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
-	const created = (index: number) => facts.workers[index].createdAt ?? Infinity;
-	return facts.workers.map((_, index) => index)
-		.sort((a, b) => launch(a) - launch(b) || created(a) - created(b) || a - b);
+	return facts.workers.map((_, index) => index).sort((a, b) => facts.workers[a].launch - facts.workers[b].launch);
 }
 
 /** 子代理按启动序的名字：全过程视图按它换子代理，位置不随状态分组跳动。 */

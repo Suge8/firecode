@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const STATE_VERSION = 8;
+const STATE_VERSION = 9;
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
@@ -17,8 +17,11 @@ export interface WorkerRef {
 	sessionPath: string;
 	cwd?: string;
 	interruptedAt?: number;
-	/** start 的时刻：resume 后没有启动序时，活动列表按它排先后。 */
-	createdAt?: number;
+	/**
+	 * 启动序：start 在同步段按到达先后取的单调序号，活动列表与全过程视图按它排。必须持久化：并行 start 越过
+	 * await 后落盘的先后（以及任何落盘时刻）与到达先后不一致，恢复后若靠别的字段排会换序。
+	 */
+	launch: number;
 	reviewNeeded?: boolean;
 	disposition?: WorkerDisposition;
 }
@@ -193,7 +196,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
-	if (record.createdAt !== undefined && (typeof record.createdAt !== "number" || record.createdAt <= 0)) return false;
+	if (typeof record.launch !== "number" || !Number.isInteger(record.launch) || record.launch <= 0) return false;
 	if (record.disposition !== undefined && record.disposition !== "pending" && record.disposition !== "reminded")
 		return false;
 	return true;

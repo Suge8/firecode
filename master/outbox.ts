@@ -1,10 +1,10 @@
 /**
  * 事件发件箱：落定事件先以 pending entry 写进主会话，再经 deliver.ts 投递，成功后写 ack；reload 重投差集。
- * 同一节拍内的落定合并成一条消息。在飞子代理数也在这里算：working/reviewing 加上事件还在队列或投递中的子代理，
- * 所以归零只发生在事件交给指挥官之后。
+ * 同一节拍内的落定合并成一条消息。在飞子代理数也在这里算：指挥官在等的 working/reviewing 加上它们的事件还在队列
+ * 或投递中的子代理，所以归零只发生在事件交给指挥官之后。视图起的运行（见 RunOrigin）不算在飞，它的事件只告知不唤醒。
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { deliver, wrapEnvelope } from "../deliver.js";
+import { deliver, inform, wrapEnvelope } from "../deliver.js";
 import { roundFromEntry } from "../tools/round.js";
 import { MASTER_EVENT_TYPE, withElapsed, type MasterEvent } from "./event-format.js";
 import type { MasterRuntime } from "./runtime.js";
@@ -19,6 +19,8 @@ export interface PendingMasterEvent {
 	id: string;
 	content: string;
 	worker?: string;
+	/** 指挥官没在等这个结果（视图起的运行）：只告知不唤醒，也不计入在飞。 */
+	inform?: true;
 }
 
 export class Outbox {
@@ -36,7 +38,13 @@ export class Outbox {
 	/** 新产出的事件：追加耗时、持久化为 pending、排队投递。 */
 	enqueue(produced: MasterEvent, worker?: string): void {
 		if (this.active.closed) return;
-		const event: PendingMasterEvent = { id: crypto.randomUUID(), content: this.withElapsed(produced, worker), ...(worker ? { worker } : {}) };
+		const informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view";
+		const event: PendingMasterEvent = {
+			id: crypto.randomUUID(),
+			content: this.withElapsed(produced, worker),
+			...(worker ? { worker } : {}),
+			...(informOnly ? { inform: true as const } : {}),
+		};
 		try {
 			this.active.setup.pi.appendEntry(PENDING_EVENT_TYPE, event);
 		} catch (error) {
@@ -62,8 +70,9 @@ export class Outbox {
 			if (this.active.closed) return;
 			const names = new Set<string>();
 			for (const worker of this.active.store.state.workers)
-				if (worker.status === "working" || worker.status === "reviewing") names.add(worker.name);
-			for (const event of [...this.queued, ...this.delivering]) if (event.worker) names.add(event.worker);
+				if ((worker.status === "working" || worker.status === "reviewing") && this.active.live.get(worker.name)?.origin !== "view")
+					names.add(worker.name);
+			for (const event of [...this.queued, ...this.delivering]) if (event.worker && !event.inform) names.add(event.worker);
 			this.active.setup.publishInFlight(names.size);
 		});
 	}
@@ -75,6 +84,7 @@ export class Outbox {
 	/**
 	 * 指挥官在跑：立即投（句缝送达，不打断）。指挥官空闲：每次唤醒都是一个完整回合，陆续到达的一批结果
 	 * 等一个安静窗口合并成一次唤醒——最后一条入队后 wakeQuietMs 内没有新结果才唤醒，从第一条起最多等 WAKE_MAX_MS。
+	 * 只告知的事件不开窗口、立即追加；窗口已开就随那一批唤醒送达。
 	 */
 	private push(event: PendingMasterEvent): void {
 		this.queued.push(event);
@@ -83,6 +93,10 @@ export class Outbox {
 		const quiet = this.active.setup.wakeQuietMs;
 		if (!this.active.ctx.isIdle() || quiet <= 0) {
 			if (!this.flushTimer || this.firstQueuedAt !== undefined) this.schedule(0);
+			return;
+		}
+		if (event.inform) {
+			if (this.firstQueuedAt === undefined) this.schedule(0);
 			return;
 		}
 		this.firstQueuedAt ??= Date.now();
@@ -104,7 +118,8 @@ export class Outbox {
 		if (!this.queued.length) return;
 		const batch = this.queued.splice(0);
 		for (const event of batch) this.delivering.add(event);
-		deliver(active.setup.pi, active.ctx, {
+		const send = batch.every((event) => event.inform) ? inform : deliver;
+		send(active.setup.pi, active.ctx, {
 			customType: MASTER_EVENT_TYPE,
 			content: batch.map((event) => wrapEnvelope("firecode_master_event", event.content)).join("\n\n"),
 		}).then(() => {
@@ -156,7 +171,12 @@ function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
 		if (entry.type !== "custom" || !entry.data || typeof entry.data !== "object") continue;
 		const data = entry.data as Record<string, unknown>;
 		if (entry.customType === PENDING_EVENT_TYPE && typeof data.id === "string" && typeof data.content === "string")
-			pending.set(data.id, { id: data.id, content: data.content, ...(typeof data.worker === "string" ? { worker: data.worker } : {}) });
+			pending.set(data.id, {
+				id: data.id,
+				content: data.content,
+				...(typeof data.worker === "string" ? { worker: data.worker } : {}),
+				...(data.inform === true ? { inform: true as const } : {}),
+			});
 		if (entry.customType === EVENT_ACK_TYPE && Array.isArray(data.ids))
 			for (const id of data.ids) if (typeof id === "string") acked.add(id);
 	}
