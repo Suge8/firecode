@@ -956,6 +956,27 @@ test("steer 越过 await 后按最新档案写回：期间落定不被改回 wor
 	expect((await harness.list()).details.workers.map((worker: any) => worker.name)).toEqual(["settles"]);
 });
 
+test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成”留到 kill", async () => {
+	const harness = await setup();
+	faux.setResponses([async () => { throw new Error("quota exhausted"); }, fauxAssistantMessage("完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "broken", prompt: "执行", role: "工程师" });
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "fine", prompt: "执行", role: "工程师" });
+	await delivered;
+	expect(harness.activity()).toEqual([
+		expect.stringMatching(/^ {2}✗ broken /u),
+		expect.stringMatching(/^ {2}✓ 1 个已完成/u),
+	]);
+
+	await harness.execute({ action: "ack", worker: "broken" });
+	await harness.execute({ action: "ack", worker: "fine" });
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u)]);
+	await harness.execute({ action: "kill", worker: "fine" });
+	expect(harness.activity()).toEqual([]);
+});
+
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
 	const harness = await setup();
 	let release!: () => void;
@@ -1444,6 +1465,7 @@ async function setup(activate = true, options: {
 		},
 	};
 	const statuses = new Map<string, string>();
+	const widgets = new Map<string, any>();
 	let sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
@@ -1457,7 +1479,8 @@ async function setup(activate = true, options: {
 		ui: {
 			notify: (message: string) => notices.push(message),
 			setStatus: (key: string, text: string | undefined) => { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
-			setWidget() {},
+			setWidget: (key: string, factory: any) => { if (factory) widgets.set(key, factory); else widgets.delete(key); },
+			getToolsExpanded: () => false,
 			theme: {
 				fg: (_color: string, text: string) => text,
 				bg: (_color: string, text: string) => text,
@@ -1487,6 +1510,11 @@ async function setup(activate = true, options: {
 		appended,
 		entries,
 		pool,
+		/** 输入框上方活动列表当前的纯文本行。 */
+		activity: () => {
+			const factory = [...widgets.values()][0];
+			return factory ? factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme).render(80).map((line: string) => stripVTControlCharacters(line)) as string[] : [];
+		},
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
