@@ -59,7 +59,7 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	const warnings: string[] = [];
 	for (let occurrence = 0; occurrence < 2; occurrence++)
 		for (const handler of events.get("session_start") ?? [])
-			handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
+			handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 	expect(warnings).toEqual([
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
@@ -213,7 +213,7 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 		});
 		const warnings: string[] = [];
 		for (const handler of events.get("session_start") ?? [])
-			await handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
+			await handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 		await cleanupFirecodeModules();
 		return warnings.filter((message) => message.includes("master.roles"));
 	};

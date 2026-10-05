@@ -67,9 +67,7 @@ class AdviceLine implements Component {
 	render(width: number): string[] {
 		const columns = Math.max(1, width);
 		try {
-			const bgFn = typeof this.theme.bg === "function"
-				? (text: string) => this.theme.bg("toolPendingBg", text)
-				: undefined;
+			const bgFn = (text: string) => this.theme.bg("toolPendingBg", text);
 			if (this.expanded) {
 				const headline = this.theme.fg("warning", clip(oneLine(this.card.headline), columns));
 				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);

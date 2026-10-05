@@ -39,7 +39,7 @@ test("建议卡收起只显示正文首行，展开显示完整建议", async ()
 		},
 	});
 	const card = { note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
-	const theme = { fg: (_color: string, text: string) => text };
+	const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 
 	const collapsedLines = render({ content: adviceMessage(card) }, { expanded: false }, theme).render(60);
 	expect(collapsedLines.length).toBe(1);

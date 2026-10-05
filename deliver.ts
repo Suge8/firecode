@@ -48,12 +48,18 @@ export interface Delivery {
 	content: string;
 }
 
+/**
+ * 统一投递。返回语义两分支不对称，调用方依赖它：
+ * - 主回合在跑：卡片进 steer 队列，入队即 resolve；
+ * - 主回合歇透：前门 sendUserMessage 唤起，等整个唤醒回合结束才 resolve。
+ * Master 靠后者让在飞数覆盖唤醒回合（投递完成前不归零）；观察员在此期间不评估新增量。
+ */
 export async function deliver(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	envelope: Delivery,
 ): Promise<void> {
-	if (ctx.isIdle?.() === true) {
+	if (ctx.isIdle()) {
 		await pi.sendUserMessage(envelope.content);
 		return;
 	}

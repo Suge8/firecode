@@ -133,7 +133,7 @@ export class ToolLine implements ActionLine {
 	}
 
 	render(width: number): string[] {
-		const { theme, ctx, meta } = this.options;
+		const { theme, ctx } = this.options;
 		const state = ctx.state;
 		const status = ctx.isError ? STATUS.err : ctx.isPartial ? STATUS.run : STATUS.ok;
 		const value = this.valueWithMeta();
@@ -174,7 +174,7 @@ function renderLine(theme: Theme, width: number, spec: LineSpec): string[] {
 	];
 	const fixedWidth = partsWidth(head);
 	const bg = status.bg;
-	const bgFn = bg && typeof theme.bg === "function" ? (text: string) => theme.bg(bg, text) : undefined;
+	const bgFn = bg ? (text: string) => theme.bg(bg, text) : undefined;
 	if (safeWidth <= fixedWidth) {
 		const clipped = paint(theme, clipParts(head, safeWidth, "end"));
 		return [paintBgLine(clipped, width, bgFn)];

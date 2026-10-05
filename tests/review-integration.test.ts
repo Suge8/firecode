@@ -527,6 +527,7 @@ describe("registerReview wiring", () => {
 			setWidget: (key: string, next: unknown) => {
 				if (key === "fire-review" && next !== undefined) widgetInstalled = true;
 			},
+			getEditorComponent: () => undefined,
 			setEditorComponent: (next: unknown) => {
 				if (next !== undefined) editorLocked = true;
 			},
@@ -550,6 +551,7 @@ describe("registerReview wiring", () => {
 		Object.assign(ctx.ui, {
 			setWidget: () => {},
 			setWorkingVisible: () => {},
+			getEditorComponent: () => undefined,
 			setEditorComponent: (factory?: typeof editorFactory) => { editorFactory = factory; },
 		});
 		const command = registered.commands.get("fire-review") as {
