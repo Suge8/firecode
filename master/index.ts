@@ -23,10 +23,13 @@ const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
 const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
 const INTERRUPT_RESUME_MS = 5 * 60_000;
+/** 一批结果陆续返回时，最后一条后静默这么久才唤醒空闲的指挥官：合并唤醒，单条结果最多多等这一下。 */
+const WAKE_QUIET_MS = 1_500;
 
 interface MasterDependencies {
 	pool?: InProcessSessionPool;
 	interruptResumeMs?: number;
+	wakeQuietMs?: number;
 }
 
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}, worker = false): void {
@@ -59,6 +62,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		workerPrompt: () => requirePrompts().worker,
 		reviewGate: reviewGateError(),
 		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
+		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
 		publishInFlight,
 	};
 	let runtime: MasterRuntime | undefined;
