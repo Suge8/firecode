@@ -360,6 +360,43 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 	await harness.command("");
 });
 
+test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
+	const harness = await setup(true, { holdWake: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("被拒的结果")]);
+	await harness.execute({ action: "start", worker: "rejected", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await Bun.sleep(5);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const envelope = harness.userMessages[0];
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event"]);
+
+	// 宿主在开回合前拒绝了前门消息（扩展订阅不到）；之后用户自己发消息开了一个回合。
+	harness.idle = false;
+	await harness.userTurn("我自己的新问题");
+	await Bun.sleep(5);
+	expect(harness.messages).toEqual([
+		{ message: expect.objectContaining({ content: envelope }), options: { deliverAs: "steer" } },
+	]);
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
+	expect(counts()).toEqual([1, 0]);
+	await harness.command("");
+});
+
+test("前门唤醒正常时只确认一次，不重复补投", async () => {
+	const harness = await setup(true, { holdWake: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "woken", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await harness.wake();
+	await harness.userTurn("之后用户又问了一句");
+	await Bun.sleep(5);
+	expect(harness.messages).toEqual([]);
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
+	await harness.command("");
+});
+
 test("事件投递失败等待重试期间仍计入在飞", async () => {
 	const harness = await setup(true, { failDeliveries: 1 });
 	faux.setResponses([fauxAssistantMessage("完成")]);
@@ -1520,9 +1557,14 @@ async function setup(activate = true, options: {
 			if (!options.holdWake) setTimeout(() => void wake(), 0);
 		},
 	};
-	const wake = async () => {
+	/** 宿主开一个回合并记录它的第一条用户消息（与宿主事件顺序一致：agent_start 在前，message_start 在后）。 */
+	const turn = async (text: string) => {
 		for (const handler of [...(handlers.get("agent_start") ?? [])]) await handler({}, ctx);
+		const message = { role: "user", content: [{ type: "text", text }] };
+		for (const handler of [...(handlers.get("message_start") ?? [])]) await handler({ message }, ctx);
 	};
+	/** 前门消息唤起的回合真正开始：宿主记录了这条信封消息本身。 */
+	const wake = () => turn(userMessages.at(-1)!);
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
 	let sessionId = crypto.randomUUID();
@@ -1574,6 +1616,8 @@ async function setup(activate = true, options: {
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
 		wake,
+		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
+		userTurn: (text: string) => turn(text),
 		command,
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);

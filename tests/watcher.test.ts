@@ -519,7 +519,11 @@ async function setup(options: {
 		sendUserMessage: (content: string) => {
 			userMessages.push(content);
 			settle();
-			setTimeout(() => { for (const handler of [...(handlers.get("agent_start") ?? [])]) handler({}, context.ctx); }, 0);
+			setTimeout(() => {
+				for (const handler of [...(handlers.get("agent_start") ?? [])]) handler({}, context.ctx);
+				const message = { role: "user", content: [{ type: "text", text: content }] };
+				for (const handler of [...(handlers.get("message_start") ?? [])]) handler({ message }, context.ctx);
+			}, 0);
 		},
 	};
 	const sessionId = crypto.randomUUID();
