@@ -55,7 +55,11 @@ function machineText(component: Component): string | undefined {
 
 function machineEntriesOf(component: Component): MachineEntry[] | undefined {
 	const text = machineText(component);
-	return text === undefined ? undefined : machineEntries(text);
+	if (text === undefined) return undefined;
+	const details = component instanceof CustomMessageComponent
+		? (component as unknown as { message: { details?: unknown } }).message.details
+		: undefined;
+	return machineEntries(text, details);
 }
 
 /** 整条内容由信封构成的 CustomMessage 或用户消息。 */

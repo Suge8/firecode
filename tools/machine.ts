@@ -8,7 +8,7 @@ export interface MachineEntry {
 	title: string;
 	/** 正文首句，没有则为空。 */
 	preview: string;
-	/** 画失败色：Master 事件带“错误：”分节，或审查未通过/未完成/停止。 */
+	/** 画失败色：只认生产端声明的事实——Master 事件带“错误：”分节，审查卡的 details.tone 为 warning/error。 */
 	alarm: boolean;
 	/** Master 事件才有：标题第一个空格前的子代理名。 */
 	worker?: string;
@@ -22,21 +22,24 @@ export interface MachineEntry {
 const SECTION = /^[^\s：]{1,8}：$/u;
 const ERROR_SECTION = "错误：";
 const RUN_TIME = /^耗时：本次运行 (\S+)/mu;
-const REVIEW_ALARM = /审查(?:未通过|未完成|停止|已由顾问终止)|Review (?:failed|incomplete|stopped)/u;
+/** 审查卡生产端（review/card.ts）在 details.tone 里声明的失败色。 */
+const ALARM_TONES = new Set(["warning", "error"]);
 /** 审查卡正文里的发现标题（“## 发现 1：…”）与原因行（“原因：…”）。 */
 const FINDING = /^#{1,6}\s*(?:发现|Finding)\s*[^：:]*[：:]\s*(.+)$/mu;
 const REASON = /^(?:原因|Reason)[：:]\s*(.+)$/mu;
 /** 审查卡里不是结论的行：模型分节、模型清单、卡点、分隔线与用时脚注。 */
 const REVIEW_NOISE = /^(?:\*\*(?:模型|Model)[ ·].*\*\*|(?:模型|Models)[：:].*|(?:卡点|Blocker)[：:].*|---|⏱.*)$/u;
 
-export function machineEntries(text: string): MachineEntry[] | undefined {
-	return parseEnvelopes(text)?.map(({ tag, body }) => entryOf(tag, body));
+/** details 是承载信封的 CustomMessage 的 details（审查卡带 tone）；用户消息形态没有。 */
+export function machineEntries(text: string, details?: unknown): MachineEntry[] | undefined {
+	return parseEnvelopes(text)?.map(({ tag, body }) => entryOf(tag, body, details));
 }
 
-function entryOf(tag: EnvelopeTag, body: string): MachineEntry {
+function entryOf(tag: EnvelopeTag, body: string, details: unknown): MachineEntry {
 	const [heading = "", ...rest] = body.split("\n");
 	if (tag === "firecode_watcher") return { title: "观察员", preview: firstSentence(rest.join("\n")), alarm: false };
-	if (tag === "firecode_review") return { title: heading, preview: reviewPreview(rest), alarm: REVIEW_ALARM.test(heading) };
+	if (tag === "firecode_review")
+		return { title: heading, preview: reviewPreview(rest), alarm: ALARM_TONES.has((details as { tone?: string } | undefined)?.tone ?? "") };
 	// 失败只看是否有独占一行的“错误：”，不论它是第几个分节；失败时预览从错误分节取。
 	const errorAt = rest.findIndex((line) => line.trim() === ERROR_SECTION);
 	const failed = errorAt >= 0;
@@ -46,7 +49,7 @@ function entryOf(tag: EnvelopeTag, body: string): MachineEntry {
 	return {
 		title: heading,
 		preview: firstSentence(content),
-		alarm: failed || REVIEW_ALARM.test(heading),
+		alarm: failed,
 		worker: heading.split(" ", 1)[0],
 		failed,
 		...(duration ? { duration } : {}),
