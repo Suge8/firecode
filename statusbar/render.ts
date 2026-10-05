@@ -9,9 +9,11 @@ import { HEAT_COLORS, type Rgb, mix, paint } from "../flame.js";
 /** 回合进行时边框左端的暖光渐隐距离（列）。 */
 const GLOW_SPAN = 18;
 const LINE_BASE: Rgb = [78, 74, 70];
-const SEPARATOR = ` ${paint([88, 84, 79], "·")} `;
+export const SEPARATOR = ` ${paint([88, 84, 79], "·")} `;
 
-type Line = (text: string) => string;
+export type Line = (text: string) => string;
+/** 一条边框的一档候选：左、右两段（已着色）。 */
+export type BorderParts = readonly [left: string, right: string];
 
 /**
  * 一条边框：`─ 左 ───── 右 ─`。左端按 glow 渐变成暖橙；横线放不下（填充不足两格）返回空串。
@@ -30,10 +32,13 @@ function border(width: number, left: string, right: string, line: Line, glow: nu
 	return `${dash(0)}${left ? ` ${left} ` : ""}${bar}${right ? ` ${right} ` : ""}${line("─")}`;
 }
 
-/** 依次尝试候选，取第一个放得下的；全都放不下就是一条纯横线。 */
-function firstFit(width: number, line: Line, candidates: Iterable<() => string>): string {
-	for (const candidate of candidates) {
-		const text = candidate();
+/**
+ * 边框布局：依次尝试由长到短的候选，取第一个放得下的；全都放不下就是一条纯横线。
+ * 主会话输入框与子代理视图输入区共用这一个函数，退让档由各自给出。
+ */
+export function fitBorder(width: number, line: Line, glow: number, candidates: Iterable<BorderParts>): string {
+	for (const [left, right] of candidates) {
+		const text = border(width, left, right, line, glow);
 		if (text && visibleWidth(text) <= width) return text;
 	}
 	return line("─").repeat(Math.max(0, width));
@@ -59,10 +64,9 @@ export function topBorder(width: number, parts: TopParts, line: Line): string {
 		return [head, review].filter(Boolean).join(SEPARATOR);
 	};
 	const right = (...items: string[]) => items.filter(Boolean).join(" ");
-	const at = (word: boolean, review: string, ...items: string[]) =>
-		() => border(width, left(word, review), right(...items), line, parts.glow);
+	const at = (word: boolean, review: string, ...items: string[]): BorderParts => [left(word, review), right(...items)];
 	const [full = "", ...shorter] = parts.review;
-	return firstFit(width, line, [
+	return fitBorder(width, line, parts.glow, [
 		at(true, full, parts.watcher, parts.master),
 		...[full, ...shorter].map((review) => at(true, review, parts.master)),
 		at(false, parts.review.at(-1) ?? "", parts.master),
@@ -93,8 +97,7 @@ export function bottomBorder(width: number, parts: BottomParts, line: Line): str
 		const name = [model + (model ? parts.think : ""), parts.fast].filter(Boolean).join(" ");
 		return [preset, name, `${parts.percent}${capacity}`].filter(Boolean).join(SEPARATOR);
 	};
-	const at = (title: string, preset: string, model: string, capacity: string) =>
-		() => border(width, title, right(preset, model, capacity), line, 0);
+	const at = (title: string, preset: string, model: string, capacity: string): BorderParts => [title, right(preset, model, capacity)];
 	function* candidates() {
 		yield at(parts.title, parts.preset, parts.model, parts.capacity);
 		yield at(parts.title, parts.preset, parts.model, "");
@@ -106,5 +109,5 @@ export function bottomBorder(width: number, parts: BottomParts, line: Line): str
 		for (let n = visibleWidth(parts.model) - 1; n >= 1; n--) yield at("", "", clip(parts.model, n), "");
 		yield at("", "", "", "");
 	}
-	return firstFit(width, line, candidates());
+	return fitBorder(width, line, 0, candidates());
 }

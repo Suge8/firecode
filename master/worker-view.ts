@@ -1,6 +1,6 @@
 /**
  * 子代理全过程视图：点活动列表里的一行打开全屏浮层，用主会话同一套过程组投影（折叠、摘要行、点击展开、ctrl+o）
- * 看这个子代理的完整记录。轮与耗时读 Worker 会话自己的轮记录（与主会话同一个轮记录器写下）；顶行状态与耗时读活动列表
+ * 看这个子代理的完整记录。轮与耗时读 Worker 会话自己的轮记录（与主会话同一个轮记录器写下）；输入区上横线的状态与耗时读活动列表
  * 同一份行状态；在这里打字补话就是 Master 的 send 动作（视图来源），working 时 steer、idle 时唤醒。
  *
  * 资源纪律：关闭时零订阅零构建。打开时一次构建（热会话读内存分支、已释放的冷子代理读一次会话文件），之后只按子会话
@@ -18,26 +18,26 @@ import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../to
 import { toolDefinitions } from "../tools/index.js";
 import { roundFromEntry, roundMarker, ROUND_ENTRY } from "../tools/round.js";
 import { TurnClock } from "../tools/turn-clock.js";
+import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
 import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
 import { modelAtomText } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
-/** 顶行状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
+/** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
 const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = {
 	running: "运行中", review: "审查中", done: "完成", failed: "失败", interrupted: "被中断", idle: "空闲",
 };
-/** 顶行、输入行、底行之外是正文（排队中的补话在输入行之上占行）。 */
+/** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
 const REPLY_LINES = 3;
-/** 正文开头与顶行之间的空行（随正文滚动）。 */
-const BODY_GAP = 1;
-/** 名字被迫截短时至少留的宽度；再窄就只留状态。 */
+/** 名字被迫截短时至少留的宽度；再窄就不写名字。 */
 const MIN_NAME = 6;
-/** 底行按键提示：按显示顺序，宽度不够时 drop 数值小的先让；“esc 返回”永远保留。 */
-const HINTS = [
-	{ text: "Tab 换子代理", drop: 2 },
+/** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。model 是模型原子的位置。 */
+const TAIL = [
+	{ text: "model", drop: 2 },
+	{ text: "Tab 换子代理", drop: 3 },
 	{ text: "点摘要展开", drop: 0 },
 	{ text: "ctrl+o 全部展开", drop: 1 },
 	{ text: "esc 返回", drop: Infinity },
@@ -47,7 +47,7 @@ const NOTICE_MS = 3_000;
 
 /** 视图要的全部外部事实与动作：由 Master 运行时提供，测试替身同形。 */
 export interface WorkerViewSource {
-	/** 活动列表的同一份事实：启动序名单与顶行行状态都从它来。 */
+	/** 活动列表的同一份事实：启动序名单与上横线的行状态都从它来。 */
 	facts(): ActivityFacts;
 	worker(name: string): WorkerRef | undefined;
 	/** 进程内热会话；已释放返回 undefined，记录改从会话文件读。 */
@@ -196,7 +196,7 @@ export class WorkerView implements Component, Focusable {
 	private readonly records = new Map<string, WorkerRecord>();
 	private readonly stopWatches: (() => void)[];
 	private failure: string | undefined;
-	/** 正在看的子代理已被移除：顶行写“已移除”，输入框停用。 */
+	/** 正在看的子代理已被移除：上横线写“已移除”，输入框停用。 */
 	private removed = false;
 	/** 在启动序里的位置；被移除后 Tab 从这里接着走。 */
 	private index = 0;
@@ -296,7 +296,7 @@ export class WorkerView implements Component, Focusable {
 		}
 	}
 
-	/** 被移除的子代理：别的直接丢掉；正在看的留着已有记录（不再更新），顶行写“已移除”，输入框停用。 */
+	/** 被移除的子代理：别的直接丢掉；正在看的留着已有记录（不再更新），上横线写“已移除”，输入框停用。 */
 	private onRemoved(name: string): void {
 		this.records.get(name)?.dispose();
 		this.source.drafts.delete(name);
@@ -331,7 +331,7 @@ export class WorkerView implements Component, Focusable {
 		const queued = this.queued(width);
 		this.bodyRows = Math.max(1, this.tui.terminal.rows - CHROME_ROWS - queued.length);
 		const { lines: body, animating } = this.body(width);
-		// 动效与顶行耗时只在有东西在动时订阅全局时钟，静止即取消。
+		// 动效与上横线耗时只在有东西在动时订阅全局时钟，静止即取消。
 		this.syncFrames(animating || (state !== undefined && ANIMATING_KINDS.has(state.kind)));
 		const record = this.record;
 		let top = 0;
@@ -344,7 +344,7 @@ export class WorkerView implements Component, Focusable {
 		}
 		const shown = body.slice(top, top + this.bodyRows);
 		while (shown.length < this.bodyRows) shown.push("");
-		return [this.header(width, worker, state), ...shown, ...queued, this.inputLine(width), this.footer(width)];
+		return [...shown, ...queued, this.topLine(width, worker, state), this.inputLine(width), this.bottomLine(width, worker)];
 	}
 
 	private body(width: number): { lines: string[]; animating: boolean } {
@@ -352,7 +352,7 @@ export class WorkerView implements Component, Focusable {
 		if (!record) return { lines: [this.theme.fg("warning", ` ${this.failure ?? ""}`)], animating: false };
 		const { nodes, animating } = projectProcessGroups(record.mirror.chat.children, this.env(record));
 		this.projection.children = nodes;
-		return { lines: [...Array<string>(BODY_GAP).fill(""), ...this.projection.render(width)], animating };
+		return { lines: this.projection.render(width), animating };
 	}
 
 	private syncFrames(moving: boolean): void {
@@ -369,25 +369,26 @@ export class WorkerView implements Component, Focusable {
 		return steering.map((text) => clip(this.theme.fg("dim", ` 排队中：${text}`), width));
 	}
 
-	/** 状态（字形、状态词、耗时）必保；放不下时模型、角色依次先让，再截短名字，最后只留状态。 */
-	private header(width: number, worker: WorkerRef | undefined, state: ReturnType<typeof rowState> | undefined): string {
-		const separator = this.theme.fg("dim", " · ");
+	private readonly line = (text: string) => this.theme.fg("borderMuted", text);
+
+	/** 上横线：左状态（字形、状态词、耗时，必保），右名字 · 角色；放不下时先让角色，再截短名字，最后不写名字。 */
+	private topLine(width: number, worker: WorkerRef | undefined, state: ReturnType<typeof rowState> | undefined): string {
 		const name = this.theme.bold(this.name);
 		if (!worker || !state) {
-			const status = this.removed ? this.theme.fg("warning", "已移除") : undefined;
-			return clip(` ${status ? `${name}${separator}${status}` : name}`, width);
+			const status = this.removed ? this.theme.fg("warning", "已移除") : "";
+			return fitBorder(width, this.line, 0, [[status, name], [status, ""]]);
 		}
 		const { kind, row } = state;
 		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : STATUS_WORD[kind];
-		// 空闲的“·”标记紧挨分隔符会看成两个分隔符，顶行不放。
+		// 空闲的“·”标记紧挨状态词像个分隔符，不放。
 		const status = [kind === "idle" ? "" : row.mark, word, row.elapsed && this.theme.fg("muted", row.elapsed)].filter(Boolean).join(" ");
-		const parts = [name, this.theme.fg("muted", worker.role), this.theme.fg("dim", modelAtomText(worker))];
-		for (let count = parts.length; count > 0; count--) {
-			const line = ` ${[...parts.slice(0, count), status].join(separator)}`;
-			if (visibleWidth(line) <= width) return line;
+		const role = this.theme.fg("muted", worker.role);
+		function* candidates(): Generator<BorderParts> {
+			yield [status, `${name}${SEPARATOR}${role}`];
+			for (let room = visibleWidth(name); room >= MIN_NAME; room--) yield [status, clip(name, room)];
+			yield [status, ""];
 		}
-		const room = width - visibleWidth(` ${separator}${status}`);
-		return room >= MIN_NAME ? ` ${clip(name, room)}${separator}${status}` : clip(` ${status}`, width);
+		return fitBorder(width, this.line, ANIMATING_KINDS.has(kind) ? 1 : 0, candidates());
 	}
 
 	private inputLine(width: number): string {
@@ -395,21 +396,29 @@ export class WorkerView implements Component, Focusable {
 		return this.input.render(width)[0] ?? "";
 	}
 
-	/** 位置 n/N 必保、在最前；提示按宽度退让，“esc 返回”永远保留。通知（已发出、未送达）替换提示。 */
-	private footer(width: number): string {
+	/** 下横线：左位置 n/N（必保），右模型与按键提示（按宽度退让，“esc 返回”永远保留）；通知（已发出、未送达）替换右侧。 */
+	private bottomLine(width: number, worker: WorkerRef | undefined): string {
 		const names = this.names();
 		const position = names.indexOf(this.name);
 		if (position >= 0) this.index = position;
-		const lead = position >= 0 ? [`${position + 1}/${names.length}`] : [];
+		const lead = position >= 0 ? `${position + 1}/${names.length}` : "";
 		const notice = this.notice && (this.notice.until === undefined || Date.now() < this.notice.until) ? this.notice.text : undefined;
-		if (notice) return clip(this.theme.fg("dim", ` ${[...lead, notice].join(" · ")}`), width);
-		const hints = [...HINTS];
-		const line = () => ` ${[...lead, ...hints.map((hint) => hint.text)].join(" · ")}`;
-		while (visibleWidth(line()) > width && hints.some((hint) => hint.drop !== Infinity)) {
-			const weakest = hints.reduce((a, b) => (b.drop < a.drop ? b : a));
-			hints.splice(hints.indexOf(weakest), 1);
+		const model = worker ? modelAtomText(worker) : "";
+		const dim = (text: string) => this.theme.fg("dim", text);
+		function* candidates(): Generator<BorderParts> {
+			if (notice) {
+				for (let room = visibleWidth(notice); room >= 1; room--) yield [lead, dim(clip(notice, room))];
+				return;
+			}
+			const tail = TAIL.filter((item) => item.text !== "model" || model);
+			for (;;) {
+				yield [lead, dim(tail.map((item) => (item.text === "model" ? model : item.text)).join(" · "))];
+				const weakest = tail.reduce((a, b) => (b.drop < a.drop ? b : a));
+				if (weakest.drop === Infinity) return;
+				tail.splice(tail.indexOf(weakest), 1);
+			}
 		}
-		return clip(this.theme.fg("dim", line()), width);
+		return fitBorder(width, this.line, 0, candidates());
 	}
 
 	/**
@@ -471,11 +480,10 @@ export class WorkerView implements Component, Focusable {
 			return { handled: true };
 		}
 		const record = this.record;
-		const row = event.y - 1;
+		const row = event.y;
 		if (event.type !== "click" || !record || row < 0 || row >= this.bodyRows) return undefined;
 		const line = Math.min(record.scrollTop ?? record.maxTop, record.maxTop) + row;
-		if (line < BODY_GAP) return undefined;
-		const result = this.projection.handleMouse({ ...event, y: line - BODY_GAP, height: record.contentHeight - BODY_GAP });
+		const result = this.projection.handleMouse({ ...event, y: line, height: record.contentHeight });
 		if (result) record.anchor.click(line);
 		return result;
 	}

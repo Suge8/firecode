@@ -3,7 +3,7 @@
  * 行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟；落定事实只在运行时，reload 后不展示历史。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } from "../activity.js";
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
@@ -31,7 +31,8 @@ export interface ActivityFacts {
 
 type Toggle = "running" | "done" | "idle";
 /** 一行输出：子代理行，或可点击的折叠行。 */
-type Line = { row: Row } | { label: string; mark?: string; toggle: Toggle };
+/** 折叠行：计数（可点）与收起时被折叠的名字。 */
+type Line = { row: Row } | { label: string; mark: string; toggle: Toggle; names: readonly string[] };
 /** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
 type Target = { toggle: Toggle } | { open: string };
 
@@ -139,23 +140,26 @@ interface Folding {
 	showIdle: boolean;
 }
 
-/** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“… +N 个在跑”。 */
+/** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“+N 个在跑”。 */
 function layout({ failed, interrupted, stuck, running, done, idle }: Groups, folding: Folding, theme: Theme): Line[] {
 	const lines: Line[] = [...failed, ...interrupted, ...stuck].map((row) => ({ row }));
+	const idleMark = theme.fg("dim", IDLE_GLYPH);
+	const names = (rows: readonly Row[], open: boolean) => (open ? [] : rows.map((row) => row.name));
 	const overflow = running.length > folding.limit;
 	if (!overflow || folding.showAllRunning) {
 		lines.push(...running.map((row) => ({ row })));
-		if (overflow) lines.push({ label: "… 收起", toggle: "running" });
+		if (overflow) lines.push({ label: "收起", mark: idleMark, toggle: "running", names: [] });
 	} else {
 		const shown = running.slice(0, folding.limit - 1);
-		lines.push(...shown.map((row) => ({ row })), { label: `… +${running.length - shown.length} 个在跑`, toggle: "running" });
+		const hidden = running.slice(shown.length);
+		lines.push(...shown.map((row) => ({ row })), { label: `+${hidden.length} 个在跑`, mark: idleMark, toggle: "running", names: names(hidden, false) });
 	}
 	if (done.length) {
-		lines.push({ label: `${done.length} 个已完成`, mark: DONE_MARK, toggle: "done" });
+		lines.push({ label: `${done.length} 个已完成`, mark: DONE_MARK, toggle: "done", names: names(done, folding.showDone) });
 		if (folding.showDone) lines.push(...done.map((row) => ({ row })));
 	}
 	if (idle.length) {
-		lines.push({ label: `${idle.length} 个空闲`, mark: theme.fg("dim", IDLE_GLYPH), toggle: "idle" });
+		lines.push({ label: `${idle.length} 个空闲`, mark: idleMark, toggle: "idle", names: names(idle, folding.showIdle) });
 		if (folding.showIdle) lines.push(...idle.map((row) => ({ row })));
 	}
 	return lines;
@@ -166,11 +170,30 @@ function renderLines(lines: Line[], width: number, theme: Theme): string[] {
 	const nameWidth = nameWidthFor(rows, width);
 	// 退让整表一致：任何一行放不下“角色 · 动作”就全表丢角色，列才对得齐。
 	const showRole = rows.every((row) => roleFits(row, width, nameWidth));
+	// 折叠行的名字预览列对齐：按最宽的计数补齐。
+	const labelWidth = Math.max(0, ...lines.map((line) => ("label" in line ? visibleWidth(line.label) : 0)));
 	return lines.map((line) => {
 		if ("row" in line) return renderActivityRow(line.row, width, nameWidth, theme, showRole);
-		const text = line.mark ? `  ${line.mark} ${theme.fg("muted", line.label)}` : `    ${theme.fg("muted", line.label)}`;
+		const head = `  ${line.mark} ${theme.fg("muted", underline(line.label))}`;
+		const room = width - visibleWidth(head) - (labelWidth - visibleWidth(line.label)) - 1;
+		const preview = fitNames(line.names, room);
+		const text = preview ? `${head}${" ".repeat(labelWidth - visibleWidth(line.label) + 1)}${theme.fg("dim", preview)}` : head;
 		return clip(text, width, "end", "");
 	});
+}
+
+/** 点线下划线（终端不支持时退为普通下划线或不显示）：折叠行计数的可点提示。 */
+const underline = (text: string) => `\x1b[4:4m${text}\x1b[24m`;
+
+/** 能放下几个名字列几个，只列整名，不在名字中间截断。 */
+function fitNames(names: readonly string[], room: number): string {
+	let text = "";
+	for (const name of names) {
+		const next = text ? `${text} · ${name}` : name;
+		if (visibleWidth(next) > room) break;
+		text = next;
+	}
+	return text;
 }
 
 /** widget 组件：动画时钟只在有行在动时订阅，静止即取消；折叠行可点击展开/收起。 */
