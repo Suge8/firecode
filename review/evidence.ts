@@ -22,13 +22,20 @@ export interface Evidence {
 	omitted: number;
 }
 
+interface Render {
+	language: Language;
+	/** 会话文件：截断标记据此告诉审查者完整原文在哪里。内存会话没有。 */
+	sessionFile?: string;
+	failedCalls: ReadonlySet<string>;
+}
+
 export function buildEvidence(
 	entries: readonly unknown[],
 	language: Language,
-	budgetTokens = DEFAULT_EVIDENCE_TOKENS,
+	{ budgetTokens = DEFAULT_EVIDENCE_TOKENS, sessionFile }: { budgetTokens?: number; sessionFile?: string } = {},
 ): Evidence {
-	const failedCalls = collectFailedCalls(entries);
-	const blocks = entries.flatMap((entry) => renderEntry(entry, language, failedCalls));
+	const render: Render = { language, ...(sessionFile ? { sessionFile } : {}), failedCalls: collectFailedCalls(entries) };
+	const blocks = entries.flatMap((entry) => renderEntry(entry, render));
 	if (blocks.length === 0) return { text: "", omitted: 0 };
 	// 锚点必须是首条用户消息（原始需求）：它之前可能排着其他扩展的可显示消息，
 	// 盲取第一块会把真正的需求锚点让进预算竞争、在长会话里被裁掉。
@@ -79,11 +86,8 @@ function collectFailedCalls(entries: readonly unknown[]): ReadonlySet<string> {
 	return failed;
 }
 
-function renderEntry(
-	entry: unknown,
-	language: Language,
-	failedCalls: ReadonlySet<string>,
-): EvidenceBlock[] {
+function renderEntry(entry: unknown, render: Render): EvidenceBlock[] {
+	const { language } = render;
 	if (!isRecord(entry)) return [];
 	switch (entry.type) {
 		case "message": {
@@ -92,25 +96,25 @@ function renderEntry(
 			if (message.role === "user")
 				return [
 					{
-						text: `## ${userLabel(language)}\n${clip(textOf(message.content))}`,
+						text: `## ${userLabel(language)}\n${clip(textOf(message.content), render)}`,
 						role: "user" as const,
 					},
 				];
 			if (message.role === "assistant")
-				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content, language, failedCalls)}` }];
+				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content, render)}` }];
 			return [];
 		}
 		case "custom_message": {
 			if (entry.display !== true) return [];
-			return [{ text: `## ${customLabel(language, String(entry.customType ?? ""))}\n${clip(textOf(entry.content))}` }];
+			return [{ text: `## ${customLabel(language, String(entry.customType ?? ""))}\n${clip(textOf(entry.content), render)}` }];
 		}
 		case "compaction":
 			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${summaryLabel(language)}\n${clip(entry.summary)}` }]
+				? [{ text: `## ${summaryLabel(language)}\n${clip(entry.summary, render)}` }]
 				: [];
 		case "branch_summary":
 			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${branchSummaryLabel(language)}\n${clip(entry.summary)}` }]
+				? [{ text: `## ${branchSummaryLabel(language)}\n${clip(entry.summary, render)}` }]
 				: [];
 		default:
 			return [];
@@ -138,26 +142,18 @@ function branchSummaryLabel(language: Language) {
 }
 
 /** assistant 正文 = 文本段 + 工具调用轨迹；纯工具回合也因此留下编辑记录。 */
-function assistantBody(
-	content: unknown,
-	language: Language,
-	failedCalls: ReadonlySet<string>,
-): string {
-	if (typeof content === "string") return clip(content);
+function assistantBody(content: unknown, render: Render): string {
+	if (typeof content === "string") return clip(content, render);
 	if (!Array.isArray(content)) return "";
 	const trail = content
-		.map((part) => toolCallLine(asRecord(part), language, failedCalls))
+		.map((part) => toolCallLine(asRecord(part), render))
 		.filter(Boolean)
 		.join("\n");
-	const body = clip(textOf(content));
+	const body = clip(textOf(content), render);
 	return [body, trail].filter(Boolean).join("\n");
 }
 
-function toolCallLine(
-	part: Record<string, unknown> | undefined,
-	language: Language,
-	failedCalls: ReadonlySet<string>,
-): string {
+function toolCallLine(part: Record<string, unknown> | undefined, { language, failedCalls }: Render): string {
 	if (part?.type !== "toolCall" || typeof part.name !== "string" || !part.name) return "";
 	const args = asRecord(part.arguments);
 	const target =
@@ -172,20 +168,30 @@ function toolCallLine(
 				? " (failed)"
 				: "（失败）"
 			: "";
-	return `${`[${part.name}] ${clipLine(target)}`.trimEnd()}${failed}`;
+	return `${`[${part.name}] ${clipLine(target, language)}`.trimEnd()}${failed}`;
 }
 
 /** 单行轨迹上限：防超长 bash 命令撑大证据块；路径不受影响。 */
 const TOOL_LINE_MAX_CHARS = 200;
 
-function clipLine(text: string) {
+function clipLine(text: string, language: Language) {
 	const single = text.replace(/\s+/gu, " ").trim();
-	return single.length <= TOOL_LINE_MAX_CHARS ? single : `${single.slice(0, TOOL_LINE_MAX_CHARS)}…`;
+	if (single.length <= TOOL_LINE_MAX_CHARS) return single;
+	const note = language === "en" ? `…[truncated, ${single.length} chars]` : `…[截断，原文 ${single.length} 字]`;
+	return `${single.slice(0, TOOL_LINE_MAX_CHARS)}${note}`;
 }
 
-function clip(text: string) {
+/**
+ * 截断处必须写明是证据组装的截断：裸省略号会被审查者当成回复本身没写完（长交付物曾因此连判 FAIL）。
+ * 完整原文在会话文件里，审查者能用 read 自行核对。
+ */
+function clip(text: string, { language, sessionFile }: Render) {
 	if (text.length <= MESSAGE_MAX_CHARS) return text.trim();
-	return `${text.slice(0, MESSAGE_MAX_CHARS).trim()}\n[…]`;
+	const where = sessionFile ?? (language === "en" ? "the session file" : "会话文件");
+	const note = language === "en"
+		? `[evidence truncated: this message has ${text.length} characters, only the first ${MESSAGE_MAX_CHARS} are shown; the full original is in ${where} — read it if you need to verify]`
+		: `[证据截断：本条消息原文 ${text.length} 字，此处只给出前 ${MESSAGE_MAX_CHARS} 字；完整原文在 ${where}，需要核对时用 read 查看]`;
+	return `${text.slice(0, MESSAGE_MAX_CHARS).trim()}\n${note}`;
 }
 
 /**
