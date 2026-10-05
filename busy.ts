@@ -83,7 +83,7 @@ export interface BusyHandlers {
 	/** 任一来源变化后调用（含歇下那一次，先于 onSettled）。 */
 	onChange?(view: BusyView, ctx: ExtensionContext | undefined): void;
 	/** 会话歇下边沿：busy 由真变假时触发一次，带本段进行中的总时长与终态。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */
-	onSettled(ctx: ExtensionContext | undefined, round: SettledRound): void;
+	onSettled?(ctx: ExtensionContext | undefined, round: SettledRound): void;
 }
 
 function outcomeOf(messages: readonly { role: string; stopReason?: string }[]): Outcome {
@@ -137,7 +137,7 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 		for (const subscriber of subscribers) subscriber.onChange?.(view, ctx);
 		if (busy || started === undefined || teardown) return;
 		const round = settledRound(now - started, outcome, requests);
-		for (const subscriber of subscribers) subscriber.onSettled(ctx, round);
+		for (const subscriber of subscribers) subscriber.onSettled?.(ctx, round);
 	};
 	pi.on("session_shutdown", () => {
 		closed = true;

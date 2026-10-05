@@ -379,7 +379,7 @@ async function shellWithBusy() {
 		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
 		/** 歇下边沿：像 tools 一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
-			feed.onSettled(ctx, round);
+			feed.onSettled?.(ctx, round);
 			branch.push(roundEntry(round));
 			bus.get(ROUND_RECORDED)?.();
 		},

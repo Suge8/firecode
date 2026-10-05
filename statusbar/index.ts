@@ -206,8 +206,6 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 			shell.syncClock();
 			shell.requestRender();
 		},
-		// 落定态不在歇下边沿取：那一刻轮记录可能还没写进分支（订阅顺序不定），等 tools 写入后的发布。
-		onSettled() {},
 	});
 	let branch: () => readonly BranchEntry[] = () => [];
 	const showRecord = (at?: number) => {
