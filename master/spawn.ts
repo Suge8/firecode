@@ -72,16 +72,12 @@ export class InProcessSessionPool {
 	constructor(private readonly environment: PoolEnvironment = {}) {}
 
 	/**
-	 * 把 "provider/model" 解析成模型。ModelRuntime 每个池只建一次（auth.json 与 models.json 只读一次）；
+	 * 把 "provider/model" 解析成模型。ModelRuntime 每个池只建一次（auth.json 与 models.json 只读一次），解析与建子会话共用；
 	 * 扩展注册的 provider 在这里不可见，只能用内置 provider 与 models.json 里的模型。
 	 */
 	async resolveModel(id: string): Promise<Model<any>> {
 		if (this.environment.resolveModel) return this.environment.resolveModel(id);
-		const agentDir = this.environment.agentDir ?? getAgentDir();
-		this.runtime ??= this.environment.modelRuntime
-			? Promise.resolve(this.environment.modelRuntime)
-			: ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
-		const runtime = await this.runtime;
+		const runtime = await this.modelRuntime();
 		const slash = id.indexOf("/");
 		const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
 		if (!model) throw new Error(`找不到模型：${id}；子会话只能使用内置 provider 或 models.json 里的模型`);
@@ -121,7 +117,8 @@ export class InProcessSessionPool {
 			const result = await createAgentSession({
 				cwd: options.cwd,
 				agentDir: this.environment.agentDir,
-				modelRuntime: this.environment.modelRuntime,
+				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
+				modelRuntime: await this.modelRuntime(),
 				model: options.model,
 				thinkingLevel: options.thinking,
 				tools: options.tools,
@@ -151,6 +148,14 @@ export class InProcessSessionPool {
 	onRelease(listener: (sessionPath: string) => void): () => void {
 		this.releaseListeners.add(listener);
 		return () => this.releaseListeners.delete(listener);
+	}
+
+	private modelRuntime(): Promise<ModelRuntime> {
+		const agentDir = this.environment.agentDir ?? getAgentDir();
+		this.runtime ??= this.environment.modelRuntime
+			? Promise.resolve(this.environment.modelRuntime)
+			: ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
+		return this.runtime;
 	}
 
 	has(sessionPath: string): boolean {

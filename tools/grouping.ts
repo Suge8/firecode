@@ -47,19 +47,34 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		stopFrames = undefined;
 		for (const restore of restores.splice(0).reverse()) restore();
 	};
-	/** 自检或渲染时发现宿主形状不符：整体退回原生显示并明确提示，不悄悄画错。 */
+	let abandoned = false;
+	/** 自检、渲染、点击或全局展开时发现宿主形状不符：整体退回原生显示并明确提示一次，不悄悄画错。 */
 	const abandon = (error: HostShapeError) => {
 		detach();
+		if (abandoned) return;
+		abandoned = true;
 		ui.notify(error.message, "warning");
 	};
-	const belongsHere = (row: ToolExecutionComponent) => toolFacts(row).ui === tui;
+	/** 宿主调进来的每个入口都经这里：形状不符就退回原生，再按原生行为完成这次调用。 */
+	const guarded = <T>(run: () => T, native: () => T): T => {
+		try {
+			return run();
+		} catch (error) {
+			if (!(error instanceof HostShapeError)) throw error;
+			abandon(error);
+			return native();
+		}
+	};
+	// 归属只比对 TUI 引用，不校验别的 TUI 的工具行形状。
+	const belongsHere = (row: ToolExecutionComponent) => rowUiOf(row) === tui;
 	// 全局展开只控制组摘要/列表；单工具正文通过下方独立的鼠标入口调用原方法。
 	restores.push(patchMethod(ToolExecutionComponent.prototype, "setExpanded", function (this: ToolExecutionComponent, value) {
 		originalExpand.call(this, belongsHere(this) ? false : value);
 	}));
 	// 机器消息的原生卡片只由点击那一行打开；全局展开不平铺它（其余 CustomMessage 照旧跟随全局）。
 	restores.push(patchMethod(CustomMessageComponent.prototype, "setExpanded", function (this: CustomMessageComponent, value) {
-		originalMessageExpand.call(this, isMachineMessage(this) ? false : value);
+		const target = guarded(() => (isMachineMessage(this) ? false : value), () => value);
+		originalMessageExpand.call(this, target);
 	}));
 
 	const install = (chat: Container) => {
@@ -89,20 +104,16 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 				for (const key of overrides) if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, false);
 				overrides.clear();
 			}
-			try {
+			return guarded(() => {
 				const { nodes, animating } = projectProcessGroups(chat.children, env);
 				projection.children = nodes;
 				// 动效只经全局时钟：有活的摘要才订阅，静止即取消。
 				if (animating && !stopFrames) stopFrames = onFrame(() => tui.requestRender());
 				else if (!animating && stopFrames) { stopFrames(); stopFrames = undefined; }
 				return projection.render(width);
-			} catch (error) {
-				if (!(error instanceof HostShapeError)) throw error;
-				abandon(error);
-				return render.call(chat, width);
-			}
+			}, () => render.call(chat, width));
 		};
-		chat.handleMouse = (event) => projection.handleMouse(event);
+		chat.handleMouse = (event) => guarded(() => projection.handleMouse(event), () => mouse.call(chat, event));
 		restores.push(() => {
 			chat.render = render;
 			chat.handleMouse = mouse;
@@ -114,13 +125,11 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		if (!chat) return;
 		attached = true;
 		removeHook();
-		try {
+		const healthy = guarded(() => {
 			for (const child of trigger ? [trigger, ...chat.children] : chat.children) checkShape(child);
-		} catch (error) {
-			if (!(error instanceof HostShapeError)) throw error;
-			return abandon(error);
-		}
-		install(chat);
+			return true;
+		}, () => false);
+		if (healthy) install(chat);
 	};
 	// 宿主没有聊天容器句柄；只在首个助手或工具插入时定位，随后立即卸掉发现钩子。
 	const removeHook = patchMethod(Container.prototype, "addChild", function (this: Container, child: Component) {
