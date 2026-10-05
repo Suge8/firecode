@@ -149,6 +149,7 @@ export class ActivityList {
 	private unsubscribe: (() => void) | undefined;
 	private showAllRunning = false;
 	private showDone = false;
+	private moving = true;
 	/** 上一次渲染每行对应的折叠开关，供点击命中。 */
 	private toggles: (Toggle | undefined)[] = [];
 
@@ -161,17 +162,15 @@ export class ActivityList {
 
 	/** 事实变化后调用：对齐时钟订阅并重绘一次。 */
 	sync(): void {
-		if (this.animating() && !this.unsubscribe) this.unsubscribe = onFrame(() => this.onFrame());
-		if (!this.animating()) this.release();
+		const animating = group(this.facts(), Date.now(), this.theme).animating;
+		if (animating && !this.unsubscribe) this.unsubscribe = onFrame(() => this.onFrame());
+		if (!animating) this.release();
 		this.tui.requestRender();
 	}
 
-	private animating(): boolean {
-		return group(this.facts(), Date.now(), this.theme).animating;
-	}
-
+	/** 每帧只重绘；是否还在动由上一次 render 的分组顺带给出，不再单独分组一遍。 */
 	private onFrame(): void {
-		if (!this.animating()) this.release();
+		if (!this.moving) this.release();
 		this.tui.requestRender();
 	}
 
@@ -184,7 +183,9 @@ export class ActivityList {
 
 	render(width: number): string[] {
 		const limit = this.limit();
-		const lines = layout(group(this.facts(), Date.now(), this.theme), {
+		const groups = group(this.facts(), Date.now(), this.theme);
+		this.moving = groups.animating;
+		const lines = layout(groups, {
 			limit,
 			expanded: limit === Infinity,
 			showAllRunning: this.showAllRunning,
