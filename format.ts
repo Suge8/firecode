@@ -55,17 +55,50 @@ export function clip(
 	return output;
 }
 
-/** 1234 → 1.2k，1_500_000 → 1.5M；0 与 undefined 显示为 ?。 */
+/** 1234 → 1.2k，1_500_000 → 1.5M，整数不带小数（1M、200k）；0 与 undefined 显示为 ?。 */
 export function formatTokens(tokens: number): string {
-	if (tokens >= 1_000_000) {
-		const value = tokens / 1_000_000;
-		return value >= 10 ? `${Math.round(value)}M` : `${value.toFixed(1)}M`;
-	}
-	if (tokens >= 1_000) {
-		const value = tokens / 1_000;
-		return value >= 10 ? `${Math.round(value)}k` : `${value.toFixed(1)}k`;
-	}
+	if (tokens >= 1_000_000) return `${scaled(tokens / 1_000_000)}M`;
+	if (tokens >= 1_000) return `${scaled(tokens / 1_000)}k`;
 	return tokens ? `${tokens}` : "?";
+}
+
+const scaled = (value: number) => (value >= 10 ? Math.round(value) : Number(value.toFixed(1)));
+
+const FENCE = /^\s*```/u;
+const HEADING = /^\s*#{1,6}\s+/u;
+const TABLE_ROW = /^\s*\|.*\|\s*$/u;
+const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/u;
+/** 块级标记：引用符、列表符、序号（含任务框）。 */
+const BLOCK_MARK = /^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)?/u;
+/** 句末：中文句末标点，或后接空白/行尾的英文句末标点——但缩写的点不算。 */
+const SENTENCE_END = /[。！？]|(?<!\b(?:e\.g|i\.e|etc|vs|cf|Mr|Mrs|Ms|Dr|St|No))[.!?](?=\s|$)/u;
+
+/**
+ * 一行预览用的首句（机器消息行、中间回复、Master 事件卡与会话标题共用）：认 Markdown 结构，
+ * 跳过标题、围栏、表格行与分隔线，剥掉引用符、列表符与序号，去掉行内标记；只有标题没有正文时才用标题文字。
+ * 首句以冒号结尾（如“标准输出：”）本身没有信息，并入下一有效行的首句。
+ */
+export function firstSentence(text: string): string {
+	const lines = text.split("\n").filter((line) => !FENCE.test(line) && !TABLE_ROW.test(line) && !RULE.test(line));
+	const body = lines.filter((line) => !HEADING.test(line));
+	const source = body.some((line) => line.trim()) ? body : lines.map((line) => line.replace(HEADING, ""));
+	return sentenceOf(source.map((line) => oneLine(inline(line.replace(BLOCK_MARK, "")))).filter(Boolean));
+}
+
+/** 预览是纯文本：链接只留文字，去掉粗体与行内代码标记。 */
+function inline(line: string): string {
+	return line
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+		.replace(/(\*\*|__)(.+?)\1/gu, "$2")
+		.replace(/`([^`]+)`/gu, "$1");
+}
+
+function sentenceOf([head = "", ...rest]: string[]): string {
+	const end = SENTENCE_END.exec(head);
+	const sentence = end ? head.slice(0, end.index + 1) : head;
+	const colon = /[：:]$/u.exec(sentence)?.[0];
+	if (!colon || rest.length === 0) return sentence;
+	return `${sentence}${colon === ":" ? " " : ""}${sentenceOf(rest)}`;
 }
 
 /** 紧凑耗时：十秒以内保留一位小数，长耗时按小时、分钟、秒进位。 */

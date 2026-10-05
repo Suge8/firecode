@@ -2,9 +2,6 @@ import { readFileSync } from "node:fs";
 import { CHECKPOINT_TYPE, isValidCheckpoint } from "./checkpoint.js";
 import type { ReviewState } from "./state.js";
 
-/** 审查活跃期在 herdr:blocked 频道发布的展示标签。 */
-export const REVIEW_OCCUPANCY_LABEL = "对抗审查进行中";
-
 export type ReviewOutcome =
 	| { status: "passed"; runId: string; rounds: number }
 	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string }

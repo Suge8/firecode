@@ -33,14 +33,8 @@ import {
 	writeCheckpoint,
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
-import {
-	type ActivityView,
-	hideActivity,
-	lockEditor,
-	reviewCounts,
-	showActivity,
-} from "./ui.js";
-import { REVIEW_OCCUPANCY_LABEL as OCCUPANCY_LABEL } from "./outcome.js";
+import { hideReviewTitle, lockEditor, showReviewTitle } from "./ui.js";
+import { OCCUPANCY_CHANNEL, OCCUPANCY_LABEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
@@ -48,6 +42,7 @@ import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.j
 import {
 	type AdvisorResult,
 	type CardData,
+	type Phase,
 	type ReviewEffect,
 	type ReviewEvent,
 	type ReviewLimits,
@@ -59,7 +54,6 @@ import {
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 /** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
 export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
-const OCCUPANCY_CHANNEL = "herdr:blocked";
 const OCCUPANCY_SOURCE = "firecode-review";
 /** herdr 按 seq 丢弃过期上报；同一 source 单调递增。 */
 let occupancySeq = Date.now() * 1000;
@@ -682,11 +676,10 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 	// 频道仍要发：它驱动 herdr 集成的 blocked 状态本身。占用信号不伤审查。
 	publishOccupancyLabel(rt, active, held);
 	try {
-		rt.pi.events.emit(OCCUPANCY_CHANNEL, {
-			active: held,
-			// progress 是活的访问器：占用频道按计数配对，进度变化不能靠重发 true 传递。
-			...(held ? { label: OCCUPANCY_LABEL, progress: () => reviewCounts(activityView(rt)) } : {}),
-		});
+		const payload: OccupancyPayload = held
+			? { active: true, label: OCCUPANCY_LABEL, progress: () => reviewProgress(rt) }
+			: { active: false };
+		rt.pi.events.emit(OCCUPANCY_CHANNEL, payload);
 	} catch (error) {
 		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或会话生命周期。
 		try {
@@ -698,23 +691,19 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 	}
 }
 
-/**
- * UI 投影：编辑器上方单行活动 + esc 接管，全部从当前状态派生。
- * 活动行自己按帧重绘，因此耗时变化不需要在这里通知。
- */
+/** UI 投影：终端标题 + esc 接管，全部从当前状态派生；审查进度经占用频道由输入框外壳显示。 */
 function syncUi(rt: ReviewRuntime): void {
 	const active = rt.controller;
 	if (!active) return;
-	const view = () => activityView(rt);
-	if (!view()) return clearUi(active);
-	showActivity(active.ctx, view);
+	if (!isActive(active.state) || !active.ctx.hasUI) return clearUi(active);
+	showReviewTitle(active.ctx, active.state.round, active.config.language);
 	// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
 	if (!canCancelWithKey(rt)) return releaseEditor(active);
 	active.unlockEditor ??= lockEditor(active.ctx, () => cancelByUser(rt));
 }
 
 function clearUi(active: Controller) {
-	hideActivity(active.ctx);
+	hideReviewTitle(active.ctx);
 	releaseEditor(active);
 }
 
@@ -723,18 +712,18 @@ function releaseEditor(active: Controller) {
 	active.unlockEditor = undefined;
 }
 
-/** 审查活动行只读取当前审查状态，总结阶段由 UI 收成一行。 */
-function activityView(rt: ReviewRuntime): ActivityView | undefined {
-	const active = rt.controller;
-	if (!active || !isActive(active.state) || !active.ctx.hasUI) return undefined;
-	return {
-		phase: active.state.phase,
-		round: active.state.round,
-		startedAt: active.state.startedAt,
-		reviewers: active.state.active?.reviewers ?? [],
-		consecutiveFailures: active.state.consecutiveFailures,
-		language: active.config.language,
-	};
+const STAGE: Partial<Record<Phase, ReviewStage>> = {
+	queued: "queued", reviewing: "reviewing", needs_fix: "advisor", awaiting_fix: "fixing", summarizing: "summarizing",
+};
+
+/** 审查进度只读 reducer 的当前状态；只有审查相的票数可数。 */
+function reviewProgress(rt: ReviewRuntime): ReviewProgress | undefined {
+	const state = rt.controller?.state;
+	const stage = state && isActive(state) ? STAGE[state.phase] : undefined;
+	if (!state || !stage) return undefined;
+	const reviewers = stage === "reviewing" ? state.active?.reviewers ?? [] : [];
+	const count = (status: string) => reviewers.filter((reviewer) => reviewer.status === status).length;
+	return { stage, round: state.round, passed: count("passed"), blocked: count("failed"), total: reviewers.length };
 }
 
 function canCancelWithKey(rt: ReviewRuntime) {

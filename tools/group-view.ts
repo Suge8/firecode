@@ -12,8 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { toolTarget } from "./actions.js";
-import { firstSentence } from "./machine.js";
-import { oneLine } from "../format.js";
+import { firstSentence, oneLine } from "../format.js";
 import { ToolLine, resultText, type ActionLine, type RowState, type ToolResult } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
@@ -120,45 +119,45 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	});
 }
 
-const ACTIVITY_TEXT = { thinking: "思考中", processing: "处理中" } as const;
+const ACTIVITY_TEXT = { thinking: "思考中", replying: "回复中" } as const satisfies Record<AssistantActivity, string>;
 
-type Facts = Pick<SummaryView, "notice" | "action" | "arrival"> & { running: number; round?: Round };
+type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures"> & { running: number; round?: Round };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
-	let running = 0;
+	const running: RowData[] = [];
 	let notice: string | undefined;
-	let latest: RowData | undefined;
 	let arrival: Facts["arrival"];
 	let round: Round | undefined;
+	const failed = new Set<string>();
 	for (const item of segment) {
 		// 多条宿主提示只取首条原文，其余在展开态可见。
 		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters((item as unknown as { text: string }).text));
 		// 同一轮多条轮记录（命令触发的再次进行）取后写的。
 		round = roundOf(item) ?? round;
 		const entries = machineEntriesOf(item);
-		const returned = entries?.findLast((entry) => entry.returned)?.returned;
-		const age = entries ? env.clock.arrivalAge(item) : Infinity;
-		if (returned && age < ARRIVAL_FLASH_MS)
-			arrival = { text: `${returned.name} ${returned.failed ? "失败" : "已返回"}`, failed: returned.failed, age };
-		if (!(item instanceof ToolExecutionComponent)) continue;
-		const data = rowData(item);
-		// 运行中的工具优先当“当前动作”；都完成时取最后一个
-		if (data.isPartial) running++;
-		if (data.isPartial || !latest?.isPartial) latest = data;
+		for (const entry of entries ?? []) if (entry.failed && entry.worker) failed.add(entry.worker);
+		const settled = entries?.findLast((entry) => entry.duration);
+		const age = settled ? env.clock.arrivalAge(item) : Infinity;
+		if (settled && age < ARRIVAL_FLASH_MS) arrival = { text: settled.title, failed: settled.alarm, age };
+		if (item instanceof ToolExecutionComponent && rowData(item).isPartial) running.push(rowData(item));
 	}
-	const line = latest && actionLine(latest.callRendererComponent);
-	const action = latest && (line
-		? { word: line.actionWord, target: line.actionTarget }
-		: {
-			word: latest.toolDefinition?.label ?? latest.toolName,
-			target: toolTarget(latest.toolName, latest.args, latest.cwd).value.map((part) => part.text).join("").trim(),
-		});
-	return {
-		notice, running, arrival, round,
-		// 指挥官自己歇着、只在等子代理：没有当前动作，摘要行只留火苗（等待状态与计时只在边框）。
-		action: activity ? { word: ACTIVITY_TEXT[activity] } : running || env.clock.agentRunning ? action ?? { word: "思考" } : undefined,
-	};
+	return { notice, running: running.length, arrival, round, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
+}
+
+/**
+ * 当前动作只说正在发生的事：运行中的工具 > 助手在思考/回复 > 指挥官回合在跑但两头都没动静（等模型）是思考中；
+ * 指挥官自己歇着、只在等子代理时没有当前动作，摘要行只留火苗（等待状态与计时只在边框）。
+ */
+function actionOf(tool: RowData | undefined, activity: AssistantActivity | undefined, env: ProjectionEnv): SummaryView["action"] {
+	if (tool) {
+		const line = actionLine(tool.callRendererComponent);
+		return line
+			? { word: line.actionWord, target: line.actionTarget }
+			: { word: tool.toolDefinition?.label ?? tool.toolName, target: toolTarget(tool.toolName, tool.args, tool.cwd).value.map((part) => part.text).join("").trim() };
+	}
+	if (activity) return { word: ACTIVITY_TEXT[activity] };
+	return env.clock.agentRunning ? { word: ACTIVITY_TEXT.thinking } : undefined;
 }
 
 /** 机器消息：展开态一行 ↳，点击切换完整正文（信封用户消息）或原生卡片（CustomMessage）。 */
@@ -319,14 +318,16 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
 	const open = globalOpen !== env.isOpen(turn);
 	const facts = scan(segment, reply?.activity, env);
-	const hasSummary = segment.some(hasSubstance) || !!reply?.activity;
 	const live = final && (env.clock.live(turn) || facts.running > 0 || !!reply?.activity);
+	// 进行中的轮一律有摘要行：纯文字轮从开始到歇下都占着这一行，回复不跳。
+	const hasSummary = live || segment.some(hasSubstance);
 	const round = live ? undefined : facts.round;
 	const sinceEnd = round && env.clock.now() - round.at;
 	const nodes: Component[] = [];
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
-			...facts, live, round, sinceEnd,
+			// 运行中失败行常驻在子代理活动列表，摘要行只在事后留痕。
+			...facts, failures: live ? 0 : facts.failures, live, round, sinceEnd,
 			toggle: () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
@@ -352,8 +353,9 @@ function foldedReplies(
 	const shown = middle.slice(-env.replyLines);
 	if (shown.length) {
 		out.push(new Spacer(1));
-		if (middle.length > shown.length) out.push(new Line(`  ${theme.fg("dim", `+${middle.length - shown.length} 条`)}`));
-		for (const text of shown) out.push(new Line(`  ${theme.fg("muted", firstSentence(text))}`));
+		// 与宿主正文同一左边距（1 列）。
+		if (middle.length > shown.length) out.push(new Line(` ${theme.fg("dim", `+${middle.length - shown.length} 条`)}`));
+		for (const text of shown) out.push(new Line(` ${theme.fg("muted", firstSentence(text))}`));
 	}
 	// 宿主助手正文自带前导空行，不再另垫。
 	if (body) out.push(body);
@@ -368,8 +370,8 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 		if (roundOf(item)) continue;
 		const machine = machineEntriesOf(item);
 		if (machine) {
-			// 工具行之后空一行，免得 ↳ 行像是贴在上一个工具行底下。
-			if (list.at(-1) instanceof ToolItem) list.push(new Spacer(1));
+			// 与上一个工具行或正文空一行，免得 ↳ 行像是贴在它底下；连续的 ↳ 行紧挨。
+			if (!(list.at(-1) instanceof MachineItem || list.at(-1) instanceof Spacer)) list.push(new Spacer(1));
 			list.push(new MachineItem(item, machine, env));
 		} else if (item instanceof ToolExecutionComponent) {
 			if (!(list.at(-1) instanceof ToolItem)) list.push(new Spacer(1));
