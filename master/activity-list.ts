@@ -79,11 +79,21 @@ interface Groups {
 	animating: boolean;
 }
 
-function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
+/** 启动序：本进程内的 start 序号，重载恢复的没有序号、排最前并按创建时间。 */
+function launchSorted(facts: ActivityFacts): number[] {
 	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
 	const created = (index: number) => facts.workers[index].createdAt ?? Infinity;
-	const indexes = facts.workers.map((_, index) => index)
+	return facts.workers.map((_, index) => index)
 		.sort((a, b) => launch(a) - launch(b) || created(a) - created(b) || a - b);
+}
+
+/** 子代理按启动序的名字：全过程视图按它换子代理，位置不随状态分组跳动。 */
+export function launchOrder(facts: ActivityFacts): string[] {
+	return launchSorted(facts).map((index) => facts.workers[index].name);
+}
+
+function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
+	const indexes = launchSorted(facts);
 	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
 	for (const index of indexes) {
 		const worker = facts.workers[index];
@@ -128,12 +138,6 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 		groups.failed.push({ ...settledRow, mark: FAILED_MARK, action: fact.note ?? "失败", tone: "failed" });
 	}
 	return groups;
-}
-
-/** 全部展开时的行序（需要处理的、在跑、已完成、空闲）：全过程视图按它换子代理。 */
-export function displayOrder(facts: ActivityFacts, theme: Theme): string[] {
-	const { failed, interrupted, stuck, running, done, idle } = group(facts, Date.now(), theme);
-	return [...failed, ...interrupted, ...stuck, ...running, ...done, ...idle].map((row) => row.name);
 }
 
 interface Folding {

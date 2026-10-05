@@ -10,6 +10,9 @@ import {
 	AssistantMessageComponent,
 	CustomMessageComponent,
 	getMarkdownTheme,
+	type CustomEntry,
+	type EntryRenderer,
+	type Theme,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type AgentSessionEvent,
@@ -155,6 +158,21 @@ export function patchMethod<T extends object, K extends keyof T>(target: T, key:
 }
 
 /**
+ * 机器消息卡片（指挥官事件、审查结果卡）的原生展开只由投影决定：主会话的分组补丁压住宿主对它们的全局展开，
+ * 只放行投影点开登记过的卡片。主会话与子代理视图同一机制。
+ */
+const openedCards = new WeakSet<Component>();
+
+export function openCard(card: CustomMessageComponent): void {
+	openedCards.add(card);
+	card.setExpanded(true);
+}
+
+export function isCardOpened(card: Component): boolean {
+	return openedCards.has(card);
+}
+
+/**
  * 独立的工具行 TUI 句柄：除 requestRender 外全部委托给真实 TUI。主会话的分组补丁按“工具行属于主 TUI”识别自己的行，
  * 不在主聊天里的投影（子代理全过程视图）用它建工具行，单工具展开与重绘都归调用方。
  */
@@ -162,12 +180,28 @@ export function detachedTui(tui: TUI, requestRender: () => void): TUI {
 	return Object.create(tui, { requestRender: { value: requestRender } }) as TUI;
 }
 
-/** 镜像建组件要的外部来源：工具行的 TUI 句柄与工作目录、工具渲染定义、自定义消息渲染器。 */
+/** 镜像建组件要的外部来源：工具行的 TUI 句柄与工作目录、工具渲染定义、自定义消息与自定义记录的渲染器、主题。 */
 export interface MirrorSources {
 	ui: TUI;
 	cwd: string;
+	theme: Theme;
 	toolDefinition(name: string): ToolDefinition | undefined;
 	messageRenderer(customType: string): MessageRenderer | undefined;
+	entryRenderer(customType: string): EntryRenderer | undefined;
+}
+
+/** 会话分支里镜像认得的条目（宿主 SessionEntry 的结构子集）。 */
+export type MirrorEntry =
+	| { type: "message"; message: AgentMessage }
+	| { type: "custom_message"; customType: string; content: unknown; display: boolean; details?: unknown; timestamp: string }
+	| { type: "custom"; customType: string; data?: unknown; timestamp: string }
+	| { type: string };
+
+function customMessage(entry: { customType: string; content: unknown; details?: unknown; timestamp: string }) {
+	return {
+		role: "custom", customType: entry.customType, content: entry.content, display: true,
+		details: entry.details, timestamp: Date.parse(entry.timestamp),
+	} as AgentMessage;
 }
 
 /** 宿主 CustomEntryComponent 的壳（类不导出）：Container 带 hasContent 能力，里面放一个零行标记；isEntry 按同一能力识别。 */
@@ -194,8 +228,15 @@ export class ChatMirror {
 
 	constructor(private readonly sources: MirrorSources) {}
 
-	/** 已落盘的一条消息（历史回放）。 */
-	replay(message: AgentMessage): void {
+	/** 会话分支里的一个条目（历史回放）：消息、显示的自定义消息与自定义记录。 */
+	replay(entry: MirrorEntry): void {
+		if (entry.type === "message" && "message" in entry) this.replayMessage(entry.message);
+		else if (entry.type === "custom_message" && "display" in entry) {
+			if (entry.display) this.add(customMessage(entry));
+		} else if (entry.type === "custom" && "customType" in entry) this.addEntry(entry);
+	}
+
+	private replayMessage(message: AgentMessage): void {
 		if (message.role === "assistant") {
 			this.chat.addChild(this.assistant(message));
 			for (const call of message.content) {
@@ -271,20 +312,22 @@ export class ChatMirror {
 				this.pending.clear();
 				return true;
 			case "entry_appended":
+				if (event.entry.type === "custom") return this.addEntry(event.entry);
 				if (event.entry.type !== "custom_message" || !event.entry.display) return false;
-				this.add({
-					role: "custom", customType: event.entry.customType, content: event.entry.content,
-					display: true, details: event.entry.details, timestamp: Date.parse(event.entry.timestamp),
-				});
+				this.add(customMessage(event.entry));
 				return true;
 			default:
 				return false;
 		}
 	}
 
-	/** 扩展记录（如轮记录标记）以宿主 CustomEntry 的同一形态放进聊天树。 */
-	addEntry(marker: Component): void {
-		this.chat.addChild(entryShell(marker));
+	/** 自定义记录（如轮记录）：有渲染器的以宿主 CustomEntry 的同一形态放进聊天树，没有的不显示（与宿主一致）。 */
+	private addEntry(entry: { customType: string; data?: unknown; timestamp: string }): boolean {
+		const renderer = this.sources.entryRenderer(entry.customType);
+		const component = renderer?.(entry as CustomEntry, { expanded: false }, this.sources.theme);
+		if (!component) return false;
+		this.chat.addChild(entryShell(component));
+		return true;
 	}
 
 	private add(message: AgentMessage): void {

@@ -15,7 +15,7 @@
 | `guard.ts` | Worker 会话里唯一注册的 edit/write checkout 守卫 |
 | `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
 | `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
-| `worker-view.ts` | 子代理全过程视图（原型）：点活动列表一行打开全屏浮层，用过程组投影看完整记录并可补话 |
+| `worker-view.ts` | 子代理全过程视图：点活动列表一行打开全屏浮层，用过程组投影看完整记录并可补话 |
 
 Worker 是主进程内的 SDK 子会话而非独立进程：reload 会中断在飞回合（JSONL 与审查义务保留、可续派），换来父进程退出即全停、无幽灵进程与跨进程对账。池只管 Worker 生命周期与结果回传，不建 Goal、Task、任务板或消息总线；多个 Worker 可并行写同一 checkout，没有写租约，集成与验证归指挥官。
 
@@ -67,6 +67,11 @@ Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路�
 
 Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取 v8 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
 
-## 全过程视图（原型）
+## 全过程视图
 
-点活动列表里任何一个子代理行（含已完成、空闲展开后的行）打开全屏浮层（宿主 `ctx.ui.custom` overlay）。记录来自子会话：热会话读内存分支并订阅事件增量更新，已释放的冷子代理读一次会话文件；宿主组件由 `tools/host.ts` 的 `ChatMirror` 镜像生成，投影仍是 `tools/group-view.ts` 的过程组（时钟、展开档位与点击覆盖按视图各自构造）。子代理会话不写轮记录，轮界按运行边界合成：一次运行落定时放一个轮记录标记，其后的派单开新一轮，运行中的 steer 补话折进当前轮。浮层里打字补话走 `ACTION_HANDLERS.send` 同一条路径（working 时 steer、idle 时唤醒）；冷子代理被唤醒时 runtime 的 `onWorkerSession` 在第一条事件之前通知视图接上订阅。关闭时退订并丢掉组件，浮层关闭期间零订阅零构建。
+点活动列表里任何一个子代理行（含已完成、空闲展开后的行）打开全屏浮层（宿主 `ctx.ui.custom` overlay）。视图只经 `WorkerViewSource` 读运行时：启动序名单（`launchOrder`，位置 n/N 不随状态分组跳）、档案、热会话、会话接上通知、本次运行起点与视图来源的 send。
+
+- **记录**：热会话读内存分支并订阅事件增量更新，已释放的冷子代理读一次会话文件；宿主组件由 `tools/host.ts` 的 `ChatMirror` 镜像生成，投影仍是 `tools/group-view.ts` 的过程组（时钟、展开档位与点击覆盖按视图各自构造）。轮界与每轮耗时、终态、均速读 Worker 会话里轮记录器写下的 `firecode-round` 记录，与主会话同一合成规则；顶行空闲时的耗时取最近一轮的合成结果。
+- **补话**：输入框回车即 `ACTION_HANDLERS.send({ worker, prompt, origin: "view" })`（working 时 steer、idle 时唤醒）；已发出未送达的补话读子会话的排队队列，在输入框上方显示浅色“排队中：原话”，送达后消失。冷子代理被唤醒时 runtime 的 `onWorkerSession` 在第一条事件之前通知视图接上订阅。
+- **按键**：Tab / Shift+Tab 按启动序换子代理，←/→ 归输入框光标；浮层抢走焦点后宿主编辑器的全局键不生效，视图给出同义行为：esc 返回，ctrl+c 先清输入、再按关闭视图，空输入的 ctrl+d 关闭视图（不在浮层里退出 pi），ctrl+o 是视图自己的全部展开。
+- **资源**：关闭时退订会话事件与会话接上通知、停掉动画时钟、丢掉组件，浮层关闭期间零订阅零构建。
