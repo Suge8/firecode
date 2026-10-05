@@ -10,12 +10,12 @@ afterEach(() => jest.useRealTimers());
 afterAll(cleanupFirecodeModules);
 
 /** 经真实注册入口拿到横幅：session_start 时宿主收到的组件，以及它请求重绘的次数。 */
-async function mountHeader() {
+async function mountHeader(cwd = "/tmp/project") {
 	const { registerHeader } = await loadFirecodeModule("header.ts") as { registerHeader(pi: unknown): void };
 	let onStart: ((event: unknown, ctx: unknown) => void) | undefined;
 	registerHeader({ on: (name: string, handler: never) => { if (name === "session_start") onStart = handler; } });
 	let factory: Factory | undefined;
-	onStart?.({}, { cwd: "/tmp/project", ui: { setHeader: (next: Factory) => { factory = next; } } });
+	onStart?.({}, { cwd, ui: { setHeader: (next: Factory) => { factory = next; } } });
 	const tui = { renders: 0, requestRender() { tui.renders++; } };
 	return { header: factory!(tui, {}), tui };
 }
@@ -55,5 +55,16 @@ test("三档都显示版本与工作目录（同一份来源）；单行档放�
 	expect(tiny).toMatch(/FireCode .*pi \S+ · \/tmp\/project ─+$/u);
 	expect(visibleWidth(tiny)).toBe(40);
 	expect(plain(30)).toMatch(/FireCode …\S*project ─+/u);
+	header.dispose?.();
+});
+
+test("工作目录放不下时按目录段从开头省略，保留完整的末尾目录名，不从词中间截断", async () => {
+	jest.useFakeTimers();
+	const { header } = await mountHeader("/private/tmp/fc-dogfood2-repo");
+	jest.advanceTimersByTime(3000);
+	const plain = (width: number) => header.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, "")).join("\n");
+	expect(plain(40)).toMatch(/FireCode …\/fc-dogfood2-repo ─+/u);
+	expect(plain(40)).not.toMatch(/…[^/\s]+\/fc-dogfood2-repo/u);
+	expect(plain(110)).toContain("pi ");
 	header.dispose?.();
 });
