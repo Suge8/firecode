@@ -201,15 +201,16 @@ test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样
 	expect(view.text()).toHaveLength(2);
 });
 
-test("窄屏名字列有上限：长名字截短带 …，动作仍看得见", async () => {
+test("窄屏名字列让位给动作：动作至少留出能认的宽度，名字放不下才截短带 …", async () => {
 	const rows: Spec[] = [
-		{ name: "fix-auth-refresh-x", tool: "bash", args: { command: "sleep 330" }, output: NOW - 1_000 },
+		{ name: "fix-auth-refresh-x-long", tool: "bash", args: { command: "sleep 330" }, output: NOW - 1_000 },
 		{ name: "lint", tool: "bash", args: { command: "sleep 100" }, output: NOW - 1_000 },
 	];
 	const text = (await list(rows, { now: NOW })).text(40);
-	expect(text[0]).toMatch(/fix-auth…/u);
-	expect(text[0]).toContain("操作 $ sleep 330");
-	expect(text[1]).toContain("操作 $ sleep 100");
+	expect(text[0]).toMatch(/fix-auth-ref.*…/u);
+	expect(text[0]).toContain("操作 $ slee");
+	expect(text[1]).toContain("操作 $ slee");
+	for (const line of text) expect(line.length).toBeLessThanOrEqual(40);
 });
 
 test("窄屏整表统一丢角色；宽屏动作文字按行宽显示，不先硬截 40 列", async () => {
@@ -275,6 +276,6 @@ test("窄屏卡住行提醒优先：40 列也看得到完整的无输出提醒�
 		{ name: "repo-scan", tool: "read", args: { path: "/p/master/index.ts" }, output: NOW - 1_000 },
 	];
 	const [line] = (await list(rows, { now: NOW })).text(40);
-	expect(line).toMatch(/5(?: 分钟|m) 无输出/u);
+	expect(line).toMatch(/5(?: 分钟|m )无输出/u);
 	expect(line).not.toMatch(/无…|分…/u);
 });
