@@ -1,9 +1,9 @@
 /** 过程分组的安装：原始聊天树不变，渲染与鼠标命中共用同一份投影；宿主私有细节全部经 host.ts。 */
-import { AssistantMessageComponent, CustomMessageComponent, ToolExecutionComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, CustomMessageComponent, ToolExecutionComponent, UserMessageComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
 import { onFrame } from "../flame.js";
 import { isMachineMessage, projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
-import { assistantFacts, captureTui, findChat, HostShapeError, patchMethod, rowUiOf, toolFacts } from "./host.js";
+import { assistantFacts, captureTui, findChat, HostShapeError, patchMethod, rowUiOf, scrollViewOf, toolFacts } from "./host.js";
 import type { TurnClock } from "./turn-clock.js";
 
 const OWNER = Symbol.for("pi.firecode.tool-groups");
@@ -83,14 +83,24 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		const projection = new Container();
 		const overrides = new Set<object>();
 		let lastExpanded = ui.getToolsExpanded();
+		/**
+		 * 点击展开/收起时被点的那一行留在视口原位：跟随末尾的滚动视图会把下方新增的内容顶上来、把被点的行滚出屏幕，
+		 * 所以点击当下就地停住滚动位置（被点行之上的内容不变，它在视口里的位置也就不变）；用户滚回底部即恢复跟随。
+		 */
+		const holdViewport = () => {
+			const view = scrollViewOf(tui, chat);
+			view?.scrollTo(view.scrollTop, { disableFollow: true });
+		};
 		const env: ProjectionEnv = {
 			ui, clock: options.clock, replyLines: options.replyLines, headless: {},
 			toggleRow: (row) => {
+				holdViewport();
 				toggleToolDetails(row, originalExpand);
 				tui.requestRender();
 			},
 			isOpen: (key) => overrides.has(key),
 			toggleOpen: (key) => {
+				holdViewport();
 				const opening = !overrides.delete(key);
 				if (opening) overrides.add(key);
 				if (key instanceof CustomMessageComponent) originalMessageExpand.call(key, opening);
@@ -131,10 +141,11 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 		}, () => false);
 		if (healthy) install(chat);
 	};
-	// 宿主没有聊天容器句柄；只在首个助手或工具插入时定位，随后立即卸掉发现钩子。
+	// 宿主没有聊天容器句柄；首条用户消息、助手或工具插入时定位（首条用户消息一出现就带竖条），随后立即卸掉发现钩子。
 	const removeHook = patchMethod(Container.prototype, "addChild", function (this: Container, child: Component) {
 		originalAdd.call(this, child);
-		if (child instanceof AssistantMessageComponent || (child instanceof ToolExecutionComponent && rowUiOf(child) === tui)) discover(child);
+		if (child instanceof AssistantMessageComponent || child instanceof UserMessageComponent
+			|| (child instanceof ToolExecutionComponent && rowUiOf(child) === tui)) discover(child);
 	});
 	restores.push(removeHook);
 	discover();

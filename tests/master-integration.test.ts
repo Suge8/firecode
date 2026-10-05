@@ -360,6 +360,73 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 	await harness.command("");
 });
 
+test("报告现场时序：最后一个子代理在指挥官空闲时返回，整段只歇下一次，且在唤醒回合落定之后", async () => {
+	const harness = await setup(true, { holdWake: true });
+	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
+	const rounds: any[] = [];
+	watchBusy(harness.pi, { onSettled: (_ctx: unknown, round: unknown) => rounds.push(round) });
+	try {
+		at(0);
+		// 指挥官回合派出子代理后歇着等。
+		await harness.emit("agent_start", {});
+		const finish = Promise.withResolvers<void>();
+		faux.setResponses([async () => { await finish.promise; return fauxAssistantMessage("完成"); }]);
+		await harness.execute({ action: "start", worker: "last", prompt: "执行", role: "工程师" });
+		harness.idle = true;
+		await harness.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+		await harness.emit("agent_settled", {});
+		expect(rounds).toEqual([]);
+
+		at(373);
+		finish.resolve();
+		await harness.userMessageStarted;
+		await Bun.sleep(5);
+		// 前门消息已发出、唤醒回合还没开始：不能歇下（报告里这里先写了一条整段记录）。
+		expect(rounds).toEqual([]);
+
+		harness.idle = false;
+		await harness.wake();
+		await Bun.sleep(5);
+		expect(rounds).toEqual([]);
+		at(376);
+		harness.idle = true;
+		await harness.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+		await harness.emit("agent_settled", {});
+		expect(rounds).toEqual([{ elapsed: 376_000, outcome: "complete" }]);
+	} finally {
+		await harness.command("");
+	}
+});
+
+test("指挥官空闲时陆续到达的一批结果合并成一次唤醒；指挥官在跑时照旧立即句缝送达", async () => {
+	const harness = await setup(true, { wakeQuietMs: 80 });
+	harness.idle = true;
+	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+	faux.setResponses(gates.map((gate, index) => async () => { await gate.promise; return fauxAssistantMessage(`结果 ${index}`); }));
+	await harness.execute({ action: "start", worker: "batch-a", prompt: "A", role: "工程师" });
+	await harness.execute({ action: "start", worker: "batch-b", prompt: "B", role: "工程师" });
+	gates[0].resolve();
+	await Bun.sleep(40);
+	// 第一条到达后安静窗口内不唤醒，等同批的下一条。
+	expect(harness.userMessages).toEqual([]);
+	gates[1].resolve();
+	await Bun.sleep(200);
+	expect(harness.userMessages).toHaveLength(1);
+	expect(harness.userMessages[0]).toContain("结果 0");
+	expect(harness.userMessages[0]).toContain("结果 1");
+
+	// 指挥官在跑：不等窗口，立即经 steer 送达。
+	harness.idle = false;
+	faux.setResponses([fauxAssistantMessage("忙时结果")]);
+	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const sentAt = Date.now();
+	await harness.execute({ action: "send", worker: "batch-a", prompt: "再来" });
+	await steered;
+	expect(Date.now() - sentAt).toBeLessThan(80);
+	expect(harness.messages.at(-1).options).toEqual({ deliverAs: "steer" });
+	await harness.command("");
+});
+
 test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
 	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
@@ -726,7 +793,7 @@ test("主回合空闲时，并发落定合并走前门用户消息，投递前�
 	]);
 });
 
-test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 send 自动注入现场自检", async () => {
+test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待续跑”，首次 send 自动注入现场自检", async () => {
 	const harness = await setup(true, { interruptResumeMs: 10 });
 	let resumedPrompt = "";
 	faux.setResponses([
@@ -749,12 +816,9 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	await delivered;
 	at(400);
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 被中断");
+	// 中断是指挥官自己发起的，它知道现场：过了提醒时限也不补发“待续跑”。
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 待续跑");
-	// 续跑提醒不是落定类事件：不带“本次运行”，不触发到达高亮。
-	expect(elapsedTail(harness.messages.at(-1).message.content)).toBe("耗时：当前任务 6m40s");
-	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(reminded.disposition).toBe("reminded");
+	expect(harness.messages.map((entry: any) => titleOf(entry.message.content))).toEqual(["interrupted 被中断"]);
 
 	faux.setResponses([(context: any) => {
 		resumedPrompt = context.messages.filter((message: any) => message.role === "user")
@@ -771,6 +835,23 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(resumedPrompt).toContain("</firecode_master_event>");
 	const listed = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(listed.interruptedAt).toBeUndefined();
+});
+
+test("会话重载打断的回合：恢复后补挂续跑提醒，提醒说清是重载打断而不是“外部中断后无人接手”", async () => {
+	const harness = await setup(false, { interruptResumeMs: 10 });
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, JSON.stringify({ version: 8, workers: [{
+		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"),
+	}] }));
+	await harness.command("");
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	const content = harness.messages.at(-1).message.content as string;
+	expect(titleOf(content)).toBe("reloaded 待续跑");
+	expect(content).toContain("重载");
+	expect(content).not.toMatch(/外部中断|无人接手/u);
+	await harness.command("");
 });
 
 test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也不报错", async () => {
@@ -1026,9 +1107,42 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 
 	await harness.execute({ action: "ack", worker: "broken" });
 	await harness.execute({ action: "ack", worker: "fine" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u)]);
+	// 发落后的失败行离开置顶组，子代理仍在池里，合进“N 个空闲”。
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u), expect.stringMatching(/^ +1 个空闲/u)]);
 	await harness.execute({ action: "kill", worker: "fine" });
-	expect(harness.activity()).toEqual([]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
+});
+
+test("活动列表：已完成展开显示结果首句，下一轮人类输入时自动收起；ctrl+o 不展开活动列表", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("刷新改为单飞。更多细节"), fauxAssistantMessage("清掉 4 处 lint。")]);
+	for (const worker of ["fix-auth", "lint"]) {
+		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action: "start", worker, prompt: "执行", role: "工程师" });
+		await delivered;
+	}
+	harness.toolsExpanded = true;
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 2 个已完成/u)]);
+	harness.clickActivity("2 个已完成");
+	const opened = harness.activity();
+	expect(opened[1]).toMatch(/fix-auth .*刷新改为单飞。/u);
+	expect(opened[2]).toMatch(/lint .*清掉 4 处 lint。/u);
+	await harness.emit("input", { source: "interactive" });
+	expect(harness.activity()).toHaveLength(1);
+	await harness.command("");
+});
+
+test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个空闲”", async () => {
+	const harness = await setup(false);
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, JSON.stringify({ version: 8, workers: ["writer", "slow"].map((name) => ({
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`),
+	})) }));
+	await harness.command("");
+	expect(harness.activity()).toEqual([expect.stringMatching(/2 个空闲/u)]);
+	await harness.command("");
 });
 
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
@@ -1160,7 +1274,7 @@ const elapsedTail = (content: string) => content.split("\n").at(-2);
 /** 信封正文第一行：给人看的“<名字> <结果词>”标题。 */
 const titleOf = (content: string) => content.split("\n")[1];
 
-test("落定事件末尾带 Worker 本次运行与指挥官任务耗时，Master 事件不重置任务起点", async () => {
+test("落定事件末尾只带 Worker 本次运行耗时，对人没有意义的“当前任务”不再出现", async () => {
 	const harness = await setup();
 	const settle = async (prompt: string, action: "start" | "send", settleAt: number) => {
 		faux.setResponses([() => { at(settleAt); return fauxAssistantMessage("完成"); }]);
@@ -1172,16 +1286,9 @@ test("落定事件末尾带 Worker 本次运行与指挥官任务耗时，Master
 	at(0);
 	await harness.emit("input", { source: "interactive" });
 	at(20);
-	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s · 当前任务 1m25s");
-
-	at(100);
-	await harness.emit("input", { source: "extension" });
+	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s");
 	at(110);
-	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s · 当前任务 2m10s");
-
-	at(200);
-	await harness.emit("input", { source: "interactive" });
-	expect(elapsedTail(await settle("再续", "send", 205))).toBe("耗时：本次运行 5.0s · 当前任务 5.0s");
+	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s");
 });
 
 test("中断事件带耗时", async () => {
@@ -1200,15 +1307,16 @@ test("中断事件带耗时", async () => {
 	await delivered;
 	const content = harness.messages.at(-1).message.content as string;
 	expect(titleOf(content)).toBe("clock 被中断");
-	expect(content).toContain("会话与审查义务均已保留");
+	// 没有审查义务就不提审查义务。
+	expect(content).not.toContain("审查义务");
 	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
-	expect(harness.activity()).toEqual([]);
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 40s");
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ +1 个空闲/u)]);
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
-test("审查终态事件带审查自身耗时与任务耗时", async () => {
+test("审查终态事件带审查自身耗时", async () => {
 	const harness = await setup(true, { review: true, mockReview: true });
 	faux.setResponses([fauxAssistantMessage("实现完成"), fauxAssistantMessage("审查完成")]);
 	at(0);
@@ -1224,7 +1332,7 @@ test("审查终态事件带审查自身耗时与任务耗时", async () => {
 	await delivered;
 	const content = harness.messages.at(-1).message.content as string;
 	expect(content).toContain("审查通过");
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 1m20s");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
 test("crash 恢复只重投 pending 减 ack 的差集", async () => {
@@ -1436,6 +1544,8 @@ async function setup(activate = true, options: {
 	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
 	inputGate?: boolean;
 	autoActivate?: boolean;
+	/** 指挥官空闲时合并唤醒的安静窗口；测试默认 0（立即唤醒）。 */
+	wakeQuietMs?: number;
 	/** 前门唤醒回合不自动开始：宿主 sendUserMessage 立即返回，agent_start 由测试 wake() 发出。 */
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
@@ -1523,6 +1633,7 @@ async function setup(activate = true, options: {
 	const entries: any[] = [];
 	const userMessages: string[] = [];
 	const emitted: [string, any][] = [];
+	const channels = new Map<string, any[]>();
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
@@ -1539,7 +1650,16 @@ async function setup(activate = true, options: {
 			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
 			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
 		},
-		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
+		events: {
+			on: (channel: string, handler: any) => {
+				channels.set(channel, [...(channels.get(channel) ?? []), handler]);
+				return () => {};
+			},
+			emit: (channel: string, payload: any) => {
+				emitted.push([channel, payload]);
+				for (const handler of channels.get(channel) ?? []) handler(payload);
+			},
+		},
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
@@ -1567,6 +1687,14 @@ async function setup(activate = true, options: {
 	const wake = () => turn(userMessages.at(-1)!);
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
+	const components = new Map<any, any>();
+	let toolsExpanded = false;
+	const activityList = () => {
+		const factory = [...widgets.values()][0];
+		if (!factory) return undefined;
+		if (!components.has(factory)) components.set(factory, factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme));
+		return components.get(factory);
+	};
 	let sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
@@ -1581,7 +1709,7 @@ async function setup(activate = true, options: {
 			notify: (message: string) => notices.push(message),
 			setStatus: (key: string, text: string | undefined) => { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
 			setWidget: (key: string, factory: any) => { if (factory) widgets.set(key, factory); else widgets.delete(key); },
-			getToolsExpanded: () => false,
+			getToolsExpanded: () => toolsExpanded,
 			theme: {
 				fg: (_color: string, text: string) => text,
 				bg: (_color: string, text: string) => text,
@@ -1592,6 +1720,7 @@ async function setup(activate = true, options: {
 	module.registerMaster(pi, {
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
+		wakeQuietMs: options.wakeQuietMs ?? 0,
 	});
 	const command = (args: string) => commands.get("fire-master").handler(args, ctx);
 	if (activate) await command("");
@@ -1607,15 +1736,21 @@ async function setup(activate = true, options: {
 		appended,
 		entries,
 		pool,
-		/** 输入框上方活动列表当前的纯文本行。 */
-		activity: () => {
-			const factory = [...widgets.values()][0];
-			return factory ? factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme).render(80).map((line: string) => stripVTControlCharacters(line)) as string[] : [];
+		/** 输入框上方活动列表当前的纯文本行（与宿主一致：组件只建一次，点击状态保留）。 */
+		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line)) as string[] ?? [],
+		/** 点活动列表里含 label 的那一行。 */
+		clickActivity: (label: string) => {
+			const list = activityList();
+			const y = list.render(80).findIndex((line: string) => stripVTControlCharacters(line).includes(label));
+			return list.handleMouse({ type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width: 80, height: 20, shift: false, alt: false, ctrl: false });
 		},
+		set toolsExpanded(value: boolean) { toolsExpanded = value; },
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
 		wake,
+		pi,
+		ctx,
 		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
 		userTurn: (text: string) => turn(text),
 		command,

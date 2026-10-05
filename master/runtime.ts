@@ -22,6 +22,8 @@ export interface MasterSetup {
 	/** fire-review 不可用的原因；可用时为 undefined。 */
 	reviewGate?: string;
 	interruptResumeMs: number;
+	/** 指挥官空闲时合并唤醒的安静窗口（见 outbox.ts）。 */
+	wakeQuietMs: number;
 	/** 在飞子代理数的唯一发布口（跨会话保持上次发布值以便配对）。 */
 	publishInFlight(count: number): void;
 }
@@ -66,8 +68,6 @@ export class MasterRuntime {
 	readonly store: MasterStore;
 	readonly outbox: Outbox;
 	readonly live = new Map<string, WorkerLive>();
-	/** 最近一条真实用户输入的时刻；Master 事件（source extension）不算。 */
-	taskStartedAt?: number;
 	private launchSeq = 0;
 	private list?: ActivityList;
 	private closedValue = false;
@@ -83,7 +83,7 @@ export class MasterRuntime {
 		});
 		ctx.ui.setWidget(LIST_WIDGET_KEY, (tui, theme) => {
 			this.list = new ActivityList(tui, theme, () => this.activityFacts(),
-				() => visibleRows(tui.terminal?.rows, ctx.ui.getToolsExpanded()));
+				() => visibleRows(tui.terminal?.rows));
 			return this.list;
 		}, { placement: "aboveEditor" });
 	}
@@ -102,6 +102,11 @@ export class MasterRuntime {
 		this.outbox.scheduleInFlight();
 		this.ctx.ui.setStatus("master", MASTER_IDENTITY);
 		this.list?.sync();
+	}
+
+	/** 新的一轮（人类输入）开始：活动列表的展开收起。 */
+	collapseList(): void {
+		this.list?.collapse();
 	}
 
 	liveOf(name: string): WorkerLive {

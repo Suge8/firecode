@@ -1,5 +1,5 @@
 /**
- * 输入框上方的子代理活动列表：需要处理的（失败、被中断、卡住）置顶，然后在跑与审查，最后一行合计已完成。
+ * 输入框上方的子代理活动列表：需要处理的（失败、被中断、卡住）置顶，然后在跑与审查，再合计已完成与空闲。
  * 行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟；落定事实只在运行时，reload 后不展示历史。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -31,11 +31,11 @@ export interface ActivityFacts {
 	launchOrder: ReadonlyMap<string, number>;
 }
 
-type Toggle = "running" | "done";
+type Toggle = "running" | "done" | "idle";
 /** 一行输出：子代理行，或可点击的折叠行。 */
 type Line = { row: Row } | { label: string; mark?: string; toggle: Toggle };
 
-/** working 子代理这么久没有任何输出就标“无动静”。 */
+/** working 子代理这么久没有任何输出（模型 token 或工具事件）就追加“N 分钟无输出”。 */
 const STUCK_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 const STUCK_GLYPH = "◌";
@@ -46,11 +46,17 @@ const ROWS_PER_ACTIVITY = 6;
 
 const duration = (ms: number) => formatDuration(Math.max(0, ms));
 const DONE_MARK = paint(HEAT_COLORS.green, "✓");
+const IDLE_GLYPH = "·";
+/** 名字列至多占行宽的这一份（窄屏不让长名字挤掉动作），且不少于 MIN_NAME_WIDTH。 */
+const NAME_WIDTH_SHARE = 5;
+const MIN_NAME_WIDTH = 9;
 const FAILED_MARK = paint(HEAT_COLORS.fail, "✗");
 
-/** 可见的在跑行数：随终端高度放宽，全局展开显示全部；宿主拿不到高度时用下限。 */
-export function visibleRows(terminalRows: number | undefined, expanded: boolean): number {
-	if (expanded) return Infinity;
+/**
+ * 可见的在跑行数：随终端高度放宽；宿主拿不到高度时用下限。ctrl+o 是聊天区的全局展开，不展开活动列表——
+ * 它常驻在输入框上方，再展开只会挤掉正文视口；要看全部点折叠行。
+ */
+export function visibleRows(terminalRows: number | undefined): number {
 	return Math.max(MIN_ROWS, Math.floor((terminalRows ?? 0) / ROWS_PER_ACTIVITY));
 }
 
@@ -60,6 +66,8 @@ interface Groups {
 	stuck: Row[];
 	running: Row[];
 	done: Row[];
+	/** 空闲且本进程内没有落定结局的（resume 恢复的、ack 过的）。 */
+	idle: Row[];
 	/** 有行在动：在跑、审查、卡住（耗时仍在走），需要动画时钟；落定行静止。 */
 	animating: boolean;
 }
@@ -67,7 +75,7 @@ interface Groups {
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
 	const indexes = facts.workers.map((_, index) => index).sort((a, b) => launch(a) - launch(b) || a - b);
-	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], animating: false };
+	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
 	for (const index of indexes) {
 		const worker = facts.workers[index];
 		const path = worker.sessionPath;
@@ -77,12 +85,12 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 		if (worker.status === "working") {
 			groups.animating = true;
 			const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
-			if (silent >= STUCK_MS) {
-				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action: `${Math.floor(silent / MINUTE_MS)} 分钟无动静`, tone: "warning" });
-				continue;
-			}
 			const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
-			groups.running.push({ ...base, mark: flame(1, phase), action: tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中" });
+			const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
+			// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
+			if (silent >= STUCK_MS)
+				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action, note: ` · ${Math.floor(silent / MINUTE_MS)} 分钟无输出` });
+			else groups.running.push({ ...base, mark: flame(1, phase), action });
 			continue;
 		}
 		if (worker.status === "reviewing") {
@@ -93,7 +101,10 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 			continue;
 		}
 		const fact = facts.settled.get(path);
-		if (!fact) continue;
+		if (!fact) {
+			groups.idle.push({ ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "空闲", settled: true });
+			continue;
+		}
 		const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
 		if (fact.kind === "done") {
 			groups.done.push({ ...settledRow, mark: DONE_MARK, action: fact.note ?? "已返回" });
@@ -110,31 +121,37 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 
 interface Folding {
 	limit: number;
-	expanded: boolean;
 	showAllRunning: boolean;
 	showDone: boolean;
+	showIdle: boolean;
 }
 
 /** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“… +N 个在跑”。 */
-function layout({ failed, interrupted, stuck, running, done }: Groups, folding: Folding): Line[] {
+function layout({ failed, interrupted, stuck, running, done, idle }: Groups, folding: Folding): Line[] {
 	const lines: Line[] = [...failed, ...interrupted, ...stuck].map((row) => ({ row }));
 	const overflow = running.length > folding.limit;
-	if (!overflow || folding.expanded || folding.showAllRunning) {
+	if (!overflow || folding.showAllRunning) {
 		lines.push(...running.map((row) => ({ row })));
-		if (overflow && !folding.expanded) lines.push({ label: "… 收起", toggle: "running" });
+		if (overflow) lines.push({ label: "… 收起", toggle: "running" });
 	} else {
 		const shown = running.slice(0, folding.limit - 1);
 		lines.push(...shown.map((row) => ({ row })), { label: `… +${running.length - shown.length} 个在跑`, toggle: "running" });
 	}
-	if (!done.length) return lines;
-	lines.push({ label: `${done.length} 个已完成`, mark: DONE_MARK, toggle: "done" });
-	if (folding.expanded || folding.showDone) lines.push(...done.map((row) => ({ row })));
+	if (done.length) {
+		lines.push({ label: `${done.length} 个已完成`, mark: DONE_MARK, toggle: "done" });
+		if (folding.showDone) lines.push(...done.map((row) => ({ row })));
+	}
+	if (idle.length) {
+		lines.push({ label: `${idle.length} 个空闲`, toggle: "idle" });
+		if (folding.showIdle) lines.push(...idle.map((row) => ({ row })));
+	}
 	return lines;
 }
 
 function renderLines(lines: Line[], width: number, theme: Theme): string[] {
 	const rows = lines.flatMap((line) => ("row" in line ? [line.row] : []));
-	const nameWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.name)));
+	const longest = Math.max(0, ...rows.map((row) => visibleWidth(row.name)));
+	const nameWidth = Math.min(longest, Math.max(MIN_NAME_WIDTH, Math.floor(width / NAME_WIDTH_SHARE)));
 	// 退让整表一致：任何一行放不下“角色 · 动作”就全表丢角色，列才对得齐。
 	const showRole = rows.every((row) => roleFits(row, width, nameWidth));
 	return lines.map((line) => {
@@ -149,6 +166,7 @@ export class ActivityList {
 	private unsubscribe: (() => void) | undefined;
 	private showAllRunning = false;
 	private showDone = false;
+	private showIdle = false;
 	private moving = true;
 	/** 上一次渲染每行对应的折叠开关，供点击命中。 */
 	private toggles: (Toggle | undefined)[] = [];
@@ -187,9 +205,9 @@ export class ActivityList {
 		this.moving = groups.animating;
 		const lines = layout(groups, {
 			limit,
-			expanded: limit === Infinity,
 			showAllRunning: this.showAllRunning,
 			showDone: this.showDone,
+			showIdle: this.showIdle,
 		});
 		this.toggles = lines.map((line) => ("toggle" in line ? line.toggle : undefined));
 		return renderLines(lines, width, this.theme);
@@ -200,9 +218,17 @@ export class ActivityList {
 		const toggle = this.toggles[event.y];
 		if (!toggle) return undefined;
 		if (toggle === "running") this.showAllRunning = !this.showAllRunning;
-		else this.showDone = !this.showDone;
+		else if (toggle === "done") this.showDone = !this.showDone;
+		else this.showIdle = !this.showIdle;
 		this.tui.requestRender();
 		return { handled: true };
+	}
+
+	/** 展开不常驻：下一轮人类输入时收起，免得一直占着输入框上方。 */
+	collapse(): void {
+		if (!this.showAllRunning && !this.showDone && !this.showIdle) return;
+		this.showAllRunning = this.showDone = this.showIdle = false;
+		this.tui.requestRender();
 	}
 
 	dispose(): void {

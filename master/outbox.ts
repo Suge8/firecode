@@ -11,6 +11,8 @@ import type { MasterRuntime } from "./runtime.js";
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
 const EVENT_RETRY_MS = 5_000;
+/** 指挥官空闲时，从第一条结果入队起最多等这么久就唤醒，即使结果还在陆续到达。 */
+const WAKE_MAX_MS = 6_000;
 
 export interface PendingMasterEvent {
 	id: string;
@@ -23,6 +25,9 @@ export class Outbox {
 	/** 已交给 deliver、尚未确认送达的事件：投递完成前对应子代理仍算在飞。 */
 	private readonly delivering = new Set<PendingMasterEvent>();
 	private flushTimer?: NodeJS.Timeout;
+	private retrying = false;
+	/** 空闲合并窗口里第一条事件入队的时刻。 */
+	private firstQueuedAt?: number;
 	private inFlightScheduled = false;
 
 	constructor(private readonly active: MasterRuntime) {}
@@ -66,13 +71,25 @@ export class Outbox {
 		clearTimeout(this.flushTimer);
 	}
 
+	/**
+	 * 指挥官在跑：立即投（句缝送达，不打断）。指挥官空闲：每次唤醒都是一个完整回合，陆续到达的一批结果
+	 * 等一个安静窗口合并成一次唤醒——最后一条入队后 wakeQuietMs 内没有新结果才唤醒，从第一条起最多等 WAKE_MAX_MS。
+	 */
 	private push(event: PendingMasterEvent): void {
 		this.queued.push(event);
 		this.scheduleInFlight();
-		if (!this.flushTimer) this.schedule(0);
+		if (this.retrying) return;
+		const quiet = this.active.setup.wakeQuietMs;
+		if (!this.active.ctx.isIdle() || quiet <= 0) {
+			if (!this.flushTimer || this.firstQueuedAt !== undefined) this.schedule(0);
+			return;
+		}
+		this.firstQueuedAt ??= Date.now();
+		this.schedule(Math.min(quiet, Math.max(0, this.firstQueuedAt + WAKE_MAX_MS - Date.now())));
 	}
 
 	private schedule(delay: number): void {
+		clearTimeout(this.flushTimer);
 		this.flushTimer = setTimeout(() => this.flush(), delay);
 		this.flushTimer.unref?.();
 	}
@@ -81,6 +98,8 @@ export class Outbox {
 		const { active } = this;
 		if (active.closed) return;
 		this.flushTimer = undefined;
+		this.retrying = false;
+		this.firstQueuedAt = undefined;
 		if (!this.queued.length) return;
 		const batch = this.queued.splice(0);
 		for (const event of batch) this.delivering.add(event);
@@ -107,19 +126,15 @@ export class Outbox {
 			for (const event of batch) this.delivering.delete(event);
 			this.queued.unshift(...batch);
 			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
+			this.retrying = true;
 			this.schedule(EVENT_RETRY_MS);
 		});
 	}
 
-	/** 两个起点各只有运行时一处记录；reload 后缺失的部分省略。 */
+	/** 本次运行起点只有运行时一处记录；reload 后缺失则省略。 */
 	private withElapsed(produced: MasterEvent, worker?: string): string {
-		const now = Date.now();
 		const runStartedAt = worker === undefined ? undefined : this.active.live.get(worker)?.runStartedAt;
-		const { taskStartedAt } = this.active;
-		return withElapsed(produced, {
-			...(runStartedAt === undefined ? {} : { run: now - runStartedAt }),
-			...(taskStartedAt === undefined ? {} : { task: now - taskStartedAt }),
-		});
+		return withElapsed(produced, runStartedAt === undefined ? {} : { run: Date.now() - runStartedAt });
 	}
 }
 

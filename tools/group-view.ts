@@ -16,7 +16,7 @@ import { firstSentence, oneLine, textOf } from "../format.js";
 import { ToolLine, resultText, type ActionLine } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
-import { customMessageOf, isEntry, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
+import { customMessageOf, isEntry, isToolOutputEcho, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
@@ -62,8 +62,8 @@ function isHuman(component: Component): boolean {
 	return component instanceof UserMessageComponent && !machineEntriesOf(component);
 }
 
-/** 过程 = 模型的输出、动作与收件（含机器消息）；其余节点（错误、CustomEntry 等）是段边界。 */
-function isProcess(component: Component): boolean {
+/** 模型侧的过程 = 模型的输出、动作与收件（含机器消息）；投影里再加上本段的补话。其余节点（错误、CustomEntry 等）是段边界。 */
+function isModelProcess(component: Component): boolean {
 	return component instanceof ToolExecutionComponent
 		|| component instanceof AssistantMessageComponent
 		|| component instanceof CustomMessageComponent
@@ -240,16 +240,44 @@ export interface Projection {
 	animating: boolean;
 }
 
+/**
+ * 开轮的人类消息：没有更早的人类消息，或与上一条人类消息之间已有轮记录（上一段已歇下）。
+ * 其余人类消息是本段内的补话（steer、等子代理时的追加），折进当前轮，不另起一轮。只看聊天树，不另存状态。
+ */
+function openersOf(children: readonly Component[]): Set<Component> {
+	const openers = new Set<Component>();
+	let seenHuman = false;
+	let settled = false;
+	for (const child of children) {
+		if (roundOf(child)) settled = true;
+		else if (isHuman(child)) {
+			if (!seenHuman || settled) openers.add(child);
+			seenHuman = true;
+			settled = false;
+		}
+	}
+	return openers;
+}
+
+/** 宿主对 ctrl+o 的回显连同它前面的 Spacer 不进投影。 */
+function withoutEchoes(children: readonly Component[]): Component[] {
+	return children.filter((child, index) => !isToolOutputEcho(child) && !(child instanceof Spacer && isToolOutputEcho(children[index + 1])));
+}
+
 /** 从宿主组件顺序投影，既不搬走原组件，也不另存工具调用或展开档位。 */
-export function projectProcessGroups(children: readonly Component[], env: ProjectionEnv): Projection {
+export function projectProcessGroups(source: readonly Component[], env: ProjectionEnv): Projection {
+	const children = withoutEchoes(source);
+	const openers = openersOf(children);
+	const isProcess = (component: Component) => isModelProcess(component) || (isHuman(component) && !openers.has(component));
 	const nodes: Component[] = [];
 	let animating = false;
 	let turn = env.headless;
 	let segment: Component[] = [];
-	env.clock.track(children.findLast(isHuman) ?? env.headless);
+	env.clock.track([...openers].at(-1) ?? env.headless);
 	const flush = (final: boolean) => {
-		if (!segment.length) return;
-		const view = renderSegment(segment, turn, final, env);
+		// 进行中的轮在第一个助手组件到来之前也有摘要行（思考中）。
+		if (!segment.length && !(final && env.clock.live(turn))) return;
+		const view = renderSegment(segment, turn, final, isProcess, env);
 		nodes.push(...view.nodes);
 		animating ||= view.animating;
 		segment = [];
@@ -268,7 +296,7 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 		next !== undefined && (isProcess(next) || isEntry(next) || (segment.some(hasSubstance) && noticeKind(next, env.ui.theme) !== undefined));
 	for (let index = 0; index < children.length; index++) {
 		const child = children[index];
-		if (isHuman(child)) {
+		if (openers.has(child)) {
 			flush(false);
 			turn = child;
 			nodes.push(new UserBar(child));
@@ -283,8 +311,10 @@ export function projectProcessGroups(children: readonly Component[], env: Projec
 	return { nodes, animating };
 }
 
-/** 段尾回复 = 其后只剩提示与机器消息的最后一条助手消息；回复留在摘要下方，其余折进摘要。 */
-function tailReply(segment: readonly Component[]) {
+type IsProcess = (component: Component) => boolean;
+
+/** 段尾回复 = 其后只剩提示与机器消息的最后一条助手消息（其后有补话就还没有段尾回复）；回复留在摘要下方，其余折进摘要。 */
+function tailReply(segment: readonly Component[], isProcess: IsProcess) {
 	let at = segment.length - 1;
 	while (at >= 0 && (!isProcess(segment[at]) || machineEntriesOf(segment[at]))) at--;
 	const tail = segment[at];
@@ -292,8 +322,8 @@ function tailReply(segment: readonly Component[]) {
 	return { tail, reply };
 }
 
-function renderSegment(segment: readonly Component[], turn: object, final: boolean, env: ProjectionEnv) {
-	const { tail, reply } = tailReply(segment);
+function renderSegment(segment: readonly Component[], turn: object, final: boolean, isProcess: IsProcess, env: ProjectionEnv) {
+	const { tail, reply } = tailReply(segment, isProcess);
 	const globalOpen = env.ui.getToolsExpanded();
 	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
 	const open = globalOpen !== env.isOpen(turn);
@@ -316,7 +346,10 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	return { nodes, animating: hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd))) };
 }
 
-/** 折叠态：最近 replyLines 条中间回复各一行首句（更早的计入“+N 条”），再接最后一条回复全文。 */
+/**
+ * 折叠态：按时间顺序列出最近 replyLines 条中间回复各一行首句（更早的计入“+N 条”）与本段的补话
+ * （橙色竖条加首句，总是显示——那是用户自己说的话），再接最后一条回复全文。
+ */
 function foldedReplies(
 	segment: readonly Component[],
 	tail: Component | undefined,
@@ -326,16 +359,21 @@ function foldedReplies(
 ): Component[] {
 	const out: Component[] = [];
 	const { theme } = env.ui;
-	const middle = hasSummary && env.replyLines > 0
-		? segment.filter((item): item is AssistantMessageComponent => item instanceof AssistantMessageComponent && item !== tail)
-			.map(replyText).filter(Boolean)
-		: [];
-	const shown = middle.slice(-env.replyLines);
-	if (shown.length) {
+	const items = segment.flatMap((item) => {
+		if (item instanceof UserMessageComponent && isHuman(item)) return [{ human: true, text: firstSentence(userTextOf(item)) }];
+		if (!(item instanceof AssistantMessageComponent) || item === tail) return [];
+		const text = replyText(item);
+		return text ? [{ human: false, text: firstSentence(text) }] : [];
+	});
+	const replies = items.filter((item) => !item.human);
+	const shown = new Set(hasSummary && env.replyLines > 0 ? replies.slice(-env.replyLines) : []);
+	const listed = items.filter((item) => item.human || shown.has(item));
+	if (listed.length) {
 		out.push(new Spacer(1));
-		// 与宿主正文同一左边距（1 列）。
-		if (middle.length > shown.length) out.push(new Line(` ${theme.fg("dim", `+${middle.length - shown.length} 条`)}`));
-		for (const text of shown) out.push(new Line(` ${theme.fg("muted", firstSentence(text))}`));
+		// 与宿主正文同一左边距（1 列）；补话的竖条占这一列。
+		if (replies.length > shown.size) out.push(new Line(` ${theme.fg("dim", `+${replies.length - shown.size} 条`)}`));
+		for (const item of listed)
+			out.push(new Line(item.human ? `${paint(HEAT_COLORS.orange, "▌")} ${item.text}` : ` ${theme.fg("muted", item.text)}`));
 	}
 	// 宿主助手正文自带前导空行，不再另垫。
 	if (body) out.push(body);
@@ -359,7 +397,8 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 		} else if (item instanceof AssistantMessageComponent) {
 			const body = assistantView(item, true).body;
 			if (body) list.push(body);
-		} else list.push(item);
+		} else if (item instanceof UserMessageComponent) list.push(new UserBar(item));
+		else list.push(item);
 	}
 	return list;
 }

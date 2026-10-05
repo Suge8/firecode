@@ -102,6 +102,8 @@ test("重开会话时宿主恢复的仍是预设模型：预设整套生效—�
 	expect(host.state.tools).toEqual(["read", "bash"]);
 	expect(await host.instructions()).toContain("深度模式指令");
 	expect(host.state.status).toContain("Deep");
+	// 输入框下边框直接显示发布串：只有名字，不带图标。
+	expect(host.state.status).toBe("Deep");
 });
 
 test("重开会话时宿主恢复的模型已不是预设的：预设失效，名字与指令清掉，再重开也不复活", async () => {

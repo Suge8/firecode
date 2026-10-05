@@ -66,7 +66,8 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 }
 
 const names = (lines: string[]) => lines.map((line) => line.match(/^ {2}\S ([a-z][a-z0-9-]*) /u)?.[1] ?? line.trim());
-const done = (name: string, agoMs = 2 * MINUTE): Spec => ({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "done"] });
+const done = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
+	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "done", note] });
 const interrupted = (name: string, agoMs = 2 * MINUTE): Spec =>
 	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "interrupted"] });
 const failed = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
@@ -83,9 +84,9 @@ test("分组与顺序：失败、卡住置顶，然后在跑与审查，最后�
 		{ name: "reloaded", status: "idle" },
 	], { limit: 10, now: NOW });
 	const text = view.text();
-	expect(names(text)).toEqual(["fail-a", "stuck-a", "run-a", "rev-a", "✓ 2 个已完成"]);
+	expect(names(text)).toEqual(["fail-a", "stuck-a", "run-a", "rev-a", "✓ 2 个已完成", "1 个空闲"]);
 	expect(text[0]).toMatch(/✗ fail-a .*失败/u);
-	expect(text[1]).toContain("6 分钟无动静");
+	expect(text[1]).toContain("思考中 · 6 分钟无输出");
 	expect(text[2]).toMatch(/run-a .*读取 \.\/src\/a\.ts/u);
 	expect(text[3]).toContain("审查第 2 轮 · 1/3 通过");
 });
@@ -113,23 +114,27 @@ test("被中断不是失败：静态黄色标记、不画 ✗，与失败、卡�
 	expect(later.raw(160)[1].slice(0, 22)).toBe(halt.slice(0, 22));
 });
 
-test("卡住：working 五分钟没有任何输出标黄色“N 分钟无动静”，字形静止；有输出立即恢复", async () => {
+test("卡住：working 五分钟没有任何输出时保留动作文字，追加黄色“· N 分钟无输出”，字形静止；有输出立即恢复", async () => {
 	const silentSince = NOW - 5 * MINUTE;
-	const stuck = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "bun test" } }], { paint: tagged, now: NOW });
+	const stuck = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330" } }], { paint: tagged, now: NOW });
 	const [line] = stuck.raw(160);
-	expect(stripVTControlCharacters(line)).toContain("5 分钟无动静");
+	const plain = stripVTControlCharacters(line).replace(/<\/?[a-z]+>/gu, "");
+	expect(plain).toContain("操作 $ sleep 330 · 5 分钟无输出");
 	expect(line).toMatch(/^ {2}<warning>\S<\/warning> /u);
-	expect(line).toContain("<warning>5 分钟无动静</warning>");
-	const later = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince }], { paint: tagged, now: NOW + 1_234 });
+	expect(line).toContain("<warning> · 5 分钟无输出</warning>");
+	const later = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330" } }], { paint: tagged, now: NOW + 1_234 });
 	expect(later.raw(160)[0].slice(0, 22)).toBe(line.slice(0, 22));
+	// 窄屏先截动作，“无输出”始终可见。
+	const narrow = (await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330 && echo slow-done" } }], { now: NOW })).text(40);
+	expect(narrow[0]).toContain("5 分钟无输出");
 
 	// 从没有输出时按本次运行起点算。
 	const never = await list([{ name: "slow", started: NOW - 6 * MINUTE }], { now: NOW });
-	expect(never.text()[0]).toContain("6 分钟无动静");
+	expect(never.text()[0]).toContain("思考中 · 6 分钟无输出");
 
 	const recovered = await list([{ name: "slow", started: silentSince - MINUTE, output: NOW - 1_000, tool: "bash", args: { command: "bun test" } }], { now: NOW });
 	expect(recovered.text()[0]).toContain("操作 $ bun test");
-	expect(recovered.text()[0]).not.toContain("无动静");
+	expect(recovered.text()[0]).not.toContain("无输出");
 	const fresh = await list([{ name: "fast", started: NOW - 4 * MINUTE }], { now: NOW });
 	expect(fresh.text()[0]).toContain("思考中");
 });
@@ -150,7 +155,7 @@ test("行数上限只约束在跑的行：失败与卡住永远可见，超出�
 
 test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个已完成”列出名字与本次运行耗时、再点收起", async () => {
 	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
-	const view = await list([...running, done("done-a"), done("done-b")], { limit: 4, now: NOW });
+	const view = await list([...running, done("done-a", 2 * MINUTE, "刷新改为单飞。"), done("done-b")], { limit: 4, now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
 
 	expect(view.click(rowOf("… +3 个在跑"))).toMatchObject({ handled: true });
@@ -164,6 +169,9 @@ test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个�
 	const doneRows = opened.slice(rowOf("✓ 2 个已完成") + 1);
 	expect(doneRows.map((line) => line.match(/(done-[ab])/u)?.[1])).toEqual(["done-a", "done-b"]);
 	for (const line of doneRows) expect(line).toMatch(/30s $/u);
+	// 展开行是结果首句，不是千篇一律的“已返回”；没有结果文字时才退回“已返回”。
+	expect(doneRows[0]).toContain("刷新改为单飞。");
+	expect(doneRows[1]).toContain("已返回");
 	view.click(rowOf("✓ 2 个已完成"));
 	expect(names(view.text()).at(-1)).toBe("✓ 2 个已完成");
 	expect(view.text().some((line) => line.includes("done-a"))).toBe(false);
@@ -172,13 +180,29 @@ test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个�
 	expect(view.click(0)).toBeUndefined();
 });
 
-test("ctrl+o 全局展开时全部列出：在跑全部、已完成逐个", async () => {
-	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
-	const view = await list([...running, done("done-a")], { limit: Infinity, now: NOW });
-	const text = names(view.text());
-	expect(text.filter((line) => line.startsWith("run-"))).toHaveLength(6);
-	expect(text.some((line) => line.includes("个在跑") || line.includes("收起"))).toBe(false);
-	expect(view.text().some((line) => line.includes("done-a"))).toBe(true);
+test("空闲子代理（resume 后没有落定事实）合成一行“N 个空闲”，点开列出名字、再点收起", async () => {
+	const view = await list([
+		{ name: "run-a", output: NOW - 1_000 },
+		{ name: "writer", status: "idle" },
+		{ name: "slow", status: "idle" },
+	], { now: NOW });
+	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
+	expect(names(view.text())).toEqual(["run-a", "2 个空闲"]);
+	expect(view.click(rowOf("2 个空闲"))).toMatchObject({ handled: true });
+	expect(view.text().slice(rowOf("2 个空闲") + 1).map((line) => line.match(/(writer|slow)/u)?.[1])).toEqual(["writer", "slow"]);
+	view.click(rowOf("2 个空闲"));
+	expect(names(view.text())).toEqual(["run-a", "2 个空闲"]);
+});
+
+test("窄屏名字列有上限：长名字截短带 …，动作仍看得见", async () => {
+	const rows: Spec[] = [
+		{ name: "fix-auth-refresh-x", tool: "bash", args: { command: "sleep 330" }, output: NOW - 1_000 },
+		{ name: "lint", tool: "bash", args: { command: "sleep 100" }, output: NOW - 1_000 },
+	];
+	const text = (await list(rows, { now: NOW })).text(40);
+	expect(text[0]).toMatch(/fix-auth…/u);
+	expect(text[0]).toContain("操作 $ sleep 330");
+	expect(text[1]).toContain("操作 $ sleep 100");
 });
 
 test("窄屏整表统一丢角色；宽屏动作文字按行宽显示，不先硬截 40 列", async () => {
