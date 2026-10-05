@@ -1036,3 +1036,21 @@ test("宿主组件形状不符时不安装过程分组：明确提示，聊天�
 	expect(() => s.chat.addChild(message)).toThrow(/过程分组已停用.*isStreaming/u);
 	expect(s.chat.render).toBe(s.originalRender);
 });
+
+test("宿主形状不符出现在全局展开补丁里时同样整体退回原生：补丁还原并提示，不让宿主的展开操作抛适配异常", async () => {
+	const host = await import(PI_CODING_AGENT_URL) as any;
+	const pristine = host.CustomMessageComponent.prototype.setExpanded;
+	const s = await scene();
+	expect(host.CustomMessageComponent.prototype.setExpanded).not.toBe(pristine);
+	const card = new s.host.CustomMessageComponent({ role: "custom", customType: "x", content: "正文", display: true, timestamp: 0 });
+	// 模拟宿主升级后私有字段改名：自定义消息不再有 message。
+	delete (card as any).message;
+	let notice = "";
+	try {
+		card.setExpanded(true);
+	} catch (error) {
+		notice = String(error);
+	}
+	expect(notice).toMatch(/过程分组已停用.*message/u);
+	expect(host.CustomMessageComponent.prototype.setExpanded).toBe(pristine);
+});
