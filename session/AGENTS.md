@@ -11,7 +11,7 @@
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 | `bark.ts` | 只在 `busy.ts` 的“会话歇下”边沿推 iPhone Bark 通知（恰好一次，含唤醒回合先于事件投递完成而结束的时序；agent_settled 时 isIdle 为 false 不算结束） |
 
-预设的 `model` 是模型原子（`provider/model/thinking`），模型与思考档一起切换：模型切换失败时思考档也不动。
+预设的 `model` 是模型原子（`provider/model/thinking`），模型与思考档一起切换；模型套用失败（找不到或没有凭据）时整套不套：思考档、工具集与预设名都不动，只提示原因。
 调 Pi 接口前才把 provider 与模型名拆开。
 
 模型、思考档与工具集的事实源是宿主（记在会话里，session_start 之前与切分支时由宿主恢复）；预设只持有宿主不知道的名字与附加指令，

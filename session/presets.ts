@@ -94,37 +94,33 @@ export function registerPresets(pi: ExtensionAPI): void {
 		if (valid.length) pi.setActiveTools(valid);
 	}
 
+	/** 先套模型；模型套用失败就整套不套（不动工具、不设预设名），只提示原因。 */
 	async function applyPreset(name: string, preset: Preset, ctx: ExtensionContext): Promise<void> {
 		// 首次应用前留一份快照，用于恢复默认。
-		if (activeName === undefined) {
-			originalState = {
-				model: ctx.model,
-				thinkingLevel: pi.getThinkingLevel(),
-				tools: pi.getActiveTools(),
-			};
-		}
+		const snapshot = activeName === undefined
+			? { model: ctx.model, thinkingLevel: pi.getThinkingLevel(), tools: pi.getActiveTools() }
+			: originalState;
 		applying = true;
-		try {
-			await applyModel(name, preset, ctx);
-		} finally {
-			applying = false;
+		const failure = await applyModel(preset, ctx).finally(() => { applying = false; });
+		if (failure) {
+			ctx.ui.notify(`预设「${name}」未切换：${failure}`, "warning");
+			return;
 		}
+		originalState = snapshot;
 		applyTools(name, preset, ctx);
 		setActive(name, ctx);
+		ctx.ui.notify(`已切换预设「${name}」`, "info");
 	}
 
-	async function applyModel(name: string, preset: Preset, ctx: ExtensionContext): Promise<void> {
-		if (preset.model) {
-			const [provider, id] = splitModel(preset.model.model);
-			const model = ctx.modelRegistry.find(provider, id);
-			if (!model) {
-				ctx.ui.notify(`Preset "${name}": Model ${preset.model.model} not found`, "warning");
-			} else if (!(await pi.setModel(model))) {
-				ctx.ui.notify(`Preset "${name}": No API key for ${preset.model.model}`, "warning");
-			} else {
-				pi.setThinkingLevel(preset.model.thinking);
-			}
-		}
+	/** 返回失败原因；成功或预设不管模型时为 undefined。 */
+	async function applyModel(preset: Preset, ctx: ExtensionContext): Promise<string | undefined> {
+		if (!preset.model) return undefined;
+		const [provider, id] = splitModel(preset.model.model);
+		const model = ctx.modelRegistry.find(provider, id);
+		if (!model) return `找不到模型 ${preset.model.model}`;
+		if (!(await pi.setModel(model))) return `模型 ${preset.model.model} 没有可用凭据`;
+		pi.setThinkingLevel(preset.model.thinking);
+		return undefined;
 	}
 
 	/** 当前模型已不是预设的：预设失效。 */
@@ -139,7 +135,6 @@ export function registerPresets(pi: ExtensionAPI): void {
 		const preset = presets[name];
 		if (!preset) return;
 		await applyPreset(name, preset, ctx);
-		ctx.ui.notify(`已切换预设「${name}」`, "info");
 	}
 
 	async function clearPreset(ctx: ExtensionContext): Promise<void> {
@@ -287,7 +282,6 @@ export function registerPresets(pi: ExtensionAPI): void {
 		if (typeof flag === "string" && flag) {
 			if (presets[flag]) {
 				await applyPreset(flag, presets[flag], ctx);
-				ctx.ui.notify(`已切换预设「${flag}」`, "info");
 			} else {
 				const available = Object.keys(presets).join(", ") || "(none defined)";
 				ctx.ui.notify(`未知预设「${flag}」，可用：${available}`, "warning");
