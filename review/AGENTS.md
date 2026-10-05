@@ -1,6 +1,6 @@
 # review：`/fire-review` 对抗性审查
 
-多模型并行审、顾问仲裁、checkpoint、结果卡、单行活动。零外部依赖：schema 校验是手写纯函数（不引 typebox）。
+多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布。零外部依赖：schema 校验是手写纯函数（不引 typebox）。
 
 ## 状态与生命周期
 
@@ -37,7 +37,7 @@ AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill �
 `outcome.ts` 是外部读取终态判定的唯一入口，checkpoint 格式仍归 review 所有。事故终态的 `reason` 取该轮
 `details` 原文（超时、供应商报错都写在里面），枚举名只作缺失兜底：读取方不得把枚举名当原因展示。
 
-## 卡片与活动行
+## 卡片与审查进度
 
 结果卡渲染器始终注册（即使 feature 关闭），使用 pi 原生背景卡与完整 Markdown：通过为绿底，未通过、
 终止与异常为红底，其余为紫底；排队相不发卡，开始卡只发第 1 轮，后续轮边界由结果卡轮号承担。reload 与
@@ -47,10 +47,9 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 顾问卡与审查结果卡同构：裁决进标题（顾问指引 · 继续修复），正文首行为粗体模型分节，三段正文标题加粗且
 段间补空行（Markdown 把单换行折进同段，不补会糊成一块）。
 
-主会话审查的活动只占编辑器上方一行（`activity.ts` 的 `renderActivityRow`）：`◈ 本轮改动 · 审查 · 第 N 轮 ·
-k/n 位审查者通过`，有审查者未通过时注明阻断；排队、顾问、修复、总结相各有对应动作文案，耗时为整场总耗时。
-UI 只读 reducer 的审查者状态，不再另派生逐审查者工具进度或摘要。动效经 `flame.ts` 的全局时钟，
-组件 dispose 时退订；执行器不维护计时器。Working 指示的可见性归 statusbar 管，本模块不写。
+主会话审查进度不由本模块绘制：执行器经占用频道发布 `ReviewProgress`（阶段、轮次、通过/阻断/总票数，只有审查相的票数可数），
+由输入框外壳嵌进上边框，编辑器上方没有独立审查行。进度只读 reducer 的当前状态，不另派生逐审查者工具进度或摘要；
+执行器不维护计时器。`ui.ts` 只管编辑器接管与终端标题（“审查中 R轮次 · 会话名”）。Working 指示的可见性归 statusbar 管，本模块不写。
 
 `ui.ts` 等待模型时接管编辑器：禁止输入，esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 与
 `summarizing` 相把输入交还用户。接管时保存 `getEditorComponent()` 的当前工厂，解锁还原它（可能是别的扩展设置的自定义编辑器，
@@ -62,7 +61,7 @@ UI 只读 reducer 的审查者状态，不再另派生逐审查者工具进度�
 ## 占用信号
 
 审查活跃期双通道：进程内 `herdr:blocked` 频道驱动 herdr 集成的 blocked 状态（集成只转发状态，message
-会被 herdr 丢弃）；持有时的 payload 另带活的 `progress` 访问器（返回 `k/n`），输入框外壳借它显示审查进度，占用是 UI 唯一事实源，
+会被 herdr 丢弃）；频道名、标签与 payload 只在 `occupancy.ts` 定义，输入框外壳与观察员都从这里导入。持有时的 payload 另带活的 `progress` 访问器（返回 `ReviewProgress`），输入框外壳借它显示审查进度，占用是 UI 唯一事实源，
 访问器不重发 true 以免破坏计数配对；`progress` 是进程内求值函数，频道不可序列化转发；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
 投递（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
 

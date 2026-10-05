@@ -71,3 +71,17 @@ test("工具执行耗时仍来自真实调用，展示包装不改变结果", as
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("bash 目标省掉 cd 到当前工作目录的前缀，cd 到别处保留", async () => {
+	const { homedir } = await import("node:os");
+	const { toolActionText } = await loadFirecodeModule("tools/actions.ts");
+	const home = `${homedir()}/proj`;
+	for (const [command, cwd, expected] of [
+		["cd /project && bun test", "/project", "操作 $ bun test"],
+		["cd \"/project\" && bun test", "/project", "操作 $ bun test"],
+		["cd /project/ && bun test", "/project", "操作 $ bun test"],
+		["cd ~/proj && bun test", home, "操作 $ bun test"],
+		["cd /other && bun test", "/project", "操作 $ cd /other && bun test"],
+		["cd /project/sub && ls", "/project", "操作 $ cd /project/sub && ls"],
+	]) expect(toolActionText("bash", { command }, cwd)).toBe(expected);
+});

@@ -141,9 +141,12 @@ export function settleMark(kind: Settle, sinceMs: number, phase = 0): string {
 /** 落定过渡是否仍在播放；调用方据此决定是否继续订阅时钟。 */
 export const settling = (sinceMs: number) => sinceMs < COOL_MS + SETTLE_MS;
 
-/** 审查：菱形在火焰色里缓慢呼吸。 */
+const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
+/** 审查：金色盲文转圈点，与火苗同一时钟、同一字符族，靠金色与火焰橙区分；phase 错开并列的转圈。 */
 export function reviewMark(phase = 0): string {
-	return paint(heat(0.62 + 0.18 * Math.sin(Math.PI * 2 * (0.8 * frameSeconds() + phase))), "◈");
+	const frame = Math.floor(Date.now() / FRAME_MS + phase * SPINNER.length);
+	return paint(HEAT_COLORS.gold, SPINNER[frame % SPINNER.length]);
 }
 
 /** 并列火苗的相位：按序号错开，避免一排火苗同起同落。 */

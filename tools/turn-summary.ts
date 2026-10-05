@@ -1,4 +1,8 @@
-/** 一轮的摘要行：只承担运行状态、事后记录与成本提醒。运行中是火苗 + 当前动作（实时计时只在边框），落定后是 ✓ 整段耗时 · 均速，中断/请求失败是 ✗ 加终态字样；宿主的 ⚠ 提示原文才追加。工具失败是模型的工作过程，不计数、不影响标记。纯渲染，不碰宿主组件。 */
+/**
+ * 一轮的摘要行：只承担运行状态、事后记录与异常提醒。运行中是火苗 + 当前动作（实时计时只在边框），落定后是 ✓ 整段耗时 · 均速，
+ * 中断/请求失败是 ✗ 加终态字样；这一轮有子代理失败追加“N 个子代理失败”，宿主的 ⚠ 提示原文也追加。
+ * 工具失败是模型的工作过程，不计数、不影响标记。纯渲染，不碰宿主组件。
+ */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
@@ -15,6 +19,8 @@ export interface SummaryView {
 	action?: { word: string; target?: string };
 	/** 子代理结果刚到达：短暂替换当前动作。 */
 	arrival?: { text: string; failed: boolean; age: number };
+	/** 这一轮里失败的子代理数（按名字去重）。 */
+	failures?: number;
 	/** 落定后的轮记录：整段耗时与终态。 */
 	round?: Round;
 	sinceEnd?: number;
@@ -42,10 +48,11 @@ export class TurnSummary implements Component {
 			: settleMark(outcome ? "failed" : "done", view.sinceEnd ?? Infinity);
 		const head = word ? `${glyph} ${word}` : glyph;
 		const record = view.round === undefined ? [] : roundTexts(view.round).map((text) => theme.fg("muted", text));
+		const failures = view.failures ? [theme.fg("error", `${view.failures} 个子代理失败`)] : [];
 		const join = (lead: string, parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !word ? " " : sep) + part).join("")}`;
-		// 窄屏先裁目标（给提示原文留出最小空间），再裁提示原文，仍放不下再丢记录；动作词是固定标记。
-		for (const base of [record, []]) {
-			const noticeNeed = view.notice ? visibleWidth(sep) + 2 + Math.min(visibleWidth(view.notice), NOTICE_MIN) : 0;
+		const noticeNeed = view.notice ? visibleWidth(sep) + 2 + Math.min(visibleWidth(view.notice), NOTICE_MIN) : 0;
+		// 窄屏先裁目标（给提示原文留出最小空间），再裁提示原文，仍放不下再丢记录，最后丢提示原文；动作词与失败数是固定标记。
+		for (const base of [[...record, ...failures], failures]) {
 			const targetRoom = width - visibleWidth(join(head, base)) - noticeNeed - 1;
 			const lead = target && targetRoom >= MIN_TARGET ? `${head} ${theme.fg("muted", clip(target, targetRoom))}` : head;
 			const used = visibleWidth(join(lead, base));
@@ -53,7 +60,8 @@ export class TurnSummary implements Component {
 			const noticeRoom = width - used - visibleWidth(sep) - 2;
 			if (view.notice && noticeRoom >= 4) return [join(lead, [...base, theme.fg("warning", `⚠ ${clip(view.notice, noticeRoom)}`)])];
 		}
-		return [clip(head, Math.max(1, width))];
+		const marked = join(head, failures);
+		return [visibleWidth(marked) <= width ? marked : clip(head, Math.max(1, width))];
 	}
 
 	private flashing(): boolean {

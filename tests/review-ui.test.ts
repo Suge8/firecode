@@ -1,54 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
-const reviewer = (index: number, status: string) => ({
-	index, label: `model-${index + 1}`, status, action: "读 a.ts", toolCalls: 1, trail: [],
-});
-
-describe("review activity row", () => {
-	async function render(view: Record<string, unknown>, width = 100) {
-		const { showActivity } = await loadFirecodeModule("review/ui.js") as any;
-		let factory: any;
-		const widgets: any[] = [];
-		const ctx = { ui: { setWidget: (_key: string, next: any, options: any) => { factory = next; widgets.push(options); } } };
-		showActivity(ctx, () => view);
-		const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text });
-		try { return { lines: component.render(width) as string[], widgets }; } finally { component.dispose(); }
-	}
-	const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-
-	test("主会话审查是编辑器上方的一行，写明轮次与通过进度", async () => {
-		const { lines, widgets } = await render({
-			phase: "reviewing", round: 2, startedAt: Date.now() - 90_000, language: "zh",
-			reviewers: [reviewer(0, "passed"), reviewer(1, "running"), reviewer(2, "running")],
-		});
-		expect(widgets).toEqual([{ placement: "aboveEditor" }]);
-		expect(lines).toHaveLength(1);
-		expect(plain(lines[0])).toMatch(/^ {2}◈ 本轮改动 +审查 · 第 2 轮 · 1\/3 位审查者通过 +1m30s $/u);
-	});
-
-	test("有审查者未通过时注明阻断", async () => {
-		const { lines } = await render({
-			phase: "reviewing", round: 1, startedAt: Date.now(), language: "zh",
-			reviewers: [reviewer(0, "passed"), reviewer(1, "failed"), reviewer(2, "running")],
-		});
-		expect(lines).toHaveLength(1);
-		expect(plain(lines[0])).toContain("1/3 位审查者通过，1 位阻断");
-	});
-
-	test("窄屏不超宽，顾问与修复相仍是单行", async () => {
-		for (const phase of ["queued", "needs_fix", "awaiting_fix", "summarizing"])
-			for (const width of [26, 40, 72]) {
-				const { lines } = await render({
-					phase, round: 2, startedAt: Date.now(), language: "zh", consecutiveFailures: 2,
-					reviewers: [reviewer(0, "running")],
-				}, width);
-				expect(lines).toHaveLength(1);
-				expect([...plain(lines[0])].length).toBeLessThanOrEqual(width);
-			}
-	});
-});
-
 describe("review editor lock", () => {
 	const tui = { requestRender: () => {}, terminal: { rows: 40 } };
 	const theme = { borderColor: (text: string) => text, selectList: {} };

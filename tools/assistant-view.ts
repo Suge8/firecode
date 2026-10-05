@@ -2,15 +2,15 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { Container, MouseRegion, Spacer, type Component } from "@earendil-works/pi-tui";
 
-export type AssistantActivity = "thinking" | "processing";
+export type AssistantActivity = "thinking" | "replying";
 type AssistantData = { contentContainer: Container; lastMessage?: AssistantMessage; isStreaming: boolean };
 
+/** 流式中的助手在做什么：最后一块是有字的正文即在回复，其余（还没内容、思考、空块）都算思考。 */
 function activity(data: AssistantData): AssistantActivity | undefined {
 	if (!data.isStreaming || ["aborted", "error", "length"].includes(data.lastMessage?.stopReason ?? "")) return;
 	const last = data.lastMessage?.content.at(-1);
-	if (last?.type === "thinking" && last.thinking.trim()) return "thinking";
-	if (!last || (last.type === "text" && !last.text.trim()) || (last.type === "thinking" && !last.thinking.trim()))
-		return "processing";
+	if (last?.type === "text" && last.text.trim()) return "replying";
+	if (!last || last.type === "text" || last.type === "thinking") return "thinking";
 }
 
 function withoutThinking(children: readonly Component[]): Component[] {
