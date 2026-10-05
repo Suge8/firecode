@@ -23,7 +23,11 @@ const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
 const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
 const INTERRUPT_RESUME_MS = 5 * 60_000;
-/** 一批结果陆续返回时，最后一条后静默这么久才唤醒空闲的指挥官：合并唤醒，单条结果最多多等这一下。 */
+/**
+ * 一批结果陆续返回时，最后一条后静默这么久才唤醒空闲的指挥官：合并唤醒，单条结果最多多等这一下。
+ * 这是业务语义的等待：“这一批还会不会马上再来一条”没有事件能回答。同批结果相邻间隔约 2～3 秒，而唤醒回合本身要数秒，
+ * 1.5 秒足以把紧挨着的并进一次唤醒，回合开跑后再到的走句缝。
+ */
 const WAKE_QUIET_MS = 1_500;
 
 interface MasterDependencies {
@@ -194,6 +198,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 			action: StringEnum(ACTIONS, { description: "七动作之一；等待状态变化，不要用 sleep 轮询。" }),
 			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
 			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
+			// 角色词只来自角色表，代码不持有固定词表；代价是角色名拼错无法在加载时报出。
 			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: "start 必填角色表中的角色；send 可选，传入时切换角色，省略则沿用。" })),
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
 			cwd: Type.Optional(Type.String({ description: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。" })),
