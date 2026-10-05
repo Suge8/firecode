@@ -383,10 +383,10 @@ test("歇下那一刻上边框直接是 ✓ 加定格文字，不先出一帧冷
 	expect(shell.top()).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
 });
 
-test("预设名显示在下边框标题之后、模型之前，不带图标；名字已含在模型名里（同源）时不重复显示", async () => {
+test("预设名显示在下边框标题之后、模型之前，不带图标；显不显示由预设模块发不发布决定，外壳原样显示", async () => {
 	const shell = await shellWithBusy();
 	shell.statuses.set("preset", "Deep");
 	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Deep · test-model · 1\.0%\/1M ─$/u);
 	shell.statuses.set("preset", "\x1b[38;5;4mModel\x1b[39m");
-	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ test-model · 1\.0%\/1M ─$/u);
+	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Model · test-model · 1\.0%\/1M ─$/u);
 });
