@@ -193,7 +193,7 @@ describe("evidence assembly", () => {
 	test("the first user message is always kept, even under a tiny budget", async () => {
 		await loadAll();
 		const entries = [user("原始需求：加登录"), assistant("改了很久"), toolResult()];
-		const { text, omitted } = buildEvidence(entries, "zh", 30);
+		const { text, omitted } = buildEvidence(entries, "zh", { budgetTokens: 30 });
 		expect(text).toContain("原始需求：加登录");
 		expect(text).toContain("改了很久");
 		expect(omitted).toBe(0);
@@ -202,11 +202,34 @@ describe("evidence assembly", () => {
 	test("budget clips older middle messages but keeps the newest work", async () => {
 		await loadAll();
 		const entries = [user("原始需求"), assistant("中间 1"), assistant("中间 2"), assistant("最新改动")];
-		const { text, omitted } = buildEvidence(entries, "zh", 20);
+		const { text, omitted } = buildEvidence(entries, "zh", { budgetTokens: 20 });
 		expect(text).toContain("原始需求");
 		expect(text).toContain("最新改动");
 		expect(omitted).toBeGreaterThan(0);
 		expect(text).toContain("省略");
+	});
+
+	test("超长消息的截断处写明是证据截断、原文多少字、完整原文在哪个会话文件，不留裸“[…]”让审查者误判回复不完整", async () => {
+		await loadAll();
+		const essay = "冬".repeat(5_000);
+		const { text } = buildEvidence([user("写一篇散文"), assistant(essay)], "zh", { sessionFile: "/tmp/s/main.jsonl" });
+		expect(text).not.toContain("[…]");
+		expect(text).toContain("证据截断");
+		expect(text).toContain("5000 字");
+		expect(text).toContain("/tmp/s/main.jsonl");
+		const english = buildEvidence([user("write"), assistant(essay)], "en", { sessionFile: "/tmp/s/main.jsonl" }).text;
+		expect(english).toContain("evidence truncated");
+		expect(english).toContain("/tmp/s/main.jsonl");
+	});
+
+	test("超长命令的轨迹行截断同样写明原文长度", async () => {
+		await loadAll();
+		const command = `echo ${"x".repeat(400)}`;
+		const { text } = buildEvidence([user("需求"), {
+			type: "message",
+			message: { role: "assistant", content: [{ type: "toolCall", id: "1", name: "bash", arguments: { command } }] },
+		}], "zh");
+		expect(text).toMatch(new RegExp(`截断，原文 ${command.length} 字`, "u"));
 	});
 
 	test("assistant toolCall trail is kept as attribution evidence", async () => {
@@ -505,4 +528,11 @@ describe("feature switch types", () => {
 		})) as { loadConfig: () => { problems: string[] } };
 		expect(module.loadConfig().problems).toEqual([]);
 	});
+});
+
+test("总结回合的材料超长时写明省略了多少字，不留裸省略号", async () => {
+	const { buildSummaryPrompt } = await loadFirecodeModule("review/prompt.js") as any;
+	const prompt = buildSummaryPrompt({ language: "zh", kind: "passed", rounds: 2, material: "结论".repeat(3_000) });
+	expect(prompt).toMatch(/材料截断：省略 2000 字/u);
+	expect(prompt).not.toMatch(/\n…\n/u);
 });
