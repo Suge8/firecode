@@ -1258,3 +1258,19 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 		expect(blank).toBeLessThanOrEqual(2);
 	}
 });
+
+test("用户消息竖条上下不保留宿主的底色内边距空行：竖条从第一行正文开始、到最后一行正文结束，前后是普通间隔", async () => {
+	const s = await scene();
+	hostUser(s, "第一段\n\n第二段");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	const raw = s.chat.render(60);
+	const plain = raw.map((line: string) => stripVTControlCharacters(line));
+	const first = plain.findIndex((line: string) => line.startsWith("▌"));
+	const last = plain.findLastIndex((line: string) => line.startsWith("▌"));
+	expect(plain[first]).toContain("第一段");
+	expect(plain[last]).toContain("第二段");
+	expect(plain[first - 1]).toBe("");
+	expect(plain[last + 1]).toBe("");
+	// OSC 133 语义标记仍在消息的第一行行首。
+	expect(raw[first]).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/u);
+});
