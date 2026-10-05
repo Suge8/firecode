@@ -84,7 +84,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 				body: cleanMarkdown(lastAssistantText).slice(0, MAX_BODY_LENGTH),
 				group: dirName,
 				sessionId,
-				awaitingDecision: hasPendingDisposition(masterStatePath(sessionId)),
+				awaitingDecision: hasPendingDisposition(masterStatePath(getAgentDir(), sessionId)),
 			}),
 		);
 	} });

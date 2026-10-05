@@ -3,7 +3,7 @@
  * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts。
  */
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload } from "../busy.js";
 import { loadConfig, type MasterRole } from "../config.js";
 import { ToolLine } from "../tools/line.js";
@@ -96,7 +96,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		if (runtime) return activate(ctx);
 		let restored: MasterState | undefined;
 		try {
-			restored = loadMasterState(masterStatePath(ctx.sessionManager.getSessionId()));
+			restored = loadMasterState(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()));
 		} catch {
 			return activate(ctx);
 		}

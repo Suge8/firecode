@@ -2,7 +2,7 @@
  * 一个指挥官会话的运行时：持久化档案（store）、按名字索引的 Worker 运行时事实（live）、事件发件箱与活动列表。
  * 运行时事实只在进程内；档案与 JSONL 才是身份与续派的事实源。会话关闭后 closed 置位，迟到的异步续延一律作废。
  */
-import type { AgentSession, AgentSessionEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MasterRole } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewProgress } from "../review/outcome.js";
@@ -75,7 +75,7 @@ export class MasterRuntime {
 
 	constructor(readonly setup: MasterSetup, public ctx: ExtensionContext, restored?: MasterState) {
 		this.outbox = new Outbox(this);
-		this.store = new MasterStore(masterStatePath(ctx.sessionManager.getSessionId()), restored, () => this.render());
+		this.store = new MasterStore(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()), restored, () => this.render());
 		// 池空闲释放热会话后放掉订阅：不再持有已关闭的会话。
 		this.stopReleaseWatch = setup.pool.onRelease((sessionPath) => {
 			for (const live of this.live.values())

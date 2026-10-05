@@ -1,5 +1,4 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const STATE_VERSION = 8;
@@ -79,9 +78,10 @@ export class LegacyMasterStateError extends Error {
 	}
 }
 
-export function masterStatePath(sessionId: string): string {
+/** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
+export function masterStatePath(agentDir: string, sessionId: string): string {
 	const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/gu, "-");
-	return join(homedir(), ".pi", "agent", "tmp", `firecode-master-${safeId}.json`);
+	return join(agentDir, "tmp", `firecode-master-${safeId}.json`);
 }
 
 export function loadMasterState(path: string): MasterState | undefined {

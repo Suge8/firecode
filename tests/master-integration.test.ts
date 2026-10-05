@@ -1267,7 +1267,7 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () => {
 	const harness = await setup(false);
 	const state = await loadFirecodeModule("master/state.js") as any;
-	const path = state.masterStatePath(harness.sessionId);
+	const path = state.masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, JSON.stringify({ version: 7, workers: [] }));
 	try {
