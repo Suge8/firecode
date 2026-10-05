@@ -1018,3 +1018,12 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	expect(rows.map((line: string) => stripVTControlCharacters(line).trim())).toEqual(cases.map((entry) => entry.row));
 	expect(rows.map((line: string) => line.includes(s.ui.theme.fg("error", "↳")))).toEqual(cases.map((entry) => entry.red));
 });
+
+test("摘要行“运行中”只认会话进行中：会话已歇下时残留的未完成工具行（如重载前被打断）不再点火苗", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.tool("bash", { command: "被打断的命令" });
+	expect(s.lines().filter((line: string) => new RegExp(`^${FLAME}`).test(line))).toEqual([]);
+	feed(s, true);
+	expect(s.lines().find((line: string) => new RegExp(`^${FLAME} 操作`).test(line))).toBeDefined();
+});
