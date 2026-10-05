@@ -24,7 +24,7 @@ import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { ActivityList, visibleRows, type ReviewProgress, type SettledFact } from "./activity-list.js";
-import { MASTER_EVENT_TYPE, masterEvent, withElapsed } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent, withElapsed, type MasterEvent } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
 import {
@@ -285,16 +285,16 @@ export function registerMaster(
 	};
 	const enqueueEvent = (
 		active: MasterRuntime,
-		content: string,
+		produced: MasterEvent | { replay: PendingMasterEvent },
 		worker?: string,
-		options: { replayId?: string; runEndedAt?: number } = {},
 	) => {
 		if (!ownsRuntime(active)) return;
-		const replay = options.replayId !== undefined;
-		// 重放的 pending 事件正文已带落定当时的耗时，不再追加。
+		// 重放的 pending 事件正文已带落定当时的耗时，原样再投。
+		const replay = "replay" in produced;
 		const sessionPath = active.store.state.workers.find((candidate) => candidate.name === worker)?.sessionPath;
-		const body = replay ? content : withElapsedOf(active, content, sessionPath, options.runEndedAt);
-		const event: PendingMasterEvent = { id: options.replayId ?? crypto.randomUUID(), content: body, ...(worker ? { worker } : {}) };
+		const event: PendingMasterEvent = replay
+			? produced.replay
+			: { id: crypto.randomUUID(), content: withElapsedOf(active, produced, sessionPath), ...(worker ? { worker } : {}) };
 		if (!replay) {
 			try {
 				pi.appendEntry(PENDING_EVENT_TYPE, event);
@@ -325,7 +325,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, masterEvent.resumeReminder(worker.name), worker.name, { runEndedAt: worker.interruptedAt });
+			enqueueEvent(active, masterEvent.resumeReminder(worker.name), worker.name);
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -348,7 +348,7 @@ export function registerMaster(
 			}
 		}
 		for (const event of unackedEvents(ctx))
-			enqueueEvent(active, event.content, event.worker, { replayId: event.id });
+			enqueueEvent(active, { replay: event }, event.worker);
 		return active;
 	};
 	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就释放热会话并放弃本次动作。 */
@@ -862,7 +862,7 @@ function settleWorker(
 	identity: WorkerRef,
 	terminal: WorkerTerminal | undefined,
 	error?: unknown,
-): string | undefined {
+): MasterEvent | undefined {
 	const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 	if (!current || current.sessionPath !== identity.sessionPath) return undefined;
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
@@ -877,11 +877,11 @@ function settleWorker(
 }
 
 /** 两个起点各只有运行时一处记录；reload 后缺失的部分省略。 */
-function withElapsedOf(active: MasterRuntime, content: string, sessionPath?: string, runEndedAt?: number): string {
+function withElapsedOf(active: MasterRuntime, event: MasterEvent, sessionPath?: string): string {
 	const now = Date.now();
 	const runStartedAt = sessionPath ? active.runStartedAt.get(sessionPath) : undefined;
-	return withElapsed(content, {
-		...(runStartedAt === undefined ? {} : { run: (runEndedAt ?? now) - runStartedAt }),
+	return withElapsed(event, {
+		...(runStartedAt === undefined ? {} : { run: now - runStartedAt }),
 		...(active.taskStartedAt === undefined ? {} : { task: now - active.taskStartedAt }),
 	});
 }
