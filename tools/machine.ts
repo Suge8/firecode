@@ -2,6 +2,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type EnvelopeTag, parseEnvelopes } from "../deliver.js";
 import { clip, firstSentence } from "../format.js";
+import { CHAT_GUTTER } from "./line.js";
 
 export interface MachineEntry {
 	/** 一行标题：Master 事件与审查卡是信封正文第一行原样，观察员固定为“观察员”。 */
@@ -24,7 +25,6 @@ const ERROR_SECTION = "错误：";
 const RUN_TIME = /^耗时：本次运行 (\S+)/mu;
 /** 审查卡生产端（review/card.ts）在 details.tone 里声明的失败色。 */
 const ALARM_TONES = new Set(["warning", "error"]);
-const SCROLLBAR_WIDTH = 1;
 /** 审查卡正文里的发现标题（“## 发现 1：…”）与原因行（“原因：…”）。 */
 const FINDING = /^#{1,6}\s*(?:发现|Finding)\s*[^：:]*[：:]\s*(.+)$/mu;
 const REASON = /^(?:原因|Reason)[：:]\s*(.+)$/mu;
@@ -74,5 +74,5 @@ export function machineLine(entry: MachineEntry, theme: Theme, width: number): s
 	const head = `${theme.fg(entry.alarm ? "error" : "success", "↳")} ${theme.fg(entry.alarm ? "error" : "text", entry.title)}`;
 	const duration = entry.duration ? `${theme.fg("dim", " · ")}${theme.fg("muted", entry.duration)}` : "";
 	const preview = entry.preview ? ` ${theme.fg("muted", entry.preview)}` : "";
-	return clip(`${head}${duration}${preview}`, Math.max(1, width - SCROLLBAR_WIDTH));
+	return clip(`${head}${duration}${preview}`, Math.max(1, width - CHAT_GUTTER));
 }

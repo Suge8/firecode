@@ -25,6 +25,26 @@ export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<Sett
 	invalidate() {},
 });
 
+/** 一轮里更早的非完成终态的短标记。 */
+const EARLIER_TEXT = { aborted: "中断过", error: "请求失败过" } as const;
+
+/**
+ * 一轮可能有多条记录（中断后又跑了一段，如 /fire-review 或命令触发的再次进行）。合成规则不丢信息：
+ * 耗时累加（用户关心这一轮总共花了多久），终态与落定时刻取最后一条（这一轮最终怎样），更早的中断/请求失败
+ * 以“中断过 N 次”追加；多段的均速没有请求墙钟无法合成，按“不出半截的数”不给。
+ */
+export function combineRounds(rounds: readonly Round[]): { round: Round; earlier: string[] } | undefined {
+	const last = rounds.at(-1);
+	if (!last) return undefined;
+	const elapsed = rounds.reduce((total, round) => total + round.elapsed, 0);
+	const round: Round = rounds.length === 1 ? last : { elapsed, outcome: last.outcome, at: last.at };
+	const earlier = (["aborted", "error"] as const).flatMap((outcome) => {
+		const count = rounds.slice(0, -1).filter((round) => round.outcome === outcome).length;
+		return count ? [`${EARLIER_TEXT[outcome]} ${count} 次`] : [];
+	});
+	return { round, earlier };
+}
+
 /** 宿主把 entry 包成 Container（Spacer + 渲染器组件）；按能力找标记，不依赖类身份。 */
 export function roundOf(component: Component): Round | undefined {
 	const children = (component as { children?: readonly Component[] }).children;

@@ -105,8 +105,9 @@ class Shell {
 			const since = Date.now() - settled.endedAt;
 			const text = OUTCOME_TEXT[settled.outcome];
 			parts.mark = settleMark(text ? "failed" : "done", since);
-			parts.word = text && theme.fg("error", text);
-			parts.elapsed = roundTexts(settled).map((part) => theme.fg("muted", part)).join(theme.fg("dim", " · "));
+			// 与摘要行同一写法：终态字样、耗时、均速之间都是“ · ”；终态字样不随窄屏退让。
+			parts.elapsed = [...(text ? [theme.fg("error", text)] : []), ...roundTexts(settled).map((part) => theme.fg("muted", part))]
+				.join(theme.fg("dim", " · "));
 			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
 		}
 		if (review && theme) parts.review = reviewTiers(review(), theme);
@@ -122,7 +123,7 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
-			preset: this.statuses().get(PRESET_STATUS) ?? "",
+			preset: presetLabel(this.statuses().get(PRESET_STATUS), model?.id),
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(thinkingColor(thinking as never), `/${thinking}`) : "",
 			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
@@ -132,10 +133,22 @@ class Shell {
 	}
 }
 
-/** 进行中的那个词：指挥官在跑是“处理中”；主会话审查在等结论时由审查进度说明，不另写词；否则是在等子代理。 */
+/** 进行中的那个词：主会话审查期间（等结论、修复、总结）一律由审查进度说明，不另写词；否则指挥官在跑是“处理中”，再否则是在等子代理。 */
 function activityWord(busy: BusyView): string {
-	if (busy.agentRunning) return "处理中";
-	return busy.review ? "" : `等待 ${busy.inFlight} 个子代理`;
+	if (busy.review) return "";
+	return busy.agentRunning ? "处理中" : `等待 ${busy.inFlight} 个子代理`;
+}
+
+const letters = (text: string) => stripVTControlCharacters(text).toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+/**
+ * 预设名只在它补充了模型名之外的信息时显示：名字已含在模型名里（如 Sonnet 之于 claude-sonnet-5-5）就是同一信息说两遍，省略。
+ * 只比字母数字、不分大小写与分隔符。
+ */
+function presetLabel(preset: string | undefined, modelId: string | undefined): string {
+	if (!preset) return "";
+	const name = letters(preset);
+	return name && modelId && letters(modelId).includes(name) ? "" : preset;
 }
 
 const STAGE_TEXT: Record<Exclude<ReviewStage, "reviewing">, string> = {

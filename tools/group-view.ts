@@ -18,7 +18,7 @@ import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
 import { customMessageOf, isEntry, isToolOutputEcho, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
-import { type Round, roundOf } from "./round.js";
+import { combineRounds, type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
@@ -101,20 +101,20 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 const ACTIVITY_TEXT = { thinking: "思考中", replying: "回复中" } as const satisfies Record<AssistantActivity, string>;
 
-type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures"> & { round?: Round };
+type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures" | "earlier"> & { round?: Round };
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
 	const running: RowData[] = [];
 	let notice: string | undefined;
 	let arrival: Facts["arrival"];
-	let round: Round | undefined;
+	const rounds: Round[] = [];
 	const failed = new Set<string>();
 	for (const item of segment) {
 		// 多条宿主提示只取首条原文，其余在展开态可见。
 		if (noticeKind(item, env.ui.theme) === "warning") notice ??= oneLine(stripVTControlCharacters(textComponentText(item as Text)));
-		// 同一轮多条轮记录（命令触发的再次进行）取后写的。
-		round = roundOf(item) ?? round;
+		const round = roundOf(item);
+		if (round) rounds.push(round);
 		const entries = machineEntriesOf(item);
 		for (const entry of entries ?? []) if (entry.failed && entry.worker) failed.add(entry.worker);
 		const settled = entries?.findLast((entry) => entry.duration);
@@ -122,7 +122,8 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		if (settled && age < ARRIVAL_FLASH_MS) arrival = { text: settled.title, failed: settled.alarm, age };
 		if (item instanceof ToolExecutionComponent && rowData(item).isPartial) running.push(rowData(item));
 	}
-	return { notice, arrival, round, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
+	const record = combineRounds(rounds);
+	return { notice, arrival, round: record?.round, earlier: record?.earlier, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
 }
 
 /**
@@ -348,7 +349,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 
 /**
  * 折叠态：按时间顺序列出最近 replyLines 条中间回复各一行首句（更早的计入“+N 条”）与本段的补话
- * （橙色竖条加首句，总是显示——那是用户自己说的话），再接最后一条回复全文。
+ * （总是显示），再接最后一条回复全文。
  */
 function foldedReplies(
 	segment: readonly Component[],
@@ -360,20 +361,29 @@ function foldedReplies(
 	const out: Component[] = [];
 	const { theme } = env.ui;
 	const items = segment.flatMap((item) => {
-		if (item instanceof UserMessageComponent && isHuman(item)) return [{ human: true, text: firstSentence(userTextOf(item)) }];
+		if (item instanceof UserMessageComponent && isHuman(item)) return [{ message: item, text: "" }];
 		if (!(item instanceof AssistantMessageComponent) || item === tail) return [];
 		const text = replyText(item);
-		return text ? [{ human: false, text: firstSentence(text) }] : [];
+		return text ? [{ message: undefined, text: firstSentence(text) }] : [];
 	});
-	const replies = items.filter((item) => !item.human);
-	const shown = new Set(hasSummary && env.replyLines > 0 ? replies.slice(-env.replyLines) : []);
-	const listed = items.filter((item) => item.human || shown.has(item));
-	if (listed.length) {
-		out.push(new Spacer(1));
-		// 与宿主正文同一左边距（1 列）；补话的竖条占这一列。
-		if (replies.length > shown.size) out.push(new Line(` ${theme.fg("dim", `+${replies.length - shown.size} 条`)}`));
-		for (const item of listed)
-			out.push(new Line(item.human ? `${paint(HEAT_COLORS.orange, "▌")} ${item.text}` : ` ${theme.fg("muted", item.text)}`));
+	const replies = items.filter((item) => !item.message);
+	const listing = hasSummary && env.replyLines > 0;
+	const shown = new Set(listing ? replies.slice(-env.replyLines) : []);
+	const listed = items.filter((item) => item.message || shown.has(item));
+	// 中间回复首句连成一组，前面空一行；补话是人类原话，与开轮的用户消息同样竖条全文，前后各空一行。
+	let inLines = false;
+	const line = (text: string) => {
+		if (!inLines) out.push(new Spacer(1));
+		inLines = true;
+		out.push(new Line(` ${text}`));
+	};
+	if (listing && replies.length > shown.size) line(theme.fg("dim", `+${replies.length - shown.size} 条`));
+	for (const item of listed) {
+		if (!item.message) line(theme.fg("muted", item.text));
+		else {
+			out.push(new Spacer(1), new UserBar(item.message));
+			inLines = false;
+		}
 	}
 	// 宿主助手正文自带前导空行，不再另垫。
 	if (body) out.push(body);
