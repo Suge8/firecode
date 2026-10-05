@@ -398,6 +398,35 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 	}
 });
 
+test("指挥官空闲时陆续到达的一批结果合并成一次唤醒；指挥官在跑时照旧立即句缝送达", async () => {
+	const harness = await setup(true, { wakeQuietMs: 80 });
+	harness.idle = true;
+	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+	faux.setResponses(gates.map((gate, index) => async () => { await gate.promise; return fauxAssistantMessage(`结果 ${index}`); }));
+	await harness.execute({ action: "start", worker: "batch-a", prompt: "A", role: "工程师" });
+	await harness.execute({ action: "start", worker: "batch-b", prompt: "B", role: "工程师" });
+	gates[0].resolve();
+	await Bun.sleep(40);
+	// 第一条到达后安静窗口内不唤醒，等同批的下一条。
+	expect(harness.userMessages).toEqual([]);
+	gates[1].resolve();
+	await Bun.sleep(200);
+	expect(harness.userMessages).toHaveLength(1);
+	expect(harness.userMessages[0]).toContain("结果 0");
+	expect(harness.userMessages[0]).toContain("结果 1");
+
+	// 指挥官在跑：不等窗口，立即经 steer 送达。
+	harness.idle = false;
+	faux.setResponses([fauxAssistantMessage("忙时结果")]);
+	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const sentAt = Date.now();
+	await harness.execute({ action: "send", worker: "batch-a", prompt: "再来" });
+	await steered;
+	expect(Date.now() - sentAt).toBeLessThan(80);
+	expect(harness.messages.at(-1).options).toEqual({ deliverAs: "steer" });
+	await harness.command("");
+});
+
 test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
 	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
@@ -1482,6 +1511,8 @@ async function setup(activate = true, options: {
 	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
 	inputGate?: boolean;
 	autoActivate?: boolean;
+	/** 指挥官空闲时合并唤醒的安静窗口；测试默认 0（立即唤醒）。 */
+	wakeQuietMs?: number;
 	/** 前门唤醒回合不自动开始：宿主 sendUserMessage 立即返回，agent_start 由测试 wake() 发出。 */
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
@@ -1648,6 +1679,7 @@ async function setup(activate = true, options: {
 	module.registerMaster(pi, {
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
+		wakeQuietMs: options.wakeQuietMs ?? 0,
 	});
 	const command = (args: string) => commands.get("fire-master").handler(args, ctx);
 	if (activate) await command("");
