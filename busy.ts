@@ -31,10 +31,10 @@ export const HERDR_WORKING_LABEL = "子代理进行中";
 export interface BusyView {
 	agentRunning: boolean;
 	inFlight: number;
-	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞。 */
-	busy: boolean;
-	/** 主会话 /fire-review 进行中（含修复与总结回合之间的等待）。 */
+	/** 主会话 /fire-review 进行中（含修复与总结回合之间的等待）：算会话进行中，审查时长计入这一段。 */
 	review: boolean;
+	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞 || 主会话审查进行中。 */
+	busy: boolean;
 	/** 本段进行中的起点（Date.now）；当且仅当 busy 时存在。 */
 	since?: number;
 }
@@ -133,7 +133,7 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 		}
 		const started = since;
 		if (!busy) since = undefined;
-		const view = { agentRunning, inFlight, review, busy, since };
+		const view: BusyView = { agentRunning, inFlight, review, busy, since };
 		for (const subscriber of subscribers) subscriber.onChange?.(view, ctx);
 		if (busy || started === undefined || teardown) return;
 		const round = settledRound(now - started, outcome, requests);

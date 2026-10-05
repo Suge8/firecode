@@ -3,6 +3,8 @@ import { stripVTControlCharacters } from "node:util";
 import { contextColor } from "../theme.js";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
+const FLAME3 = "[\u2800-\u28ff]{3}";
+
 afterEach(cleanupFirecodeModules);
 
 /** 同名事件保留全部处理器（busy.ts 与 statusbar 都订阅生命周期事件），按注册顺序依次调用。 */
@@ -62,7 +64,8 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	entries = [{ type: "message", message: long }];
 	events.get("session_tree")!({}, ctx);
 	expect(bottom(110)).toContain("─ 把 refresh token 的竞态修掉。 ─");
-	expect(bottom(52)).toMatch(/^─ 把 \S+… ─+ test-model/u);
+	// 窄屏先省容量再裁标题。
+	expect(bottom(52)).toMatch(/^─ 把 refresh.*… ─+ test-model\/medium Fast · 42\.3% ─$/u);
 	name = "完整的自定义会话名称";
 	events.get("session_info_changed")!({}, ctx);
 	expect(bottom()).toContain(name);
@@ -100,7 +103,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(editor).toBeUndefined();
 });
 
-test("审查期间上边框只显示一处审查进度，窄屏逐级退让：先丢轮次，再丢审查字样，最后只留计数", async () => {
+test("审查期间上边框只显示一处审查进度，窄屏逐级退让：先丢阻断数，再丢票数，再丢“处理中”，“审查 第N轮”最后才让", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
 	const events = new Map<string, Function>();
@@ -128,9 +131,10 @@ test("审查期间上边框只显示一处审查进度，窄屏逐级退让：�
 	const top = (width: number) => stripVTControlCharacters(editor.render(width)[0]);
 	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
 	expect(top(110)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 第2轮 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
-	expect(top(52)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
-	expect(top(47)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
-	expect(top(30)).toMatch(new RegExp(`^─ \\S+ \\S+ · ${glyph} 1/3 ─+ 指挥官 ─$`, "u"));
+	expect(top(52)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
+	expect(top(46)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
+	expect(top(40)).toMatch(new RegExp(`^─ \\S+ \\S+ · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
+	expect(top(30)).toMatch(/^─ \S+ \S+ ─+ 指挥官 ─$/u);
 	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
 	expect(stripVTControlCharacters(editor.render(110).at(-1))).toContain("12.0%/1M");
 });
@@ -143,15 +147,18 @@ test("上下文低占用保持灰色，仅接近既有阈值时警告", () => {
 	expect(contextColor(undefined)).toBe("muted");
 });
 
-test("输入框边框按宽度退让：下边框先裁标题、再省容量、最后裁模型，Fast 与百分比保留", async () => {
+test("输入框边框按宽度退让：下边框先省容量、再让预设名、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
 	const { bottomBorder } = await loadFirecodeModule("statusbar/render.js") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	const parts = { title: "修复登录态偶发失效", model: "opus-4.7", think: "/high", fast: "", percent: "23%", capacity: "/1M" };
+	const parts = { title: "修复登录态偶发失效", preset: "", model: "opus-4.7", think: "/high", fast: "", percent: "23%", capacity: "/1M" };
 	const line = (text: string) => text;
 	const draw = (width: number, over = {}) => stripVTControlCharacters(bottomBorder(width, { ...parts, ...over }, line));
 
 	for (const width of [110, 72]) expect(draw(width)).toMatch(/^─ 修复登录态偶发失效 ─{2,} opus-4\.7\/high · 23%\/1M ─$/u);
-	expect(draw(40)).toMatch(/^─ 修复登录… ─{2,} opus-4\.7\/high · 23%\/1M ─$/u);
+	expect(draw(110, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} Deep · opus-4\.7\/high · 23%\/1M ─$/u);
+	expect(draw(52, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} Deep · opus-4\.7\/high · 23% ─$/u);
+	expect(draw(45, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} opus-4\.7\/high · 23% ─$/u);
+	expect(draw(40)).toMatch(/^─ 修复登录态偶… ─{2,} opus-4\.7\/high · 23% ─$/u);
 	expect(draw(26)).toMatch(/^─{3,} opus-4\.7\/high · 23% ─$/u);
 	expect(draw(26, { fast: "Fast" })).toMatch(/Fast · 23% ─$/u);
 	for (let width = 0; width <= 120; width++)
@@ -299,4 +306,83 @@ test("上边框落定态：均速跟在耗时后，中断与请求失败写明�
 	} finally {
 		setSystemTime();
 	}
+});
+
+
+/** 会话进行中的视图由 busy.ts 产出；这里换掉它的 watchBusy，直接喂带 review 字段的视图（主会话审查算进行中）。 */
+async function shellWithBusy() {
+	const { readFileSync } = await import("node:fs");
+	const { join } = await import("node:path");
+	const { FIRECODE_DIR } = await import("./loader.ts");
+	const stub = [
+		`export * from "./busy-real.ts";`,
+		`import { watchBusy as real } from "./busy-real.ts";`,
+		`export function watchBusy(pi, handlers) { globalThis.__fcBusyFeed = handlers; return real(pi, handlers); }`,
+	].join("\n");
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts", {
+		extraFiles: { "busy-real.ts": readFileSync(join(FIRECODE_DIR, "busy.ts"), "utf8"), "busy.ts": stub },
+	}) as any;
+	const events = new Map<string, Function>();
+	const bus = new Map<string, Function>();
+	let editor: any;
+	const statuses = new Map([["master", "指挥官"]]);
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		isIdle: () => true,
+		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
+		getContextUsage: () => ({ percent: 1, contextWindow: 1_000_000 }),
+		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => [] },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
+			setEditorComponent(factory: any) {
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
+			},
+		},
+	};
+	registerStatusBar({ on: (event: string, fn: Function) => events.set(event, fn), events: { on: (channel: string, fn: Function) => bus.set(channel, fn) }, getThinkingLevel: () => "off" });
+	events.get("session_start")!({}, ctx);
+	const feed = (globalThis as any).__fcBusyFeed;
+	return {
+		statuses,
+		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
+		settle: (round: Record<string, unknown>) => feed.onSettled(ctx, round),
+		review: (progress: Record<string, unknown>) => bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => progress }),
+		top: (width = 110) => stripVTControlCharacters(editor.render(width)[0]),
+		bottom: (width = 110) => stripVTControlCharacters(editor.render(width).at(-1)),
+	};
+}
+
+test("主会话审查算会话进行中：上边框是火苗加计时与审查进度，不并排显示上一段的落定记录，也不写“等待 N 个子代理”", async () => {
+	const shell = await shellWithBusy();
+	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
+	try {
+		setSystemTime(new Date(1_000_000));
+		shell.settle({ elapsed: 3_100, outcome: "complete", tps: 21.5 });
+		expect(shell.top()).toContain("✓ 3.1s");
+		shell.view({ busy: true, since: 1_000_000, review: true, inFlight: 2 });
+		shell.review({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 0 });
+		setSystemTime(new Date(1_062_000));
+		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
+		expect(shell.top(40)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
+		// 修复回合：指挥官在跑，照常“处理中”，审查进度并排。
+		shell.view({ busy: true, since: 1_000_000, review: true, agentRunning: true });
+		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 处理中 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
+	} finally {
+		setSystemTime();
+	}
+});
+
+test("歇下那一刻上边框直接是 ✓ 加定格文字，不先出一帧冷却中的火苗", async () => {
+	const shell = await shellWithBusy();
+	shell.view({ busy: true, since: Date.now() - 2_900, agentRunning: true });
+	shell.view({ busy: false });
+	shell.settle({ elapsed: 2_900, outcome: "complete", tps: 40 });
+	expect(shell.top()).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
+});
+
+test("预设名显示在下边框标题之后、模型之前，不带图标", async () => {
+	const shell = await shellWithBusy();
+	shell.statuses.set("preset", "Deep");
+	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Deep · test-model · 1\.0%\/1M ─$/u);
 });

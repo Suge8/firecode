@@ -15,7 +15,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, OUTCOME_TEXT, type SettledRound, roundTexts, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 
@@ -44,6 +44,8 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 }
 
 const FAST_STATUS = "pi-openai-native-fast";
+/** session/presets.ts 发布的生效预设名（已着色）。 */
+const PRESET_STATUS = "preset";
 /** 落定后暖光渐隐的时长；落定结果本身一直留到下一轮开始。 */
 const GLOW_FADE_MS = 1_000;
 
@@ -95,7 +97,8 @@ class Shell {
 		};
 		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
-			parts.word = this.theme?.fg("text", busy.agentRunning ? "处理中" : `等待 ${busy.inFlight} 个子代理`) ?? "";
+			const word = activityWord(busy);
+			parts.word = word && (this.theme?.fg("text", word) ?? "");
 			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - busy.since)) ?? "";
 			parts.glow = 1;
 		} else if (settled && theme) {
@@ -119,6 +122,7 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
+			preset: this.statuses().get(PRESET_STATUS) ?? "",
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(thinkingColor(thinking as never), `/${thinking}`) : "",
 			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
@@ -128,23 +132,26 @@ class Shell {
 	}
 }
 
-const STAGE_TEXT = { queued: "排队中", advisor: "顾问介入", fixing: "修复中", summarizing: "总结中" } as const;
+/** 进行中的那个词：指挥官在跑是“处理中”；主会话审查在等结论时由审查进度说明，不另写词；否则是在等子代理。 */
+function activityWord(busy: BusyView): string {
+	if (busy.agentRunning) return "处理中";
+	return busy.review ? "" : `等待 ${busy.inFlight} 个子代理`;
+}
 
-/** 审查进度的退让档：`审查 第2轮 1/3 · 1 阻断` → 丢轮次 → 丢“审查” → 只留计数；字形始终在。 */
+const STAGE_TEXT: Record<Exclude<ReviewStage, "reviewing">, string> = {
+	queued: "排队中", advisor: "顾问介入", fixing: "修复中", summarizing: "总结中",
+};
+
+/** 审查进度的退让档：`审查 第2轮 1/3 · 1 阻断` → 丢阻断数 → 丢票数或阶段，“审查 第N轮”留到最后；字形始终在。 */
 function reviewTiers(progress: ReviewProgress | undefined, theme: Theme): string[] {
 	const gold = (text: string) => paint(HEAT_COLORS.gold, text);
 	const mark = reviewMark(phaseOf(2));
-	if (!progress) return [`${mark} ${gold("审查")}`, mark];
-	const counting = progress.stage === "reviewing";
-	const body = gold(counting ? `${progress.passed}/${progress.total}` : STAGE_TEXT[progress.stage]);
-	const blocked = counting && progress.blocked ? `${gold(" · ")}${theme.fg("error", `${progress.blocked} 阻断`)}` : "";
-	const round = progress.round > 0 ? gold(` 第${progress.round}轮`) : "";
-	const tiers = [
-		`${mark} ${gold("审查")}${round} ${body}${blocked}`,
-		`${mark} ${gold("审查")} ${body}${blocked}`,
-		`${mark} ${body}${blocked}`,
-		`${mark} ${body}`,
-	];
+	const head = `${mark} ${gold("审查")}`;
+	if (!progress) return [head];
+	const named = progress.round > 0 ? `${head}${gold(` 第${progress.round}轮`)}` : head;
+	const body = gold(progress.stage === "reviewing" ? `${progress.passed}/${progress.total}` : STAGE_TEXT[progress.stage]);
+	const blocked = progress.stage === "reviewing" && progress.blocked ? `${gold(" · ")}${theme.fg("error", `${progress.blocked} 阻断`)}` : "";
+	const tiers = [`${named} ${body}${blocked}`, `${named} ${body}`, named];
 	return tiers.filter((tier, index) => tier !== tiers[index - 1]);
 }
 

@@ -73,6 +73,8 @@ export function topBorder(width: number, parts: TopParts, line: Line): string {
 
 export interface BottomParts {
 	title: string;
+	/** 生效中的预设名（已着色）；没有预设为空。 */
+	preset: string;
 	model: string;
 	/** 含前导斜杠，如 `/high`；模型不支持思考档时为空。 */
 	think: string;
@@ -82,20 +84,27 @@ export interface BottomParts {
 	capacity: string;
 }
 
-/** 退让顺序：标题 → 容量 → 模型名；Fast 与百分比始终保留。 */
+/** 标题裁到这么窄就先去裁模型名：再窄的标题认不出会话。 */
+const TITLE_MIN = 8;
+
+/** 退让顺序：容量 → 预设名 → 标题裁到 TITLE_MIN → 模型名逐列裁 → 丢标题；Fast 与百分比始终保留。 */
 export function bottomBorder(width: number, parts: BottomParts, line: Line): string {
-	const right = (model: string, capacity: string) => {
+	const right = (preset: string, model: string, capacity: string) => {
 		const name = [model + (model ? parts.think : ""), parts.fast].filter(Boolean).join(" ");
-		return [name, `${parts.percent}${capacity}`].filter(Boolean).join(SEPARATOR);
+		return [preset, name, `${parts.percent}${capacity}`].filter(Boolean).join(SEPARATOR);
 	};
-	const at = (title: string, model: string, capacity: string) =>
-		() => border(width, title, right(model, capacity), line, 0);
+	const at = (title: string, preset: string, model: string, capacity: string) =>
+		() => border(width, title, right(preset, model, capacity), line, 0);
 	function* candidates() {
-		for (let n = visibleWidth(parts.title); n >= 1; n--) yield at(clip(parts.title, n), parts.model, parts.capacity);
-		yield at("", parts.model, parts.capacity);
-		yield at("", parts.model, "");
-		for (let n = visibleWidth(parts.model) - 1; n >= 1; n--) yield at("", clip(parts.model, n), "");
-		yield at("", "", "");
+		yield at(parts.title, parts.preset, parts.model, parts.capacity);
+		yield at(parts.title, parts.preset, parts.model, "");
+		const titleWidth = visibleWidth(parts.title);
+		for (let n = titleWidth; n >= Math.min(titleWidth, TITLE_MIN); n--) yield at(clip(parts.title, n), "", parts.model, "");
+		const short = clip(parts.title, TITLE_MIN);
+		for (let n = visibleWidth(parts.model) - 1; n >= 1; n--) yield at(short, "", clip(parts.model, n), "");
+		yield at("", "", parts.model, "");
+		for (let n = visibleWidth(parts.model) - 1; n >= 1; n--) yield at("", "", clip(parts.model, n), "");
+		yield at("", "", "", "");
 	}
 	return firstFit(width, line, candidates());
 }

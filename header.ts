@@ -1,6 +1,6 @@
 /**
  * 会话启动横幅：半格方块像素火焰 + 字标，按终端宽度分三档，三档都带同一行副标题（pi 版本 · 工作目录，
- * 放不下从开头裁、保留目录尾部）。启动时字标自左向右点亮、扫光一道，约 1.5 秒后定格并退订动画时钟——
+ * 放不下只留目录、从开头按整段省略）。启动时字标自左向右点亮、扫光一道，约 1.5 秒后定格并退订动画时钟——
  * 横幅会滚出视口，定格后不再触发重绘。
  */
 import { homedir } from "node:os";
@@ -115,23 +115,41 @@ function sideBySide(left: string[], right: string[], gap: number, rightTop = 0):
 	});
 }
 
-/** 副标题：从深底色淡入成灰；宽度不够从开头裁，保留目录尾部。 */
-function subtitleLine(subtitle: string, width: number, t: number): string {
-	return paint(mix(FADE_FROM, HEAT_COLORS.ash, ease((t - 0.4) / 0.6)), clip(subtitle, width, "start"));
+/** 副标题的来源：三档共用同一份。 */
+interface Subtitle {
+	version: string;
+	cwd: string;
 }
 
-function large(t: number, subtitle: string): string[] {
+/** 放得下就是“pi 版本 · 工作目录”；放不下只留目录，从开头按整段省略（…/末尾几段），连末段都放不下才裁字。 */
+function fitSubtitle({ version, cwd }: Subtitle, width: number): string {
+	const full = `pi ${version} · ${cwd}`;
+	if (visibleWidth(full) <= width) return full;
+	const segments = cwd.split("/");
+	for (let index = 1; index < segments.length; index++) {
+		const tail = `…/${segments.slice(index).join("/")}`;
+		if (visibleWidth(tail) <= width) return tail;
+	}
+	return clip(segments.at(-1) ?? cwd, width, "start");
+}
+
+/** 副标题：从深底色淡入成灰。 */
+function subtitleLine(subtitle: Subtitle, width: number, t: number): string {
+	return paint(mix(FADE_FROM, HEAT_COLORS.ash, ease((t - 0.4) / 0.6)), fitSubtitle(subtitle, width));
+}
+
+function large(t: number, subtitle: Subtitle): string[] {
 	const word = halfBlocks(wordmark(2, t));
 	return sideBySide(halfBlocks(roundFlame(10, 16, t)), [...word, "", subtitleLine(subtitle, visibleWidth(word[0]), t)], 3, 2);
 }
 
-function mid(t: number, subtitle: string): string[] {
+function mid(t: number, subtitle: Subtitle): string[] {
 	const word = halfBlocks(wordmark(1, t));
 	return sideBySide(halfBlocks(roundFlame(6, 8, t)), [...word, subtitleLine(subtitle, visibleWidth(word[0]), t)], 2);
 }
 
 /** 一行档：火苗 + 渐变字标逐字亮起 + 副标题 + 向右渐隐的横线；太窄时只留横线。 */
-function tiny(width: number, t: number, glyph: string, subtitle: string): string {
+function tiny(width: number, t: number, glyph: string, subtitle: Subtitle): string {
 	const sweep = ((t - REVEAL_END) / (SWEEP_END - REVEAL_END)) * 14 - 3;
 	const letters = [...WORD].map((char, index) => {
 		if (t <= (index / WORD.length) * REVEAL_END) return " ";
@@ -156,13 +174,13 @@ function center(lines: string[], width: number): string[] {
 	return lines.map((line) => clip(pad + line, width, "end", ""));
 }
 
-function banner(width: number, t: number, glyph: string, subtitle: string): string[] {
+function banner(width: number, t: number, glyph: string, subtitle: Subtitle): string[] {
 	if (width >= LARGE_MIN_WIDTH) return ["", ...center(large(t, subtitle), width), ""];
 	if (width >= MID_MIN_WIDTH) return ["", ...center(mid(t, subtitle), width), ""];
 	return [tiny(width, t, glyph, subtitle), ""];
 }
 
-function createBanner(tui: TUI, subtitle: string) {
+function createBanner(tui: TUI, subtitle: Subtitle) {
 	const start = Date.now();
 	const elapsed = () => Math.min(SWEEP_END, (Date.now() - start) / 1000);
 	let unsubscribe: (() => void) | undefined;
@@ -195,6 +213,6 @@ export function registerHeader(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		const home = homedir();
 		const cwd = ctx.cwd.startsWith(home) ? `~${ctx.cwd.slice(home.length)}` : ctx.cwd;
-		ctx.ui.setHeader((tui) => createBanner(tui, `pi ${VERSION} · ${cwd}`));
+		ctx.ui.setHeader((tui) => createBanner(tui, { version: VERSION, cwd }));
 	});
 }

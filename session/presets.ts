@@ -69,7 +69,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	const updateStatus = (ctx: ExtensionContext) =>
 		ctx.ui.setStatus(
 			"preset",
-			activeName ? ctx.ui.theme.fg("accent", `🧩 ${title(activeName)}`) : undefined,
+			activeName ? ctx.ui.theme.fg("accent", title(activeName)) : undefined,
 		);
 
 	const noPresetsHint = (ctx: ExtensionContext) =>

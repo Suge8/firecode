@@ -11,7 +11,7 @@ afterEach(async () => {
 
 const FLAME = "[\u2800-\u28ff]";
 
-async function scene(options: { withMaster?: boolean; replyLines?: number } = {}) {
+async function scene(options: { withMaster?: boolean; replyLines?: number; scroll?: boolean } = {}) {
 	const { withMaster = false, replyLines = 3 } = options;
 	const [host, tui, module, toolsModule, clockModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
@@ -33,7 +33,9 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 	}
 	const chat = new tui.Container();
 	const root = new tui.Container();
-	root.addChild(chat);
+	// 真实宿主（全屏模式）把聊天容器放在跟随末尾的 ScrollView 里。
+	const scroll = options.scroll ? new tui.ScrollView(chat, { follow: "end", primary: true }) : undefined;
+	root.addChild(scroll ?? chat);
 	let expanded = false;
 	let renders = 0;
 	root.requestRender = () => { renders++; };
@@ -75,7 +77,7 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 		chat.addChild(entry);
 		root.requestRender();
 	};
-	return { clock, setNow, settle, host, tui, chat, root, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	return { clock, setNow, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -195,9 +197,12 @@ test("用户消息之间的整段过程折成一行：图片、中途正文与�
 	]);
 	expect(collapsed.join("\n")).not.toMatch(/fix-auth 完成|image payload/);
 
+	// 上一段歇下（写了轮记录）之后的人类消息才开新一轮。
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
 	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
 	s.complete(s.tool("read", { path: "c.ts" }));
-	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(2);
+	expect(s.lines().filter((line: string) => /^✓/.test(line))).toHaveLength(2);
 	expect(s.lines().join("\n")).toContain("下一问");
 
 	s.ui.setToolsExpanded(true);
@@ -400,7 +405,7 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	reply.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "修好了" }] }, false);
 	note("warning", "Cache miss after 8m idle: 63k tokens re-billed");
 	note("warning", "Anthropic dropped 23 thinking blocks: prefix_binding_mismatch");
-	note("dim", "Tool output: collapsed");
+	note("dim", "Thinking level: high");
 	let collapsed = s.lines().filter(Boolean);
 	expect(collapsed).toHaveLength(2);
 	expect(collapsed[0]).toMatch(/^✓ ⚠ Cache miss after 8m idle: 63k tokens re-billed\s*$/);
@@ -418,12 +423,14 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 
 	s.ui.setToolsExpanded(true);
 	const expanded = s.lines().join("\n");
-	for (const needle of ["Cache miss", "prefix_binding_mismatch", "Tool output: collapsed"]) expect(expanded).toContain(needle);
+	for (const needle of ["Cache miss", "prefix_binding_mismatch", "Thinking level: high"]) expect(expanded).toContain(needle);
 	// 摘要行带首条提示原文，列表里的提示在回复之后。
 	expect(expanded.indexOf("修好了")).toBeLessThan(expanded.lastIndexOf("Cache miss"));
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(5);
 
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
 	s.chat.addChild(new s.host.UserMessageComponent("再问"));
 	const plain = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(plain);
@@ -586,10 +593,12 @@ test("点击某一轮摘要只展开这一轮，ctrl+o 的全局档位不变", a
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
 	s.complete(s.tool("read", { path: "first.ts" }));
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
 	s.chat.addChild(new s.host.UserMessageComponent("第二问"));
 	s.complete(s.tool("read", { path: "second.ts" }));
 	const summaryAt = (nth: number) => s.lines().map((line: string, index: number) => [line, index] as const)
-		.filter(([line]) => /^✓\s*$/.test(line))[nth][1];
+		.filter(([line]) => /^✓/.test(line))[nth][1];
 	expect(s.lines().join("\n")).not.toMatch(/first\.ts|second\.ts/);
 
 	s.click(summaryAt(0));
@@ -604,10 +613,12 @@ test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全�
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
 	s.complete(s.tool("read", { path: "first.ts" }));
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
 	s.chat.addChild(new s.host.UserMessageComponent("第二问"));
 	s.complete(s.tool("read", { path: "second.ts" }));
 	const summaryAt = (nth: number) => s.lines().map((line: string, index: number) => [line, index] as const)
-		.filter(([line]) => /^✓\s*$/.test(line))[nth][1];
+		.filter(([line]) => /^✓/.test(line))[nth][1];
 	const shown = () => ["first.ts", "second.ts"].filter((name) => s.lines().join("\n").includes(name));
 
 	// 点开第一轮 → ctrl+o 全局展开 → 再 ctrl+o 全局折叠：被点开的那一轮也折回去。
@@ -1053,4 +1064,115 @@ test("宿主形状不符出现在全局展开补丁里时同样整体退回原�
 	}
 	expect(notice).toMatch(/过程分组已停用.*message/u);
 	expect(host.CustomMessageComponent.prototype.setExpanded).toBe(pristine);
+});
+
+test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮（折叠态一行、展开态全文）；歇下之后的人类消息才开新一轮", async () => {
+	const s = await scene();
+	hostUser(s, "原问题");
+	s.setNow(0);
+	feed(s, true, 0, 0);
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "先看看。" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
+	hostUser(s, "补一句：顺便说下几点\n第二行细节");
+	const bash = s.tool("bash", { command: "date" });
+	const summaries = () => s.lines().filter((line: string) => /^(?:✓|✗|[⠀-⣿])/.test(line));
+	expect(summaries()).toHaveLength(1);
+	expect(summaries()[0]).toMatch(new RegExp(`^${FLAME} 操作 \\$ date`));
+	s.complete(bash);
+	assistant(s, [{ type: "text", text: "现在十点。" }]);
+	feed(s, false);
+	s.settle(5_000, "complete", 0);
+	s.setNow(60_000);
+
+	const folded = s.lines().map((line: string) => line.trimEnd()).filter(Boolean);
+	expect(folded.filter((line: string) => /^✓/.test(line))).toEqual(["✓ 5.0s"]);
+	const at = (needle: string) => folded.findIndex((line: string) => line.includes(needle));
+	expect(folded[at("补一句")]).toBe("▌ 补一句：顺便说下几点");
+	expect(folded.join("\n")).not.toContain("第二行细节");
+	expect([at("原问题"), at("✓ 5.0s"), at("补一句"), at("现在十点。")]).toEqual([...[at("原问题"), at("✓ 5.0s"), at("补一句"), at("现在十点。")]].sort((a, b) => a - b));
+
+	s.click(s.lines().findIndex((line: string) => line.startsWith("✓")));
+	const expanded = s.lines().join("\n");
+	const order = ["原问题", "a.ts", "先看看。", "补一句", "第二行细节", "date", "现在十点。"].map((needle) => expanded.indexOf(needle));
+	expect(order.every((position) => position >= 0)).toBe(true);
+	expect(order).toEqual([...order].sort((a, b) => a - b));
+
+	hostUser(s, "新问题");
+	s.complete(s.tool("read", { path: "c.ts" }));
+	expect(s.lines().filter((line: string) => /^✓/.test(line))).toHaveLength(2);
+});
+
+test("回合一开始就有摘要行：首条用户消息一出现就带橙色竖条，助手组件还没来时已显示思考中", async () => {
+	const s = await scene();
+	s.setNow(0);
+	feed(s, true, 0, 0);
+	hostUser(s, "你好");
+	const lines = s.lines().map((line: string) => line.trimEnd()).filter(Boolean);
+	expect(lines[0]).toBe("▌ 你好");
+	expect(lines[1]).toMatch(new RegExp(`^${FLAME} 思考中$`));
+});
+
+test("点击摘要展开或收起一轮时，被点的那一行留在视口原位：跟随末尾的滚动视图不再把它滚出屏幕", async () => {
+	const s = await scene({ scroll: true });
+	for (let turn = 1; turn <= 4; turn++) {
+		hostUser(s, `问题${turn}`);
+		for (const name of ["a", "b", "c"]) s.complete(s.tool("read", { path: `${name}${turn}.ts` }));
+		assistant(s, [{ type: "text", text: `回答${turn}` }]);
+		s.settle(1_000, "complete", 0);
+	}
+	s.setNow(60_000);
+	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, 10, () => {});
+	layout();
+	const top = s.scroll.scrollTop;
+	expect(s.scroll.isFollowingEnd).toBe(true);
+	const row = s.lines().findLastIndex((line: string) => line.startsWith("✓"));
+	expect(row).toBeGreaterThanOrEqual(top);
+
+	s.click(row);
+	layout();
+	expect(s.lines()[row]).toMatch(/^✓/);
+	expect(s.scroll.scrollTop).toBe(top);
+	s.click(row);
+	layout();
+	expect(s.lines()[row]).toMatch(/^✓/);
+	expect(s.scroll.scrollTop).toBe(top);
+});
+
+test("宿主对 ctrl+o 的回显“Tool output: expanded/collapsed”不进对话；其余宿主状态行照常折入", async () => {
+	const s = await scene();
+	const note = (color: string, text: string) => {
+		s.chat.addChild(new s.tui.Spacer(1));
+		s.chat.addChild(new s.tui.Text(s.ui.theme.fg(color, text), 1, 0));
+	};
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "好了" }]);
+	s.settle(1_000, "complete", 0);
+	note("dim", "Tool output: expanded");
+	note("dim", "Thinking level: high");
+	note("dim", "Tool output: collapsed");
+	for (const expanded of [false, true]) {
+		s.ui.setToolsExpanded(expanded);
+		const text = s.lines().join("\n");
+		expect(text).not.toContain("Tool output");
+		if (expanded) expect(text).toContain("Thinking level: high");
+	}
+	hostUser(s, "下一问");
+	note("dim", "Tool output: expanded");
+	expect(s.lines().join("\n")).not.toContain("Tool output");
+});
+
+test("收尾不拼帧：歇下那一刻摘要行直接是 ✓ 加定格文字，不再先出一帧冷却中的火苗", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.setNow(1_000);
+	feed(s, true, 0, 1_000);
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "好了" }]);
+	feed(s, false);
+	s.settle(3_000, "complete", 1_000, 40);
+	for (const now of [1_000, 1_050, 1_200]) {
+		s.setNow(now);
+		expect(s.lines().find((line: string) => line.includes("3.0s"))).toMatch(/^✓ 3\.0s · 40 tps/u);
+	}
 });

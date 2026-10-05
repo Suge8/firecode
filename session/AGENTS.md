@@ -4,7 +4,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `presets.ts` | 预设切换：模型原子、工具集、附加指令 |
+| `presets.ts` | 预设切换：模型原子、工具集、附加指令；生效中的预设名以 `preset` 状态键发布（accent 色名字，不带图标），输入框下边框显示 |
 | `rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
 | `herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
