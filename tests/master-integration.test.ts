@@ -339,21 +339,21 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	expect(working()).toEqual([true, false, true, false]);
 });
 
-test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒的投递完成后才归零", async () => {
-	const harness = await setup(true, { deferUserMessage: true });
+test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒要等唤醒回合开始才归零（宿主 sendUserMessage 不等回合）", async () => {
+	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	await harness.execute({ action: "start", worker: "late", prompt: "只回复完成", role: "工程师", thinking: "low" });
 	await harness.userMessageStarted;
-	await Bun.sleep(0);
+	await Bun.sleep(5);
 	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
 	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
-	// worker 已落定为 idle，事件正在前门投递：不能归零，否则会话会在唤醒前出现“歇下”缝隙。
+	// worker 已落定为 idle，前门消息已发出但唤醒回合还没开始：不能归零，否则会话会在唤醒前误报一次“歇下”。
 	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
 	expect(counts()).toEqual([1]);
 	expect(working()).toEqual([true]);
 
-	harness.releaseUserMessage();
+	await harness.wake();
 	await Bun.sleep(5);
 	expect(counts()).toEqual([1, 0]);
 	expect(working()).toEqual([true, false]);
@@ -615,7 +615,7 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 });
 
 test("空闲前门投递未完成时替换会话，旧投递不得确认到新 runtime", async () => {
-	const harness = await setup(true, { deferUserMessage: true });
+	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
 	faux.setResponses([fauxAssistantMessage("旧会话结果")]);
 	await harness.execute({
@@ -625,7 +625,7 @@ test("空闲前门投递未完成时替换会话，旧投递不得确认到新 r
 	const appendedBeforeReplacement = harness.appended.length;
 
 	await harness.replaceSession();
-	harness.releaseUserMessage();
+	await harness.wake();
 	await Bun.sleep(0);
 
 	expect(harness.appended).toHaveLength(appendedBeforeReplacement);
@@ -1370,7 +1370,8 @@ async function setup(activate = true, options: {
 	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
 	inputGate?: boolean;
 	autoActivate?: boolean;
-	deferUserMessage?: boolean;
+	/** 前门唤醒回合不自动开始：宿主 sendUserMessage 立即返回，agent_start 由测试 wake() 发出。 */
+	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
 	promptFiles?: Record<string, string>;
@@ -1459,10 +1460,6 @@ async function setup(activate = true, options: {
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
-	let releaseUserMessage = () => {};
-	const userMessageGate = options.deferUserMessage
-		? new Promise<void>((resolve) => { releaseUserMessage = resolve; })
-		: Promise.resolve();
 	let markUserMessageStarted!: () => void;
 	const userMessageStarted = new Promise<void>((resolve) => { markUserMessageStarted = resolve; });
 	let activeTools = ["read", "bash", "edit", "write"];
@@ -1472,7 +1469,10 @@ async function setup(activate = true, options: {
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
-		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		on: (name: string, handler: any) => {
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+		},
 		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
@@ -1483,12 +1483,16 @@ async function setup(activate = true, options: {
 			messages.push({ message, options });
 			onMessage?.();
 		},
-		sendUserMessage: async (content: string) => {
+		// 与宿主一致：扩展的 sendUserMessage 返回 void、不等唤醒回合；回合稍后才 agent_start。
+		sendUserMessage: (content: string) => {
 			userMessages.push(content);
 			markUserMessageStarted();
-			await userMessageGate;
 			onMessage?.();
+			if (!options.holdWake) setTimeout(() => void wake(), 0);
 		},
+	};
+	const wake = async () => {
+		for (const handler of [...(handlers.get("agent_start") ?? [])]) await handler({}, ctx);
 	};
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
@@ -1540,7 +1544,7 @@ async function setup(activate = true, options: {
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
-		releaseUserMessage,
+		wake,
 		command,
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);

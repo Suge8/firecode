@@ -156,3 +156,39 @@ export default function (pi) {
 		session.dispose();
 	}
 }, 10_000);
+
+test("宿主契约：扩展 API 的 sendUserMessage 立即返回、不等唤醒回合（deliver 闲时分支据此订阅 agent_start）", async () => {
+	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-void-"));
+	const cwd = join(directory, "project");
+	const agentDir = join(directory, "agent");
+	const extensionsDir = join(agentDir, "extensions");
+	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
+	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
+	await writeFile(join(extensionsDir, "wake.ts"), `
+export default function (pi) {
+	const order = (globalThis.__wakeOrder = []);
+	pi.on("agent_start", () => { order.push("agent_start"); });
+	pi.registerCommand("wake", { handler: async () => {
+		const returned = pi.sendUserMessage("woken from extension");
+		order.push(returned === undefined ? "returned-void" : "returned-value");
+	} });
+}
+`);
+	faux = registerFauxProvider();
+	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	const model = faux.getModel();
+	const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") });
+	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
+	faux.setResponses([fauxAssistantMessage("woken")]);
+	const { session } = await createAgentSession({ cwd, agentDir, model, modelRuntime, sessionManager: SessionManager.inMemory(cwd) });
+	try {
+		await session.bindExtensions({ mode: "print" });
+		await session.prompt("/wake");
+		while (!(globalThis as any).__wakeOrder.includes("agent_start")) await new Promise((resolve) => setTimeout(resolve, 5));
+		await session.waitForIdle();
+		expect((globalThis as any).__wakeOrder).toEqual(["returned-void", "agent_start"]);
+	} finally {
+		delete (globalThis as any).__wakeOrder;
+		session.dispose();
+	}
+}, 10_000);
