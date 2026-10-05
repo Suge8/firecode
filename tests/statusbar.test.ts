@@ -126,7 +126,7 @@ test("审查期间上边框只显示一处审查进度，窄屏逐级退让：�
 		isIdle: () => true,
 		model: { id: "gpt-5.5", reasoning: true, contextWindow: 1_000_000 },
 		getContextUsage: () => ({ percent: 12, contextWindow: 1_000_000 }),
-		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => branch },
+		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => [] },
 		ui: {
 			setWorkingVisible() {},
 			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
@@ -351,7 +351,7 @@ async function shellWithBusy() {
 		isIdle: () => true,
 		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
 		getContextUsage: () => ({ percent: 1, contextWindow: 1_000_000 }),
-		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => [] },
+		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => branch },
 		ui: {
 			setWorkingVisible() {},
 			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
