@@ -34,7 +34,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 
 ## 在飞数发布
 
-Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（`flushEvents` 的 deliver 结束后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖，闲时前门唤醒由 agent 回合覆盖，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发带 `teardown` 的归零——遗弃在飞子代理不是歇下，busy.ts 只结束本段、不发歇下边沿。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
+Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（发件箱的 deliver 完成后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖；闲时前门唤醒的 deliver 订阅下一次 `agent_start`，唤醒回合真正开始才完成——宿主扩展的 `sendUserMessage` 返回 void、不等回合（`tests/delivery-contract.test.ts` 钉住），扣减时指挥官回合已在跑，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发带 `teardown` 的归零——遗弃在飞子代理不是歇下，busy.ts 只结束本段、不发歇下边沿。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
 
 ## 投递与义务
 

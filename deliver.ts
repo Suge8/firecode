@@ -49,10 +49,12 @@ export interface Delivery {
 }
 
 /**
- * 统一投递。返回语义两分支不对称，调用方依赖它：
- * - 主回合在跑：卡片进 steer 队列，入队即 resolve；
- * - 主回合歇透：前门 sendUserMessage 唤起，等整个唤醒回合结束才 resolve。
- * Master 靠后者让在飞数覆盖唤醒回合（投递完成前不归零）；观察员在此期间不评估新增量。
+ * 统一投递，resolve 即“已交给指挥官”：
+ * - 主回合在跑：卡片进 steer 队列，入队即交付；
+ * - 主回合歇透：前门 sendUserMessage 唤起。宿主的扩展 sendUserMessage 返回 void、不等回合，
+ *   所以这里订阅下一次 agent_start，唤醒回合真正开始才 resolve。Master 据此扣在飞数：
+ *   扣减时指挥官回合已在跑，busy.ts 不会在唤醒前误报一次“歇下”。
+ * 宿主若在开始回合前就拒绝（如没有可用模型），agent_start 不会来，投递保持未完成：宁可不歇下，也不误报歇下。
  */
 export async function deliver(
 	pi: ExtensionAPI,
@@ -60,7 +62,18 @@ export async function deliver(
 	envelope: Delivery,
 ): Promise<void> {
 	if (ctx.isIdle()) {
-		await pi.sendUserMessage(envelope.content);
+		const started = Promise.withResolvers<void>();
+		const off = pi.on("agent_start", () => {
+			off();
+			started.resolve();
+		});
+		try {
+			pi.sendUserMessage(envelope.content);
+		} catch (error) {
+			off();
+			throw error;
+		}
+		await started.promise;
 		return;
 	}
 	pi.sendMessage(

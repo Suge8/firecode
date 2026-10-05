@@ -88,8 +88,8 @@ const HUBS = Symbol.for("firecode.busy");
  * 会话进行中的唯一判定与歇下边沿：上边框、轮次时钟与 Bark 都只订阅这里，不各自拼装。
  * 每个 pi 只有一份状态机，首个订阅者安装宿主事件，之后只追加订阅；登记挂在 globalThis 上，
  * 宿主按文件加载模块副本时同一个 pi 仍只命中一份。
- * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界（宿主 sendUserMessage 会 await 整个唤醒回合，
- * 所以投递完成、在飞数归零可能晚于 agent_settled，歇下必须在两个来源都满足的那一刻触发）。
+ * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界。在飞数归零与回合落定先后不定
+ * （闲时前门投递在唤醒回合 agent_start 后才算完成，见 deliver.ts），歇下必须在两个来源都满足的那一刻触发。
  * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {

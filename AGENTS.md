@@ -35,7 +35,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起，投递以唤醒回合 `agent_start` 为完成（宿主的扩展 `sendUserMessage` 返回 void、不等回合）。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 `tools/grouping.ts` 是与宿主耦合最紧的一处；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
