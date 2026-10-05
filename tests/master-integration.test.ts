@@ -817,6 +817,7 @@ test("子代理视图里的补话走 send 同一入口：落定事件标题注�
 	expect(content).toContain("你说：把标题改短");
 	expect(content).toContain("回复：\n按你说的改好了");
 	expect(content).toMatch(/耗时：本次运行 /u);
+	await Bun.sleep(0);
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ status: "idle", disposition: "pending" });
 });
