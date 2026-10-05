@@ -16,11 +16,11 @@ import {
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { clip, formatDuration, textOf } from "../format.js";
 import { HEAT_COLORS, paint } from "../flame.js";
-import { readReviewOutcome, type ReviewOutcome } from "../review/outcome.js";
+import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome, type ReviewProgress } from "../review/outcome.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
 import { registerMasterEventRenderer } from "./event-card.js";
-import { ActivityList, visibleRows, type ReviewProgress, type SettledFact } from "./activity-list.js";
+import { ActivityList, visibleRows, type SettledFact } from "./activity-list.js";
 import { MASTER_EVENT_TYPE, masterEvent, withElapsed, type MasterEvent } from "./event-format.js";
 import { assembleMasterPrompt, assembleWorkerPrompt, readMasterPrompt } from "./prompt.js";
 import { InProcessSessionPool, preallocateWorkerSession } from "./spawn.js";
@@ -403,7 +403,7 @@ export function registerMaster(
 				if (!tools?.size) active.currentTools.delete(sessionPath);
 			}
 			if (event.type === "entry_appended") {
-				const progress = reviewProgressFromEntry(event.entry);
+				const progress = reviewProgressOf(event.entry);
 				if (progress) active.reviewProgress.set(sessionPath, progress);
 			}
 		});
@@ -900,7 +900,7 @@ function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {
 }
 
 function monitorReview(
-	session: { subscribe: (listener: (event: { type: string }) => void) => () => void; prompt: (text: string) => Promise<void> },
+	session: { subscribe: (listener: (event: { type: string; entry?: unknown }) => void) => () => void; prompt: (text: string) => Promise<void> },
 	sessionPath: string,
 	previousRunId: string | undefined,
 ): Promise<ReviewOutcome> {
@@ -922,8 +922,10 @@ function monitorReview(
 			unsubscribe();
 			resolve(outcome);
 		};
+		// 只看刚追加的那条记录，不每条都重读整份 JSONL；回合结束时再读一次文件兜底。
 		unsubscribe = session.subscribe((event) => {
-			if (event.type === "entry_appended") finish(readReviewOutcome(sessionPath));
+			const outcome = event.type === "entry_appended" ? outcomeOfEntry(event.entry) : undefined;
+			if (outcome) finish(outcome);
 		});
 		void session.prompt("/fire-review").then(
 			() => {
@@ -1056,29 +1058,12 @@ const LIST_WIDGET_KEY = "firecode-master-list";
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, "指挥官");
 
-function reviewProgressFromEntry(entry: unknown): ReviewProgress | undefined {
-	if (!entry || typeof entry !== "object") return undefined;
-	const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
-	if (record.type !== "custom" || record.customType !== "firecode-review-checkpoint") return undefined;
-	if (!record.data || typeof record.data !== "object") return undefined;
-	const active = (record.data as { active?: unknown }).active;
-	if (!active || typeof active !== "object") return undefined;
-	const progress = active as { round?: unknown; settledCount?: unknown; reviewers?: unknown };
-	if (
-		typeof progress.round !== "number"
-		|| typeof progress.settledCount !== "number"
-		|| !Array.isArray(progress.reviewers)
-	) return undefined;
-	return {
-		kind: "review",
-		round: progress.round,
-		settled: progress.settledCount,
-		total: progress.reviewers.length,
-	};
-}
 
 function currentWorkerAction(active: MasterRuntime, worker: ReturnType<typeof compactWorker>) {
-	if (worker.status === "reviewing") return active.reviewProgress.get(worker.session);
+	if (worker.status === "reviewing") {
+		const progress = active.reviewProgress.get(worker.session);
+		return progress && { kind: "review" as const, ...progress };
+	}
 	if (worker.status === "idle") {
 		let since = active.idleSince.get(worker.session);
 		try {

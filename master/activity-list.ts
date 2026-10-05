@@ -8,14 +8,8 @@ import { type ActivityRow as Row, renderActivityRow, roleFits } from "../activit
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";
+import type { ReviewProgress } from "../review/outcome.js";
 import type { WorkerRef } from "./state.js";
-
-export interface ReviewProgress {
-	kind: "review";
-	round: number;
-	settled: number;
-	total: number;
-}
 
 /** 本次运行的落定事实：落定时刻、结局与行上的说明。失败与被中断留到 ack 或 kill，完成留到 kill。 */
 export interface SettledFact {
