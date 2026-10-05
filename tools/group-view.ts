@@ -348,8 +348,8 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 }
 
 /**
- * 折叠态：按时间顺序列出最近 replyLines 条中间回复各一行首句（更早的计入“+N 条”）与本段的补话
- * （总是显示），再接最后一条回复全文。
+ * 折叠态按时间顺序：先是第一条补话之前的中间回复，之后每条补话（人类原话，竖条全文）后面跟它那一段的中间回复；
+ * 每组各自只列最近 replyLines 条首句，更早的在组内折成“+N 条”。最后接段尾回复全文。
  */
 function foldedReplies(
 	segment: readonly Component[],
@@ -360,30 +360,24 @@ function foldedReplies(
 ): Component[] {
 	const out: Component[] = [];
 	const { theme } = env.ui;
-	const items = segment.flatMap((item) => {
-		if (item instanceof UserMessageComponent && isHuman(item)) return [{ message: item, text: "" }];
-		if (!(item instanceof AssistantMessageComponent) || item === tail) return [];
-		const text = replyText(item);
-		return text ? [{ message: undefined, text: firstSentence(text) }] : [];
-	});
-	const replies = items.filter((item) => !item.message);
-	const listing = hasSummary && env.replyLines > 0;
-	const shown = new Set(listing ? replies.slice(-env.replyLines) : []);
-	const listed = items.filter((item) => item.message || shown.has(item));
-	// 中间回复首句连成一组，前面空一行；补话是人类原话，与开轮的用户消息同样竖条全文，前后各空一行。
-	let inLines = false;
-	const line = (text: string) => {
-		if (!inLines) out.push(new Spacer(1));
-		inLines = true;
-		out.push(new Line(` ${text}`));
-	};
-	if (listing && replies.length > shown.size) line(theme.fg("dim", `+${replies.length - shown.size} 条`));
-	for (const item of listed) {
-		if (!item.message) line(theme.fg("muted", item.text));
-		else {
-			out.push(new Spacer(1), new UserBar(item.message));
-			inLines = false;
+	const groups: { message?: UserMessageComponent; replies: string[] }[] = [{ replies: [] }];
+	for (const item of segment) {
+		if (item instanceof UserMessageComponent && isHuman(item)) groups.push({ message: item, replies: [] });
+		else if (item instanceof AssistantMessageComponent && item !== tail) {
+			const text = replyText(item);
+			if (text) groups[groups.length - 1].replies.push(firstSentence(text));
 		}
+	}
+	const listing = hasSummary && env.replyLines > 0;
+	for (const { message, replies } of groups) {
+		// 前后留白与开轮的用户消息一致：上方隔一行，竖条消息自带上下内边距。
+		if (message) out.push(new Spacer(1), new UserBar(message));
+		if (!listing || !replies.length) continue;
+		const shown = replies.slice(-env.replyLines);
+		// 与宿主正文同一左边距（1 列）。
+		out.push(new Spacer(1));
+		if (replies.length > shown.length) out.push(new Line(` ${theme.fg("dim", `+${replies.length - shown.length} 条`)}`));
+		for (const text of shown) out.push(new Line(` ${theme.fg("muted", text)}`));
 	}
 	// 宿主助手正文自带前导空行，不再另垫。
 	if (body) out.push(body);

@@ -1,7 +1,8 @@
 /**
  * 活动行：输入框上方子代理活动列表（master/activity-list.ts）的一行布局。
  * 标记 名字  角色 · 当前动作 · 提醒 …… 耗时。宽度不够时的退让顺序：先缩名字列（整表一致，名字截短带 …）、
- * 再丢角色（整表一致），提醒（卡住行的“无输出”）先换短写法，最后才截动作文字。
+ * 再丢角色（整表一致），最后截动作文字。卡住行的提醒比动作重要：先保提醒（放不下全写法换短写法），
+ * 动作截到看不出是哪条命令（不足 COMFORT_ACTION_WIDTH）就整段不显示，不留“操作 …”这种没信息的残片。
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -25,7 +26,7 @@ export interface ActivityRow {
 	action: string;
 	/** 当前动作的语气：审查金色，失败红色，被中断黄色。 */
 	tone?: "review" | "failed" | "warning";
-	/** 动作后追加的黄色提醒（卡住行的“无输出”）：比动作重要，宽度不够先换短写法，再截动作。 */
+	/** 动作后追加的黄色提醒（卡住行的“无输出”）：比动作重要，宽度不够先换短写法，动作没信息就整段不显示。 */
 	note?: { full: string; short: string };
 	elapsed: string;
 	/** 已落定的行文字退为暗色，只有标记保留颜色。 */
@@ -73,17 +74,19 @@ export function renderActivityRow(
 				: row.tone === "warning" ? theme.fg("warning", text)
 					: theme.fg(color("muted"), text);
 	const actionRoom = showRole ? room - visibleWidth(row.role) - SEP.length : room;
-	const note = noteFor(row, actionRoom);
-	const textRoom = actionRoom - visibleWidth(note);
-	const action = (row.action && textRoom >= MIN_ACTION_WIDTH ? paintAction(clip(row.action, textRoom)) : "") + (note && theme.fg("warning", note));
+	const action = row.note ? withNote(row, actionRoom, paintAction, theme) : (
+		row.action && actionRoom >= MIN_ACTION_WIDTH ? paintAction(clip(row.action, actionRoom)) : "");
 	const role = theme.fg(color("muted"), row.role);
 	const middle = showRole ? (action ? `${role}${theme.fg("dim", SEP)}${action}` : role) : action;
 	return `${head}  ${pad(middle, room + 1)}${theme.fg(color("muted"), row.elapsed)} `;
 }
 
-/** 提醒优先于动作：全写法放得下且还能给动作留一点就用全写法，否则短写法，再不够才截。 */
-function noteFor(row: ActivityRow, room: number): string {
-	if (!row.note) return "";
-	if (visibleWidth(row.note.full) + MIN_ACTION_WIDTH <= room) return row.note.full;
-	return clip(row.note.short, room);
+/** “动作 · 提醒”：提醒优先；剩下的位置装得下整条动作或至少能认出命令才带上动作。 */
+function withNote(row: ActivityRow, room: number, paintAction: (text: string) => string, theme: Theme): string {
+	const { full, short } = row.note!;
+	const note = visibleWidth(full) <= room ? full : clip(short, room);
+	const actionRoom = room - visibleWidth(note) - SEP.length;
+	const fits = visibleWidth(row.action) <= actionRoom || actionRoom >= COMFORT_ACTION_WIDTH;
+	if (!row.action || !fits) return theme.fg("warning", note);
+	return `${paintAction(clip(row.action, actionRoom))}${theme.fg("warning", `${SEP}${note}`)}`;
 }

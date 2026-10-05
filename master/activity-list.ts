@@ -53,7 +53,7 @@ const IDLE_GLYPH = "·";
 
 /** 卡住提醒的全写法与窄屏短写法。 */
 function silentNote(minutes: number): { full: string; short: string } {
-	return { full: ` · ${minutes} 分钟无输出`, short: ` · ${minutes}m 无输出` };
+	return { full: `${minutes} 分钟无输出`, short: `${minutes}m 无输出` };
 }
 const FAILED_MARK = paint(HEAT_COLORS.fail, "✗");
 
@@ -96,7 +96,8 @@ function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 			const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
 			// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
 			if (silent >= STUCK_MS)
-				groups.stuck.push({ ...base, mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) });
+				// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
+				groups.stuck.push({ ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) });
 			else groups.running.push({ ...base, mark: flame(1, phase), action });
 			continue;
 		}

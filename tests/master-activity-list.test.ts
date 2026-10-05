@@ -279,3 +279,13 @@ test("窄屏卡住行提醒优先：40 列也看得到完整的无输出提醒�
 	expect(line).toMatch(/5(?: 分钟|m )无输出/u);
 	expect(line).not.toMatch(/无…|分…/u);
 });
+
+test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两个时长并排看混）；窄屏动作放不下有效信息时整段丢掉，只留名字与提醒", async () => {
+	const stuck: Spec = { name: "slow", started: NOW - 6 * MINUTE, output: NOW - 5 * MINUTE, tool: "bash", args: { command: "sleep 330 && echo slow-done" } };
+	const others: Spec[] = [{ name: "repo-scan", tool: "read", args: { path: "/p/master/index.ts" }, output: NOW - 1_000 }];
+	const [wide] = (await list([stuck, ...others], { now: NOW })).text(160);
+	expect(wide).toContain("操作 $ sleep 330 && echo slow-done · 5 分钟无输出");
+	expect(wide).not.toMatch(/6m\s*$/u);
+	const [narrow] = (await list([stuck, ...others], { now: NOW })).text(40);
+	expect(narrow).toMatch(/^ {2}\S slow\s+5(?: 分钟|m )无输出\s*$/u);
+});
