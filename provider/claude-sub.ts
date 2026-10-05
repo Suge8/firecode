@@ -3,6 +3,7 @@
  * - 归因：按 Claude Code 的格式补 user-agent 与系统提示词首块的 billing header，缺失时注入，已存在则原样通过。
  * - 换发自愈：Anthropic 换发订阅令牌即吊销旧令牌，换发时仍在途的请求以 401 落空；宿主不重试 401，
  *   这里把该失败从模型投影中省略并续跑一次，续跑请求由宿主重读令牌文件拿到新令牌。重试仍 401 即登录真失效，照常落定。
+ *   是否已重试只看会话分支，不留内存标记；不交给角色 fallback，换模型解决不了令牌换发。宿主将来自行重试这类 401 时删除本自愈。
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";

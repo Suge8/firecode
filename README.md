@@ -80,4 +80,4 @@ curl -fsSL https://raw.githubusercontent.com/Suge8/firecode/v0.6.1/config.exampl
 bun test
 ```
 
-模块边界、状态机约束和领域术语见 `AGENTS.md`、各模块的 `AGENTS.md` 与 `CONTEXT.md`。
+模块边界、状态机约束和领域术语见 `AGENTS.md`、各模块的 `AGENTS.md` 与术语表 `WORDS.md`。

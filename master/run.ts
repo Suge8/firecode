@@ -108,7 +108,10 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef): void {
 	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true), identity.name);
 }
 
-/** 会话重载打断的回合：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间。指挥官自己 interrupt 的不提醒。 */
+/**
+ * 会话重载打断的回合：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间。指挥官自己 interrupt 的不提醒。
+ * 只提醒、不代发“继续”：工作说明归指挥官，插件盲续会复活它已作废的任务。
+ */
 export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): void {
 	if (active.closed) return;
 	const live = active.liveOf(worker.name);
@@ -125,6 +128,10 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 	live.interruptTimer.unref?.();
 }
 
+/**
+ * 任何 error 终态都沿角色链切换，不按关键词分类故障：供应商措辞多变，关键词白名单实测一次未命中，分类也不改变决策。
+ * 瞬时限流与 Claude 令牌换发在 error 之前已由宿主重试和 claude-sub 自愈处理。由插件而非宿主做：宿主不知道角色与档案。
+ */
 async function resumeWithFallback(
 	active: MasterRuntime,
 	identity: WorkerRef,

@@ -71,12 +71,13 @@ function steer(pi: ExtensionAPI, envelope: Delivery): void {
 }
 
 /**
- * 前门唤起按事实确认送达（ADR 0017）。宿主的扩展 sendUserMessage 返回 void、不等回合；开回合前被拒时只走宿主
+ * 前门唤起按事实确认送达。宿主的扩展 sendUserMessage 返回 void、不等回合；开回合前被拒时只走宿主
  * emitError，扩展订阅不到。所以等下一个回合的第一条消息：
  * - 正是这条信封（role=user、正文原样）：它开启了这一回合，送达；
  * - 是别的（用户自己发的话、其他扩展唤起的消息）：这条没进来，会话此刻正忙，同一节拍改走 steer 补投，句缝送达。
  * 两种情况下 resolve 时指挥官回合都已在跑，Master 扣在飞数不会让 busy.ts 误报歇下。
  * 之后再没有任何回合时投递保持未完成：宁可不歇下，也不误报歇下；没有计时器。
+ * 不以任意 agent_start 为送达（宿主拒绝后用户自己开的回合会被误认，事件被 ack 却没进上下文）；不加超时（超时后仍判断不了是否送达）。
  */
 function wake(pi: ExtensionAPI, envelope: Delivery): Promise<void> {
 	const delivered = Promise.withResolvers<void>();

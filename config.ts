@@ -311,6 +311,7 @@ const FALLBACK_THINKING: ThinkingLevelValue = "medium";
  * 解析 "provider/model/thinking"：按最后一个斜杠切出思考档，前半必须仍是 provider/model。
  * 任何位置的模型配置都走这里，解析失败只记录问题并留空模型，让上层拒绝启动。
  * 每个字段只报一条问题，且必带目标形状——两段式旧写法会同时踩中两项校验，逐项报错说不出该改成什么。
+ * 旧的分字段与两段式写法一律拒绝、不做兼容：兼容层会把三种写法固化成三套事实源。
  */
 export function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
 	const shape = `${field} 必须是“provider/model/thinking”字符串`;

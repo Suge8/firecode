@@ -39,6 +39,7 @@ async function tail(active: MasterRuntime, params: Params): Promise<ToolResult> 
 	return { content: [{ type: "text", text: await readWorkerTrace(target) }], details: undefined };
 }
 
+/** 动作名按模型先验取：曾叫 hold，被读成“暂停”而假成功。名字治误读，非 idle 报错治假成功。 */
 async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 	if (target.reviewNeeded) throw new Error(`${target.name} 此票有审查义务，完成 review 后才能 ack`);
