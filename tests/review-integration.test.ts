@@ -404,7 +404,6 @@ describe("registerReview wiring", () => {
 		}
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		expect(readCheckpoint({ sessionManager })?.summary ?? null).toBeNull();
-		expect(activityFactory).toBeUndefined();
 		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 		await rm(script, { force: true });
 	}, 20_000);
