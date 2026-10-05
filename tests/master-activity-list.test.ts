@@ -68,7 +68,9 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 	};
 }
 
-const names = (lines: string[]) => lines.map((line) => line.match(/^ {2}\S ([a-z][a-z0-9-]*) /u)?.[1] ?? line.trim());
+/** 子代理行取名字；折叠行取“标记 计数”（后面的名字预览不算）。 */
+const names = (lines: string[]) => lines.map((line) => line.match(/^ {2}\S ([a-z][a-z0-9-]*) /u)?.[1]
+	?? line.match(/^ {2}(\S (?:\+\d+ 个在跑|\d+ 个已完成|\d+ 个空闲|收起))/u)?.[1] ?? line.trim());
 const done = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
 	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "done", note] });
 const interrupted = (name: string, agoMs = 2 * MINUTE): Spec =>
@@ -142,7 +144,7 @@ test("卡住：working 五分钟没有任何输出时保留动作文字，追加
 	expect(fresh.text()[0]).toContain("思考中");
 });
 
-test("行数上限只约束在跑的行：失败与卡住永远可见，超出折成“… +N 个在跑”", async () => {
+test("行数上限只约束在跑的行：失败与卡住永远可见，超出折成“+N 个在跑”", async () => {
 	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
 	const view = await list([
 		...running,
@@ -152,20 +154,20 @@ test("行数上限只约束在跑的行：失败与卡住永远可见，超出�
 		done("done-a"),
 	], { limit: 4, now: NOW });
 	expect(names(view.text())).toEqual([
-		"fail-a", "fail-b", "stuck-a", "run-0", "run-1", "run-2", "… +3 个在跑", "✓ 1 个已完成",
+		"fail-a", "fail-b", "stuck-a", "run-0", "run-1", "run-2", "· +3 个在跑", "✓ 1 个已完成",
 	]);
 });
 
-test("点击“… +N 个在跑”展开全部、再点收起；点“✓ N 个已完成”列出名字与本次运行耗时、再点收起", async () => {
+test("点击“+N 个在跑”展开全部、再点收起；点“✓ N 个已完成”列出名字与本次运行耗时、再点收起", async () => {
 	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
 	const view = await list([...running, done("done-a", 2 * MINUTE, "刷新改为单飞。"), done("done-b")], { limit: 4, now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
 
-	expect(view.click(rowOf("… +3 个在跑"))).toMatchObject({ handled: true });
+	expect(view.click(rowOf("+3 个在跑"))).toMatchObject({ handled: true });
 	expect(names(view.text()).filter((line) => line.startsWith("run-"))).toHaveLength(6);
-	expect(rowOf("… +3 个在跑")).toBe(-1);
+	expect(rowOf("+3 个在跑")).toBe(-1);
 	view.click(rowOf("收起"));
-	expect(names(view.text())).toEqual(["run-0", "run-1", "run-2", "… +3 个在跑", "✓ 2 个已完成"]);
+	expect(names(view.text())).toEqual(["run-0", "run-1", "run-2", "· +3 个在跑", "✓ 2 个已完成"]);
 
 	view.click(rowOf("✓ 2 个已完成"));
 	const opened = view.text();
@@ -192,7 +194,7 @@ test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样
 		{ name: "p3", status: "idle", launch: 3 },
 	], { now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
-	expect(view.text()[1]).toMatch(/^ {2}\S 3 个空闲$/u);
+	expect(view.text()[1]).toMatch(/^ {2}\S 3 个空闲 +p1 · p3 · p6$/u);
 	expect(view.click(rowOf("3 个空闲"))).toMatchObject({ handled: true });
 	const rows = view.text().slice(rowOf("3 个空闲") + 1);
 	expect(rows.map((line) => line.match(/ (p\d) /u)?.[1])).toEqual(["p1", "p3", "p6"]);
@@ -288,4 +290,43 @@ test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两
 	expect(wide).not.toMatch(/6m\s*$/u);
 	const [narrow] = (await list([stuck, ...others], { now: NOW })).text(40);
 	expect(narrow).toMatch(/^ {2}\S slow\s+5(?: 分钟|m )无输出\s*$/u);
+});
+
+const UNDERLINE = (text: string) => `\x1b[4:4m${text}\x1b[24m`;
+
+test("折叠行的可点提示：计数加点线下划线，后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有 … 与箭头", async () => {
+	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
+	const view = await list([...running, done("types"), done("pen"), { name: "writer", status: "idle" }, { name: "nap", status: "idle" }],
+		{ limit: 4, now: NOW, paint: tagged });
+	const raw = view.raw(100);
+	const fold = (count: string) => raw.find((line) => line.includes(UNDERLINE(count)))!;
+	expect(fold("+3 个在跑")).toMatch(/^ {2}<dim>·<\/dim> /u);
+	expect(fold("+3 个在跑")).toContain("<dim>run-3 · run-4 · run-5</dim>");
+	expect(fold("2 个已完成")).toContain("<dim>types · pen</dim>");
+	expect(fold("2 个空闲")).toMatch(/^ {2}<dim>·<\/dim> /u);
+	expect(fold("2 个空闲")).toContain("<dim>writer · nap</dim>");
+	for (const line of view.text(100)) expect(line).not.toMatch(/[…▸▾▶▼›>]/u);
+	// 计数后的名字列对齐。
+	const text = view.text(100);
+	const column = (needle: string) => text.find((line) => line.includes(needle))!.indexOf(needle);
+	expect(column("run-3")).toBe(column("types"));
+	expect(column("types")).toBe(column("writer"));
+});
+
+test("折叠行名字按宽度少列，不在名字中间截断；展开后收起行同样加点线下划线，已展开的分组不再预览名字", async () => {
+	const running = Array.from({ length: 8 }, (_, index) => ({ name: `worker-${index}`, output: NOW - 1_000 }));
+	const view = await list([...running, done("types")], { limit: 4, now: NOW });
+	const line = view.text(40).find((entry) => entry.includes("+5 个在跑"))!;
+	const listed = line.slice(line.indexOf("worker-")).split(" · ");
+	expect(listed.length).toBeGreaterThan(0);
+	expect(listed.length).toBeLessThan(5);
+	for (const name of listed) expect(name).toMatch(/^worker-[3-7]$/u);
+	expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
+
+	view.click(view.text(40).indexOf(line));
+	expect(view.raw(100).some((entry) => entry.includes(UNDERLINE("收起")))).toBe(true);
+	view.click(view.text(100).findIndex((entry) => entry.includes("1 个已完成")));
+	const header = view.text(100).find((entry) => entry.includes("1 个已完成"))!;
+	expect(header).not.toContain("types");
+	expect(view.text(100).some((entry) => /^ {2}\S types /u.test(entry))).toBe(true);
 });
