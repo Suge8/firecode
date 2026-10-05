@@ -196,3 +196,27 @@ test("tools.replyLines 默认 3，接受非负整数，类型错误与未知字�
 	expect((await load('{ "replyLine": 2 }')).problems).toContain("未知字段 tools.replyLine");
 	expect((await load("[]")).problems).toContain("tools 必须是对象");
 });
+
+test("功能关闭时它那一节的配置错误不全局警告；开启时照常警告", async () => {
+	const warningsFor = async (master: boolean) => {
+		const configJsonc = JSON.stringify({
+			features: { ...(await featuresOnly()), master },
+			master: { roles: { 工程师: { model: "bad", use: "坏原子" } } },
+		});
+		const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
+		const events = new Map<string, Array<(...args: unknown[]) => void>>();
+		(registerFirecode as (pi: unknown) => void)({
+			registerCommand() {}, registerShortcut() {}, registerTool() {}, registerMessageRenderer() {}, registerEntryRenderer() {},
+			getActiveTools: () => [], setActiveTools() {},
+			on: (name: string, handler: (...args: unknown[]) => void) => events.set(name, [...(events.get(name) ?? []), handler]),
+			events: { on() {}, emit() {} },
+		});
+		const warnings: string[] = [];
+		for (const handler of events.get("session_start") ?? [])
+			await handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
+		await cleanupFirecodeModules();
+		return warnings.filter((message) => message.includes("master.roles"));
+	};
+	expect(await warningsFor(false)).toEqual([]);
+	expect(await warningsFor(true)).not.toEqual([]);
+});
