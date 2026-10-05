@@ -80,6 +80,8 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const read = s.tool("read", { path: "/project/a.ts" });
 	s.complete(read);
 	const bash = s.tool("bash", { command: "bun test" });
@@ -100,6 +102,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	expect(s.lines().join("\n")).not.toContain("private full result");
 
 	s.complete(bash);
+	feed(s, false);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
@@ -143,6 +146,8 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 
 test("摘要优先显示运行项，工具失败不计数、不画红叉，切档不改聊天树", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
@@ -157,6 +162,7 @@ test("摘要优先显示运行项，工具失败不计数、不画红叉，切�
 			for (const line of s.lines(width)) expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
 	s.complete(running);
+	feed(s, false);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 });
@@ -245,6 +251,8 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 
 test("首条思考即显示过程状态，思考完成后摘要行留在原位，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
@@ -264,6 +272,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	};
 	const originalMessage = structuredClone(message);
 	assistant.updateContent(message, false);
+	feed(s, false);
 	let clicks = 0;
 	assistant.addChild(new s.tui.MouseRegion(new s.tui.Text("原生额外内容", 0, 0), () => { clicks++; return { handled: true }; }));
 	const originalTree = assistant.children;
@@ -297,6 +306,8 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 
 test("思考期间异常和截断诊断不会被思考折叠吞掉", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
@@ -313,6 +324,8 @@ test("思考期间异常和截断诊断不会被思考折叠吞掉", async () =>
 
 test("真实子代理调用与池查询纳入过程组，保留原生动作和列表摘要，详情按需展开", async () => {
 	const s = await scene({ withMaster: true });
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -322,6 +335,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
 		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
 	} });
+	feed(s, false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 	expect(s.lines().join("\n")).not.toContain("worker-one");
