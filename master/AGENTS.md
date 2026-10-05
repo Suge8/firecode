@@ -4,12 +4,26 @@
 
 ## 运行时
 
+| 文件 | 职责 |
+| --- | --- |
+| `index.ts` | 注册入口：激活与停用、命令、两个工具与生命周期 |
+| `runtime.ts` | 一个指挥官会话的运行时：档案 store、按名字索引的 Worker 运行时事实表（live）、活动列表投影；`current`/`commit` 是 await 后唯一的重读与写回点 |
+| `outbox.ts` | 事件发件箱：pending/ack 持久化、合并投递、重试、耗时行与在飞数计算 |
+| `run.ts` | 回合编排：打开会话、跑回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视、中断续跑提醒 |
+| `actions.ts` | 七个命令动作的处理函数，表驱动分发 |
+| `list-view.ts` | 工具行、池快照展开与 status 文本，纯投影 |
+| `guard.ts` | Worker 会话里唯一注册的 edit/write checkout 守卫 |
+| `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
+| `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
+
 所有子会话只经 `spawn.ts` 创建：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
-系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
+系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在子会话里不可见。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
 
 Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
 
-热冷只属于运行时缓存：池不订阅会话事件自判空闲，只有 Master 在回合落定、中断落定、审查落定时 `markIdle` 才起释放计时，因此 reviewing 中的 Worker（审查期间它自己是闲的，修复回合结束也会落定）不会被释放；到期释放先经该会话的 extensionRunner 发 `session_shutdown`（reason quit）让会话内扩展收口，再 dispose——与宿主替换会话的顺序一致，否则会话里跑着的 fire-review 会成为握着死 ctx 的孤儿。档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 在同步段内删档案与内存引用，再等待 session_shutdown 收口后释放热会话，永不删除 JSONL。异步回写只属于满足 `runtime === active` 的当前 runtime；会话关闭先清空当前 runtime，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
+热冷只属于运行时缓存：池不订阅会话事件自判空闲，只有 Master 在回合落定、中断落定、审查落定时 `markIdle` 才起释放计时，因此 reviewing 中的 Worker（审查期间它自己是闲的，修复回合结束也会落定）不会被释放；释放热会话后池通知持有方，Master 随即退订，不再持有已关闭的会话；到期释放先经该会话的 extensionRunner 发 `session_shutdown`（reason quit）让会话内扩展收口，再 dispose——与宿主替换会话的顺序一致，否则会话里跑着的 fire-review 会成为握着死 ctx 的孤儿。档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 在同步段内删档案与该名下的整条运行时事实（计时器、订阅、当前工具、落定结局一次清掉），再等待 session_shutdown 收口后释放热会话，永不删除 JSONL；start 失败同样只撤自己这一票的事实。异步回写只属于未关闭的当前 runtime；会话关闭先清空当前 runtime 并置 closed，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
+
+档案（v8）存在 Pi Agent 目录（`getAgentDir()`，含 `PI_CODING_AGENT_DIR` 覆写）的 `tmp/firecode-master-<主会话 id>.json`，事件的 pending/ack 存在主会话 JSONL：fork 出的会话带着 pending 却没有档案，重投时可能提到不在池里的 Worker——这是已知边缘，接受。
 
 ## 工具契约
 
@@ -26,7 +40,7 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 `subagents_list` 是零参数查询：模型结果只返回池快照；折叠工具行显示池计数与每个 Worker 的「角色·状态」，展开后每个 Worker 一行以角色为主投影当前工具与耗时、审查轮次进度或落定相对时间，模型与思考档降为行尾次要信息。
 ## 活动列表
 
-`activity-list.ts` 在输入框上方（widget aboveEditor）逐行列出子代理，单行布局在根级 `activity.ts`，分组、折叠与点击在本文件；底栏只发布纯文字“指挥官”。分组顺序：需要处理的置顶——失败（红 ✗，含审查停止、审查未完成），然后被中断（静态黄色 ‖ 加“被中断”：不是失败，会话与义务都在），然后卡住（working 自本次运行起点与最近一次输出（模型 token 或工具事件）中较晚者起 5 分钟无输出，静态黄色 ◌ 加“N 分钟无动静”，有输出即恢复）；然后在跑（火苗 + 与工具行同源的动作词和目标，见 `tools/actions.ts`；无工具时“思考中”）与审查中（审查第 N 轮 · k/n 通过）；最后一行 `✓ N 个已完成`。落定事实（时刻、成败与说明）只在运行时记录，不看持久化 disposition，reload 后不展示历史：失败与被中断的行留到 ack 或 kill，完成留到 kill；续派后该行按新状态显示。右侧耗时：运行中取本次运行起点，落定行冻结在落定时刻。
+`activity-list.ts` 在输入框上方（widget aboveEditor）逐行列出子代理，单行布局在根级 `activity.ts`，分组、折叠与点击在本文件；底栏只发布纯文字“指挥官”。活动列表的输入由 runtime 从档案加 live 表投影一次给出，落定时刻只有 live 里一份（列表冻结耗时与 subagents_list 的“落定 X 前”共用）。分组顺序：需要处理的置顶——失败（红 ✗，含审查停止、审查未完成），然后被中断（静态黄色 ‖ 加“被中断”：不是失败，会话与义务都在），然后卡住（working 自本次运行起点与最近一次输出（模型 token 或工具事件）中较晚者起 5 分钟无输出，静态黄色 ◌ 加“N 分钟无动静”，有输出即恢复）；然后在跑（火苗 + 与工具行同源的动作词和目标，见 `tools/actions.ts`；无工具时“思考中”）与审查中（审查第 N 轮 · k/n 通过）；最后一行 `✓ N 个已完成`。落定事实（时刻、成败与说明）只在运行时记录，不看持久化 disposition，reload 后不展示历史：失败与被中断的行留到 ack 或 kill，完成留到 kill；续派后该行按新状态显示。右侧耗时：运行中取本次运行起点，落定行冻结在落定时刻。
 
 组内一律按启动序：运行时在 `start` 同步段取单调序号（名字 → 序号，`kill` 或启动失败时删除），这是唯一排序依据——池数组顺序受并发 `start` 越过 await 的先后影响，不能当启动序；reload 恢复的没有序号，排最前并保持池内顺序。可见行数上限 `max(4, floor(终端高度/6))`（拿不到高度时 4）只约束在跑与审查的行，失败与卡住永远可见、不计入；超出时折成“… +N 个在跑”。点击由宿主经布局分发到 widget：点“… +N 个在跑”展开全部、点“… 收起”折回；点 `✓ N 个已完成` 列出名字与本次运行耗时、再点收起；全局展开（ctrl+o）全部列出。窄屏退让整表一致：任何一行的动作文字保不住 12 列就全表丢角色，动作文字按剩余宽度截短（保留开头，带 …）。动画时钟只在有行在动（在跑、审查、卡住）时订阅 `flame.ts` 的 `onFrame`，全部静止即取消，Master 自身不持有帧计时器。
 
@@ -48,4 +62,4 @@ Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.
 
 Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout；bash 仍是可信能力，最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
-Master 只跨模块读取 `review/outcome.ts`，并订阅 Worker 会话里的 review checkpoint 事件投影审查进度；bark 只读取 v8 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
+Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取 v8 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
