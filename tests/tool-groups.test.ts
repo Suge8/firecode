@@ -1171,6 +1171,28 @@ test("点击摘要展开或收起时被点的行留在视口内；原本跟随�
 	expect(s.scroll.scrollTop).toBe(3);
 });
 
+test("内容不足一屏时点开一轮、展开后超出视口：被点的摘要行仍在视口内，之后新输出恢复跟随", async () => {
+	const s = await scene({ scroll: true });
+	hostUser(s, "问题");
+	for (let index = 0; index < 20; index++) s.complete(s.tool("read", { path: `f${index}.ts` }));
+	assistant(s, [{ type: "text", text: "回答" }]);
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
+	const VIEWPORT = 10;
+	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, VIEWPORT, () => {});
+	layout();
+	expect(s.chat.render(100).length).toBeLessThan(VIEWPORT);
+	const row = s.lines().findIndex((line: string) => line.startsWith("✓"));
+	s.click(row);
+	layout();
+	expect(s.chat.render(100).length).toBeGreaterThan(VIEWPORT);
+	expect(s.lines()[row]).toMatch(/^✓/);
+	expect(row >= s.scroll.scrollTop && row < s.scroll.scrollTop + VIEWPORT).toBe(true);
+	s.complete(s.tool("read", { path: "z.ts" }));
+	layout();
+	expect(s.scroll.isFollowingEnd).toBe(true);
+});
+
 test("宿主对 ctrl+o 的回显“Tool output: expanded/collapsed”不进对话；其余宿主状态行照常折入", async () => {
 	const s = await scene();
 	const note = (color: string, text: string) => {

@@ -41,7 +41,8 @@ export class ClickAnchor {
 			this.held = undefined;
 			if (line >= scroller.contentHeight + growth - scroller.viewport) return scroller.follow();
 			scroller.holdAt(line);
-			this.held = { top: line, height };
+			// 宿主按上次布局的内容高夹住首行（内容原本不足一屏时夹到 0）：记实际停住的位置，否则下一次布局会误判成用户滚动过。
+			this.held = { top: scroller.top, height };
 			return;
 		}
 		const held = this.held;
