@@ -42,7 +42,7 @@ const PRESET_CONFIG = JSON.stringify({
 	},
 });
 
-/** 宿主替身：模型与思考档由宿主在 session_start 之前按会话记录恢复，工具集不入会话记录、每次开会话是默认集。 */
+/** 宿主替身：模型、思考档与工具集都由宿主记在会话里，并在 session_start 之前按记录恢复（真实宿主的工具集随运行记入 transcript）。 */
 async function presetHost() {
 	const { registerPresets } = await loadFirecodeModule("session/presets.ts", { configJsonc: PRESET_CONFIG });
 	const models: Record<string, { provider: string; id: string }> = {
@@ -53,7 +53,7 @@ async function presetHost() {
 	const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 	const handlers = new Map<string, Function[]>();
 	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
-	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined };
+	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, recordedTools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined };
 	const emit = async (name: string, event: unknown = {}) => {
 		let result: unknown;
 		for (const handler of handlers.get(name) ?? []) result = (await handler(event, ctx)) ?? result;
@@ -78,14 +78,14 @@ async function presetHost() {
 			return true;
 		},
 		getActiveTools: () => state.tools,
-		setActiveTools: (tools: string[]) => { state.tools = tools; },
+		setActiveTools: (tools: string[]) => { state.tools = tools; state.recordedTools = tools; },
 		getAllTools: () => DEFAULT_TOOLS.map((name) => ({ name })),
 		appendEntry: (customType: string, data: unknown) => state.branch.push({ type: "custom", customType, data }),
 	});
-	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）、工具回默认集，再发 session_start。 */
+	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再发 session_start。 */
 	const reopen = async (restoredModel: string) => {
 		state.model = models[restoredModel];
-		state.tools = DEFAULT_TOOLS;
+		state.tools = state.recordedTools;
 		await emit("session_start");
 	};
 	const instructions = async () =>
@@ -94,7 +94,7 @@ async function presetHost() {
 	return { state, emit, reopen, instructions, preset, models, DEFAULT_TOOLS };
 }
 
-test("重开会话时宿主恢复的仍是预设模型：预设整套生效——工具集重新应用、指令照常注入、状态显示预设名", async () => {
+test("重开会话时宿主恢复的仍是预设模型：预设整套生效——工具集仍是预设的、指令照常注入、状态显示预设名", async () => {
 	const host = await presetHost();
 	await host.emit("session_start");
 	await host.preset("deep");
@@ -111,7 +111,8 @@ test("重开会话时宿主恢复的模型已不是预设的：预设失效，�
 	await host.reopen("test/base");
 	expect(await host.instructions()).toBe("BASE");
 	expect(host.state.status).toBeUndefined();
-	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	// 失效只清预设自己的状态（名字与指令），宿主恢复的工具集不动。
+	expect(host.state.tools).toEqual(["read", "bash"]);
 	await host.reopen("test/deep");
 	expect(await host.instructions()).toBe("BASE");
 	expect(host.state.status).toBeUndefined();
