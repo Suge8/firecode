@@ -36,7 +36,7 @@ export interface BusyView {
 	/** 主会话 /fire-review 进行中：算会话进行中，审查时长计入这一段。 */
 	review: boolean;
 }
-export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false };
+export const IDLE: BusyView = { agentRunning: false, inFlight: 0, busy: false, review: false };
 
 /** 本段最后一个指挥官回合的终态，与宿主 AgentActivityOutcome 同一判定：最后一条助手消息的 stopReason。 */
 export type Outcome = "complete" | "aborted" | "error";
@@ -125,7 +125,7 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 		}
 		const started = since;
 		if (!busy) since = undefined;
-		const view = { agentRunning, inFlight, busy, since };
+		const view: BusyView = { agentRunning, inFlight, busy, since, review: false };
 		for (const subscriber of subscribers) subscriber.onChange?.(view, ctx);
 		if (busy || started === undefined || teardown) return;
 		const round = settledRound(now - started, outcome, requests);
