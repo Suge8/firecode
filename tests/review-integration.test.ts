@@ -133,6 +133,7 @@ function makePi(sessionManager: MockSessionManager) {
 			sessionManager.appendCustomEntry(customType, data);
 		},
 		events: {
+			on: () => () => {},
 			emit: (name: string, data: unknown) => registered.emitted.push({ name, data }),
 		},
 	};

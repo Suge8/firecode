@@ -19,7 +19,7 @@ import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { LABEL, toolTarget } from "./actions.js";
 import { diffMeta } from "./parts.js";
-import { ROUND_ENTRY, renderRound, ROUND_RECORDED_CHANNEL } from "./round.js";
+import { ROUND_ENTRY, renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
 
@@ -153,16 +153,9 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
 	// 时钟只投影 busy.ts 的唯一状态机；拆会话会重载扩展，不跨会话复用。
 	const clock = new TurnClock();
+	// 轮记录由根级轮记录器写（每个会话都有）；这里只把它渲染成零行标记，供摘要行读。
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
-	watchBusy(pi, {
-		onChange: (view) => clock.sync(view),
-		// 轮记录只属于装了分组投影的 TUI 主会话；写成会话记录，摘要行落定时读它，写入后发布给输入框外壳。
-		onSettled: (_ctx, round) => {
-			if (!dispose) return;
-			pi.appendEntry(ROUND_ENTRY, round);
-			pi.events.emit(ROUND_RECORDED_CHANNEL, undefined);
-		},
-	});
+	watchBusy(pi, { onChange: (view) => clock.sync(view) });
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();

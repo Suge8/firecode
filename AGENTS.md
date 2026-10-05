@@ -6,7 +6,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
 状态，关掉任何一个不影响其余；跨模块接缝只有十条：Master 只读调 `review/outcome.ts`，bark 只读调
 `master/state.ts` 的持久化状态，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度（频道名与 payload 只在 `review/occupancy.ts` 定义），statusbar、tools 与 bark 经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有），statusbar 的落定态经 `tools/round.ts` 的 `latestTurnRecord` 读轮记录（与摘要行同一合成规则）。
+`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度（频道名与 payload 只在 `review/occupancy.ts` 定义），轮记录器、statusbar、tools 与 bark 经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有），statusbar 的落定态经 `tools/round.ts` 的 `latestTurnRecord` 读轮记录（与摘要行同一合成规则），Master 的“本次运行”耗时与子代理视图经 `roundFromEntry` 读子代理会话里的轮记录。
 
 ## 模块
 
@@ -21,6 +21,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
+| `round-recorder.ts` | 轮记录器：会话歇下时把整段时长、终态与均速写成 `firecode-round` CustomEntry 并发布“已写入”；不属于任何可关的功能，主会话与每个子代理会话都注册、与界面无关，记录格式与读取在 `tools/round.ts` |
 | `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起并以宿主记录这条消息为送达，没进回合就改走 steer 补投 | |
 | `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞 \|\| 主会话审查进行中）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长、终态与均速）`watchBusy`；频道名与 payload 只在这里定义 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
