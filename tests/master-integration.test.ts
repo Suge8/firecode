@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import {
 	cleanupFirecodeModules,
 	featuresOnly,
+	firecodeModulePath,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
 	PI_AI_URL,
@@ -793,6 +794,33 @@ test("主回合空闲时，并发落定合并走前门用户消息，投递前�
 	]);
 });
 
+test("本次运行耗时读子代理会话自己写的轮记录：子代理没装轮记录器时事件不带本次运行，不拿指挥官这边的计时冒充", async () => {
+	const harness = await setup(true, { workerRecorder: false });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "bare", prompt: "执行", role: "工程师" });
+	await delivered;
+	expect(harness.messages.at(-1).message.content).not.toContain("本次运行");
+});
+
+test("子代理视图里的补话走 send 同一入口：落定事件标题注明是你在视图里直接派的，正文带你说的原话，其余与普通 send 相同", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("初始完成"), fauxAssistantMessage("按你说的改好了")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "viewed", prompt: "初始化", role: "工程师" });
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "viewed", prompt: "把标题改短", origin: "view" });
+	await delivered;
+	const content = harness.messages.at(-1).message.content as string;
+	expect(titleOf(content)).toBe("viewed 已返回（你在子代理视图里直接派的）");
+	expect(content).toContain("你说：把标题改短");
+	expect(content).toContain("回复：\n按你说的改好了");
+	expect(content).toMatch(/耗时：本次运行 /u);
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle", disposition: "pending" });
+});
+
 test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待续跑”，首次 send 自动注入现场自检", async () => {
 	const harness = await setup(true, { interruptResumeMs: 10 });
 	let resumedPrompt = "";
@@ -1572,6 +1600,8 @@ async function setup(activate = true, options: {
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
+	/** 子会话加载 FireCode 的轮记录器（与真实安装一致）；false 复现 Worker 排除了 FireCode 扩展。 */
+	workerRecorder?: boolean;
 	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
 } = {}) {
@@ -1581,7 +1611,10 @@ async function setup(activate = true, options: {
 	const sessionDir = join(directory, "sessions");
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
 	const extensions = join(agentDir, "extensions");
-	if (options.mockReview || options.shutdownProbe || options.inputGate) await mkdir(extensions);
+	await mkdir(extensions);
+	if (options.workerRecorder !== false)
+		await writeFile(join(extensions, "round-recorder.ts"),
+			`export { registerRoundRecorder as default } from ${JSON.stringify(await firecodeModulePath("round-recorder.ts"))};`);
 	if (options.inputGate)
 		await writeFile(join(extensions, "input-gate.ts"), `export default function(pi) {
 			pi.on("input", async (event) => {
@@ -1853,9 +1886,11 @@ function mockReviewExtension(
 		pi.registerCommand("fire-review", {
 			description: "mock review",
 			handler: () => {
+				// 与真实 review 一致：审查期间持有占用，会话因此算进行中，审查时长计入子代理的轮记录。
+				pi.events.emit("herdr:blocked", { active: true, label: "审查", progress: () => undefined });
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
 				globalThis.__reviewTick?.();
-				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});`}
+				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)}); pi.events.emit("herdr:blocked", { active: false });`}
 				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
 			},
 		});
