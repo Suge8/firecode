@@ -248,12 +248,12 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 处理中\\s*$`));
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }, { type: "text", text: "第一段" }], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
+	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 回复中\\s*$`));
 	const message = {
 		role: "assistant", stopReason: "stop", content: [
 			{ type: "thinking", thinking: "第一段内部思考" },
@@ -422,8 +422,11 @@ test("宿主的单色提示与状态行折入段内并计数，错误与混色�
 	expect(after.join("\n")).not.toContain("过程");
 });
 
-const WORKER_RESULT = (name: string, body = "刷新改为单飞。更多细节") =>
-	`<firecode_master_event>\n子代理 ${name} 已停下\n回复：\n${body}\n耗时：本次运行 8m · 当前任务 19m\n</firecode_master_event>`;
+/** Master 事件信封：正文第一行是给人看的标题“<名字> <结果词>”，落定类事件带“耗时：本次运行 …”。 */
+const EVENT = (title: string, body: string, run = "8m") =>
+	`<firecode_master_event>\n${title}\n${body}\n耗时：本次运行 ${run} · 当前任务 19m\n</firecode_master_event>`;
+const WORKER_RESULT = (name: string, body = "刷新改为单飞。更多细节") => EVENT(`${name} 已返回`, `回复：\n${body}`);
+const WORKER_FAILED = (name: string, error = "429 Too Many Requests") => EVENT(`${name} 失败`, `错误：\n${error}`, "2m");
 
 /** 宿主 addMessageToChat 在每条用户消息前先插一个 Spacer（空闲送达的信封用户消息也一样）。 */
 function hostUser(s: any, text: string) {
@@ -780,4 +783,162 @@ test("用户消息竖条不把 OSC 133 语义提示标记挤到行中：标记�
 	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
 	expect(marked.length).toBeGreaterThan(0);
 	for (const line of marked) expect(line).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/);
+});
+
+test("纯文字轮从开始到歇下摘要行一直在原位：思考中 → 回复中 → 落定，回复不跳", async () => {
+	const s = await scene();
+	hostUser(s, "你好");
+	s.setNow(1000);
+	feed(s, true, 0, 1000);
+	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(reply);
+	const frame = () => s.lines(60).map((line: string) => line.trimEnd());
+	const summaryAt = (lines: string[]) => lines.findIndex((line) => /^(?:✓|✗|[⠀-⣿])/.test(line));
+
+	reply.updateContent({ role: "assistant", stopReason: "pending", content: [] }, true);
+	const first = frame();
+	expect(first[summaryAt(first)]).toMatch(new RegExp(`^${FLAME} 思考中$`));
+
+	reply.updateContent({ role: "assistant", stopReason: "pending", content: [{ type: "text", text: "你好，有什么" }] }, true);
+	const streaming = frame();
+	expect(summaryAt(streaming)).toBe(summaryAt(first));
+	expect(streaming[summaryAt(streaming)]).toMatch(new RegExp(`^${FLAME} 回复中$`));
+	const replyAt = streaming.findIndex((line) => line.includes("你好，有什么"));
+
+	reply.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "你好，有什么要做的？" }] }, false);
+	const ended = frame();
+	expect(summaryAt(ended)).toBe(summaryAt(first));
+	expect(ended.findIndex((line) => line.includes("你好，有什么要做的？"))).toBe(replyAt);
+
+	// 歇下边沿与轮记录写入在同一节拍内完成。
+	s.setNow(3400);
+	feed(s, false);
+	s.settle(2400, "complete", 3400, 80);
+	s.setNow(10_000);
+	const settled = frame();
+	expect(summaryAt(settled)).toBe(summaryAt(first));
+	expect(settled[summaryAt(settled)]).toMatch(/^✓ 2\.4s · 80 tps$/u);
+	expect(settled.findIndex((line) => line.includes("你好，有什么要做的？"))).toBe(replyAt);
+});
+
+test("当前动作只说正在发生的事：工具都完成后等模型是思考中，出正文是回复中，不再挂着已完成的工具", async () => {
+	const s = await scene();
+	hostUser(s, "看一下");
+	feed(s, true, 0, 0);
+	const summary = () => s.lines().find((line: string) => /^[⠀-⣿]/.test(line))!.trimEnd();
+	const read = s.tool("read", { path: "/project/a.ts" });
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 读取 \\./a\\.ts$`));
+	s.complete(read);
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 思考中$`));
+	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	s.chat.addChild(reply);
+	reply.updateContent({ role: "assistant", stopReason: "pending", content: [{ type: "text", text: "读完了，正在" }] }, true);
+	expect(summary()).toMatch(new RegExp(`^${FLAME} 回复中$`));
+});
+
+test("↳ 行：标题按信封原样显示，成败色由信封决定，审查卡预览取首条发现或原因，观察员只写建议原文", async () => {
+	const s = await scene();
+	const { buildCard } = await loadFirecodeModule("review/card.ts");
+	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
+	const { adviceMessage } = await loadFirecodeModule("watcher/card.ts");
+	const reviewCard = (card: unknown) => s.chat.addChild(new s.host.CustomMessageComponent({
+		role: "custom", customType: "firecode-review-card", content: wrapEnvelope("firecode_review", buildCard(card, "zh").content), display: true, timestamp: 0,
+	}));
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n## 交付\n- 修好了 refresh 竞态。", "14m"));
+	hostUser(s, WORKER_FAILED("perf-probe"));
+	hostUser(s, EVENT("lint 审查停止", "停止原因：\n顾问建议停止。"));
+	hostUser(s, "<firecode_master_event>\nfix-auth 被中断\n会话与审查义务均已保留，请 send 续派或 kill 收口\n</firecode_master_event>");
+	reviewCard({ kind: "fail", round: 1, details: "模型 1 · gpt-5.5\nFAIL\n## 发现 1：刷新竞态未修\n- **严重程度**: 高", advisor: null });
+	reviewCard({ kind: "error", message: "所有审查者均未给出有效结论" });
+	reviewCard({ kind: "pass", round: 2, summary: "模型 1 · gpt-5.5\nPASS\n验证命令 exit 0，核心逻辑已核对。\n证据：文件=a.ts；命令=bun test", details: "", elapsedMs: 95_000 });
+	s.chat.addChild(new s.host.CustomMessageComponent({
+		role: "custom", customType: "firecode-watcher-note", display: true, timestamp: 0,
+		content: adviceMessage({ note: "指挥官在没有跑测试的情况下宣布完成，建议先跑 bun test。", turnIndex: 12 }),
+	}));
+	s.ui.setToolsExpanded(true);
+
+	const raw = s.chat.render(120);
+	const rows = raw.map((line: string) => stripVTControlCharacters(line).trim()).filter((line: string) => line.startsWith("↳"));
+	expect(rows).toEqual([
+		"↳ fix-auth 审查通过（2 轮） · 14m 修好了 refresh 竞态。",
+		"↳ perf-probe 失败 · 2m 429 Too Many Requests",
+		"↳ lint 审查停止 · 8m 顾问建议停止。",
+		"↳ fix-auth 被中断 会话与审查义务均已保留，请 send 续派或 kill 收口",
+		"↳ 审查未通过 刷新竞态未修",
+		"↳ 审查未完成 所有审查者均未给出有效结论",
+		"↳ 第 2 轮审查通过 验证命令 exit 0，核心逻辑已核对。",
+		"↳ 观察员 指挥官在没有跑测试的情况下宣布完成，建议先跑 bun test。",
+	]);
+	const red = s.ui.theme.fg("error", "↳");
+	const toneOf = (needle: string) => raw.find((line: string) => line.includes(needle))!.includes(red);
+	expect(["perf-probe 失败", "lint 审查停止", "审查未通过", "审查未完成"].filter(toneOf)).toEqual(["perf-probe 失败", "lint 审查停止", "审查未通过", "审查未完成"]);
+	expect(["审查通过（2 轮）", "fix-auth 被中断", "第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
+});
+
+test("所有 Master 落定类事件都触发到达高亮，标题原样显示，失败为红", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.setNow(1000);
+	feed(s, true, 0, 1000);
+	s.tool("bash", { command: "bun test" });
+	const summary = () => s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!;
+	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n完成。"));
+	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} fix-auth 审查通过（2 轮）$`));
+	s.setNow(5000);
+	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test$`));
+	hostUser(s, WORKER_FAILED("perf-probe"));
+	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} perf-probe 失败$`));
+	// 到达文字从白色渐变到终色：失败的终色偏红，成功的偏金。
+	s.setNow(7400);
+	const [, r, g] = /38;2;(\d+);(\d+);\d+m[^\x1b]*perf-probe 失败/u.exec(summary())!.map(Number);
+	expect(r - g).toBeGreaterThan(100);
+});
+
+test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失败”（红），与提示原文同一退让", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	hostUser(s, WORKER_FAILED("perf-probe"));
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_FAILED("lint"), display: true, timestamp: 0 }));
+	hostUser(s, WORKER_FAILED("perf-probe", "又一次失败"));
+	hostUser(s, WORKER_RESULT("fix-auth"));
+	assistant(s, [{ type: "text", text: "收口" }]);
+	s.settle(3_000, "complete", 0);
+	s.setNow(60_000);
+	const summary = (width = 100) => s.lines(width).find((line: string) => line.startsWith("✓"))!.trimEnd();
+	expect(summary()).toBe("✓ 3.0s · 2 个子代理失败");
+	expect(s.chat.render(100).join("\n")).toContain(s.ui.theme.fg("error", "2 个子代理失败"));
+	expect(summary(20)).toBe("✓ 2 个子代理失败");
+
+	s.chat.addChild(new s.tui.Spacer(1));
+	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss after 8m idle"), 1, 0));
+	expect(summary()).toBe("✓ 3.0s · 2 个子代理失败 · ⚠ Cache miss after 8m idle");
+	for (const width of [24, 30, 40]) {
+		const line = summary(width);
+		expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
+		expect(line).toContain("2 个子代理失败");
+	}
+});
+
+test("展开态 ↳ 行与上一段正文之间空一行；折叠态中间回复与最后回复左边距一致", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	assistant(s, [{ type: "text", text: "先看看。" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	assistant(s, [{ type: "text", text: "全部通过。" }], "toolUse");
+	hostUser(s, WORKER_RESULT("fix-auth"));
+	assistant(s, [{ type: "text", text: "收口" }]);
+
+	const folded = s.lines();
+	const interim = folded.find((line: string) => line.includes("先看看。"))!;
+	const final = folded.find((line: string) => line.includes("收口"))!;
+	expect(interim.indexOf("先看看。")).toBe(final.indexOf("收口"));
+
+	s.ui.setToolsExpanded(true);
+	const expanded = s.lines();
+	const body = expanded.findIndex((line: string) => line.includes("全部通过。"));
+	expect(expanded[body + 1].trim()).toBe("");
+	expect(expanded[body + 2].trim()).toStartWith("↳ fix-auth 已返回");
 });

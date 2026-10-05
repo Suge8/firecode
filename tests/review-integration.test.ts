@@ -362,7 +362,7 @@ describe("registerReview wiring", () => {
 		await rm(script, { force: true });
 	}, 20_000);
 
-	test("a pass keeps a one-line summary activity until the summary turn ends, then releases occupancy", async () => {
+	test("a pass reports the summarizing stage through occupancy until the summary turn ends, then releases it", async () => {
 		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
 		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(verdict);
 		const sessionManager = makeSessionManager();
@@ -370,8 +370,6 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		let activityFactory: any;
-		Object.assign(ctx.ui, { setWidget: (_key: string, factory: unknown) => { activityFactory = factory; } });
 		const command = registered.commands.get("fire-review") as {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
@@ -382,13 +380,8 @@ describe("registerReview wiring", () => {
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
-		expect(activityFactory).toBeFunction();
-		const activity = activityFactory({ requestRender() {} }, { fg: (_color: string, text: string) => text });
-		try {
-			const lines = activity.render(100);
-			expect(lines).toHaveLength(1);
-			expect(lines[0]).toContain("总结中");
-		} finally { activity.dispose(); }
+		const held = (registered.emitted as { data: { active: boolean; progress?: () => unknown } }[]).findLast((event) => event.data.active);
+		expect(held?.data.progress?.()).toMatchObject({ stage: "summarizing" });
 		const sent = registered.sent as { customType?: string; content?: string; display?: boolean }[];
 		const summaryIndex = sent.findIndex((message) => message.customType === "firecode-review-summary");
 		const cardIndex = sent.findIndex((message) => message.customType === "firecode-review-card");
@@ -521,7 +514,7 @@ describe("registerReview wiring", () => {
 		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	}, 10_000);
 
-	test("installs the activity bar and locks editor when review starts", async () => {
+	test("locks the editor when review starts without an extra row above it", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
 			configJsonc: reviewConfig(),
 		})) as { registerReview: (pi: unknown) => ReviewHandle };
@@ -544,7 +537,7 @@ describe("registerReview wiring", () => {
 		};
 		await command.handler("", ctx);
 		await review.settled();
-		expect(widgetInstalled).toBe(true);
+		expect(widgetInstalled).toBe(false);
 		expect(editorLocked).toBe(true);
 	});
 

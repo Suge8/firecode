@@ -53,7 +53,12 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 
 	const message = { role: "user", content: [{ type: "text", text: "优化插件状态栏和工具展示" }] };
 	events.get("message_start")!({ message }, ctx);
-	expect(bottom()).toContain("优化插件状态…");
+	expect(bottom()).toContain("─ 优化插件状态栏和工具展示 ─");
+	const long = { role: "user", content: "把 refresh token 的竞态修掉。顺便看看 lint" };
+	entries = [{ type: "message", message: long }];
+	events.get("session_tree")!({}, ctx);
+	expect(bottom(110)).toContain("─ 把 refresh token 的竞态修掉。 ─");
+	expect(bottom(52)).toMatch(/^─ 把 \S+… ─+ test-model/u);
 	name = "完整的自定义会话名称";
 	events.get("session_info_changed")!({}, ctx);
 	expect(bottom()).toContain(name);
@@ -65,26 +70,65 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(top()).not.toContain("处理中");
 	events.get("agent_start")!({}, ctx);
 	expect(top()).toMatch(/处理中 \d/u);
-	let counts = "1/2";
-	bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => counts });
-	expect(top()).toContain("◈ 审查 1/2");
-	counts = "2/2";
-	expect(top()).toContain("◈ 审查 2/2");
+	let progress = { stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 };
+	bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => progress });
+	expect(top()).toMatch(/处理中 \S+ · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 审查 第2轮 1\/3 · 1 阻断 /u);
+	// 审查字形是金色盲文转圈点，与火苗同一字符族，靠金色区分。
+	expect(editor.render(100)[0]).toMatch(/\x1b\[38;2;255;195;61m[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u);
+	progress = { stage: "reviewing", round: 2, passed: 3, total: 3, blocked: 0 };
+	expect(top()).toContain("审查 第2轮 3/3 ─");
 	statuses.set("watcher", "观察员");
 	statuses.set("master", "指挥官");
 	expect(top()).toEndWith(" 观察员 指挥官 ─");
 	events.get("agent_end")!({ messages: [] }, ctx);
 	events.get("agent_settled")!({}, ctx);
 	expect(top()).not.toContain("处理中");
-	expect(top()).toContain("◈ 审查 2/2");
+	expect(top()).toContain("审查 第2轮 3/3");
+	progress = { stage: "summarizing", round: 2, passed: 0, total: 0, blocked: 0 };
+	expect(top()).toContain("审查 第2轮 总结中");
 	bus.get("herdr:blocked")!({ active: false });
-	expect(top()).not.toContain("◈");
+	expect(top()).not.toContain("审查");
 
 	for (let width = 1; width <= 120; width++)
 		for (const line of editor.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 	events.get("session_shutdown")!({}, ctx);
 	expect(footer).toBeUndefined();
 	expect(editor).toBeUndefined();
+});
+
+test("审查期间上边框只显示一处审查进度，窄屏逐级退让：先丢轮次，再丢审查字样，最后只留计数", async () => {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
+	const events = new Map<string, Function>();
+	const bus = new Map<string, Function>();
+	let editor: any;
+	const statuses = new Map([["master", "指挥官"]]);
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		isIdle: () => true,
+		model: { id: "gpt-5.5", reasoning: true, contextWindow: 1_000_000 },
+		getContextUsage: () => ({ percent: 12, contextWindow: 1_000_000 }),
+		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => [] },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
+			setEditorComponent(factory: any) {
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
+			},
+		},
+	};
+	registerStatusBar({ on: (event: string, fn: Function) => events.set(event, fn), events: { on: (channel: string, fn: Function) => bus.set(channel, fn) }, getThinkingLevel: () => "high" });
+	events.get("session_start")!({}, ctx);
+	events.get("agent_start")!({}, ctx);
+	bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });
+	const top = (width: number) => stripVTControlCharacters(editor.render(width)[0]);
+	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
+	expect(top(110)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 第2轮 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
+	expect(top(52)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 审查 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
+	expect(top(47)).toMatch(new RegExp(`^─ \\S+ 处理中 \\S+ · ${glyph} 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
+	expect(top(30)).toMatch(new RegExp(`^─ \\S+ \\S+ · ${glyph} 1/3 ─+ 指挥官 ─$`, "u"));
+	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
+	expect(stripVTControlCharacters(editor.render(110).at(-1))).toContain("12.0%/1M");
 });
 
 test("上下文低占用保持灰色，仅接近既有阈值时警告", () => {
@@ -118,7 +162,7 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 	const { topBorder } = await loadFirecodeModule("statusbar/render.js") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
 	const parts = {
-		mark: "FFF", word: "处理中", elapsed: "12s", review: "◈ 审查 2/3", reviewShort: "◈ 2/3",
+		mark: "FFF", word: "处理中", elapsed: "12s", review: ["◈ 审查 2/3", "◈ 2/3"],
 		watcher: "观察员", master: "指挥官", glow: 0,
 	};
 	const line = (text: string) => text;
@@ -127,7 +171,7 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 	for (const width of [110, 72]) expect(draw(width)).toMatch(/^─ FFF 处理中 12s · ◈ 审查 2\/3 ─{2,} 观察员 指挥官 ─$/u);
 	expect(draw(40)).toMatch(/^─ FFF 处理中 12s · ◈ 2\/3 ─{2,} 指挥官 ─$/u);
 	expect(draw(26)).toMatch(/^─ FFF 12s ─{2,} 指挥官 ─$/u);
-	const idle = { mark: "", word: "", elapsed: "", review: "", reviewShort: "" };
+	const idle = { mark: "", word: "", elapsed: "", review: [] };
 	expect(draw(110, idle)).toMatch(/^─{2,} 观察员 指挥官 ─$/u);
 	expect(draw(30, { ...idle, watcher: "", master: "" })).toBe("─".repeat(30));
 	for (let width = 0; width <= 120; width++)
