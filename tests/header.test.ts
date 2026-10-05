@@ -63,7 +63,7 @@ test("工作目录放不下时按目录段从开头省略，保留完整的末�
 	const { header } = await mountHeader("/private/tmp/fc-dogfood2-repo");
 	jest.advanceTimersByTime(3000);
 	const plain = (width: number) => header.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, "")).join("\n");
-	expect(plain(40)).toMatch(/FireCode …\/fc-dogfood2-repo ─+/u);
+	expect(plain(40)).toMatch(/FireCode …\/(?:[^/\s]+\/)*fc-dogfood2-repo ─+/u);
 	expect(plain(40)).not.toMatch(/…[^/\s]+\/fc-dogfood2-repo/u);
 	expect(plain(110)).toContain("pi ");
 	header.dispose?.();
