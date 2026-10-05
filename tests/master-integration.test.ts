@@ -56,13 +56,16 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect(harness.activeTools).toContain("subagents");
 });
 
-test("status 每个子代理一行以角色为主、模型短名次之", async () => {
-	const { statusText } = await loadFirecodeModule("master/index.js") as any;
-
-	expect(statusText([
-		{ name: "侦察", role: "调研员", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
-		{ name: "验收", role: "工程师", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
-	])).toBe("侦察 调研员·工作 gpt-5.1-codex-mini\n验收 工程师·审查 claude-sonnet-4-5");
+test("/fire-master status 每个子代理一行，以角色为主、模型短名次之", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("完成")]);
+	for (const [worker, role] of [["scout", "工程师"], ["verify", "设计师"]]) {
+		const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action: "start", worker, prompt: "执行", role });
+		await settled;
+	}
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toBe("scout 工程师·空闲 worker\nverify 设计师·空闲 worker-2");
 });
 
 test("边框身份只发布“指挥官”，子代理进出不改变它", async () => {
