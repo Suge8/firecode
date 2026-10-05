@@ -1027,3 +1027,12 @@ test("摘要行“运行中”只认会话进行中：会话已歇下时残留�
 	feed(s, true);
 	expect(s.lines().find((line: string) => new RegExp(`^${FLAME} 操作`).test(line))).toBeDefined();
 });
+
+test("宿主组件形状不符时不安装过程分组：明确提示，聊天树保持原生渲染", async () => {
+	const s = await scene();
+	const row = new s.host.ToolExecutionComponent("read", "id", { path: "a.ts" }, {}, undefined, undefined, "/project");
+	// 模拟宿主升级后私有字段改名：工具行不再有 isPartial。
+	delete (row as any).isPartial;
+	expect(() => s.chat.addChild(row)).toThrow(/过程分组已停用.*isPartial/u);
+	expect(s.chat.render).toBe(s.originalRender);
+});
