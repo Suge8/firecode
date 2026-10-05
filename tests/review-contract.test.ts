@@ -222,14 +222,15 @@ describe("evidence assembly", () => {
 		expect(english).toContain("/tmp/s/main.jsonl");
 	});
 
-	test("超长命令的轨迹行截断同样写明原文长度", async () => {
+	test("超长命令的轨迹行截断同样写明原文长度与会话文件路径", async () => {
 		await loadAll();
 		const command = `echo ${"x".repeat(400)}`;
 		const { text } = buildEvidence([user("需求"), {
 			type: "message",
 			message: { role: "assistant", content: [{ type: "toolCall", id: "1", name: "bash", arguments: { command } }] },
-		}], "zh");
+		}], "zh", { sessionFile: "/tmp/s/main.jsonl" });
 		expect(text).toMatch(new RegExp(`截断，原文 ${command.length} 字`, "u"));
+		expect(text).toContain("/tmp/s/main.jsonl");
 	});
 
 	test("assistant toolCall trail is kept as attribution evidence", async () => {
