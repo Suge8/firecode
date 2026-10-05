@@ -28,7 +28,7 @@ const ALARM_TONES = new Set(["warning", "error"]);
 const FINDING = /^#{1,6}\s*(?:发现|Finding)\s*[^：:]*[：:]\s*(.+)$/mu;
 const REASON = /^(?:原因|Reason)[：:]\s*(.+)$/mu;
 /** 审查卡里不是结论的行：模型分节、模型清单、卡点、分隔线与用时脚注。 */
-const REVIEW_NOISE = /^(?:\*\*(?:模型|Model)[ ·].*\*\*|(?:模型|Models)[：:].*|(?:卡点|Blocker)[：:].*|---|⏱.*)$/u;
+const REVIEW_NOISE = /^(?:\*\*(?:模型|Model)[ ·].*\*\*|(?:模型|Models)[：:].*|(?:卡点|Blocker)[：:].*|---|(?:用时|Elapsed)[：:].*)$/u;
 
 /** details 是承载信封的 CustomMessage 的 details（审查卡带 tone）；用户消息形态没有。 */
 export function machineEntries(text: string, details?: unknown): MachineEntry[] | undefined {

@@ -930,8 +930,8 @@ function sendCard(rt: ReviewRuntime, card: CardData) {
 		if (card.reason === "user" && active.ctx.hasUI)
 			active.ctx.ui.notify(
 				active.config.language === "en"
-					? "⏸ Review cancelled\nStopped by user"
-					: "⏸ 审查已取消\n已按你的操作停止",
+					? "Review cancelled\nStopped by user"
+					: "审查已取消\n已按你的操作停止",
 				"info",
 			);
 		return;
