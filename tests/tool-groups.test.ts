@@ -1133,7 +1133,7 @@ test("回合一开始就有摘要行：首条用户消息一出现就带橙色�
 	expect(lines[1]).toMatch(new RegExp(`^${FLAME} 思考中$`));
 });
 
-test("点击摘要展开或收起一轮时，被点的那一行留在视口原位：跟随末尾的滚动视图不再把它滚出屏幕", async () => {
+test("点击摘要展开或收起时被点的行留在视口内；原本跟随末尾的之后恢复跟随、新输出看得到，原本已上滚的保持不动", async () => {
 	const s = await scene({ scroll: true });
 	for (let turn = 1; turn <= 4; turn++) {
 		hostUser(s, `问题${turn}`);
@@ -1142,21 +1142,55 @@ test("点击摘要展开或收起一轮时，被点的那一行留在视口原�
 		s.settle(1_000, "complete", 0);
 	}
 	s.setNow(60_000);
-	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, 10, () => {});
+	const VIEWPORT = 10;
+	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, VIEWPORT, () => {});
+	const visible = (row: number) => row >= s.scroll.scrollTop && row < s.scroll.scrollTop + VIEWPORT;
 	layout();
-	const top = s.scroll.scrollTop;
 	expect(s.scroll.isFollowingEnd).toBe(true);
 	const row = s.lines().findLastIndex((line: string) => line.startsWith("✓"));
-	expect(row).toBeGreaterThanOrEqual(top);
+	s.click(row);
+	layout();
+	expect(s.lines()[row]).toMatch(/^✓/);
+	expect(visible(row)).toBe(true);
+	// 新输出到达：恢复跟随末尾。
+	hostUser(s, "下一问");
+	s.complete(s.tool("read", { path: "z.ts" }));
+	layout();
+	expect(s.scroll.isFollowingEnd).toBe(true);
+	expect(s.scroll.scrollTop).toBe(s.chat.render(100).length - VIEWPORT);
 
+	// 已上滚：点击与新输出都不动视口。
+	s.scroll.scrollTo(3, { disableFollow: true });
+	layout();
+	const up = s.lines().findIndex((line: string, index: number) => index >= 3 && line.startsWith("✓"));
+	s.click(up);
+	layout();
+	expect(s.scroll.scrollTop).toBe(3);
+	s.complete(s.tool("read", { path: "y.ts" }));
+	layout();
+	expect(s.scroll.scrollTop).toBe(3);
+});
+
+test("内容不足一屏时点开一轮、展开后超出视口：被点的摘要行仍在视口内，之后新输出恢复跟随", async () => {
+	const s = await scene({ scroll: true });
+	hostUser(s, "问题");
+	for (let index = 0; index < 20; index++) s.complete(s.tool("read", { path: `f${index}.ts` }));
+	assistant(s, [{ type: "text", text: "回答" }]);
+	s.settle(1_000, "complete", 0);
+	s.setNow(60_000);
+	const VIEWPORT = 10;
+	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, VIEWPORT, () => {});
+	layout();
+	expect(s.chat.render(100).length).toBeLessThan(VIEWPORT);
+	const row = s.lines().findIndex((line: string) => line.startsWith("✓"));
 	s.click(row);
 	layout();
+	expect(s.chat.render(100).length).toBeGreaterThan(VIEWPORT);
 	expect(s.lines()[row]).toMatch(/^✓/);
-	expect(s.scroll.scrollTop).toBe(top);
-	s.click(row);
+	expect(row >= s.scroll.scrollTop && row < s.scroll.scrollTop + VIEWPORT).toBe(true);
+	s.complete(s.tool("read", { path: "z.ts" }));
 	layout();
-	expect(s.lines()[row]).toMatch(/^✓/);
-	expect(s.scroll.scrollTop).toBe(top);
+	expect(s.scroll.isFollowingEnd).toBe(true);
 });
 
 test("宿主对 ctrl+o 的回显“Tool output: expanded/collapsed”不进对话；其余宿主状态行照常折入", async () => {

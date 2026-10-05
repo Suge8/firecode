@@ -20,18 +20,13 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "createdAt">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "launch">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
-	/**
-	 * 名字 → 启动序号（start 调用到达的先后）；池数组顺序受并发 start 的 await 影响，不能当启动序。
-	 * 重载恢复的没有序号，排最前并按档案里的创建时间。
-	 */
-	launchOrder: ReadonlyMap<string, number>;
 }
 
 type Toggle = "running" | "done" | "idle";
@@ -79,12 +74,9 @@ interface Groups {
 	animating: boolean;
 }
 
-/** 启动序：本进程内的 start 序号，重载恢复的没有序号、排最前并按创建时间。 */
+/** 按档案里的启动序。 */
 function launchSorted(facts: ActivityFacts): number[] {
-	const launch = (index: number) => facts.launchOrder.get(facts.workers[index].name) ?? -1;
-	const created = (index: number) => facts.workers[index].createdAt ?? Infinity;
-	return facts.workers.map((_, index) => index)
-		.sort((a, b) => launch(a) - launch(b) || created(a) - created(b) || a - b);
+	return facts.workers.map((_, index) => index).sort((a, b) => facts.workers[a].launch - facts.workers[b].launch);
 }
 
 /** 子代理按启动序的名字：全过程视图按它换子代理，位置不随状态分组跳动。 */
@@ -92,50 +84,50 @@ export function launchOrder(facts: ActivityFacts): string[] {
 	return launchSorted(facts).map((index) => facts.workers[index].name);
 }
 
+/** 一个子代理在活动列表里的分组（审查与在跑同组展示）；全过程视图顶行读同一份。 */
+export type RowKind = "failed" | "interrupted" | "stuck" | "running" | "review" | "done" | "idle";
+
+/** 有行在动（耗时仍在走）的分组：需要动画时钟。 */
+export const ANIMATING_KINDS: ReadonlySet<RowKind> = new Set(["stuck", "running", "review"]);
+
+/** 一个子代理的行状态：所在分组与这一行（标记、动作、耗时）。index 是它在 facts.workers 里的位置（决定火苗相位）。 */
+export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row } {
+	const worker = facts.workers[index];
+	const path = worker.sessionPath;
+	const phase = phaseOf(index);
+	const start = facts.runStartedAt.get(path);
+	const base = { name: worker.name, role: worker.role, elapsed: start === undefined ? "" : duration(now - start) };
+	if (worker.status === "working") {
+		const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
+		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
+		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
+		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
+		if (silent >= STUCK_MS)
+			// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
+			return { kind: "stuck", row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) } };
+		return { kind: "running", row: { ...base, mark: flame(1, phase), action } };
+	}
+	if (worker.status === "reviewing") {
+		const progress = facts.reviewProgress.get(path);
+		const action = progress ? `审查第 ${progress.round} 轮 · ${progress.settled}/${progress.total} 通过` : "审查中";
+		return { kind: "review", row: { ...base, mark: reviewMark(phase), action, tone: "review" } };
+	}
+	const fact = facts.settled.get(path);
+	// 组名已经说了“空闲”，展开行只列谁。
+	if (!fact) return { kind: "idle", row: { ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "", settled: true } };
+	const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
+	if (fact.kind === "done") return { kind: "done", row: { ...settledRow, mark: DONE_MARK, action: fact.note ?? "已返回" } };
+	if (fact.kind === "interrupted")
+		return { kind: "interrupted", row: { ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: "被中断", tone: "warning" } };
+	return { kind: "failed", row: { ...settledRow, mark: FAILED_MARK, action: fact.note ?? "失败", tone: "failed" } };
+}
+
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
-	const indexes = launchSorted(facts);
 	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
-	for (const index of indexes) {
-		const worker = facts.workers[index];
-		const path = worker.sessionPath;
-		const phase = phaseOf(index);
-		const start = facts.runStartedAt.get(path);
-		const base = { name: worker.name, role: worker.role, elapsed: start === undefined ? "" : duration(now - start) };
-		if (worker.status === "working") {
-			groups.animating = true;
-			const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
-			const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
-			const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
-			// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
-			if (silent >= STUCK_MS)
-				// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
-				groups.stuck.push({ ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) });
-			else groups.running.push({ ...base, mark: flame(1, phase), action });
-			continue;
-		}
-		if (worker.status === "reviewing") {
-			groups.animating = true;
-			const progress = facts.reviewProgress.get(path);
-			const action = progress ? `审查第 ${progress.round} 轮 · ${progress.settled}/${progress.total} 通过` : "审查中";
-			groups.running.push({ ...base, mark: reviewMark(phase), action, tone: "review" });
-			continue;
-		}
-		const fact = facts.settled.get(path);
-		if (!fact) {
-			// 组名已经说了“空闲”，展开行只列谁。
-			groups.idle.push({ ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "", settled: true });
-			continue;
-		}
-		const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
-		if (fact.kind === "done") {
-			groups.done.push({ ...settledRow, mark: DONE_MARK, action: fact.note ?? "已返回" });
-			continue;
-		}
-		if (fact.kind === "interrupted") {
-			groups.interrupted.push({ ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: "被中断", tone: "warning" });
-			continue;
-		}
-		groups.failed.push({ ...settledRow, mark: FAILED_MARK, action: fact.note ?? "失败", tone: "failed" });
+	for (const index of launchSorted(facts)) {
+		const { kind, row } = rowState(facts, index, now, theme);
+		groups.animating ||= ANIMATING_KINDS.has(kind);
+		groups[kind === "review" ? "running" : kind].push(row);
 	}
 	return groups;
 }

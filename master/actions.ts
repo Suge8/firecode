@@ -28,8 +28,7 @@ export const ACTION_HANDLERS: Record<Action, Handler> = { start, send, interrupt
 async function kill(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 	// 同步段内删档案与运行时事实，迟到的异步写回据此全部作废；随后等 session_shutdown 收口释放热会话。
-	active.drop(target.name);
-	active.store.dispatch({ type: "REMOVE_WORKER", name: target.name });
+	active.remove(target.name);
 	await active.setup.pool.dispose(target.sessionPath);
 	return toolResult({ killed: true });
 }
@@ -106,11 +105,16 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 	const requestedCwd = optionalString(params.cwd);
 	const prompt = requiredString(params.prompt, "prompt");
 	validateDelegationText(prompt);
-	// 子代理全过程视图的补话走同一入口，只多一个来源标记：这次运行的落定事件据此注明是用户在视图里直接派的。
+	// 子代理全过程视图的补话走同一入口，只多一个来源标记：视图起的运行指挥官不在等（见 RunOrigin），
+	// 落定事件注明是用户在视图里直接派的；视图补进别人起的运行只记原话，不改来源。
 	const fromView = params.origin === "view";
 	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
 		const result = await steer(active, target, prompt, params.review === true);
 		if (fromView) live.viewPrompts.push(prompt);
+		else if (live.origin !== "master") {
+			live.origin = "master";
+			active.render();
+		}
 		return result;
 	}
 	if (target.status === "working") throw new Error(`${target.name} 正在工作；切换 role/thinking/cwd 需先 interrupt`);
@@ -146,7 +150,7 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 			status: "working",
 			...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),
 		}));
-		active.beginRun(target.name);
+		active.beginRun(target.name, fromView ? "view" : "master");
 		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
 		return toolResult({ sent: true });
@@ -188,8 +192,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	validateDelegationText(prompt);
 	const selectedRole = resolveRole(roster, requiredString(params.role, "start 必须指定 role"));
 	const thinking = validThinking(optionalString(params.thinking)) ?? selectedRole.thinking;
-	// 同步占名并取启动序：并发 start 越过后续 await 的先后不定，序号必须在此取。
-	const live = active.reserve(name);
+	const { live, launch } = active.reserve(name);
 	try {
 		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 		active.assertOpen();
@@ -203,7 +206,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 			status: "working",
 			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
 			cwd,
-			createdAt: Date.now(),
+			launch,
 			...(params.review === true ? { reviewNeeded: true } : {}),
 		};
 		active.store.dispatch({ type: "UPSERT_WORKER", worker });
@@ -214,10 +217,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		return toolResult({ started: true, worker: compactWorker(worker) });
 	} catch (error) {
 		// 只撤自己这一票：kill 后同名重开的新票不受影响。
-		if (!active.closed && active.live.get(name) === live) {
-			active.drop(name, live);
-			active.store.dispatch({ type: "REMOVE_WORKER", name });
-		}
+		if (!active.closed && active.live.get(name) === live) active.remove(name, live);
 		throw error;
 	}
 }

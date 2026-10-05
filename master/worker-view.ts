@@ -1,48 +1,65 @@
 /**
  * 子代理全过程视图：点活动列表里的一行打开全屏浮层，用主会话同一套过程组投影（折叠、摘要行、点击展开、ctrl+o）
- * 看这个子代理的完整记录。轮与耗时读 Worker 会话自己的轮记录（与主会话同一个轮记录器写下）；
- * 在这里打字补话就是 Master 的 send 动作（视图来源），working 时 steer、idle 时唤醒。
+ * 看这个子代理的完整记录。轮与耗时读 Worker 会话自己的轮记录（与主会话同一个轮记录器写下）；顶行状态与耗时读活动列表
+ * 同一份行状态；在这里打字补话就是 Master 的 send 动作（视图来源），working 时 steer、idle 时唤醒。
  *
- * 资源纪律：关闭时零订阅零构建。打开时一次构建（热会话读内存分支、已释放的冷子代理读一次会话文件），
- * 之后只按子会话事件增量更新；切换与关闭时退订并丢掉组件。投影的时钟、展开档位与点击覆盖按视图各自构造。
+ * 资源纪律：关闭时零订阅零构建。打开时一次构建（热会话读内存分支、已释放的冷子代理读一次会话文件），之后只按子会话
+ * 事件增量更新；打开期间看过的子代理各留一份记录与展开状态（切回原样），关闭时全部退订丢弃。草稿按子代理留在
+ * 运行时内存里，到会话结束。
  */
 import { readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Input, matchesKey, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { flame, onFrame, phaseOf } from "../flame.js";
-import { clip, formatDuration } from "../format.js";
+import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { onFrame } from "../flame.js";
+import { clip } from "../format.js";
+import { ClickAnchor, type Scroller } from "../tools/click-anchor.js";
 import { projectProcessGroups, type ProjectionEnv } from "../tools/group-view.js";
 import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../tools/host.js";
 import { toolDefinitions } from "../tools/index.js";
-import { latestTurnRecord, roundFromEntry, roundMarker, ROUND_ENTRY, type TurnRecord } from "../tools/round.js";
+import { roundFromEntry, roundMarker, ROUND_ENTRY } from "../tools/round.js";
 import { TurnClock } from "../tools/turn-clock.js";
 import { ACTION_HANDLERS } from "./actions.js";
-import { launchOrder } from "./activity-list.js";
+import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
 import { modelAtomText } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
-const STATUS_TEXT: Record<WorkerRef["status"], string> = { working: "运行中", idle: "空闲", reviewing: "审查中" };
+/** 顶行状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
+const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = {
+	running: "运行中", review: "审查中", done: "完成", failed: "失败", interrupted: "被中断", idle: "空闲",
+};
 /** 顶行、输入行、底行之外是正文（排队中的补话在输入行之上占行）。 */
 const CHROME_ROWS = 3;
 const REPLY_LINES = 3;
 /** 正文开头与顶行之间的空行（随正文滚动）。 */
 const BODY_GAP = 1;
-const HINT = "Tab 换子代理 · 点摘要展开 · ctrl+o 全部展开 · esc 返回";
+/** 名字被迫截短时至少留的宽度；再窄就只留状态。 */
+const MIN_NAME = 6;
+/** 底行按键提示：按显示顺序，宽度不够时 drop 数值小的先让；“esc 返回”永远保留。 */
+const HINTS = [
+	{ text: "Tab 换子代理", drop: 2 },
+	{ text: "点摘要展开", drop: 0 },
+	{ text: "ctrl+o 全部展开", drop: 1 },
+	{ text: "esc 返回", drop: Infinity },
+];
+/** “已发出”替换按键提示的时长；任何按键也会提前收起。 */
+const NOTICE_MS = 3_000;
 
 /** 视图要的全部外部事实与动作：由 Master 运行时提供，测试替身同形。 */
 export interface WorkerViewSource {
-	/** 视图内的子代理顺序：启动序（不随状态分组变化）。 */
-	names(): string[];
+	/** 活动列表的同一份事实：启动序名单与顶行行状态都从它来。 */
+	facts(): ActivityFacts;
 	worker(name: string): WorkerRef | undefined;
 	/** 进程内热会话；已释放返回 undefined，记录改从会话文件读。 */
 	session(worker: WorkerRef): AgentSession | undefined;
 	/** 子代理会话接上订阅（冷启动、重开）时通知，在它的第一条事件之前。 */
 	onSession(listener: (name: string) => void): () => void;
-	/** 本次运行的起点（运行中才有），顶行实时耗时用。 */
-	runStartedAt(name: string): number | undefined;
+	/** 子代理被移除（kill、启动失败撤票）时按名字通知。 */
+	onWorkerRemoved(listener: (name: string) => void): () => void;
 	/** 视图来源的 send：与指挥官 send 同一处理入口。 */
 	send(name: string, prompt: string): Promise<void>;
+	/** 名字 → 没发出的草稿；随运行时活到会话结束，不持久化。 */
+	drafts: Map<string, string>;
 }
 
 /** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。 */
@@ -59,28 +76,40 @@ export async function openWorkerView(active: MasterRuntime, name: string): Promi
 	}
 }
 let viewOpen = false;
+const runtimeDrafts = new WeakMap<MasterRuntime, Map<string, string>>();
 
 function runtimeSource(active: MasterRuntime): WorkerViewSource {
+	let drafts = runtimeDrafts.get(active);
+	if (!drafts) runtimeDrafts.set(active, drafts = new Map());
 	return {
-		names: () => launchOrder(active.activityFacts()),
+		facts: () => active.activityFacts(),
 		worker: (name) => active.store.state.workers.find((worker) => worker.name === name),
 		session: (worker) => active.setup.pool.getSession(worker.sessionPath),
 		onSession: (listener) => active.onWorkerSession(listener),
-		runStartedAt: (name) => active.live.get(name)?.runStartedAt,
+		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),
 		send: async (name, prompt) => {
 			await ACTION_HANDLERS.send(active, { worker: name, prompt, origin: "view" }, active.ctx);
 		},
+		drafts,
 	};
 }
 
 /**
- * 一个子代理记录：宿主组件镜像（轮记录随分支进来，投影按它分轮）、这个子代理自己的轮次时钟、
- * 最近一轮的落定事实（顶行用），以及热会话时的事件订阅。
+ * 一个子代理记录：宿主组件镜像（轮记录随分支进来，投影按它分轮）、这个子代理自己的轮次时钟、热会话时的事件订阅，
+ * 以及视图在它上面的状态（逐轮展开、全部展开档位、滚动与点击锚定），切走切回原样。
  */
 class WorkerRecord {
 	readonly mirror: ChatMirror;
 	readonly clock = new TurnClock();
-	latest: TurnRecord | undefined;
+	readonly overrides = new Set<object>();
+	expanded = false;
+	/** 正文的第一行；undefined 表示跟随末尾。 */
+	scrollTop: number | undefined;
+	/** 上次布局的正文高与最大首行。 */
+	contentHeight = 0;
+	maxTop = 0;
+	viewport = 0;
+	readonly anchor: ClickAnchor;
 	private unsubscribe: (() => void) | undefined;
 
 	constructor(worker: WorkerRef, readonly session: AgentSession | undefined, tui: TUI, theme: Theme, private readonly changed: () => void) {
@@ -96,9 +125,24 @@ class WorkerRecord {
 		});
 		const branch = session ? session.sessionManager.getBranch() as MirrorEntry[] : fileBranch(worker.sessionPath);
 		for (const entry of branch) this.mirror.replay(entry);
-		this.latest = latestTurnRecord(branch as Parameters<typeof latestTurnRecord>[0]);
 		this.sync(session?.isStreaming === true);
 		if (session) this.unsubscribe = session.subscribe((event) => this.onEvent(event));
+		const record = this;
+		const scroller: Scroller = {
+			get top() { return record.scrollTop ?? record.maxTop; },
+			get following() { return record.scrollTop === undefined; },
+			get viewport() { return record.viewport; },
+			get contentHeight() { return record.contentHeight; },
+			holdAt: (top) => { this.scrollTop = top; },
+			follow: () => { this.scrollTop = undefined; },
+		};
+		this.anchor = new ClickAnchor(() => scroller);
+	}
+
+	/** 用户滚动：到底即恢复跟随末尾。 */
+	scrollBy(delta: number): void {
+		const next = Math.max(0, Math.min(this.maxTop, (this.scrollTop ?? this.maxTop) + delta));
+		this.scrollTop = next >= this.maxTop ? undefined : next;
 	}
 
 	dispose(): void {
@@ -110,8 +154,6 @@ class WorkerRecord {
 		if (event.type === "agent_start") this.sync(true);
 		if (event.type === "agent_end") this.sync(false);
 		const touched = this.mirror.handle(event);
-		if (event.type === "entry_appended" && event.entry.type === "custom" && event.entry.customType === ROUND_ENTRY && this.session)
-			this.latest = latestTurnRecord(this.session.sessionManager.getBranch() as Parameters<typeof latestTurnRecord>[0]);
 		if (touched || event.type === "agent_start" || event.type === "agent_end" || event.type === "queue_update") this.changed();
 	}
 
@@ -149,17 +191,18 @@ function fileBranch(path: string): MirrorEntry[] {
 export class WorkerView implements Component, Focusable {
 	private readonly input = new Input({ prompt: "› ", placeholder: "补话给这个子代理，回车发送" });
 	private readonly projection = new Container();
-	private readonly overrides = new Set<object>();
 	private readonly headless = {};
-	private readonly stopSessionWatch: () => void;
-	private record: WorkerRecord | undefined;
+	/** 打开期间看过的子代理：名字 → 记录。 */
+	private readonly records = new Map<string, WorkerRecord>();
+	private readonly stopWatches: (() => void)[];
 	private failure: string | undefined;
-	private notice = "";
-	private expanded = false;
-	/** 正文的第一行；undefined 表示跟随末尾。 */
-	private scrollTop: number | undefined;
+	/** 正在看的子代理已被移除：顶行写“已移除”，输入框停用。 */
+	private removed = false;
+	/** 在启动序里的位置；被移除后 Tab 从这里接着走。 */
+	private index = 0;
+	private notice: { text: string; until?: number } | undefined;
+	private noticeTimer: ReturnType<typeof setTimeout> | undefined;
 	private bodyRows = 0;
-	private bodyLines = 0;
 	private stopFrames: (() => void) | undefined;
 	private sending = false;
 
@@ -172,14 +215,16 @@ export class WorkerView implements Component, Focusable {
 		private readonly done: () => void,
 	) {
 		this.input.onSubmit = (text) => void this.send(text);
-		// 冷子代理被唤醒、或释放后重开：会话在第一条事件之前接上订阅，记录从新会话重建一次。
-		this.stopSessionWatch = source.onSession((worker) => {
-			const current = this.worker();
-			if (worker !== this.name || !current || source.session(current) === this.record?.session) return;
-			this.load();
-			this.tui.requestRender();
-		});
-		this.load();
+		this.stopWatches = [
+			// 冷子代理被唤醒、或释放后重开：会话在第一条事件之前接上订阅，记录从新会话重建一次。
+			source.onSession((worker) => {
+				if (worker !== this.name || this.removed) return;
+				this.load();
+				this.tui.requestRender();
+			}),
+			source.onWorkerRemoved((worker) => this.onRemoved(worker)),
+		];
+		this.enter(name);
 	}
 
 	get focused(): boolean {
@@ -193,126 +238,209 @@ export class WorkerView implements Component, Focusable {
 	invalidate(): void {}
 
 	dispose(): void {
-		this.stopSessionWatch();
-		this.record?.dispose();
-		this.record = undefined;
+		this.saveDraft();
+		for (const stop of this.stopWatches.splice(0)) stop();
+		for (const record of this.records.values()) record.dispose();
+		this.records.clear();
+		clearTimeout(this.noticeTimer);
 		this.stopFrames?.();
 		this.stopFrames = undefined;
 		this.projection.children = [];
+	}
+
+	private get record(): WorkerRecord | undefined {
+		return this.records.get(this.name);
 	}
 
 	private worker(): WorkerRef | undefined {
 		return this.source.worker(this.name);
 	}
 
-	/** 打开或切换时的一次构建；之后由事件增量。 */
+	private names(): string[] {
+		return launchOrder(this.source.facts());
+	}
+
+	/** 换到某个子代理：草稿换成它的，记录与展开状态打开期间看过就原样接上。 */
+	private enter(name: string): void {
+		this.name = name;
+		this.removed = false;
+		this.notice = undefined;
+		this.index = Math.max(0, this.names().indexOf(name));
+		this.input.setValue(this.source.drafts.get(name) ?? "");
+		this.load();
+	}
+
+	private saveDraft(): void {
+		const draft = this.input.getValue();
+		if (draft && !this.removed) this.source.drafts.set(this.name, draft);
+		else this.source.drafts.delete(this.name);
+	}
+
+	/** 记录缺失或会话已换（释放后重开、冷启动）时构建一次；之后由事件增量。 */
 	private load(): void {
-		this.record?.dispose();
-		this.record = undefined;
 		this.failure = undefined;
-		this.overrides.clear();
-		this.scrollTop = undefined;
 		const worker = this.worker();
 		if (!worker) {
 			this.failure = `${this.name} 已不在池里`;
 			return;
 		}
+		const session = this.source.session(worker);
+		const cached = this.record;
+		if (cached && cached.session === session) return;
+		cached?.dispose();
+		this.records.delete(this.name);
 		try {
-			this.record = new WorkerRecord(worker, this.source.session(worker), this.tui as TUI, this.theme, () => this.tui.requestRender());
+			this.records.set(this.name, new WorkerRecord(worker, session, this.tui as TUI, this.theme, () => this.tui.requestRender()));
 		} catch (error) {
 			this.failure = error instanceof HostShapeError ? error.message : `读不到 ${worker.name} 的记录：${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
+	/** 被移除的子代理：别的直接丢掉；正在看的留着已有记录（不再更新），顶行写“已移除”，输入框停用。 */
+	private onRemoved(name: string): void {
+		this.records.get(name)?.dispose();
+		this.source.drafts.delete(name);
+		if (name === this.name) {
+			this.removed = true;
+			this.input.setValue("");
+		} else this.records.delete(name);
+		this.tui.requestRender();
+	}
+
 	private env(record: WorkerRecord): ProjectionEnv {
 		return {
-			ui: { theme: this.theme, getToolsExpanded: () => this.expanded },
+			ui: { theme: this.theme, getToolsExpanded: () => record.expanded },
 			clock: record.clock, replyLines: REPLY_LINES, headless: this.headless,
 			toggleRow: (row) => {
 				row.setExpanded(!(row as unknown as { expanded: boolean }).expanded);
 				this.tui.requestRender();
 			},
-			isOpen: (key) => this.overrides.has(key),
+			isOpen: (key) => record.overrides.has(key),
 			toggleOpen: (key) => {
-				if (!this.overrides.delete(key)) this.overrides.add(key);
+				if (!record.overrides.delete(key)) record.overrides.add(key);
 				this.tui.requestRender();
 			},
 		};
 	}
 
 	render(width: number): string[] {
+		const worker = this.removed ? undefined : this.worker();
+		const facts = this.source.facts();
+		const index = worker ? facts.workers.findIndex((entry) => entry.name === worker.name) : -1;
+		const state = index < 0 ? undefined : rowState(facts, index, Date.now(), this.theme);
 		const queued = this.queued(width);
 		this.bodyRows = Math.max(1, this.tui.terminal.rows - CHROME_ROWS - queued.length);
-		const body = this.body(width);
-		this.bodyLines = body.length;
-		const maxTop = Math.max(0, body.length - this.bodyRows);
-		const top = Math.min(this.scrollTop ?? maxTop, maxTop);
+		const { lines: body, animating } = this.body(width);
+		// 动效与顶行耗时只在有东西在动时订阅全局时钟，静止即取消。
+		this.syncFrames(animating || (state !== undefined && ANIMATING_KINDS.has(state.kind)));
+		const record = this.record;
+		let top = 0;
+		if (record) {
+			record.viewport = this.bodyRows;
+			record.anchor.layout(body.length);
+			record.contentHeight = body.length;
+			record.maxTop = Math.max(0, body.length - this.bodyRows);
+			top = Math.min(record.scrollTop ?? record.maxTop, record.maxTop);
+		}
 		const shown = body.slice(top, top + this.bodyRows);
 		while (shown.length < this.bodyRows) shown.push("");
-		return [this.header(width), ...shown, ...queued, this.input.render(width)[0] ?? "", this.footer(width)];
+		return [this.header(width, worker, state), ...shown, ...queued, this.inputLine(width), this.footer(width)];
 	}
 
-	private body(width: number): string[] {
+	private body(width: number): { lines: string[]; animating: boolean } {
 		const record = this.record;
-		if (!record) return [this.theme.fg("warning", ` ${this.failure ?? ""}`)];
+		if (!record) return { lines: [this.theme.fg("warning", ` ${this.failure ?? ""}`)], animating: false };
 		const { nodes, animating } = projectProcessGroups(record.mirror.chat.children, this.env(record));
 		this.projection.children = nodes;
-		const working = this.worker()?.status === "working";
-		// 动效与顶行耗时只在有东西在动时订阅全局时钟，静止即取消。
-		if ((animating || working) && !this.stopFrames) this.stopFrames = onFrame(() => this.tui.requestRender());
-		else if (!animating && !working && this.stopFrames) {
+		return { lines: [...Array<string>(BODY_GAP).fill(""), ...this.projection.render(width)], animating };
+	}
+
+	private syncFrames(moving: boolean): void {
+		if (moving && !this.stopFrames) this.stopFrames = onFrame(() => this.tui.requestRender());
+		else if (!moving && this.stopFrames) {
 			this.stopFrames();
 			this.stopFrames = undefined;
 		}
-		return [...Array<string>(BODY_GAP).fill(""), ...this.projection.render(width)];
 	}
 
 	/** 已发出、还没在句缝送达的补话：读 Worker 会话的排队事实，送达后自然消失。 */
 	private queued(width: number): string[] {
-		const steering = this.record?.session?.getSteeringMessages() ?? [];
+		const steering = this.removed ? [] : this.record?.session?.getSteeringMessages() ?? [];
 		return steering.map((text) => clip(this.theme.fg("dim", ` 排队中：${text}`), width));
 	}
 
-	private header(width: number): string {
-		const worker = this.worker();
-		if (!worker) return clip(` ${this.name}`, width);
-		const started = this.source.runStartedAt(worker.name);
-		const elapsed = worker.status === "working"
-			? started === undefined ? undefined : Date.now() - started
-			: this.record?.latest?.round.elapsed;
-		const mark = worker.status === "working" ? `${flame(1, phaseOf(0))} ` : "";
-		const parts = [
-			this.theme.bold(worker.name),
-			this.theme.fg("muted", worker.role),
-			this.theme.fg("dim", modelAtomText(worker)),
-			`${mark}${STATUS_TEXT[worker.status]}${elapsed === undefined ? "" : this.theme.fg("muted", ` ${formatDuration(Math.max(0, elapsed))}`)}`,
-		];
-		return clip(` ${parts.join(this.theme.fg("dim", " · "))}`, width);
+	/** 状态（字形、状态词、耗时）必保；放不下时模型、角色依次先让，再截短名字，最后只留状态。 */
+	private header(width: number, worker: WorkerRef | undefined, state: ReturnType<typeof rowState> | undefined): string {
+		const separator = this.theme.fg("dim", " · ");
+		const name = this.theme.bold(this.name);
+		if (!worker || !state) {
+			const status = this.removed ? this.theme.fg("warning", "已移除") : undefined;
+			return clip(` ${status ? `${name}${separator}${status}` : name}`, width);
+		}
+		const { kind, row } = state;
+		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : STATUS_WORD[kind];
+		// 空闲的“·”标记紧挨分隔符会看成两个分隔符，顶行不放。
+		const status = [kind === "idle" ? "" : row.mark, word, row.elapsed && this.theme.fg("muted", row.elapsed)].filter(Boolean).join(" ");
+		const parts = [name, this.theme.fg("muted", worker.role), this.theme.fg("dim", modelAtomText(worker))];
+		for (let count = parts.length; count > 0; count--) {
+			const line = ` ${[...parts.slice(0, count), status].join(separator)}`;
+			if (visibleWidth(line) <= width) return line;
+		}
+		const room = width - visibleWidth(` ${separator}${status}`);
+		return room >= MIN_NAME ? ` ${clip(name, room)}${separator}${status}` : clip(` ${status}`, width);
 	}
 
+	private inputLine(width: number): string {
+		if (this.removed) return clip(`› ${this.theme.fg("dim", "子代理已移除，不能再补话")}`, width);
+		return this.input.render(width)[0] ?? "";
+	}
+
+	/** 位置 n/N 必保、在最前；提示按宽度退让，“esc 返回”永远保留。通知（已发出、未送达）替换提示。 */
 	private footer(width: number): string {
-		const names = this.source.names();
-		return clip(this.theme.fg("dim", ` ${this.notice || HINT} · ${names.indexOf(this.name) + 1}/${names.length}`), width);
+		const names = this.names();
+		const position = names.indexOf(this.name);
+		if (position >= 0) this.index = position;
+		const lead = position >= 0 ? [`${position + 1}/${names.length}`] : [];
+		const notice = this.notice && (this.notice.until === undefined || Date.now() < this.notice.until) ? this.notice.text : undefined;
+		if (notice) return clip(this.theme.fg("dim", ` ${[...lead, notice].join(" · ")}`), width);
+		const hints = [...HINTS];
+		const line = () => ` ${[...lead, ...hints.map((hint) => hint.text)].join(" · ")}`;
+		while (visibleWidth(line()) > width && hints.some((hint) => hint.drop !== Infinity)) {
+			const weakest = hints.reduce((a, b) => (b.drop < a.drop ? b : a));
+			hints.splice(hints.indexOf(weakest), 1);
+		}
+		return clip(this.theme.fg("dim", line()), width);
 	}
 
 	/**
 	 * 浮层抢走焦点后宿主编辑器上的全局键不再生效，在这里给出同义行为：esc 返回；ctrl+c 先清输入、再按关闭视图；
-	 * 空输入的 ctrl+d 关闭视图（不在浮层里退出整个 pi）；ctrl+o 是这个视图的全部展开。
+	 * 空输入的 ctrl+d 关闭视图（不在浮层里退出整个 pi）；ctrl+o 是这个视图的全部展开；PageUp/PageDown 翻页。
 	 */
 	handleInput(data: string): void {
 		const empty = !this.input.getValue();
+		this.notice = undefined;
 		if (this.keys.matches(data, "app.interrupt")) return this.done();
 		if (this.keys.matches(data, "app.clear")) return empty ? this.done() : this.clearInput();
 		if (this.keys.matches(data, "app.exit") && empty) return this.done();
-		if (this.keys.matches(data, "app.tools.expand")) {
-			this.expanded = !this.expanded;
-			this.overrides.clear();
-			this.tui.requestRender();
-			return;
-		}
+		if (this.keys.matches(data, "app.tools.expand")) return this.toggleAll();
 		if (matchesKey(data, "tab")) return this.step(1);
 		if (matchesKey(data, "shift+tab")) return this.step(-1);
-		this.input.handleInput(data);
+		if (matchesKey(data, "pageUp")) return this.scroll(1 - this.bodyRows);
+		if (matchesKey(data, "pageDown")) return this.scroll(this.bodyRows - 1);
+		if (!this.removed) this.input.handleInput(data);
+		this.tui.requestRender();
+	}
+
+	private toggleAll(): void {
+		const record = this.record;
+		if (!record) return;
+		record.expanded = !record.expanded;
+		record.overrides.clear();
+		this.tui.requestRender();
+	}
+
+	private scroll(delta: number): void {
+		this.record?.scrollBy(delta);
 		this.tui.requestRender();
 	}
 
@@ -322,50 +450,61 @@ export class WorkerView implements Component, Focusable {
 	}
 
 	private step(direction: number): void {
-		const names = this.source.names();
-		if (names.length < 2) return;
-		const index = names.indexOf(this.name);
-		this.name = names[(index + direction + names.length) % names.length];
-		this.notice = "";
-		this.load();
+		const names = this.names();
+		const count = names.length;
+		if (count < (this.removed ? 1 : 2)) return;
+		this.saveDraft();
+		if (this.removed) {
+			// 被移除的位置由后一个顶上：Tab 落在原位置，Shift+Tab 落在前一个。
+			this.enter(names[(direction > 0 ? this.index : this.index - 1 + count) % count]);
+		} else this.enter(names[(names.indexOf(this.name) + direction + count) % count]);
 		this.tui.requestRender();
 	}
 
+	/**
+	 * 只处理滚轮与点击：按下、拖动与松开交还宿主，宿主据此做文字选择（有浮层时按屏幕坐标选、松开即复制），
+	 * 不拖动的松开再由宿主转成点击发回来；点到摘要、↳ 与工具行之外的地方也交还宿主。
+	 */
 	handleMouse(event: TuiMouseEvent) {
-		const maxTop = Math.max(0, this.bodyLines - this.bodyRows);
 		if (event.type === "wheel") {
-			const next = Math.max(0, Math.min(maxTop, (this.scrollTop ?? maxTop) + (event.wheelDelta ?? 0)));
-			this.scrollTop = next >= maxTop ? undefined : next;
-			this.tui.requestRender();
+			this.scroll(event.wheelDelta ?? 0);
 			return { handled: true };
 		}
+		const record = this.record;
 		const row = event.y - 1;
-		if (row < 0 || row >= this.bodyRows) return undefined;
-		const top = Math.min(this.scrollTop ?? maxTop, maxTop);
-		// 点开或收起时被点的那一行留在原位：先把视口钉在当前位置，再交给投影。
-		this.scrollTop = top;
-		const line = top + row - BODY_GAP;
-		if (line < 0) return { handled: true };
-		const result = this.projection.handleMouse({ ...event, y: line, height: this.bodyLines - BODY_GAP });
-		this.tui.requestRender();
-		return result ?? { handled: true };
+		if (event.type !== "click" || !record || row < 0 || row >= this.bodyRows) return undefined;
+		const line = Math.min(record.scrollTop ?? record.maxTop, record.maxTop) + row;
+		if (line < BODY_GAP) return undefined;
+		const result = this.projection.handleMouse({ ...event, y: line - BODY_GAP, height: record.contentHeight - BODY_GAP });
+		if (result) record.anchor.click(line);
+		return result;
 	}
 
 	private async send(text: string): Promise<void> {
 		const prompt = text.trim();
-		if (!prompt || this.sending) return;
+		if (!prompt || this.sending || this.removed) return;
+		const name = this.name;
 		this.sending = true;
-		this.notice = "发送中…";
-		this.tui.requestRender();
+		this.showNotice("发送中…");
 		try {
-			await this.source.send(this.name, prompt);
-			this.input.setValue("");
-			this.notice = "已发出";
+			await this.source.send(name, prompt);
+			if (name === this.name) this.input.setValue("");
+			this.source.drafts.delete(name);
+			this.showNotice("已发出", NOTICE_MS);
 		} catch (error) {
-			this.notice = `未送达：${error instanceof Error ? error.message : String(error)}`;
+			this.showNotice(`未送达：${error instanceof Error ? error.message : String(error)}`);
 		} finally {
 			this.sending = false;
-			this.tui.requestRender();
 		}
+	}
+
+	private showNotice(text: string, duration?: number): void {
+		clearTimeout(this.noticeTimer);
+		this.notice = { text, ...(duration === undefined ? {} : { until: Date.now() + duration }) };
+		if (duration !== undefined) {
+			this.noticeTimer = setTimeout(() => this.tui.requestRender(), duration);
+			this.noticeTimer.unref?.();
+		}
+		this.tui.requestRender();
 	}
 }

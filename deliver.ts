@@ -1,6 +1,7 @@
 /**
  * 统一投递入口（Master 事件与观察员发言共用）：宿主流式中投自定义卡片、经
- * steer 队列在句缝送达；会话歇透时改走 sendUserMessage 前门唤起——宿主的
+ * steer 队列在句缝送达；会话歇透时改走 sendUserMessage 前门唤起（只告知不唤醒的
+ * 结果改走 inform，歇透时直接追加）——宿主的
  * triggerTurn 唤醒会跳过 before_agent_start（上游缺陷，#33），前门唤醒自带
  * 完整开跑仪式，系统提示注入不随回合抖动。
  *
@@ -61,6 +62,22 @@ export async function deliver(
 ): Promise<void> {
 	if (ctx.isIdle()) return wake(pi, envelope);
 	steer(pi, envelope);
+}
+
+/**
+ * 告知不唤醒：指挥官没在等的结果（用户在子代理视图里直接派的运行）。主回合在跑时与 deliver 相同，经 steer 队列句缝送达；
+ * 主会话歇透时以不带 triggerTurn 的 sendMessage 追加为会话记录，下一回合自然进上下文，resolve 即已写入。
+ * 歇透时追加是安全的（核对宿主 AgentSession.sendCustomMessage）：不在流式中且不触发回合时，宿主当场写会话树并刷新
+ * 上下文，追加在最后一条消息之后，不夹进工具调用与结果之间，已有前缀不变、提示词缓存不重写。#28 的快照分叉只发生在
+ * 回合进行中立即追加；这里也不经 triggerTurn，与 #33 无关。
+ */
+export async function inform(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	envelope: Delivery,
+): Promise<void> {
+	if (!ctx.isIdle()) return steer(pi, envelope);
+	pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true });
 }
 
 function steer(pi: ExtensionAPI, envelope: Delivery): void {

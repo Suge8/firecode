@@ -147,6 +147,13 @@ export function scrollViewOf(root: Component, target: Component): ScrollView | u
 	return visit(root);
 }
 
+/** 滚动视图上次布局的内容总高（宿主私有字段）：点击锚定按它把组件内行号换成滚动内容行号。 */
+export function scrollContentHeight(view: ScrollView): number {
+	const height = (view as unknown as { contentHeight?: unknown }).contentHeight;
+	if (typeof height !== "number") throw new HostShapeError("ScrollView.contentHeight");
+	return height;
+}
+
 /** 原型补丁的安装与精确还原：只还原仍是自己装上的那一层。 */
 export function patchMethod<T extends object, K extends keyof T>(target: T, key: K, replacement: T[K]): () => void {
 	const original = target[key];

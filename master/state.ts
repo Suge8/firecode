@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const STATE_VERSION = 8;
+const STATE_VERSION = 9;
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
@@ -17,8 +17,11 @@ export interface WorkerRef {
 	sessionPath: string;
 	cwd?: string;
 	interruptedAt?: number;
-	/** start 的时刻：resume 后没有启动序时，活动列表按它排先后。 */
-	createdAt?: number;
+	/**
+	 * 启动序：start 在同步段按到达先后取的单调序号，活动列表与全过程视图按它排。必须持久化：并行 start 越过
+	 * await 后落盘的先后（以及任何落盘时刻）与到达先后不一致，恢复后若靠别的字段排会换序。
+	 */
+	launch: number;
 	reviewNeeded?: boolean;
 	disposition?: WorkerDisposition;
 }
@@ -101,8 +104,8 @@ export function loadMasterState(path: string): MasterState | undefined {
 		throw new Error(`Master Worker Pool 状态不是合法 JSON：${path}`);
 	}
 	const version = (data as { version?: unknown } | null)?.version;
-	if (typeof version === "number" && version !== STATE_VERSION) throw new LegacyMasterStateError(version);
-	const state = restoreMasterState(data);
+	if (typeof version === "number" && version !== STATE_VERSION && version !== 8) throw new LegacyMasterStateError(version);
+	const state = restoreMasterState(version === 8 ? migrateFromV8(data as { workers?: unknown }) : data);
 	if (!state) throw new Error(`Master Worker Pool 状态结构无效：${path}`);
 	return state;
 }
@@ -149,6 +152,24 @@ export class MasterStore {
 	}
 }
 
+/**
+ * v8 → v9 只差启动序：v8 的创建时间是同一先后的近似（并行 start 下可能有出入，从此以 launch 为准），没有创建时间的
+ * 是更早版本恢复来的、排最前。升级不丢池：池里是用户仍在用的子代理，丢弃会让指挥官失去它们的会话与审查义务。
+ */
+function migrateFromV8(data: { workers?: unknown }): unknown {
+	if (!Array.isArray(data.workers)) return data;
+	const workers = data.workers as Record<string, unknown>[];
+	const created = (index: number) => (typeof workers[index]?.createdAt === "number" ? workers[index].createdAt as number : -Infinity);
+	const order = workers.map((_, index) => index).sort((a, b) => created(a) - created(b) || a - b);
+	return {
+		version: STATE_VERSION,
+		workers: workers.map((worker, index) => {
+			const { createdAt: _createdAt, ...rest } = worker ?? {};
+			return { ...rest, launch: order.indexOf(index) + 1 };
+		}),
+	};
+}
+
 export function requireWorker(state: MasterState, name: string): WorkerRef {
 	const worker = state.workers.find((candidate) => candidate.name === name);
 	if (!worker) throw new Error(`子代理不存在：${name}`);
@@ -193,7 +214,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
-	if (record.createdAt !== undefined && (typeof record.createdAt !== "number" || record.createdAt <= 0)) return false;
+	if (typeof record.launch !== "number" || !Number.isInteger(record.launch) || record.launch <= 0) return false;
 	if (record.disposition !== undefined && record.disposition !== "pending" && record.disposition !== "reminded")
 		return false;
 	return true;
