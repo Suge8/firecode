@@ -26,6 +26,10 @@ const toolResult = (id: string, text: string) =>
 const round = (elapsed: number, outcome = "complete", tps?: number) =>
 	({ type: "custom", customType: "firecode-round", id: `r${clock}`, timestamp: at(), data: { elapsed, outcome, ...(tps ? { tps } : {}) } });
 
+/** 审查结果卡的渲染器替身：像真实结果卡一样随原生展开档位给出紧凑卡或完整卡。 */
+let Text: any;
+const cardRenderer = (_message: unknown, options: { expanded: boolean }) => new Text(options.expanded ? "完整卡：共 2 轮，全部通过" : "紧凑卡", 0, 0);
+
 /** 进程内热会话的替身：只有视图读取的那几样（分支、流式标记、排队、事件订阅）。 */
 function hotSession(branch: unknown[], streaming = false) {
 	const listeners = new Set<(event: unknown) => void>();
@@ -33,7 +37,7 @@ function hotSession(branch: unknown[], streaming = false) {
 		isStreaming: streaming,
 		steering: [] as string[],
 		sessionManager: { getBranch: () => branch },
-		extensionRunner: { getMessageRenderer: () => undefined },
+		extensionRunner: { getMessageRenderer: (type: string) => (type === "firecode-review-card" ? cardRenderer : undefined) },
 		getSteeringMessages: () => session.steering,
 		subscribe(listener: (event: unknown) => void) {
 			listeners.add(listener);
@@ -58,6 +62,7 @@ async function open(options: { workers: Worker[]; sessions: Record<string, Retur
 		loadFirecodeModule("master/worker-view.ts"), loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/turn-clock.ts"),
 	]) as any[];
 	host.initTheme("dark");
+	Text = tui.Text;
 	const theme = (await import(new URL("./modes/interactive/theme/theme.ts", PI_CODING_AGENT_URL).href)).theme;
 	const root = new tui.Container();
 	const chat = new tui.Container();
@@ -218,9 +223,9 @@ test("视图里点开审查结果卡这类机器消息看到完整卡：卡片�
 	view.key("\x0f");
 	const row = view.lines().findIndex((line) => line.startsWith("↳ 审查通过"));
 	expect(row).toBeGreaterThan(0);
-	expect(view.lines().join("\n")).not.toContain("[firecode-review-card]");
+	expect(view.lines().join("\n")).not.toMatch(/紧凑卡|完整卡/u);
 	view.click(row);
-	expect(view.lines().join("\n")).toContain("[firecode-review-card]");
+	expect(view.lines().join("\n")).toContain("完整卡：共 2 轮，全部通过");
 });
 
 test("浮层里宿主的全局键不落空：ctrl+c 先清输入、再按关闭视图；esc 与空输入的 ctrl+d 关闭视图", async () => {
