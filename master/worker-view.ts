@@ -14,7 +14,7 @@ import { clip, formatDuration } from "../format.js";
 import { projectProcessGroups, type ProjectionEnv } from "../tools/group-view.js";
 import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../tools/host.js";
 import { toolDefinitions } from "../tools/index.js";
-import { latestTurnRecord, renderRound, ROUND_ENTRY, type TurnRecord } from "../tools/round.js";
+import { latestTurnRecord, roundFromEntry, roundMarker, ROUND_ENTRY, type TurnRecord } from "../tools/round.js";
 import { TurnClock } from "../tools/turn-clock.js";
 import { ACTION_HANDLERS } from "./actions.js";
 import { launchOrder } from "./activity-list.js";
@@ -26,6 +26,8 @@ const STATUS_TEXT: Record<WorkerRef["status"], string> = { working: "运行中",
 /** 顶行、输入行、底行之外是正文（排队中的补话在输入行之上占行）。 */
 const CHROME_ROWS = 3;
 const REPLY_LINES = 3;
+/** 正文开头与顶行之间的空行（随正文滚动）。 */
+const BODY_GAP = 1;
 const HINT = "Tab 换子代理 · 点摘要展开 · ctrl+o 全部展开 · esc 返回";
 
 /** 视图要的全部外部事实与动作：由 Master 运行时提供，测试替身同形。 */
@@ -89,7 +91,8 @@ class WorkerRecord {
 			theme,
 			toolDefinition: (tool) => definitions[tool],
 			messageRenderer: (type) => session?.extensionRunner.getMessageRenderer(type),
-			entryRenderer: (type) => (type === ROUND_ENTRY ? renderRound as EntryRenderer : undefined),
+			// 轮记录逐条经 roundFromEntry 读出，以零行标记放进聊天树，投影按它分轮（与主会话同一份记录格式）。
+			entryRenderer: (type) => (type === ROUND_ENTRY ? roundEntryRenderer : undefined),
 		});
 		const branch = session ? session.sessionManager.getBranch() as MirrorEntry[] : fileBranch(worker.sessionPath);
 		for (const entry of branch) this.mirror.replay(entry);
@@ -116,6 +119,11 @@ class WorkerRecord {
 		this.clock.sync({ agentRunning: running, inFlight: 0, busy: running, review: false, ...(running ? { since: Date.now() } : {}) });
 	}
 }
+
+const roundEntryRenderer: EntryRenderer = (entry) => {
+	const round = roundFromEntry(entry);
+	return round && roundMarker(round);
+};
 
 /** 已释放的冷子代理：读一次会话文件，从最后一条沿 parentId 回到根，得到当前分支。 */
 function fileBranch(path: string): MirrorEntry[] {
@@ -256,7 +264,7 @@ export class WorkerView implements Component, Focusable {
 			this.stopFrames();
 			this.stopFrames = undefined;
 		}
-		return this.projection.render(width);
+		return [...Array<string>(BODY_GAP).fill(""), ...this.projection.render(width)];
 	}
 
 	/** 已发出、还没在句缝送达的补话：读 Worker 会话的排队事实，送达后自然消失。 */
@@ -336,7 +344,9 @@ export class WorkerView implements Component, Focusable {
 		const top = Math.min(this.scrollTop ?? maxTop, maxTop);
 		// 点开或收起时被点的那一行留在原位：先把视口钉在当前位置，再交给投影。
 		this.scrollTop = top;
-		const result = this.projection.handleMouse({ ...event, y: top + row, height: this.bodyLines });
+		const line = top + row - BODY_GAP;
+		if (line < 0) return { handled: true };
+		const result = this.projection.handleMouse({ ...event, y: line, height: this.bodyLines - BODY_GAP });
 		this.tui.requestRender();
 		return result ?? { handled: true };
 	}
