@@ -71,7 +71,7 @@ describe("result card payload", () => {
 			advisor: { verdict: "continue", advice: "**核实结论**：发现属实\n**根因判断**：竞态\n**下一步方向**：补锁" },
 			advisorModel: "kimi-coding/k3-256k",
 		}, "zh");
-		expect(advice.details).toMatchObject({ title: "顾问指引 · 继续修复", icon: "🧭", tone: "neutral" });
+		expect(advice.details).toMatchObject({ title: "顾问指引 · 继续修复", icon: "⠿", tone: "neutral" });
 		expect(advice.details.lines).toEqual([
 			"**模型 · k3-256k**",
 			"",
@@ -98,12 +98,12 @@ describe("result card payload", () => {
 		]);
 	});
 
-	test("content is plain text facts; details carry the localized title and icon", async () => {
+	test("content is plain text facts; details carry the localized title and glyph", async () => {
 		await loadAll();
 		const built = buildCard({ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 60000 }, "zh");
 		expect(built.content).not.toMatch(/\x1b\[/);
 		expect(built.details.title).toBe("审查通过");
-		expect(built.details.icon).toBe("✅");
+		expect(built.details.icon).toBe("✓");
 		expect(built.details.lines.join("\n")).toContain("ok");
 	});
 
@@ -112,7 +112,7 @@ describe("result card payload", () => {
 		const started = buildCard({ kind: "start", round: 1, focus: "", models: ["p/sol"] }, "zh");
 		expect(started.details).toMatchObject({
 			title: "审查开始",
-			icon: "🔥",
+			icon: "⠿",
 			lines: ["模型：sol"],
 		});
 	});
@@ -130,15 +130,15 @@ describe("result card payload", () => {
 		const cancelled = buildCard({ kind: "cancel", round: 1, reason: "user" }, "zh");
 		const timeout = buildCard({ kind: "timeout", round: 1, reason: "timeout" }, "zh");
 		expect(failed.details.title).toBe("第 2 轮审查未通过");
-		expect(failed.details.icon).toBe("❌");
+		expect(failed.details.icon).toBe("✗");
 		expect(failed.details.lines).toContain("**模型 1 · sol**");
 		expect(failed.details.lines).toContain("## 发现 1");
 		expect(failed.details.lines).toContain("- 问题: x");
 		expect(failed.details.lines).toContain("---");
-		expect(failed.details.lines).toContain("⏱ 用时：2m7s");
+		expect(failed.details.lines).toContain("用时：2m7s");
 		expect(failed.details.lines.join("\n")).not.toContain("/ 总");
-		expect(cancelled.details).toMatchObject({ title: "审查已取消", icon: "⏸" });
-		expect(timeout.details).toMatchObject({ title: "审查未完成", icon: "🛑" });
+		expect(cancelled.details).toMatchObject({ title: "审查已取消", icon: "‖" });
+		expect(timeout.details).toMatchObject({ title: "审查未完成", icon: "◌" });
 		expect(timeout.details.lines).toContain("卡点：审查超时");
 	});
 
@@ -163,10 +163,44 @@ describe("result card payload", () => {
 			const component = renderer?.(
 				{ details: built.details, content: built.content },
 				{},
-				{ bg: (tone: string, text: string) => { backgrounds.push(tone); return text; } },
+				{ fg: (_color: string, text: string) => text, bg: (tone: string, text: string) => { backgrounds.push(tone); return text; } },
 			);
 			expect(() => component?.render(48)).not.toThrow();
 			expect(backgrounds).toContain(background);
+		}
+	});
+
+	test("cards use the monochrome glyph set: no emoji anywhere, glyph color carries only the verdict", async () => {
+		const { initTheme, theme } = await import(new URL("./modes/interactive/theme/theme.ts", PI_CODING_AGENT_URL).href) as {
+			initTheme: (name: string) => void; theme: { fg: (color: string, text: string) => string };
+		};
+		initTheme("dark");
+		const card = (await loadFirecodeModule("review/card.js")) as {
+			buildCard: BuildCard;
+			registerCardRenderer: (pi: unknown) => void;
+		};
+		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
+		card.registerCardRenderer({ registerMessageRenderer: (_type: string, next: typeof renderer) => { renderer = next; } });
+		const gold = "\x1b[38;2;255;195;61m";
+		const cases = [
+			[{ kind: "start", round: 1, focus: "", models: ["p/m"] }, gold + "⠿"],
+			[{ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 1000, totalElapsedMs: 2000 }, theme.fg("success", "✓")],
+			[{ kind: "fail", round: 1, details: "## 发现 1", advisor: { verdict: "continue", advice: "继续" }, elapsedMs: 1000 }, theme.fg("error", "✗")],
+			[{ kind: "stop", reason: "max_rounds", round: 3, details: "", elapsedMs: 1000 }, theme.fg("error", "✗")],
+			[{ kind: "cancel", round: 1, reason: "user" }, theme.fg("muted", "‖")],
+			[{ kind: "timeout", round: 1, reason: "timeout" }, theme.fg("error", "◌")],
+			[{ kind: "error", message: "供应商报错", elapsedMs: 1000 }, theme.fg("error", "◌")],
+			[{ kind: "advisor", advisor: { verdict: "narrow", advice: "收窄" }, advisorModel: "p/a", elapsedMs: 1000 }, gold + "⠿"],
+		] as const;
+		for (const [input, mark] of cases) {
+			for (const language of ["zh", "en"] as const) {
+				const built = card.buildCard(input as never, language);
+				const text = [built.content, built.details.icon, built.details.title, ...built.details.lines].join("\n");
+				expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
+			}
+			const built = card.buildCard(input as never, "zh");
+			const lines = renderer!({ details: built.details, content: built.content }, {}, theme).render(60);
+			expect(lines.find((line) => line.includes(built.details.title))).toContain(mark);
 		}
 	});
 
@@ -202,7 +236,7 @@ describe("result card payload", () => {
 		const lines = renderer?.(
 			{ details: built.details, content: built.content },
 			{},
-			{ bg: (_tone: string, text: string) => text },
+			{ fg: (_color: string, text: string) => text, bg: (_tone: string, text: string) => text },
 		)?.render(8) ?? [];
 		expect(lines.every((line) => Bun.stringWidth(line) <= 8)).toBe(true);
 	});

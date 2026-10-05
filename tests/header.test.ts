@@ -44,3 +44,16 @@ test("入场动画驱动重绘，定格后不再请求重绘、画面静止", as
 	expect(tui.renders).toBe(settled);
 	expect([110, 72, 40].map((width) => header.render(width))).toEqual(frames);
 });
+
+test("三档都显示版本与工作目录（同一份来源）；单行档放在字标后的横线里，放不下从开头裁、保留目录尾部", async () => {
+	jest.useFakeTimers();
+	const { header } = await mountHeader();
+	jest.advanceTimersByTime(3000);
+	const plain = (width: number) => header.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, "")).join("\n");
+	for (const width of [110, 72, 60, 52, 51, 40]) expect(plain(width)).toMatch(/pi \S+ · \/tmp\/project/u);
+	const tiny = header.render(40)[0].replace(/\x1b\[[0-9;]*m/gu, "");
+	expect(tiny).toMatch(/FireCode .*pi \S+ · \/tmp\/project ─+$/u);
+	expect(visibleWidth(tiny)).toBe(40);
+	expect(plain(30)).toMatch(/FireCode …\S*project ─+/u);
+	header.dispose?.();
+});
