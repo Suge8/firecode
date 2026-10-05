@@ -29,6 +29,8 @@ let directory: string | undefined;
 afterEach(async () => {
 	setSystemTime();
 	delete (globalThis as any).__reviewTick;
+	delete (globalThis as any).__modelGate;
+	delete (globalThis as any).__inputGate;
 	faux?.unregister();
 	faux = undefined;
 	if (directory) await rm(directory, { recursive: true, force: true });
@@ -887,6 +889,70 @@ test("kill 赢过正在准备的 send/review，异步写回不会复活已删档
 	expect(harness.messages).toHaveLength(2);
 });
 
+test("start 准备期间被 kill：start 不报成功、不调模型、不留热会话", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("被 kill 的子代理不应执行")]);
+	const gate = Promise.withResolvers<void>();
+	(globalThis as any).__modelGate = gate.promise;
+	const starting = harness.execute({ action: "start", worker: "racy", prompt: "做事", role: "工程师" });
+	let workers: any[] = [];
+	while (!workers.length) {
+		await Bun.sleep(1);
+		workers = (await harness.list()).details.workers;
+	}
+	const sessionPath = workers[0].session;
+	await harness.execute({ action: "kill", worker: "racy" });
+	gate.resolve();
+	await expect(starting).rejects.toThrow("已被 kill");
+	await Bun.sleep(20);
+	expect(faux.getPendingResponseCount()).toBe(1);
+	expect(harness.pool.getSession(sessionPath)).toBeUndefined();
+	expect((await harness.list()).details.workers).toEqual([]);
+});
+
+test("steer 越过 await 后按最新档案写回：期间落定不被改回 working，期间被 kill 不复活", async () => {
+	const harness = await setup(true, { review: true, inputGate: true });
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const gateInput = () => {
+		const entered = Promise.withResolvers<void>();
+		const open = Promise.withResolvers<void>();
+		(globalThis as any).__inputGate = { entered: entered.resolve, open: open.promise };
+		return { entered: entered.promise, open: open.resolve };
+	};
+	const startHeld = async (name: string) => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		faux.setResponses([async () => { entered.resolve(); await release.promise; return fauxAssistantMessage("先完成了"); }]);
+		await harness.execute({ action: "start", worker: name, prompt: "开始", role: "工程师" });
+		await entered.promise;
+		return release.resolve;
+	};
+
+	// 期间落定：补充说明没进回合，明确报未送达；档案保持落定后的 idle，在飞数归零。
+	const finish = await startHeld("settles");
+	let input = gateInput();
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const steering = harness.execute({ action: "send", worker: "settles", prompt: "INPUT-GATE 补充", review: true });
+	await input.entered;
+	finish();
+	await delivered;
+	input.open();
+	await expect(steering).rejects.toThrow("未送达");
+	await Bun.sleep(0);
+	expect((await harness.list()).details.workers[0]).toMatchObject({ name: "settles", status: "idle" });
+	expect(counts().at(-1)).toBe(0);
+
+	// 期间被 kill：档案不复活。
+	await startHeld("killed");
+	input = gateInput();
+	const killedSteer = harness.execute({ action: "send", worker: "killed", prompt: "INPUT-GATE 补充", review: true });
+	await input.entered;
+	await harness.execute({ action: "kill", worker: "killed" });
+	input.open();
+	await expect(killedSteer).rejects.toThrow("已被 kill");
+	expect((await harness.list()).details.workers.map((worker: any) => worker.name)).toEqual(["settles"]);
+});
+
 test("第 16 个在飞 Worker 被 admission 拒绝并回报当前清单", async () => {
 	const harness = await setup();
 	let release!: () => void;
@@ -1250,6 +1316,8 @@ async function setup(activate = true, options: {
 	reviewTimeout?: boolean;
 	/** 在子会话里装一个慢速 session_shutdown 探针：收口完成才把 reason 追加到 shutdown.log。 */
 	shutdownProbe?: boolean;
+	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
+	inputGate?: boolean;
 	autoActivate?: boolean;
 	deferUserMessage?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
@@ -1263,7 +1331,15 @@ async function setup(activate = true, options: {
 	const sessionDir = join(directory, "sessions");
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
 	const extensions = join(agentDir, "extensions");
-	if (options.mockReview || options.shutdownProbe) await mkdir(extensions);
+	if (options.mockReview || options.shutdownProbe || options.inputGate) await mkdir(extensions);
+	if (options.inputGate)
+		await writeFile(join(extensions, "input-gate.ts"), `export default function(pi) {
+			pi.on("input", async (event) => {
+				if (!event.text.includes("INPUT-GATE")) return;
+				globalThis.__inputGate.entered();
+				await globalThis.__inputGate.open;
+			});
+		}`);
 	if (options.mockReview)
 		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension({
 			progressOnly: options.reviewProgressOnly === true,
@@ -1382,7 +1458,10 @@ async function setup(activate = true, options: {
 		},
 	};
 	module.registerMaster(pi, {
-		resolveModel: async (id: string) => id === "test/worker-2" ? alternateModel : fauxModel,
+		resolveModel: async (id: string) => {
+			await (globalThis as any).__modelGate;
+			return id === "test/worker-2" ? alternateModel : fauxModel;
+		},
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
 	});
