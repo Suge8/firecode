@@ -30,11 +30,11 @@ Worker 档案是 v8：`working / idle / reviewing` 三态，以 `role` 记录派
 
 行一律按启动序：运行时在 `start` 同步段取单调序号（名字 → 序号，`kill` 或启动失败时删除），这是唯一排序依据——池数组顺序受并发 `start` 越过 await 的先后影响，不能当启动序；reload 恢复的没有序号，排最前并保持池内顺序。可见行数 `max(4, floor(终端高度/6))`，拿不到高度时 4，超出时末行“… +N 个”；全局展开（ctrl+o）显示全部。窄屏先截短动作文字（保留开头，带 …），放不下再丢角色。动画时钟只在有行在动（运行、审查、落定过渡未播完）时订阅 `flame.ts` 的 `onFrame`，全部静止即取消，Master 自身不持有帧计时器。
 
-同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回。
+同时 working/reviewing 的 Worker 最多 15 个；第 16 个 `start` 直接拒绝并回报在飞清单，不排队。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回：await 之后的写回一律经 `commit` 重读最新档案再函数式更新，档案已被 kill 就释放热会话并放弃；启动回合的路径都经 `runWorker` 入口重读，准备期间被 kill 的 start 报错、不调模型、不留热会话。steer 越过 await 后回合已落定时清掉滞留队列并报“未送达”，由指挥官重发。
 
 ## 在飞数发布
 
-Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（`flushEvents` 的 deliver 结束后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖，闲时前门唤醒由 agent 回合覆盖，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发归零。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
+Master 是在飞子代理数的唯一发布者。在飞 = working/reviewing + 已落定但结果事件还在队列或投递中的子代理（`flushEvents` 的 deliver 结束后才扣除，投递失败重试期间仍计入；已落定且事件已交出的未收割子代理不算），所以归零只发生在事件已交给指挥官之后：忙时 steer 由指挥官回合覆盖，闲时前门唤醒由 agent 回合覆盖，上边框、摘要与 Bark 不会在唤醒前出现“歇下”缝隙。同一同步段内的落定与入队合并成一次计算。store 与事件队列每次变化及激活/停用时在进程内事件总线发布 `{ inFlight }`，只在数量变化时发；停用时先发带 `teardown` 的归零——遗弃在飞子代理不是歇下，busy.ts 只结束本段、不发歇下边沿。同时按 0↔正数跃迁发布通用 `herdr:working`（`{ active, label }`，与 `herdr:blocked` 同构，消费者按 active 计数配对）。频道名与 payload 只在根级 `busy.ts` 定义；statusbar、tools、bark 订阅同一个数。herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
 
 ## 投递与义务
 

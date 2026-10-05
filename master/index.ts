@@ -144,11 +144,11 @@ export function registerMaster(
 	};
 	// 在飞子代理数的唯一发布者；herdr:working 只在 0↔正数跃迁时发布，active 按计数配对。
 	let publishedInFlight = 0;
-	const publishInFlight = (count: number) => {
+	const publishInFlight = (count: number, teardown = false) => {
 		if (count === publishedInFlight) return;
 		const wasBusy = publishedInFlight > 0;
 		publishedInFlight = count;
-		pi.events.emit(WORKERS_CHANNEL, { inFlight: count } satisfies WorkersPayload);
+		pi.events.emit(WORKERS_CHANNEL, { inFlight: count, ...(teardown ? { teardown: true as const } : {}) } satisfies WorkersPayload);
 		if (wasBusy !== count > 0)
 			pi.events.emit(HERDR_WORKING_CHANNEL, { active: count > 0, label: HERDR_WORKING_LABEL } satisfies HerdrWorkingPayload);
 	};
@@ -228,7 +228,8 @@ export function registerMaster(
 	const deactivate = async () => {
 		const active = runtime;
 		runtime = undefined;
-		publishInFlight(0);
+		// 遗弃在飞子代理不是歇下：带 teardown 归零，busy.ts 只结束本段。
+		publishInFlight(0, true);
 		await pool.disposeAll();
 		for (const timer of interruptTimers.values()) clearTimeout(timer);
 		interruptTimers.clear();
@@ -344,12 +345,19 @@ export function registerMaster(
 			enqueueEvent(active, event.content, event.worker, { replayId: event.id });
 		return active;
 	};
+	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就释放热会话并放弃本次动作。 */
 	const currentWorker = (active: MasterRuntime, identity: WorkerRef) => {
 		requireRuntimeOwner(active);
 		const current = active.store.state.workers.find((worker) => worker.name === identity.name);
 		if (current?.sessionPath === identity.sessionPath) return current;
 		void active.pool.dispose(identity.sessionPath);
 		throw new Error(`${identity.name} 已被 kill，取消本次动作`);
+	};
+	/** await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖。 */
+	const commit = (active: MasterRuntime, identity: WorkerRef, update: (current: WorkerRef) => WorkerRef): WorkerRef => {
+		const next = update(currentWorker(active, identity));
+		active.store.dispatch({ type: "UPSERT_WORKER", worker: next });
+		return next;
 	};
 	const openWorkerSession = async (active: MasterRuntime, worker: WorkerRef) => {
 		requireRuntimeOwner(active);
@@ -400,7 +408,8 @@ export function registerMaster(
 	};
 	/** resolve 即回合已在飞：宿主 prompt 的前置阶段仍报空闲，期间 abort 会被丢弃，interrupt 必须晚于 preflight。 */
 	const runWorker = async (active: MasterRuntime, worker: WorkerRef, session: Awaited<ReturnType<typeof openWorkerSession>>, prompt: string) => {
-		requireRuntimeOwner(active);
+		// 启动回合的路径都经这里：准备期间被 kill 的不调模型、不留热会话。
+		currentWorker(active, worker);
 		observeWorker(active, worker.sessionPath, session);
 		const run = Symbol(worker.name);
 		let terminal: WorkerTerminal | undefined;
@@ -470,9 +479,7 @@ export function registerMaster(
 			await session.setModel(model);
 			requireRuntimeOwner(active);
 			session.setThinkingLevel(fallback.thinking);
-			const latest = currentWorker(active, current);
-			const switched: WorkerRef = { ...latest, ...fallback, status: "working" };
-			active.store.dispatch({ type: "UPSERT_WORKER", worker: switched });
+			const switched = commit(active, current, (latest) => ({ ...latest, ...fallback, status: "working" }));
 			const from = modelAtomText(current);
 			const to = modelAtomText(fallback);
 			enqueueEvent(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
@@ -618,14 +625,11 @@ export function registerMaster(
 					await session.waitForIdle();
 					requireRuntimeOwner(active);
 					observeWorker(active, target.sessionPath, session);
-					const current = currentWorker(active, target);
 					const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-					const { disposition: _disposition, interruptedAt: _interruptedAt, ...rest } = current;
+					commit(active, target, ({ disposition: _disposition, interruptedAt: _interruptedAt, ...rest }) => ({ ...rest, status: "reviewing" }));
 					clearInterruptTimer(target.name);
-					const reviewing: WorkerRef = { ...rest, status: "reviewing" };
 					active.idleSince.delete(target.sessionPath);
 					active.runStartedAt.set(target.sessionPath, Date.now());
-					active.store.dispatch({ type: "UPSERT_WORKER", worker: reviewing });
 					void monitorReview(session, target.sessionPath, previousRunId).then(
 						(outcome) => {
 							if (!ownsRuntime(active)) return;
@@ -688,8 +692,13 @@ export function registerMaster(
 					const session = active.pool.getSession(target.sessionPath);
 					if (!session?.isStreaming) throw new Error(`${target.name} 回合正在收尾，稍后再 send`);
 					await session.steer(prompt);
-					if (params.review === true && !target.reviewNeeded)
-						active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...target, reviewNeeded: true } });
+					// steer 会 await 子会话的 input 处理器：期间可能落定或被 kill，写回只认重读后的档案。
+					const current = currentWorker(active, target);
+					if (current.status !== "working") {
+						session.clearQueue();
+						throw new Error(`${target.name} 的回合已结束，补充说明未送达，请重新 send`);
+					}
+					if (params.review === true) commit(active, target, (latest) => ({ ...latest, reviewNeeded: true }));
 					return toolResult({ steered: true });
 				}
 				if (target.status === "working")
@@ -723,21 +732,19 @@ export function registerMaster(
 						thinking = requestedThinking as WorkerRef["thinking"] | undefined ?? thinking;
 						session.setThinkingLevel(thinking);
 					}
-					const current = currentWorker(active, target);
-					const { disposition: _disposition, interruptedAt, ...rest } = current;
-					const activeWorker: WorkerRef = {
+					const interruptedAt = currentWorker(active, target).interruptedAt;
+					const activeWorker = commit(active, target, ({ disposition: _disposition, interruptedAt: _interrupted, ...rest }) => ({
 						...rest,
 						role,
 						model,
 						thinking,
 						cwd,
 						status: "working",
-						...(params.review === true || target.reviewNeeded ? { reviewNeeded: true } : {}),
-					};
+						...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),
+					}));
 					clearInterruptTimer(target.name);
 					active.idleSince.delete(target.sessionPath);
 					active.runStartedAt.set(target.sessionPath, Date.now());
-					active.store.dispatch({ type: "UPSERT_WORKER", worker: activeWorker });
 					const text = interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt;
 					await runWorker(active, activeWorker, session, text);
 					return toolResult({ sent: true });
@@ -809,9 +816,11 @@ export function registerMaster(
 					await runWorker(active, worker, spawned.session, prompt);
 					return toolResult({ started: true, worker: compactWorker(worker) });
 				} catch (error) {
-					if (ownsRuntime(active)) {
+					// 只撤自己这一票：kill 后同名重开的新票不受影响。
+					if (ownsRuntime(active) && active.store.state.workers.some((candidate) => candidate.sessionPath === sessionPath)) {
 						active.store.dispatch({ type: "REMOVE_WORKER", name });
 						active.launchOrder.delete(name);
+						active.runStartedAt.delete(sessionPath);
 					}
 					throw error;
 				}

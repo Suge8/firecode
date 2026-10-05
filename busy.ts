@@ -11,6 +11,8 @@ import { formatDuration } from "./format.js";
 export const WORKERS_CHANNEL = "firecode:workers";
 export interface WorkersPayload {
 	inFlight: number;
+	/** Master 停用遗弃在飞子代理：归零只结束本段，不是歇下。 */
+	teardown?: true;
 }
 
 /**
@@ -80,12 +82,29 @@ function outcomeOf(messages: readonly { role: string; stopReason?: string }[]): 
 	return stop === "aborted" || stop === "error" ? stop : "complete";
 }
 
+const HUBS = Symbol.for("firecode.busy");
+
 /**
- * 会话进行中的唯一判定与歇下边沿：上边框、轮次时钟与 Bark 都只消费这里，不各自拼装。
+ * 会话进行中的唯一判定与歇下边沿：上边框、轮次时钟与 Bark 都只订阅这里，不各自拼装。
+ * 每个 pi 只有一份状态机，首个订阅者安装宿主事件，之后只追加订阅；登记挂在 globalThis 上，
+ * 宿主按文件加载模块副本时同一个 pi 仍只命中一份。
  * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界（宿主 sendUserMessage 会 await 整个唤醒回合，
  * 所以投递完成、在飞数归零可能晚于 agent_settled，歇下必须在两个来源都满足的那一刻触发）。
+ * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
+	const hubs = ((globalThis as Record<symbol, unknown>)[HUBS] ??= new WeakMap()) as WeakMap<ExtensionAPI, BusyHandlers[]>;
+	const subscribers = hubs.get(pi);
+	if (subscribers) {
+		subscribers.push(handlers);
+		return;
+	}
+	const list = [handlers];
+	hubs.set(pi, list);
+	installBusy(pi, list);
+}
+
+function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): void {
 	let agentRunning = false;
 	let inFlight = 0;
 	/** 本段起点；有值即进行中。 */
@@ -93,7 +112,9 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 	let outcome: Outcome = "complete";
 	let requests = FRESH;
 	let ctx: ExtensionContext | undefined;
-	const update = () => {
+	let closed = false;
+	const update = (teardown = false) => {
+		if (closed) return;
 		const now = Date.now();
 		const busy = agentRunning || inFlight > 0;
 		if (busy && since === undefined) {
@@ -102,9 +123,15 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 		}
 		const started = since;
 		if (!busy) since = undefined;
-		handlers.onChange?.({ agentRunning, inFlight, busy, since }, ctx);
-		if (!busy && started !== undefined) handlers.onSettled(ctx, settledRound(now - started, outcome, requests));
+		const view = { agentRunning, inFlight, busy, since };
+		for (const subscriber of subscribers) subscriber.onChange?.(view, ctx);
+		if (busy || started === undefined || teardown) return;
+		const round = settledRound(now - started, outcome, requests);
+		for (const subscriber of subscribers) subscriber.onSettled(ctx, round);
 	};
+	pi.on("session_shutdown", () => {
+		closed = true;
+	});
 	pi.on("agent_end", (event) => {
 		outcome = outcomeOf(event.messages);
 	});
@@ -139,7 +166,8 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 		update();
 	});
 	pi.events.on(WORKERS_CHANNEL, (data) => {
-		inFlight = (data as WorkersPayload).inFlight;
-		update();
+		const payload = data as WorkersPayload;
+		inFlight = payload.inFlight;
+		update(payload.teardown === true);
 	});
 }
