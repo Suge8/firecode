@@ -19,7 +19,7 @@ type Spec = {
 	review?: [number, number, number];
 	started?: number;
 	output?: number;
-	settled?: [number, "done" | "failed", string?];
+	settled?: [number, "done" | "failed" | "interrupted", string?];
 };
 
 function facts(specs: Spec[]) {
@@ -67,6 +67,8 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 
 const names = (lines: string[]) => lines.map((line) => line.match(/^ {2}\S ([a-z][a-z0-9-]*) /u)?.[1] ?? line.trim());
 const done = (name: string, agoMs = 2 * MINUTE): Spec => ({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "done"] });
+const interrupted = (name: string, agoMs = 2 * MINUTE): Spec =>
+	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "interrupted"] });
 const failed = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
 	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "failed", note] });
 
@@ -89,9 +91,26 @@ test("分组与顺序：失败、卡住置顶，然后在跑与审查，最后�
 });
 
 test("失败行与已完成合计不随时间消失：一小时后仍在", async () => {
-	const later = await list([failed("fail-a", 60 * MINUTE, "已中断"), done("done-a", 60 * MINUTE)], { now: NOW });
-	expect(names(later.text())).toEqual(["fail-a", "✓ 1 个已完成"]);
-	expect(later.text()[0]).toContain("已中断");
+	const later = await list([failed("fail-a", 60 * MINUTE), interrupted("halt", 60 * MINUTE), done("done-a", 60 * MINUTE)], { now: NOW });
+	expect(names(later.text())).toEqual(["fail-a", "halt", "✓ 1 个已完成"]);
+});
+
+test("被中断不是失败：静态黄色标记、不画 ✗，与失败、卡住同在置顶那一组（失败在前）", async () => {
+	const specs: Spec[] = [
+		{ name: "run-a", output: NOW - 1_000 },
+		{ name: "stuck-a", started: NOW - 9 * MINUTE },
+		interrupted("halt"),
+		failed("fail-a"),
+	];
+	const view = await list(specs, { paint: tagged, now: NOW });
+	const raw = view.raw(160);
+	expect(names(raw.map((line) => stripVTControlCharacters(line).replace(/<\/?[a-z]+>/gu, "")))).toEqual(["fail-a", "halt", "stuck-a", "run-a"]);
+	const halt = raw[1];
+	expect(halt).toMatch(/^ {2}<warning>[^✗<]<\/warning> /u);
+	expect(halt).toContain("<warning>被中断</warning>");
+	expect(halt).not.toContain("✗");
+	const later = await list(specs, { paint: tagged, now: NOW + 1_234 });
+	expect(later.raw(160)[1].slice(0, 22)).toBe(halt.slice(0, 22));
 });
 
 test("卡住：working 五分钟没有任何输出标黄色“N 分钟无动静”，字形静止；有输出立即恢复", async () => {

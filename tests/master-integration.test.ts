@@ -830,7 +830,7 @@ test("失败的 interrupt 不会把本回合或下一回合误记为中断", asy
 	release();
 	await delivered;
 	expect(harness.messages.at(-1).message.content).toContain("自然完成");
-	expect(harness.messages.at(-1).message.content).not.toContain("已中断");
+	expect(harness.messages.at(-1).message.content).not.toContain("被中断");
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker.interruptedAt).toBeUndefined();
 });
@@ -1145,6 +1145,10 @@ test("中断事件带耗时", async () => {
 	const content = harness.messages.at(-1).message.content as string;
 	expect(titleOf(content)).toBe("clock 被中断");
 	expect(content).toContain("会话与审查义务均已保留");
+	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
+	await harness.execute({ action: "ack", worker: "clock" });
+	expect(harness.activity()).toEqual([]);
 	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 40s");
 });
 

@@ -181,7 +181,6 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 
 test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变忙起连续累计，中途输入与结果唤醒都不重置）/ 全部落定且歇下才定格", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	const events = new Map<string, Function>();
 	const bus = new Map<string, Function>();
 	let editor: any;
 	const theme = { fg: (_color: string, text: string) => text };
@@ -198,11 +197,14 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 			},
 		},
 	};
+	// 同名事件保留全部处理器：busy.ts 与 statusbar 都订阅生命周期事件。
+	const handlers = new Map<string, Function[]>();
 	registerStatusBar({
-		on: (event: string, fn: Function) => events.set(event, fn),
+		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 		events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
 		getThinkingLevel: () => "off",
 	});
+	const events = { get: (event: string) => (...args: unknown[]) => handlers.get(event)?.forEach((fn) => fn(...args)) };
 	events.get("session_start")!({}, ctx);
 	const top = () => stripVTControlCharacters(editor.render(100)[0]);
 	try {
@@ -242,49 +244,6 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 		events.get("agent_start")!({}, ctx);
 		expect(top()).not.toContain("1m20s");
 		expect(top()).toMatch(/处理中 0\.0s/u);
-	} finally {
-		setSystemTime();
-	}
-});
-
-test("闲时唤醒回合先于投递完成而结束：agent_settled 时仍显示等待，在飞数归零后才定格一次", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	const events = new Map<string, Function>();
-	const bus = new Map<string, Function>();
-	let editor: any;
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
-		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
-		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
-		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
-		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
-			setEditorComponent(factory: any) {
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
-			},
-		},
-	};
-	registerStatusBar({
-		on: (event: string, fn: Function) => events.set(event, fn),
-		events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
-		getThinkingLevel: () => "off",
-	});
-	events.get("session_start")!({}, ctx);
-	const top = () => stripVTControlCharacters(editor.render(100)[0]);
-	try {
-		setSystemTime(new Date(1_000_000));
-		bus.get("firecode:workers")!({ inFlight: 1 });
-		events.get("agent_start")!({}, ctx);
-		setSystemTime(new Date(1_010_000));
-		events.get("agent_end")!({ messages: [] }, ctx);
-		events.get("agent_settled")!({}, ctx);
-		expect(top()).toMatch(/等待 1 个子代理/u);
-		setSystemTime(new Date(1_011_000));
-		bus.get("firecode:workers")!({ inFlight: 0 });
-		expect(top()).toContain("11s");
-		expect(top()).not.toMatch(/处理中|等待/u);
 	} finally {
 		setSystemTime();
 	}

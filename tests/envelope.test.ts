@@ -12,8 +12,8 @@ async function envelope() {
 
 test("信封包裹后能被识别并还原每个事件正文，一条消息可含多个事件", async () => {
 	const { wrapEnvelope, parseEnvelopes } = await envelope();
-	const first = "子代理 a 已停下\n回复：\n完成\n\n含空行";
-	const second = "子代理 b 已中断";
+	const first = "a 已返回\n回复：\n完成\n\n含空行";
+	const second = "b 被中断\n会话与审查义务均已保留";
 	const text = [wrapEnvelope("firecode_master_event", first), wrapEnvelope("firecode_master_event", second)].join("\n\n");
 	expect(parseEnvelopes(text)).toEqual([
 		{ tag: "firecode_master_event", body: first },

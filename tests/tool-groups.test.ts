@@ -848,8 +848,8 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	s.complete(s.tool("read", { path: "a.ts" }));
 	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n## 交付\n- 修好了 refresh 竞态。", "14m"));
 	hostUser(s, WORKER_FAILED("perf-probe"));
-	hostUser(s, EVENT("lint 审查停止", "停止原因：\n顾问建议停止。"));
-	hostUser(s, "<firecode_master_event>\nfix-auth 被中断\n会话与审查义务均已保留，请 send 续派或 kill 收口\n</firecode_master_event>");
+	hostUser(s, EVENT("lint 审查停止（3 轮）", "顾问意见：\n顾问建议停止。"));
+	hostUser(s, "<firecode_master_event>\nfix-auth 被中断\n会话与审查义务均已保留\n</firecode_master_event>");
 	reviewCard({ kind: "fail", round: 1, details: "模型 1 · gpt-5.5\nFAIL\n## 发现 1：刷新竞态未修\n- **严重程度**: 高", advisor: null });
 	reviewCard({ kind: "error", message: "所有审查者均未给出有效结论" });
 	reviewCard({ kind: "pass", round: 2, summary: "模型 1 · gpt-5.5\nPASS\n验证命令 exit 0，核心逻辑已核对。\n证据：文件=a.ts；命令=bun test", details: "", elapsedMs: 95_000 });
@@ -864,8 +864,8 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	expect(rows).toEqual([
 		"↳ fix-auth 审查通过（2 轮） · 14m 修好了 refresh 竞态。",
 		"↳ perf-probe 失败 · 2m 429 Too Many Requests",
-		"↳ lint 审查停止 · 8m 顾问建议停止。",
-		"↳ fix-auth 被中断 会话与审查义务均已保留，请 send 续派或 kill 收口",
+		"↳ lint 审查停止（3 轮） · 8m 顾问建议停止。",
+		"↳ fix-auth 被中断 会话与审查义务均已保留",
 		"↳ 审查未通过 刷新竞态未修",
 		"↳ 审查未完成 所有审查者均未给出有效结论",
 		"↳ 第 2 轮审查通过 验证命令 exit 0，核心逻辑已核对。",
@@ -873,7 +873,7 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	]);
 	const red = s.ui.theme.fg("error", "↳");
 	const toneOf = (needle: string) => raw.find((line: string) => line.includes(needle))!.includes(red);
-	expect(["perf-probe 失败", "lint 审查停止", "审查未通过", "审查未完成"].filter(toneOf)).toEqual(["perf-probe 失败", "lint 审查停止", "审查未通过", "审查未完成"]);
+	expect(["perf-probe 失败", "lint 审查停止（3 轮）", "审查未通过", "审查未完成"].filter(toneOf)).toEqual(["perf-probe 失败", "lint 审查停止（3 轮）", "审查未通过", "审查未完成"]);
 	expect(["审查通过（2 轮）", "fix-auth 被中断", "第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
 });
 
@@ -956,4 +956,43 @@ test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为
 	const row = s.chat.render(100).find((line: string) => stripVTControlCharacters(line).includes("fix-auth 失败"))!;
 	expect(stripVTControlCharacters(row).trim()).toBe("↳ fix-auth 失败 · 2s 供应商错误");
 	expect(row).toContain(s.ui.theme.fg("error", "↳"));
+});
+
+test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：成败只由信封决定，被中断不算失败", async () => {
+	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
+	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
+	const event = (body: string) => wrapEnvelope("firecode_master_event", withElapsed(body, { run: 8 * 60_000, task: 19 * 60_000 }));
+	const cases = [
+		{ title: "fix-auth 已返回", body: masterEvent.returned("fix-auth", "刷新改为单飞。更多细节"), row: "↳ fix-auth 已返回 · 8m 刷新改为单飞。", red: false },
+		{ title: "perf 失败", body: masterEvent.failed("perf", "429 Too Many Requests"), row: "↳ perf 失败 · 8m 429 Too Many Requests", red: true },
+		{ title: "lint 被中断", body: masterEvent.interrupted("lint"), row: "↳ lint 被中断 · 8m 会话与审查义务均已保留", red: false },
+		{ title: "docs 审查通过（2 轮）", body: masterEvent.review("docs", { status: "passed", runId: "r", rounds: 2 }, "## 交付\n- 修好了。"), row: "↳ docs 审查通过（2 轮） · 8m 修好了。", red: false },
+		{ title: "ui 审查停止（3 轮）", body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查停止（3 轮） · 8m 收敛不了，交还用户。", red: true },
+	];
+	const summaryOf = (s: any) => stripVTControlCharacters(s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!).trimEnd();
+	for (const { title, body } of cases) {
+		const s = await scene();
+		hostUser(s, "开工");
+		s.setNow(1000);
+		feed(s, true, 0, 1000);
+		s.tool("bash", { command: "bun test" });
+		hostUser(s, event(body));
+		expect(summaryOf(s)).toMatch(new RegExp(`^${FLAME} ${title.replace(/[()（）]/gu, "\\$&")}$`, "u"));
+		dispose?.();
+		dispose = undefined;
+	}
+
+	const s = await scene();
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	for (const { body } of cases) hostUser(s, event(body));
+	assistant(s, [{ type: "text", text: "收口" }]);
+	s.settle(3_000, "complete", 0);
+	s.setNow(60_000);
+	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 1 个子代理失败");
+	s.ui.setToolsExpanded(true);
+	const raw = s.chat.render(120);
+	const rows = raw.filter((line: string) => stripVTControlCharacters(line).trim().startsWith("↳"));
+	expect(rows.map((line: string) => stripVTControlCharacters(line).trim())).toEqual(cases.map((entry) => entry.row));
+	expect(rows.map((line: string) => line.includes(s.ui.theme.fg("error", "↳")))).toEqual(cases.map((entry) => entry.red));
 });
