@@ -20,8 +20,9 @@ export interface MachineEntry {
 	duration?: string;
 }
 
-/** 正文分节标记独占一行（如“回复：”“错误：”）；预览取标记之后的第一行正文。 */
+/** 正文分节标记独占一行（如“回复：”“错误：”）；失败时预览取错误分节之后的正文，否则取首个分节之后的。 */
 const SECTION = /^[^\s：]{1,8}：$/u;
+const ERROR_SECTION = "错误：";
 const RUN_TIME = /^耗时：本次运行 (\S+)/mu;
 const REVIEW_ALARM = /审查(?:未通过|未完成|停止|已由顾问终止)|Review (?:failed|incomplete|stopped)/u;
 /** 审查卡正文里的发现标题（“## 发现 1：…”）与原因行（“原因：…”）。 */
@@ -38,8 +39,10 @@ function entryOf(tag: EnvelopeTag, body: string): MachineEntry {
 	const [heading = "", ...rest] = body.split("\n");
 	if (tag === "firecode_watcher") return { title: "观察员", preview: firstSentence(rest.join("\n")), alarm: false };
 	if (tag === "firecode_review") return { title: heading, preview: reviewPreview(rest), alarm: REVIEW_ALARM.test(heading) };
-	const marker = rest.findIndex((line) => SECTION.test(line.trim()));
-	const failed = marker >= 0 && rest[marker].trim() === "错误：";
+	// 失败只看是否有独占一行的“错误：”，不论它是第几个分节；失败时预览从错误分节取。
+	const errorAt = rest.findIndex((line) => line.trim() === ERROR_SECTION);
+	const failed = errorAt >= 0;
+	const marker = failed ? errorAt : rest.findIndex((line) => SECTION.test(line.trim()));
 	const content = rest.slice(marker + 1).filter((line) => !RUN_TIME.test(line)).join("\n");
 	const duration = RUN_TIME.exec(body)?.[1];
 	return {

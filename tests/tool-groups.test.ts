@@ -942,3 +942,18 @@ test("展开态 ↳ 行与上一段正文之间空一行；折叠态中间回复
 	expect(expanded[body + 1].trim()).toBe("");
 	expect(expanded[body + 2].trim()).toStartWith("↳ fix-auth 已返回");
 });
+
+test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为红、预览取错误原文、计入子代理失败数", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.complete(s.tool("read", { path: "a.ts" }));
+	hostUser(s, EVENT("fix-auth 失败", "回复：\n部分回复\n错误：\n供应商错误", "2s"));
+	assistant(s, [{ type: "text", text: "收口" }]);
+	s.settle(3_000, "complete", 0);
+	s.setNow(60_000);
+	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 1 个子代理失败");
+	s.ui.setToolsExpanded(true);
+	const row = s.chat.render(100).find((line: string) => stripVTControlCharacters(line).includes("fix-auth 失败"))!;
+	expect(stripVTControlCharacters(row).trim()).toBe("↳ fix-auth 失败 · 2s 供应商错误");
+	expect(row).toContain(s.ui.theme.fg("error", "↳"));
+});
