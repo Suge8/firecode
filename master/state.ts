@@ -104,8 +104,8 @@ export function loadMasterState(path: string): MasterState | undefined {
 		throw new Error(`Master Worker Pool 状态不是合法 JSON：${path}`);
 	}
 	const version = (data as { version?: unknown } | null)?.version;
-	if (typeof version === "number" && version !== STATE_VERSION) throw new LegacyMasterStateError(version);
-	const state = restoreMasterState(data);
+	if (typeof version === "number" && version !== STATE_VERSION && version !== 8) throw new LegacyMasterStateError(version);
+	const state = restoreMasterState(version === 8 ? migrateFromV8(data as { workers?: unknown }) : data);
 	if (!state) throw new Error(`Master Worker Pool 状态结构无效：${path}`);
 	return state;
 }
@@ -150,6 +150,24 @@ export class MasterStore {
 			return { state: initialMasterState(), discardedLegacyVersion: error.version };
 		}
 	}
+}
+
+/**
+ * v8 → v9 只差启动序：v8 的创建时间是同一先后的近似（并行 start 下可能有出入，从此以 launch 为准），没有创建时间的
+ * 是更早版本恢复来的、排最前。升级不丢池：池里是用户仍在用的子代理，丢弃会让指挥官失去它们的会话与审查义务。
+ */
+function migrateFromV8(data: { workers?: unknown }): unknown {
+	if (!Array.isArray(data.workers)) return data;
+	const workers = data.workers as Record<string, unknown>[];
+	const created = (index: number) => (typeof workers[index]?.createdAt === "number" ? workers[index].createdAt as number : -Infinity);
+	const order = workers.map((_, index) => index).sort((a, b) => created(a) - created(b) || a - b);
+	return {
+		version: STATE_VERSION,
+		workers: workers.map((worker, index) => {
+			const { createdAt: _createdAt, ...rest } = worker ?? {};
+			return { ...rest, launch: order.indexOf(index) + 1 };
+		}),
+	};
 }
 
 export function requireWorker(state: MasterState, name: string): WorkerRef {
