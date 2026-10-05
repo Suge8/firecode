@@ -71,6 +71,24 @@ test("开口即经队列语义投递，建议带来源信封与时点标记", as
 	].join("\n"));
 });
 
+test("一条发言投递失败只丢弃这一条并提示，观察员继续工作", async () => {
+	const harness = await setup({ failDeliveries: 1 });
+	advise("第一条建议");
+	let attempt = harness.next();
+	await harness.turnEnd(3, "继续");
+	await attempt;
+	await Bun.sleep(5);
+	expect(harness.messages).toHaveLength(0);
+	expect(harness.notices.some((notice) => notice.includes("投递失败"))).toBe(true);
+	expect(harness.notices.some((notice) => notice.includes("观察员已停止"))).toBe(false);
+
+	advise("第二条建议");
+	attempt = harness.next();
+	await harness.turnEnd(4, "再继续");
+	await attempt;
+	expect(harness.notes().map((note) => note.note)).toEqual(["第二条建议"]);
+});
+
 test("用户 esc 中断过的现场照常投递，投递选项不变", async () => {
 	const harness = await setup();
 	let release!: () => void;
@@ -426,6 +444,8 @@ async function setup(options: {
 	worker?: boolean;
 	features?: Record<string, unknown>;
 	createObserver?: (...args: any[]) => Promise<any>;
+	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
+	failDeliveries?: number;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-watcher-"));
 	const cwd = join(directory, "project");
@@ -478,6 +498,7 @@ async function setup(options: {
 	const statuses = new Map<string, string>();
 	let waiter: (() => void) | undefined;
 	const settle = () => waiter?.();
+	let failures = options.failDeliveries ?? 0;
 	const pi = {
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerMessageRenderer() {},
@@ -486,7 +507,11 @@ async function setup(options: {
 			on: (name: string, handler: any) => channels.set(name, [...(channels.get(name) ?? []), handler]),
 			emit: (name: string, data: any) => { for (const handler of channels.get(name) ?? []) handler(data); },
 		},
-		sendMessage: (message: any, sendOptions: any) => { messages.push({ message, options: sendOptions }); settle(); },
+		sendMessage: (message: any, sendOptions: any) => {
+			if (failures > 0) { failures--; settle(); throw new Error("投递失败"); }
+			messages.push({ message, options: sendOptions });
+			settle();
+		},
 		sendUserMessage: async (content: string) => { userMessages.push(content); settle(); },
 	};
 	const sessionId = crypto.randomUUID();
