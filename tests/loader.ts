@@ -2,8 +2,8 @@
  * 在测试里加载 FireCode 模块：扩展运行时由 pi 注入 `@earendil-works/*`，
  * 测试环境没有这层注入，因此把整个插件目录复制到临时目录并把包名改写到 pi 源码。
  */
-import { existsSync, realpathSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync, realpathSync, rmSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { delimiter, dirname, extname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -32,7 +32,12 @@ export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.t
 const PI_AI = PI_AI_URL;
 const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
-const created: string[] = [];
+/** 同一份配置与改写只复制一次仓库：复制是测试耗时的大头（每次数百个文件）。进程退出时统一删除。 */
+const copies = new Map<string, Promise<string>>();
+process.on("exit", () => {
+	for (const directory of shared) rmSync(directory, { recursive: true, force: true });
+});
+const shared: string[] = [];
 const NON_RUNTIME_ROOTS = new Set([".git", "docs", "tests"]);
 export const TEST_REVIEW_CONFIG = {
 	advisor: "test/advisor/high",
@@ -105,8 +110,22 @@ export async function loadFirecodeModule(
 		extraFiles?: Record<string, string>;
 	} = {},
 ): Promise<Record<string, unknown>> {
+	const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
+	// undefined（默认测试配置）与 null（没有运行配置）必须分开：JSON 会把两者都写成 null。
+	const config = options.configJsonc === undefined ? { default: true } : { text: options.configJsonc };
+	const key = JSON.stringify([config, options.extraFiles, options.replacements && [sourceEntry, options.replacements]]);
+	let copy = copies.get(key);
+	if (!copy) copies.set(key, copy = prepareCopy(sourceEntry, options));
+	const directory = await copy;
+	return import(`${pathToFileURL(join(directory, entry)).href}?test=${Date.now()}-${Math.random()}`);
+}
+
+async function prepareCopy(
+	sourceEntry: string,
+	options: { configJsonc?: string | null; replacements?: Record<string, string>; extraFiles?: Record<string, string> },
+): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-test-"));
-	created.push(directory);
+	shared.push(directory);
 	await copyFirecodeSource(directory);
 	const agentDir = join(directory, "agent");
 	const configDir = join(agentDir, "extensions", "firecode");
@@ -129,16 +148,14 @@ export async function loadFirecodeModule(
 		configSource.replace(getAgentDirImport, `const getAgentDir = () => ${JSON.stringify(agentDir)};`),
 	);
 	for (const [oldText, newText] of Object.entries(options.replacements ?? {})) {
-		const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
 		const path = join(directory, sourceEntry);
 		await writeFile(path, (await readFile(path, "utf8")).replace(oldText, newText));
 	}
-	return import(`${pathToFileURL(join(directory, entry)).href}?test=${Date.now()}`);
+	return directory;
 }
 
-export async function cleanupFirecodeModules(): Promise<void> {
-	await Promise.all(created.splice(0).map((path) => rm(path, { recursive: true, force: true })));
-}
+/** 副本按配置共享、进程退出才删；保留这个钩子让各用例的 afterEach 写法不变。 */
+export async function cleanupFirecodeModules(): Promise<void> {}
 
 export const PI_TUI_URL = PI_TUI;
 
