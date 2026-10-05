@@ -309,7 +309,7 @@ describe("evidence assembly", () => {
 			...Array.from({ length: 30 }, (_, index) => assistant(`中间 ${index}`)),
 			assistant("最新改动"),
 		];
-		const { text, omitted } = buildEvidence(entries, "zh", 60);
+		const { text, omitted } = buildEvidence(entries, "zh", { budgetTokens: 60 });
 		expect(text).toContain("原始需求锚点");
 		expect(text).toContain("最新改动");
 		expect(omitted).toBeGreaterThan(0);
