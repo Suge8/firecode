@@ -93,15 +93,32 @@ test("重名身份漂移与重复 sessionPath 均拒绝", () => {
 	expect(restoreMasterState({ version: 9, workers: [worker, { ...worker, name: "worker-2" }] })).toBeUndefined();
 });
 
-test("v8 只读报旧版错误，状态所有者丢弃并记录清理告知依据", async () => {
+test("v7 只读报旧版错误，状态所有者丢弃并记录清理告知依据", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-master-v9-"));
 	const path = join(directory, "state.json");
-	await writeFile(path, JSON.stringify({ version: 8, workers: [worker] }));
+	await writeFile(path, JSON.stringify({ version: 7, workers: [worker] }));
 	expect(() => loadMasterState(path)).toThrow(LegacyMasterStateError);
 	const store = new MasterStore(path);
 	expect(store.state).toEqual(initialMasterState());
-	expect(store.discardedLegacyVersion).toBe(8);
+	expect(store.discardedLegacyVersion).toBe(7);
 	expect(await readdir(directory)).toEqual([]);
+	await rm(directory, { recursive: true, force: true });
+});
+
+test("v8 档案升级为 v9 不丢池：启动序按 v8 记下的创建时间先后补上（没有创建时间的排最前），其余字段原样", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "firecode-master-v8-"));
+	const path = join(directory, "state.json");
+	const { launch: _launch, ...v8 } = worker;
+	const at = (name: string, createdAt?: number) =>
+		({ ...v8, name, sessionPath: `/tmp/subagents/${name}.jsonl`, ...(createdAt === undefined ? {} : { createdAt }) });
+	await writeFile(path, JSON.stringify({ version: 8, workers: [at("late", 30), at("old"), at("early", 10)] }));
+	const store = new MasterStore(path);
+	expect(store.discardedLegacyVersion).toBeUndefined();
+	expect(store.state).toEqual({ version: 9, workers: [
+		{ ...v8, name: "late", sessionPath: "/tmp/subagents/late.jsonl", launch: 3 },
+		{ ...v8, name: "old", sessionPath: "/tmp/subagents/old.jsonl", launch: 1 },
+		{ ...v8, name: "early", sessionPath: "/tmp/subagents/early.jsonl", launch: 2 },
+	] });
 	await rm(directory, { recursive: true, force: true });
 });
 
