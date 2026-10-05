@@ -319,7 +319,7 @@ export function registerMaster(
 			const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 			if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
-			enqueueEvent(active, `子代理 ${worker.name} 自动续跑提醒：上次回合被外部中断，请 send 续派或 kill 收口`, worker.name, { runEndedAt: worker.interruptedAt });
+			enqueueEvent(active, `${worker.name} 待续跑\n上次回合被外部中断后无人接手，请 send 续派或 kill 收口`, worker.name, { runEndedAt: worker.interruptedAt });
 		}, delay);
 		timer.unref?.();
 		interruptTimers.set(worker.name, timer);
@@ -423,7 +423,7 @@ export function registerMaster(
 			if (!ownsRuntime(active) || activeRuns.get(worker.sessionPath) !== run) return;
 			const stranded = session.clearQueue().steering;
 			if (stranded.length)
-				enqueueEvent(active, `子代理 ${worker.name} 回合结束时有 ${stranded.length} 条补充说明未送达，请重发：\n${stranded.join("\n---\n")}`, worker.name);
+				enqueueEvent(active, `${worker.name} 补充说明未送达\n回合结束时有 ${stranded.length} 条补充说明未送达，请重发：\n${stranded.join("\n---\n")}`, worker.name);
 			activeRuns.delete(worker.sessionPath);
 			if (interruptedRuns.get(worker.sessionPath) === run) {
 				interruptedRuns.delete(worker.sessionPath);
@@ -434,7 +434,7 @@ export function registerMaster(
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				markWorkerIdle(active, worker.sessionPath);
-				enqueueEvent(active, `子代理 ${worker.name} 已中断，会话与审查义务均已保留`, worker.name);
+				enqueueEvent(active, `${worker.name} 被中断\n会话与审查义务均已保留`, worker.name);
 				armInterruptReminder(active, interrupted);
 				return;
 			}
@@ -482,7 +482,7 @@ export function registerMaster(
 			const switched = commit(active, current, (latest) => ({ ...latest, ...fallback, status: "working" }));
 			const from = modelAtomText(current);
 			const to = modelAtomText(fallback);
-			enqueueEvent(active, `子代理 ${current.name} 已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
+			enqueueEvent(active, `${current.name} 已切换模型\n已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`, current.name);
 			await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
 		} catch (error) {
 			const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
@@ -654,7 +654,7 @@ export function registerMaster(
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
-							enqueueEvent(active, `子代理 ${target.name} 审查未完成：${String(error)}`, target.name);
+							enqueueEvent(active, `${target.name} 审查未完成\n${sectionLine("reason")}\n${String(error)}`, target.name);
 						},
 					);
 					return toolResult({ reviewing: true });
@@ -864,8 +864,8 @@ function settleWorker(
 	markWorkerIdle(active, identity.sessionPath);
 	const obligation = current.reviewNeeded ? "\n此票有审查义务，请显式 review。" : "";
 	return failure
-		? `子代理 ${identity.name} 已停下\n${sectionLine("error")}\n${failure}${obligation}`
-		: `子代理 ${identity.name} 已停下\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
+		? `${identity.name} 失败\n${sectionLine("error")}\n${failure}${obligation}`
+		: `${identity.name} 已返回\n${sectionLine("reply")}\n${terminal!.text}${obligation}`;
 }
 
 /** 事件末尾追加耗时行；起点缺失（reload 后）的部分省略，不用当前时刻冒充。 */
@@ -944,12 +944,13 @@ function reviewOutcomeText(
 	outcome: ReviewOutcome,
 	messages: Array<{ role: string; content?: unknown }>,
 ): string {
-	const reply = latestAssistantText(messages) || "（无回复）";
-	if (outcome.status === "passed") return `子代理 ${name} 审查通过（${outcome.rounds} 轮）\n${sectionLine("finalReply")}\n${reply}`;
-	if (outcome.status === "stopped") return `子代理 ${name} 审查停止（${outcome.rounds} 轮）${outcome.advisorAdvice ? `：${outcome.advisorAdvice}` : ""}\n${sectionLine("finalReply")}\n${reply}`;
-	if (outcome.status === "failed") return `子代理 ${name} 审查未完成：${outcome.reason}\n${sectionLine("finalReply")}\n${reply}`;
-	if (outcome.status === "error") return `子代理 ${name} 审查读取失败：${outcome.message}`;
-	return `子代理 ${name} 审查未完成`;
+	const reply = `${sectionLine("finalReply")}\n${latestAssistantText(messages) || "（无回复）"}`;
+	if (outcome.status === "passed") return `${name} 审查通过（${outcome.rounds} 轮）\n${reply}`;
+	if (outcome.status === "stopped")
+		return `${name} 审查停止（${outcome.rounds} 轮）\n${outcome.advisorAdvice ? `${sectionLine("advice")}\n${outcome.advisorAdvice}\n` : ""}${reply}`;
+	if (outcome.status === "failed") return `${name} 审查未完成\n${sectionLine("reason")}\n${outcome.reason}\n${reply}`;
+	if (outcome.status === "error") return `${name} 审查未完成\n${sectionLine("reason")}\n审查读取失败：${outcome.message}`;
+	return `${name} 审查未完成`;
 }
 
 function captureWorkerTerminal(
