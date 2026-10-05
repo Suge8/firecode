@@ -8,6 +8,7 @@ import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-work
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
 import { OUTCOME_TEXT, roundTexts } from "../busy.js";
 import { clip } from "../format.js";
+import { CHAT_GUTTER } from "./line.js";
 import type { Round } from "./round.js";
 import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
 
@@ -21,8 +22,10 @@ export interface SummaryView {
 	arrival?: { text: string; failed: boolean; age: number };
 	/** 这一轮里失败的子代理数（按名字去重）。 */
 	failures?: number;
-	/** 落定后的轮记录：整段耗时与终态。 */
+	/** 落定后的轮记录：这一轮各段合成的耗时与终态（见 round.ts 的 combineRounds）。 */
 	round?: Round;
+	/** 这一轮更早几段的非完成终态短标记，如“中断过 1 次”。 */
+	earlier?: string[];
 	sinceEnd?: number;
 	/** 单轮展开/收起；全局展开时为空，点击无效。 */
 	toggle?: () => void;
@@ -37,7 +40,8 @@ export class TurnSummary implements Component {
 	constructor(private readonly view: SummaryView, private readonly theme: Theme) {}
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(full: number): string[] {
+		const width = full - CHAT_GUTTER;
 		const { theme, view } = this;
 		const sep = theme.fg("dim", " · ");
 		const outcome = this.outcomeText();
@@ -48,7 +52,11 @@ export class TurnSummary implements Component {
 			: settleMark(outcome ? "failed" : "done", view.sinceEnd ?? Infinity);
 		const head = word ? `${glyph} ${word}` : glyph;
 		const record = view.round === undefined ? [] : roundTexts(view.round).map((text) => theme.fg("muted", text));
-		const failures = view.failures ? [theme.fg("error", `${view.failures} 个子代理失败`)] : [];
+		// 失败数与更早的中断都是不能丢的固定标记，窄屏时与它们一起保留。
+		const failures = [
+			...(view.earlier ?? []).map((text) => theme.fg("warning", text)),
+			...(view.failures ? [theme.fg("error", `${view.failures} 个子代理失败`)] : []),
+		];
 		const join = (lead: string, parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !word ? " " : sep) + part).join("")}`;
 		const noticeNeed = view.notice ? visibleWidth(sep) + 2 + Math.min(visibleWidth(view.notice), NOTICE_MIN) : 0;
 		// 窄屏先裁目标（给提示原文留出最小空间），再裁提示原文，仍放不下再丢记录，最后丢提示原文；动作词与失败数是固定标记。
@@ -96,6 +104,6 @@ export class Line implements Component {
 	constructor(private readonly text: string) {}
 	invalidate(): void {}
 	render(width: number): string[] {
-		return [clip(this.text, Math.max(1, width))];
+		return [clip(this.text, Math.max(1, width - CHAT_GUTTER))];
 	}
 }
