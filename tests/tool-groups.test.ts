@@ -1224,3 +1224,37 @@ test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一�
 	expect(machine.endsWith("\x1b[39m")).toBe(true);
 	expect(s.tui.visibleWidth(stripVTControlCharacters(machine))).toBeLessThanOrEqual(width - 2);
 });
+
+test("折叠态按时间顺序：每条补话之后跟它那一段的中间回复首句，“+N 条”在各自段内，补话之间不空出多余的行", async () => {
+	const s = await scene({ replyLines: 2 });
+	const interim = (text: string, id: string) => {
+		assistant(s, [{ type: "text", text }, { type: "toolCall", id, name: "read", arguments: {} }], "toolUse");
+		s.complete(s.tool("read", { path: `${id}.ts` }));
+	};
+	hostUser(s, "原问题");
+	interim("回复甲。", "a");
+	interim("回复乙。", "b");
+	hostUser(s, "补话一");
+	interim("回复丙。", "c");
+	interim("回复丁。", "d");
+	interim("回复戊。", "e");
+	hostUser(s, "补话二");
+	interim("回复己。", "f");
+	assistant(s, [{ type: "text", text: "最终回复。" }]);
+	s.settle(5_000, "complete", 0);
+	s.setNow(60_000);
+
+	const all = s.lines().map((line: string) => line.trimEnd());
+	expect(all.filter((line: string) => line.replace(/▌/u, "").trim()).map((line: string) => line.trim())).toEqual([
+		"▌ 原问题", "✓ 5.0s", "回复甲。", "回复乙。",
+		"▌ 补话一", "+1 条", "回复丁。", "回复戊。",
+		"▌ 补话二", "回复己。",
+		"最终回复。",
+	]);
+	// 留白与其他节点一致：人类消息的上下内边距加一行间隔，最多连续两行空白。
+	let blank = 0;
+	for (const line of all) {
+		blank = line.replace(/▌/u, "").trim() ? 0 : blank + 1;
+		expect(blank).toBeLessThanOrEqual(2);
+	}
+});
