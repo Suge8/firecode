@@ -350,7 +350,7 @@ export class WorkerView implements Component, Focusable {
 		try {
 			await this.source.send(this.name, prompt);
 			this.input.setValue("");
-			this.notice = "已送达";
+			this.notice = "已发出";
 		} catch (error) {
 			this.notice = `未送达：${error instanceof Error ? error.message : String(error)}`;
 		} finally {
