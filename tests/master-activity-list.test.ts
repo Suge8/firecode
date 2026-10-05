@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+/** node 的 stripVTControlCharacters 不认冒号子参数 SGR（如点线下划线 4:4），先剥掉。 */
+const SUBPARAM_SGR = /\x1b\[[0-9;]*:[0-9:;]*m/gu;
 
 afterEach(cleanupFirecodeModules);
 
@@ -60,7 +62,7 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 		component,
 		opened,
 		get renders() { return renders; },
-		text: (width = 72): string[] => at(() => component.render(width)).map((line: string) => stripVTControlCharacters(line)),
+		text: (width = 72): string[] => at(() => component.render(width)).map((line: string) => stripVTControlCharacters(line.replace(SUBPARAM_SGR, ""))),
 		raw: (width = 72): string[] => at(() => component.render(width)),
 		click: (y: number, width = 72) => at(() => component.handleMouse({
 			type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width, height: 20, shift: false, alt: false, ctrl: false,
@@ -179,7 +181,7 @@ test("点击“+N 个在跑”展开全部、再点收起；点“✓ N 个已�
 	expect(doneRows[1]).toContain("已返回");
 	view.click(rowOf("✓ 2 个已完成"));
 	expect(names(view.text()).at(-1)).toBe("✓ 2 个已完成");
-	expect(view.text().some((line) => line.includes("done-a"))).toBe(false);
+	expect(view.text().some((line) => /^ {2}\S done-a /u.test(line))).toBe(false);
 
 	// 子代理行（含展开后的已完成行）点击打开它的全过程视图。
 	expect(view.click(0)).toMatchObject({ handled: true });
@@ -305,10 +307,13 @@ test("折叠行的可点提示：计数加点线下划线，后面暗色列出�
 	expect(fold("2 个已完成")).toContain("<dim>types · pen</dim>");
 	expect(fold("2 个空闲")).toMatch(/^ {2}<dim>·<\/dim> /u);
 	expect(fold("2 个空闲")).toContain("<dim>writer · nap</dim>");
-	for (const line of view.text(100)) expect(line).not.toMatch(/[…▸▾▶▼›>]/u);
+	for (const count of ["+3 个在跑", "2 个已完成", "2 个空闲"]) expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>/gu, "").replace(SUBPARAM_SGR, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
 	// 计数后的名字列对齐。
-	const text = view.text(100);
-	const column = (needle: string) => text.find((line) => line.includes(needle))!.indexOf(needle);
+	const text = view.text(100).map((line) => line.replace(/<\/?\w+>/gu, ""));
+	const column = (needle: string) => {
+		const line = text.find((entry) => entry.includes(needle))!;
+		return Bun.stringWidth(line.slice(0, line.indexOf(needle)));
+	};
 	expect(column("run-3")).toBe(column("types"));
 	expect(column("types")).toBe(column("writer"));
 });
