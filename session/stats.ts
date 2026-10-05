@@ -279,7 +279,7 @@ async function show(markdown: string, ctx: ExtensionCommandContext): Promise<voi
 }
 
 /** 支持 `/tokens 7`、`/tokens --days 7`、`/tokens 0`（全部）。 */
-export function parseDays(args: string | undefined): number {
+function parseDays(args: string | undefined): number {
 	const text = (args ?? "").trim();
 	if (!text) return DEFAULT_DAYS;
 

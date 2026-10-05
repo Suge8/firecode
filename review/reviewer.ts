@@ -190,7 +190,7 @@ const FINDING_FIELDS = [
 const SUGGESTIONS_HEADING = /^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/iu;
 
 /** PASS 证据锚点闸门：摘要行在前，首个证据行必须同时含文件段（带扩展名）与命令段。 */
-export function passIssue(body: string): string | undefined {
+function passIssue(body: string): string | undefined {
 	const lines = body
 		.split(/\r?\n/)
 		.map((line) => line.trim())
@@ -208,7 +208,7 @@ export function passIssue(body: string): string | undefined {
  * FAIL 发现闸门：至少一条带「问题」的发现，且不能全落在「建议（非阻塞）」区。
  * 空 FAIL 或一段散文都不能驱动执行模型改代码——格式非法的票一律作废为基础设施错误。
  */
-export function failIssue(body: string, language: Language): string | undefined {
+function failIssue(body: string, language: Language): string | undefined {
 	const noFinding =
 		language === "en"
 			? "FAIL has no blocking finding: a `## Finding` section is required"

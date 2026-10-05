@@ -72,7 +72,7 @@ export interface ToolsConfig {
 	replyLines: number;
 }
 
-export const DEFAULT_REPLY_LINES = 3;
+const DEFAULT_REPLY_LINES = 3;
 
 export const FEATURES = [
 	"header",

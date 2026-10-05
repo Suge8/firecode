@@ -22,7 +22,6 @@ import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
-	CHECKPOINT_TYPE,
 	CheckpointConflictError,
 	type CheckpointStamp,
 	readCheckpoint,
@@ -518,34 +517,25 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 				: writeCheckpoint(rt.pi, active.ctx, state, persisted);
 		return true;
 	} catch (error) {
-		if (error instanceof CheckpointConflictError) {
-			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+		// 冲突与写入失败共用的收口：停写、释放占用、中止在途动作并告知。
+		const halt = (message: string, level: "warning" | "error") => {
 			setOccupancy(rt, active, false);
 			active.persistedStamp = undefined;
 			active.signal.abort();
 			active.actionController?.abort();
-			if (active.ctx.hasUI)
-				active.ctx.ui.notify(
-					active.config.language === "en"
-						? "fire-review checkpoint conflict; review stopped."
-						: "fire-review checkpoint 冲突，已停止审查。",
-					"warning",
-				);
+			if (active.ctx.hasUI) active.ctx.ui.notify(message, level);
+		};
+		const en = active.config.language === "en";
+		if (error instanceof CheckpointConflictError) {
+			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+			halt(en ? "fire-review checkpoint conflict; review stopped." : "fire-review checkpoint 冲突，已停止审查。", "warning");
 			void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 			return false;
 		}
 		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
-		setOccupancy(rt, active, false);
-		active.persistedStamp = undefined;
-		active.signal.abort();
-		active.actionController?.abort();
-		if (active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
-					: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`,
-				"error",
-			);
+		halt(en
+			? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
+			: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`, "error");
 		clearUi(active);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
@@ -1000,5 +990,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// 导出供测试用（纯函数 / 类型）
-export { CHECKPOINT_TYPE };

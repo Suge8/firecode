@@ -12,10 +12,10 @@ export type ToolArgs = {
 	limit?: number;
 };
 
-export const argPath = (args: ToolArgs): string => args?.file_path ?? args?.path ?? "";
+const argPath = (args: ToolArgs): string => args?.file_path ?? args?.path ?? "";
 
 /** read 的 offset/limit → `:12-40`、`:12+`。 */
-export function rangeSuffix(args: ToolArgs): string {
+function rangeSuffix(args: ToolArgs): string {
 	if (args.offset === undefined && args.limit === undefined) return "";
 	const start = args.offset ?? 1;
 	if (args.limit === undefined) return `:${start}+`;

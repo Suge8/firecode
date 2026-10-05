@@ -24,12 +24,12 @@ export interface WatcherCard {
 	turnIndex: number;
 }
 
-export function adviceHeadline(card: WatcherCard): string {
+function adviceHeadline(card: WatcherCard): string {
 	return `${LABEL}（${timeMark(card.turnIndex)}）`;
 }
 
 /** 建议自带时点标记：投递时主会话可能已经走远，读的人要知道它看的是哪一刻。 */
-export function timeMark(turnIndex: number): string {
+function timeMark(turnIndex: number): string {
 	return `基于第 ${turnIndex} 回合前的观察`;
 }
 

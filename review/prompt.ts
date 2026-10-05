@@ -68,7 +68,7 @@ function reviewReminder(language: Language) {
 }
 
 /** 往轮 FAIL 发现清单（两相收敛的闭环输入）：第 2 轮起注入。 */
-export function priorRoundsSection(
+function priorRoundsSection(
 	history: ReviewState["history"],
 	round: number,
 	language: Language,
