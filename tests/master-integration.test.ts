@@ -68,6 +68,16 @@ test("/fire-master status 每个子代理一行，以角色为主、模型短名
 	expect(harness.notices.at(-1)).toBe("scout 工程师·空闲 worker\nverify 设计师·空闲 worker-2");
 });
 
+test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），不写死家目录", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "where", prompt: "执行", role: "工程师" });
+	await settled;
+	const files = await readdir(join(harness.agentDir, "tmp"));
+	expect(files).toContain(`firecode-master-${harness.sessionId}.json`);
+});
+
 test("边框身份只发布“指挥官”，子代理进出不改变它", async () => {
 	const harness = await setup();
 	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
