@@ -17,6 +17,8 @@ export interface WorkerRef {
 	sessionPath: string;
 	cwd?: string;
 	interruptedAt?: number;
+	/** start 的时刻：resume 后没有启动序时，活动列表按它排先后。 */
+	createdAt?: number;
 	reviewNeeded?: boolean;
 	disposition?: WorkerDisposition;
 }
@@ -191,6 +193,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
+	if (record.createdAt !== undefined && (typeof record.createdAt !== "number" || record.createdAt <= 0)) return false;
 	if (record.disposition !== undefined && record.disposition !== "pending" && record.disposition !== "reminded")
 		return false;
 	return true;

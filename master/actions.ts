@@ -196,6 +196,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 			status: "working",
 			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
 			cwd,
+			createdAt: Date.now(),
 			...(params.review === true ? { reviewNeeded: true } : {}),
 		};
 		active.store.dispatch({ type: "UPSERT_WORKER", worker });
