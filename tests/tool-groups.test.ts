@@ -1133,7 +1133,7 @@ test("回合一开始就有摘要行：首条用户消息一出现就带橙色�
 	expect(lines[1]).toMatch(new RegExp(`^${FLAME} 思考中$`));
 });
 
-test("点击摘要展开或收起一轮时，被点的那一行留在视口原位：跟随末尾的滚动视图不再把它滚出屏幕", async () => {
+test("点击摘要展开或收起时被点的行留在视口内；原本跟随末尾的之后恢复跟随、新输出看得到，原本已上滚的保持不动", async () => {
 	const s = await scene({ scroll: true });
 	for (let turn = 1; turn <= 4; turn++) {
 		hostUser(s, `问题${turn}`);
@@ -1142,21 +1142,33 @@ test("点击摘要展开或收起一轮时，被点的那一行留在视口原�
 		s.settle(1_000, "complete", 0);
 	}
 	s.setNow(60_000);
-	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, 10, () => {});
+	const VIEWPORT = 10;
+	const layout = () => s.scroll.updateLayout(s.chat.render(100).length, VIEWPORT, () => {});
+	const visible = (row: number) => row >= s.scroll.scrollTop && row < s.scroll.scrollTop + VIEWPORT;
 	layout();
-	const top = s.scroll.scrollTop;
 	expect(s.scroll.isFollowingEnd).toBe(true);
 	const row = s.lines().findLastIndex((line: string) => line.startsWith("✓"));
-	expect(row).toBeGreaterThanOrEqual(top);
+	s.click(row);
+	layout();
+	expect(s.lines()[row]).toMatch(/^✓/);
+	expect(visible(row)).toBe(true);
+	// 新输出到达：恢复跟随末尾。
+	hostUser(s, "下一问");
+	s.complete(s.tool("read", { path: "z.ts" }));
+	layout();
+	expect(s.scroll.isFollowingEnd).toBe(true);
+	expect(s.scroll.scrollTop).toBe(s.chat.render(100).length - VIEWPORT);
 
-	s.click(row);
+	// 已上滚：点击与新输出都不动视口。
+	s.scroll.scrollTo(3, { disableFollow: true });
 	layout();
-	expect(s.lines()[row]).toMatch(/^✓/);
-	expect(s.scroll.scrollTop).toBe(top);
-	s.click(row);
+	const up = s.lines().findIndex((line: string, index: number) => index >= 3 && line.startsWith("✓"));
+	s.click(up);
 	layout();
-	expect(s.lines()[row]).toMatch(/^✓/);
-	expect(s.scroll.scrollTop).toBe(top);
+	expect(s.scroll.scrollTop).toBe(3);
+	s.complete(s.tool("read", { path: "y.ts" }));
+	layout();
+	expect(s.scroll.scrollTop).toBe(3);
 });
 
 test("宿主对 ctrl+o 的回显“Tool output: expanded/collapsed”不进对话；其余宿主状态行照常折入", async () => {

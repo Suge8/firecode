@@ -52,11 +52,17 @@ function hotSession(branch: unknown[], streaming = false) {
 	return session;
 }
 
-type Worker = { name: string; role: string; model: string; thinking: string; status: string; sessionPath: string; cwd: string };
+type Worker = { name: string; role: string; model: string; thinking: string; status: string; sessionPath: string; cwd: string; launch: number };
+let launches = 0;
 const worker = (name: string, status = "idle"): Worker =>
-	({ name, role: "哨兵", model: "openai-codex/gpt-6-luna", thinking: "low", status, sessionPath: `/s/${name}.jsonl`, cwd: "/p" });
+	({ name, role: "哨兵", model: "openai-codex/gpt-6-luna", thinking: "low", status, sessionPath: `/s/${name}.jsonl`, cwd: "/p", launch: ++launches });
+/** 活动列表的运行时事实（本次运行起点、落定结局）：视图顶行与活动列表读同一份。 */
+type Facts = { started?: Record<string, number>; settled?: Record<string, { at: number; kind: string; note?: string }> };
 
-async function open(options: { workers: Worker[]; sessions: Record<string, ReturnType<typeof hotSession>>; name?: string; send?: (name: string, prompt: string) => Promise<void> }) {
+async function open(options: {
+	workers: Worker[]; sessions: Record<string, ReturnType<typeof hotSession>>; name?: string;
+	send?: (name: string, prompt: string) => Promise<void>; facts?: Facts; drafts?: Map<string, string>; rows?: number;
+}) {
 	const [host, tui, view, grouping, clockModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
 		loadFirecodeModule("master/worker-view.ts"), loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/turn-clock.ts"),
@@ -78,29 +84,47 @@ async function open(options: { workers: Worker[]; sessions: Record<string, Retur
 		setWidget(_key: string, factory?: (tui: unknown) => unknown) { factory?.(reference); },
 	}, { replyLines: 3, clock: new clockModule.TurnClock() });
 	const sessionListeners = new Set<(name: string) => void>();
+	const removedListeners = new Set<(name: string) => void>();
 	const sent: [string, string][] = [];
 	let closed = 0;
+	const byPath = <T>(record: Record<string, T> | undefined) =>
+		new Map(Object.entries(record ?? {}).map(([name, value]) => [`/s/${name}.jsonl`, value]));
 	const port = {
-		names: () => options.workers.map((entry) => entry.name),
+		facts: () => ({
+			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), lastOutputAt: new Map(),
+			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled),
+			launchOrder: new Map(options.workers.map((entry, index) => [entry.name, index])),
+		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),
 		session: (target: Worker) => options.sessions[target.name],
 		onSession(listener: (name: string) => void) {
 			sessionListeners.add(listener);
 			return () => sessionListeners.delete(listener);
 		},
-		runStartedAt: () => undefined,
+		// core 的 runtime 移除通知（kill 或启动失败撤票）同形替身。
+		onWorkerRemoved(listener: (name: string) => void) {
+			removedListeners.add(listener);
+			return () => removedListeners.delete(listener);
+		},
 		send: options.send ?? (async (name: string, prompt: string) => { sent.push([name, prompt]); }),
+		drafts: options.drafts ?? new Map<string, string>(),
 	};
-	const component = new view.WorkerView(port, options.name ?? options.workers[0].name, { terminal: { rows: ROWS }, requestRender: () => { renders++; } }, theme,
+	const rows = options.rows ?? ROWS;
+	const component = new view.WorkerView(port, options.name ?? options.workers[0].name, { terminal: { rows }, requestRender: () => { renders++; } }, theme,
 		{ matches: (data: string, action: string) => KEYS[data] === action }, () => { closed++; component.dispose(); });
 	const lines = (width = 100): string[] => component.render(width).map((line: string) => stripVTControlCharacters(line).trimEnd());
 	const type = (text: string) => { for (const char of text) component.handleInput(char); };
 	return {
-		component, lines, type, sent, sessionListeners,
+		component, lines, type, sent, sessionListeners, removedListeners,
+		remove(name: string) {
+			options.workers.splice(options.workers.findIndex((entry) => entry.name === name), 1);
+			for (const listener of [...removedListeners]) listener(name);
+		},
 		get closed() { return closed; },
 		get renders() { return renders; },
 		key: (data: string) => component.handleInput(data),
-		click: (row: number) => component.handleMouse({ type: "click", button: "left", x: 3, y: row, screenX: 3, screenY: row, width: 100, height: ROWS, shift: false, alt: false, ctrl: false }),
+		mouse: (type: string, row: number, extra: Record<string, unknown> = {}) => component.handleMouse({ type, button: "left", x: 3, y: row, screenX: 3, screenY: row, width: 100, height: rows, shift: false, alt: false, ctrl: false, ...extra }),
+		click: (row: number) => component.handleMouse({ type: "click", button: "left", x: 3, y: row, screenX: 3, screenY: row, width: 100, height: rows, shift: false, alt: false, ctrl: false }),
 	};
 }
 
@@ -163,12 +187,12 @@ test("Tab / Shift+Tab 按启动序换子代理，位置 n/N 不随状态跳；�
 	const workers = [worker("a"), worker("b", "working"), worker("c")];
 	const sessions = Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user(`派给 ${entry.name}`)])]));
 	const view = await open({ workers, sessions });
-	expect(view.lines().at(-1)).toMatch(/1\/3$/u);
+	expect(view.lines().at(-1)).toMatch(/^ 1\/3 · /u);
 	view.key(TAB);
 	expect(view.lines()[0]).toMatch(/^ b ·/u);
-	expect(view.lines().at(-1)).toMatch(/2\/3$/u);
+	expect(view.lines().at(-1)).toMatch(/^ 2\/3 · /u);
 	workers[1].status = "idle";
-	expect(view.lines().at(-1)).toMatch(/2\/3$/u);
+	expect(view.lines().at(-1)).toMatch(/^ 2\/3 · /u);
 	view.key(SHIFT_TAB);
 	view.key(SHIFT_TAB);
 	expect(view.lines()[0]).toMatch(/^ c ·/u);
@@ -202,15 +226,15 @@ test("回车补话走视图来源的 send（同一处理表入口），成功清
 	expect(view.lines().find((line) => line.startsWith("›"))).toBe("› 第二句");
 });
 
-test("关闭零订阅：打开时只挂当前子代理的一个会话订阅与一个会话接上通知，切换只留新的，关闭全部撤掉", async () => {
+test("关闭零订阅：打开时只挂当前子代理的会话订阅与两条运行时通知；打开期间看过的子代理保留订阅（切回时展开状态还在），关闭全部撤掉", async () => {
 	const sessions = { a: hotSession([user("派给 a")], true), b: hotSession([user("派给 b")], true) };
 	const view = await open({ workers: [worker("a", "working"), worker("b", "working")], sessions });
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size]).toEqual([1, 0, 1]);
+	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([1, 0, 1, 1]);
 	view.key(TAB);
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size]).toEqual([0, 1, 1]);
+	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([1, 1, 1, 1]);
 	view.key("\x1b");
 	expect(view.closed).toBe(1);
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size]).toEqual([0, 0, 0]);
+	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([0, 0, 0, 0]);
 	const renders = view.renders;
 	sessions.b.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "关了之后的事件" }], timestamp: 9 } });
 	expect(view.renders).toBe(renders);
@@ -240,4 +264,142 @@ test("浮层里宿主的全局键不落空：ctrl+c 先清输入、再按关闭�
 		view.key(close);
 		expect(view.closed).toBe(1);
 	}
+});
+
+/** 一段够长的已落定记录：五轮，每轮一条派单、一行工具、一句回复。 */
+function longBranch() {
+	const branch: unknown[] = [];
+	for (let turn = 1; turn <= 5; turn++) {
+		branch.push(user(`第 ${turn} 次派单`), reply(`看第 ${turn} 个文件。`, "toolUse", [{ type: "toolCall", id: `c${turn}`, name: "read", arguments: { path: `/p/${turn}.ts` } }]),
+			toolResult(`c${turn}`, "内容"), reply(`第 ${turn} 轮完成。`), round(1_000 * turn));
+	}
+	return branch;
+}
+const bodyRange = (lines: string[]) => lines.slice(1, lines.findIndex((line) => line.startsWith("›")));
+
+test("点击后被点的行留在视口内；原本跟随末尾的，之后新到的输出仍看得到（锚定只作用于这一次布局变化）", async () => {
+	const session = hotSession(longBranch(), true);
+	const view = await open({ workers: [worker("tick", "working")], sessions: { tick: session }, rows: 12 });
+	// 运行中最容易点的就是最底下那轮的摘要（实时的“思考中”）。
+	const row = view.lines().findLastIndex((line) => /^[⠀-⣿] 思考中/u.test(line));
+	expect(row).toBeGreaterThan(0);
+	view.click(row);
+	expect(bodyRange(view.lines()).some((line) => /^[⠀-⣿] 思考中/u.test(line))).toBe(true);
+	session.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "新到的派单" }], timestamp: 9 } });
+	expect(bodyRange(view.lines()).some((line) => line.includes("新到的派单"))).toBe(true);
+});
+
+test("原本已上滚（PageUp）时点击保持不动，新输出也不把视口拉走；PageDown 回到末尾恢复跟随", async () => {
+	const session = hotSession(longBranch(), true);
+	const view = await open({ workers: [worker("tick", "working")], sessions: { tick: session }, rows: 12 });
+	const atEnd = bodyRange(view.lines());
+	view.key("\x1b[5~");
+	const scrolled = bodyRange(view.lines());
+	expect(scrolled).not.toEqual(atEnd);
+	const row = view.lines().findIndex((line) => line.startsWith("✓"));
+	expect(row).toBeGreaterThan(0);
+	view.click(row);
+	const anchored = bodyRange(view.lines())[0];
+	expect(anchored).toBe(scrolled[0]);
+	session.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "新到的派单" }], timestamp: 9 } });
+	expect(bodyRange(view.lines())[0]).toBe(anchored);
+	for (let page = 0; page < 20; page++) view.key("\x1b[6~");
+	session.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "再来一条" }], timestamp: 10 } });
+	expect(bodyRange(view.lines()).some((line) => line.includes("再来一条"))).toBe(true);
+});
+
+test("宿主的文字选择不被浮层吃掉：按下、拖动与正文点击都交还宿主，只有摘要、↳ 与工具行的点击由视图处理", async () => {
+	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单"), reply("一段普通回复文字。"), round(1_000)]) } });
+	const text = view.lines().findIndex((line) => line.includes("一段普通回复文字"));
+	expect(view.mouse("press", text)).toBeUndefined();
+	expect(view.mouse("drag", text)).toBeUndefined();
+	expect(view.mouse("release", text)).toBeUndefined();
+	expect(view.click(text)).toBeUndefined();
+	expect(view.click(view.lines().findIndex((line) => line.startsWith("✓")))).toMatchObject({ handled: true });
+});
+
+test("40 列：顶行保住状态字形、状态词与耗时，模型、角色、名字先让；底行保住位置 n/N 与“esc 返回”", async () => {
+	const workers = [worker("fix-auth-refresh", "working"), worker("b"), worker("c")];
+	const now = Date.now();
+	const view = await open({
+		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
+		facts: { started: { "fix-auth-refresh": now - 65_000 } },
+	});
+	const [top] = view.lines(40);
+	expect(top).toMatch(/[⠀-⣿] 运行中 1m5s$/u);
+	expect(top).not.toContain("openai-codex");
+	const bottom = view.lines(40).at(-1)!;
+	expect(bottom).toMatch(/^ 1\/3 · /u);
+	expect(bottom).toContain("esc 返回");
+	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripVTControlCharacters(line))).toBeLessThanOrEqual(width);
+});
+
+test("顶行的状态与耗时与活动列表读同一份事实：已完成写完成、失败写失败，耗时是本次运行", async () => {
+	const workers = [worker("done-one"), worker("broke")];
+	const now = Date.now();
+	const view = await open({
+		workers, sessions: { "done-one": hotSession([user("派单"), reply("好了"), round(20_000)]), broke: hotSession([user("派单"), reply("坏了", "error"), round(3_000, "error")]) },
+		facts: {
+			started: { "done-one": now - 30_000, broke: now - 30_000 },
+			settled: { "done-one": { at: now - 16_000, kind: "done", note: "好了" }, broke: { at: now - 27_000, kind: "failed", note: "坏了" } },
+		},
+	});
+	expect(view.lines()[0]).toMatch(/✓ 完成 14s$/u);
+	view.key(TAB);
+	expect(view.lines()[0]).toMatch(/✗ 失败 3\.0s$/u);
+});
+
+test("正在看的子代理被移除：顶行写“已移除”，输入框不再收字也不发送，Tab 序列与 n/N 立即去掉它", async () => {
+	const workers = [worker("a"), worker("b"), worker("c")];
+	const sent: string[] = [];
+	const view = await open({
+		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user(`派给 ${entry.name}`)])])), name: "b",
+		send: async (name) => { sent.push(name); },
+	});
+	view.remove("b");
+	expect(view.lines()[0]).toMatch(/^ b · 已移除/u);
+	view.type("还想说");
+	view.key("\r");
+	await Bun.sleep(0);
+	expect(sent).toEqual([]);
+	expect(view.lines().find((line) => line.startsWith("›"))).not.toContain("还想说");
+	expect(view.lines().at(-1)).not.toMatch(/\d\/3/u);
+	view.key(TAB);
+	expect(view.lines()[0]).toMatch(/^ c ·/u);
+	expect(view.lines().at(-1)).toMatch(/^ 2\/2 · /u);
+});
+
+test("“已发出”只短暂替换按键提示：下一次按键或几秒后恢复提示", async () => {
+	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单")]) } });
+	const hint = view.lines().at(-1);
+	view.type("补一句");
+	view.key("\r");
+	await Bun.sleep(0);
+	expect(view.lines().at(-1)).toContain("已发出");
+	view.key(LEFT);
+	expect(view.lines().at(-1)).toBe(hint);
+	view.type("再一句");
+	view.key("\r");
+	await Bun.sleep(0);
+	expect(view.lines().at(-1)).toContain("已发出");
+	const realNow = Date.now;
+	Date.now = () => realNow() + 10_000;
+	try { expect(view.lines().at(-1)).toBe(hint); } finally { Date.now = realNow; }
+});
+
+test("视图打开期间切走切回保留各子代理的展开状态；esc 关闭时输入框草稿按子代理留到会话结束", async () => {
+	const workers = [worker("a"), worker("b")];
+	const sessions = { a: hotSession([user("派给 a"), reply("读一下。", "toolUse", [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "/p/a.ts" } }]), toolResult("c1", "x"), reply("好了"), round(2_000)]), b: hotSession([user("派给 b")]) };
+	const drafts = new Map<string, string>();
+	const view = await open({ workers, sessions, drafts });
+	view.click(view.lines().findIndex((line) => line.startsWith("✓")));
+	expect(view.lines().some((line) => line.includes("a.ts"))).toBe(true);
+	view.type("给 a 的草稿");
+	view.key(TAB);
+	view.key(SHIFT_TAB);
+	expect(view.lines().some((line) => line.includes("a.ts"))).toBe(true);
+	expect(view.lines().find((line) => line.startsWith("›"))).toBe("› 给 a 的草稿");
+	view.key("\x1b");
+	const again = await open({ workers, sessions, drafts });
+	expect(again.lines().find((line) => line.startsWith("›"))).toBe("› 给 a 的草稿");
 });
