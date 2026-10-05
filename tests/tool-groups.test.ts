@@ -841,14 +841,19 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	const { buildCard } = await loadFirecodeModule("review/card.ts");
 	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
 	const { adviceMessage } = await loadFirecodeModule("watcher/card.ts");
-	const reviewCard = (card: unknown) => s.chat.addChild(new s.host.CustomMessageComponent({
-		role: "custom", customType: "firecode-review-card", content: wrapEnvelope("firecode_review", buildCard(card, "zh").content), display: true, timestamp: 0,
-	}));
+	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
+	// 与 review 生产端发卡一致：信封正文加卡片 details。
+	const reviewCard = (card: unknown) => {
+		const built = buildCard(card, "zh");
+		s.chat.addChild(new s.host.CustomMessageComponent({
+			role: "custom", customType: "firecode-review-card", content: wrapEnvelope("firecode_review", built.content), details: built.details, display: true, timestamp: 0,
+		}));
+	};
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
 	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n## 交付\n- 修好了 refresh 竞态。", "14m"));
 	hostUser(s, WORKER_FAILED("perf-probe"));
-	hostUser(s, EVENT("lint 审查停止（3 轮）", "顾问意见：\n顾问建议停止。"));
+	hostUser(s, wrapEnvelope("firecode_master_event", withElapsed(masterEvent.review("lint", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "顾问建议停止。" }, ""), { run: 8 * 60_000 })));
 	hostUser(s, "<firecode_master_event>\nfix-auth 被中断\n会话与审查义务均已保留\n</firecode_master_event>");
 	reviewCard({ kind: "fail", round: 1, details: "模型 1 · gpt-5.5\nFAIL\n## 发现 1：刷新竞态未修\n- **严重程度**: 高", advisor: null });
 	reviewCard({ kind: "error", message: "所有审查者均未给出有效结论" });
@@ -864,7 +869,7 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	expect(rows).toEqual([
 		"↳ fix-auth 审查通过（2 轮） · 14m 修好了 refresh 竞态。",
 		"↳ perf-probe 失败 · 2m 429 Too Many Requests",
-		"↳ lint 审查停止（3 轮） · 8m 顾问建议停止。",
+		"↳ lint 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停",
 		"↳ fix-auth 被中断 会话与审查义务均已保留",
 		"↳ 审查未通过 刷新竞态未修",
 		"↳ 审查未完成 所有审查者均未给出有效结论",
