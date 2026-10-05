@@ -10,10 +10,16 @@ const humanEntry = (text: string) => ({ type: "message", message: { role: "user"
 const roundEntry = (data: Record<string, unknown>) =>
 	({ type: "custom", customType: "firecode-round", data, timestamp: new Date().toISOString() });
 
-/** 像 tools 一样订阅同一个歇下边沿，把轮记录写进分支。 */
-async function recordRounds(pi: unknown, branch: unknown[]) {
+/** tools 写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
+const ROUND_RECORDED = "firecode:round-recorded";
+
+/** 像 tools 一样订阅同一个歇下边沿：把轮记录写进分支，再发布“已写入”。 */
+async function recordRounds(pi: unknown, branch: unknown[], bus: Map<string, Function>) {
 	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
-	watchBusy(pi, { onSettled: (_ctx: unknown, round: Record<string, unknown>) => branch.push(roundEntry(round)) });
+	watchBusy(pi, { onSettled: (_ctx: unknown, round: Record<string, unknown>) => {
+		branch.push(roundEntry(round));
+		bus.get(ROUND_RECORDED)?.();
+	} });
 }
 
 afterEach(cleanupFirecodeModules);
@@ -228,7 +234,7 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 		getThinkingLevel: () => "off",
 	};
 	registerStatusBar(pi);
-	await recordRounds(pi, branch);
+	await recordRounds(pi, branch, bus);
 	const events = { get: (event: string) => (...args: unknown[]) => handlers.get(event)?.forEach((fn) => fn(...args)) };
 	events.get("session_start")!({}, ctx);
 	const top = () => stripVTControlCharacters(editor.render(100)[0]);
@@ -276,6 +282,7 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 
 test("上边框落定态：均速跟在耗时后，中断与请求失败写明终态", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const bus = new Map<string, Function>();
 	const events = new Map<string, Function[]>();
 	let editor: any;
 	const theme = { fg: (_color: string, text: string) => text };
@@ -295,11 +302,11 @@ test("上边框落定态：均速跟在耗时后，中断与请求失败写明�
 	const branch: unknown[] = [];
 	const pi = {
 		on: (event: string, fn: Function) => events.set(event, [...(events.get(event) ?? []), fn]),
-		events: { on() {} },
+		events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
 		getThinkingLevel: () => "off",
 	};
 	registerStatusBar(pi);
-	await recordRounds(pi, branch);
+	await recordRounds(pi, branch, bus);
 	const emit = (name: string, event = {}) => events.get(name)?.forEach((fn) => fn(event, ctx));
 	emit("session_start");
 	const top = () => stripVTControlCharacters(editor.render(100)[0]);
@@ -346,12 +353,13 @@ async function shellWithBusy() {
 	let editor: any;
 	const statuses = new Map([["master", "指挥官"]]);
 	const branch: unknown[] = [];
+	let branchReads = 0;
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
 		isIdle: () => true,
 		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
 		getContextUsage: () => ({ percent: 1, contextWindow: 1_000_000 }),
-		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => branch },
+		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => { branchReads++; return branch; } },
 		ui: {
 			setWorkingVisible() {},
 			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
@@ -366,11 +374,14 @@ async function shellWithBusy() {
 	return {
 		statuses,
 		branch,
+		branchReads: () => branchReads,
+		start: () => events.get("session_start")!({}, ctx),
 		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
 		/** 歇下边沿：像 tools 一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
-			branch.push(roundEntry(round));
 			feed.onSettled(ctx, round);
+			branch.push(roundEntry(round));
+			bus.get(ROUND_RECORDED)?.();
 		},
 		review: (progress: Record<string, unknown>) => bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => progress }),
 		top: (width = 110) => stripVTControlCharacters(editor.render(width)[0]),
@@ -422,5 +433,19 @@ test("上边框落定态与摘要行读同一份事实：一轮多段时按同�
 	shell.view({ busy: true, since: Date.now() - 195_000, review: true });
 	shell.view({ busy: false });
 	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
+	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
+});
+
+test("落定态在事件时算一次：歇下后反复重绘（按键）不再读会话分支；重开会话时按分支里的轮记录直接显示上一轮", async () => {
+	const shell = await shellWithBusy();
+	shell.branch.push(humanEntry("写一篇冬天散文"), roundEntry({ elapsed: 17_700, outcome: "aborted" }));
+	shell.view({ busy: true, since: Date.now() - 195_000, agentRunning: true });
+	shell.view({ busy: false });
+	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
+	const reads = shell.branchReads();
+	for (let key = 0; key < 20; key++) expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
+	expect(shell.branchReads()).toBe(reads);
+
+	shell.start();
 	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
 });
