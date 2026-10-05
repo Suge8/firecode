@@ -47,6 +47,8 @@ const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
 const EVENT_RETRY_MS = 5_000;
 const FAULT_SUMMARY_WIDTH = 80;
+/** 算作“有输出”的子会话事件：模型 token 流与工具执行；活动列表据此判卡住。 */
+const OUTPUT_EVENTS = new Set<AgentSessionEvent["type"]>(["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 
 interface PendingMasterEvent {
 	id: string;
@@ -91,7 +93,9 @@ interface MasterRuntime {
 	/** 最近一条真实用户输入的时刻；Master 事件（source extension）不算。 */
 	taskStartedAt?: number;
 	reviewProgress: Map<string, ReviewProgress>;
-	/** 本次运行的落定事实（时刻与成败）；列表据此保留“待发落”行，ack 或续派后失效。 */
+	/** Worker 最近一次输出（工具事件或模型 token）的时刻，活动列表据此判卡住。 */
+	lastOutputAt: Map<string, number>;
+	/** 本次运行的落定事实（时刻、成败与说明）：失败行留到 ack 或 kill，完成留到 kill。 */
 	settled: Map<string, SettledFact>;
 	/** 名字 → start 到达序号，活动列表的唯一排序依据。 */
 	launchOrder: Map<string, number>;
@@ -197,6 +201,7 @@ export function registerMaster(
 			idleSince: new Map(),
 			runStartedAt: new Map(),
 			reviewProgress: new Map(),
+			lastOutputAt: new Map(),
 			settled: new Map(),
 			launchOrder: new Map(),
 			launchSeq: 0,
@@ -211,6 +216,7 @@ export function registerMaster(
 					currentTools: active.currentTools,
 					reviewProgress: active.reviewProgress,
 					runStartedAt: active.runStartedAt,
+					lastOutputAt: active.lastOutputAt,
 					settled: active.settled,
 					launchOrder: active.launchOrder,
 				}), () => visibleRows(tui.terminal?.rows, ctx.ui.getToolsExpanded()));
@@ -389,6 +395,7 @@ export function registerMaster(
 		previous?.unsubscribe();
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			if (!ownsRuntime(active)) return;
+			if (OUTPUT_EVENTS.has(event.type)) active.lastOutputAt.set(sessionPath, Date.now());
 			if (event.type === "tool_execution_start") {
 				const tools = active.currentTools.get(sessionPath) ?? new Map<string, CurrentTool>();
 				tools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
@@ -430,7 +437,7 @@ export function registerMaster(
 				const current = active.store.state.workers.find((candidate) => candidate.name === worker.name);
 				if (!current || current.sessionPath !== worker.sessionPath) return;
 				const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
-				active.settled.set(worker.sessionPath, { at: interrupted.interruptedAt!, kind: "failed", note: "已中断" });
+				active.settled.set(worker.sessionPath, { at: interrupted.interruptedAt!, kind: "failed", note: "被中断" });
 				active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 				active.currentTools.delete(worker.sessionPath);
 				markWorkerIdle(active, worker.sessionPath);
@@ -590,6 +597,7 @@ export function registerMaster(
 				active.idleSince.delete(target.sessionPath);
 				active.runStartedAt.delete(target.sessionPath);
 				active.reviewProgress.delete(target.sessionPath);
+				active.lastOutputAt.delete(target.sessionPath);
 				active.settled.delete(target.sessionPath);
 				active.launchOrder.delete(target.name);
 				active.observedSessions.get(target.sessionPath)?.unsubscribe();
@@ -610,7 +618,8 @@ export function registerMaster(
 					const { disposition: _disposition, ...rest } = target;
 					active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
 				}
-				active.settled.delete(target.sessionPath);
+				// ack 发落失败行；完成的留在“✓ N 个已完成”里直到 kill。
+				if (active.settled.get(target.sessionPath)?.kind === "failed") active.settled.delete(target.sessionPath);
 				renderStatus();
 				return toolResult({ acked: true });
 			}
@@ -639,8 +648,7 @@ export function registerMaster(
 							const worker = outcome.status === "passed" || outcome.status === "stopped"
 								? fulfilled
 								: current;
-							const passed = outcome.status === "passed" || outcome.status === "stopped";
-							active.settled.set(target.sessionPath, { at: Date.now(), kind: passed ? "done" : "failed", note: "审查未通过" });
+							active.settled.set(target.sessionPath, reviewSettledFact(outcome));
 							active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, status: "idle" } });
 							active.reviewProgress.delete(target.sessionPath);
 							markWorkerIdle(active, target.sessionPath);
@@ -933,6 +941,13 @@ function monitorReview(
 			fail,
 		);
 	});
+}
+
+/** 审查落定在活动列表上的事实：只有通过算完成，停止与未完成都是要指挥官看的失败行。 */
+function reviewSettledFact(outcome: ReviewOutcome): SettledFact {
+	const at = Date.now();
+	if (outcome.status === "passed") return { at, kind: "done", note: "审查通过" };
+	return { at, kind: "failed", note: outcome.status === "stopped" ? "审查停止" : "审查未完成" };
 }
 
 function reviewRunId(outcome: ReviewOutcome): string | undefined {
