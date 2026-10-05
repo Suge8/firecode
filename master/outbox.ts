@@ -111,15 +111,10 @@ export class Outbox {
 		});
 	}
 
-	/** 两个起点各只有运行时一处记录；reload 后缺失的部分省略。 */
+	/** 本次运行起点只有运行时一处记录；reload 后缺失则省略。 */
 	private withElapsed(produced: MasterEvent, worker?: string): string {
-		const now = Date.now();
 		const runStartedAt = worker === undefined ? undefined : this.active.live.get(worker)?.runStartedAt;
-		const { taskStartedAt } = this.active;
-		return withElapsed(produced, {
-			...(runStartedAt === undefined ? {} : { run: now - runStartedAt }),
-			...(taskStartedAt === undefined ? {} : { task: now - taskStartedAt }),
-		});
+		return withElapsed(produced, runStartedAt === undefined ? {} : { run: Date.now() - runStartedAt });
 	}
 }
 

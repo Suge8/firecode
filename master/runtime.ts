@@ -66,8 +66,6 @@ export class MasterRuntime {
 	readonly store: MasterStore;
 	readonly outbox: Outbox;
 	readonly live = new Map<string, WorkerLive>();
-	/** 最近一条真实用户输入的时刻；Master 事件（source extension）不算。 */
-	taskStartedAt?: number;
 	private launchSeq = 0;
 	private list?: ActivityList;
 	private closedValue = false;

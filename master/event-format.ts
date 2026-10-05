@@ -36,7 +36,8 @@ export const masterEvent = {
 		settled(`${name} 已返回`, SECTIONS.reply, reply, obligation ? OBLIGATION : undefined),
 	failed: (name: string, error: string, obligation = false) =>
 		settled(`${name} 失败`, SECTIONS.error, error, obligation ? OBLIGATION : undefined),
-	interrupted: (name: string) => settled(`${name} 被中断`, "会话与审查义务均已保留"),
+	interrupted: (name: string, obligation: boolean) =>
+		settled(`${name} 被中断`, obligation ? "会话与审查义务均已保留，可 send 续派" : "会话已保留，可 send 续派"),
 	reviewIncomplete: (name: string, reason: string, reply?: string) =>
 		settled(`${name} 审查未完成`, SECTIONS.error, reason, ...(reply === undefined ? [] : [SECTIONS.finalReply, reply || "（无回复）"])),
 	/** 审查终态；reply 是 Worker 最后一条回复。停止与未完成是失败：原因进“错误：”分节，顾问意见在其后。 */
@@ -55,18 +56,15 @@ export const masterEvent = {
 		if (outcome.status === "error") return masterEvent.reviewIncomplete(name, `审查读取失败：${outcome.message}`);
 		return masterEvent.reviewIncomplete(name, `审查结束时没有终态：${outcome.status}`);
 	},
-	resumeReminder: (name: string) => notice(`${name} 待续跑`, "上次回合被外部中断后无人接手，请 send 续派或 kill 收口"),
+	/** 只给会话重载打断的回合：指挥官自己发起的 interrupt 它知道现场，不提醒。 */
+	resumeReminder: (name: string) => notice(`${name} 待续跑`, "上次回合被会话重载打断，恢复后一直没有续派；请 send 续派或 kill 收口"),
 	stranded: (name: string, texts: string[]) =>
 		notice(`${name} 补充说明未送达`, `回合结束时有 ${texts.length} 条补充说明未送达，请重发：`, texts.join("\n---\n")),
 	modelSwitched: (name: string, from: string, to: string, reason: string) =>
 		notice(`${name} 已切换模型`, `已切换 ${from}→${to}（${reason}），正在同一会话自动续跑`),
 };
 
-/** 正文末尾追加耗时行：落定类带 Worker 本次运行，都带指挥官当前任务；缺失的部分省略，不用当前时刻冒充。 */
-export function withElapsed(event: MasterEvent, { run, task }: { run?: number; task?: number }): string {
-	const parts = [
-		...(run === undefined || !event.settled ? [] : [`本次运行 ${formatDuration(run)}`]),
-		...(task === undefined ? [] : [`当前任务 ${formatDuration(task)}`]),
-	];
-	return parts.length ? `${event.body}\n耗时：${parts.join(" · ")}` : event.body;
+/** 落定类正文末尾追加 Worker 本次运行耗时；起点缺失（reload 后）或非落定事件不追加，不用当前时刻冒充。 */
+export function withElapsed(event: MasterEvent, { run }: { run?: number }): string {
+	return run === undefined || !event.settled ? event.body : `${event.body}\n耗时：本次运行 ${formatDuration(run)}`;
 }

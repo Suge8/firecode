@@ -105,11 +105,10 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef): void {
 	const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
 	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
-	active.outbox.enqueue(masterEvent.interrupted(identity.name), identity.name);
-	armInterruptReminder(active, interrupted);
+	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true), identity.name);
 }
 
-/** 中断后无人接手满时限时提醒指挥官续派；reload 后按档案里的中断时刻补算剩余时间。 */
+/** 会话重载打断的回合：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间。指挥官自己 interrupt 的不提醒。 */
 export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): void {
 	if (active.closed) return;
 	const live = active.liveOf(worker.name);
