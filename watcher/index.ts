@@ -83,9 +83,14 @@ export function registerWatcher(
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
-	const speak = (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
+	// 建议是当下的第二意见，过时重投没有价值：投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
+	const speak = async (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
 		const card: WatcherCard = { note: advice.note, turnIndex };
-		return deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
+		try {
+			await deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
+		} catch (error) {
+			if (runtime === owner) owner.ctx.ui.notify(`观察员这条建议投递失败，已丢弃：${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
 	};
 	const evaluate = async (owner: WatcherRuntime) => {
 		owner.evaluating = true;
