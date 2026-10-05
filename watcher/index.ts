@@ -2,14 +2,11 @@
  * Watcher 观察员：每个 turn 结束后异步评估主会话增量，要么沉默，要么发一条建议。
  * 与 Master、fire-review 各自独立注册；观察过程不落盘。
  */
-import type { Model } from "@earendil-works/pi-ai";
 import {
-	getAgentDir,
-	ModelRuntime,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type WatcherConfig } from "../config.js";
+import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "../review/occupancy.js";
@@ -22,12 +19,10 @@ import {
 import { createObserver, type Advice, type Observer } from "./observer.js";
 import { renderTurn } from "./transcript.js";
 
-/** review 模块发布的占用频道；观察员只订阅，不参与审查状态机。 */
 /** 观察会话自身上下文占比超过此值即重建。 */
 const CONTEXT_RESET_PERCENT = 70;
 
 interface WatcherDependencies {
-	resolveModel?: (id: string) => Promise<Model<any>>;
 	pool?: InProcessSessionPool;
 	createObserver?: typeof createObserver;
 }
@@ -48,7 +43,7 @@ export function registerWatcher(
 	// 子会话不带观察员：级联抑制是代码规则，不靠进程环境。
 	if (subsession) return;
 	registerWatcherCardRenderer(pi);
-	const loaded = loadWatcherConfiguration();
+	const loaded = loadConfig().watcher;
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
 	if ("error" in loaded) {
 		pi.registerCommand("fire-watch", {
@@ -57,7 +52,7 @@ export function registerWatcher(
 		});
 		return;
 	}
-	const config = loaded;
+	const config = loaded.config;
 	const pool = dependencies.pool ?? new InProcessSessionPool();
 	const spawnObserver = dependencies.createObserver ?? createObserver;
 	let runtime: WatcherRuntime | undefined;
@@ -88,9 +83,14 @@ export function registerWatcher(
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
-	const speak = (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
+	// 建议是当下的第二意见，过时重投没有价值：投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
+	const speak = async (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
 		const card: WatcherCard = { note: advice.note, turnIndex };
-		return deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
+		try {
+			await deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
+		} catch (error) {
+			if (runtime === owner) owner.ctx.ui.notify(`观察员这条建议投递失败，已丢弃：${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
 	};
 	const evaluate = async (owner: WatcherRuntime) => {
 		owner.evaluating = true;
@@ -102,7 +102,7 @@ export function registerWatcher(
 				let observer = owner.observer;
 				if (!observer) {
 					const cwd = owner.ctx.cwd;
-					const model = await (dependencies.resolveModel ?? resolveConfiguredModel)(config.model);
+					const model = await pool.resolveModel(config.model);
 					if (runtime !== owner) return;
 					observer = await spawnObserver({ cwd, model, thinking: config.thinking, pool });
 					if (runtime !== owner) {
@@ -174,30 +174,3 @@ export function registerWatcher(
 	pi.on("session_shutdown", () => deactivate());
 }
 
-function loadWatcherConfiguration(): WatcherConfig | { error: string } {
-	let loaded: ReturnType<typeof loadConfig>;
-	try {
-		loaded = loadConfig();
-	} catch (error) {
-		return { error: `观察员配置读取失败：${error instanceof Error ? error.message : String(error)}` };
-	}
-	// features 也算阻断集：开关写成字符串 "false" 时 `!== false` 仍会注册，
-	// 而启用观察员意味着每个回合都对模型发起真实调用。
-	const problems = loaded.problems.filter((problem) =>
-		problem.startsWith("watcher") || problem.startsWith("未知字段 watcher.")
-		|| problem.startsWith("config.jsonc") || problem.startsWith("features"));
-	if (problems.length) return { error: `观察员配置有问题，已停止：${problems.join("；")}` };
-	return loaded.config.watcher;
-}
-
-async function resolveConfiguredModel(id: string): Promise<Model<any>> {
-	const runtime = await ModelRuntime.create({
-		authPath: `${getAgentDir()}/auth.json`,
-		modelsPath: `${getAgentDir()}/models.json`,
-	});
-	const slash = id.indexOf("/");
-	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-	// 扩展注册的 provider 在无扩展子会话里不可解析（实测），必须明确引导而不是静默失败。
-	if (!model) throw new Error(`找不到模型：${id}；观察员只能使用内置 provider 的模型`);
-	return model;
-}

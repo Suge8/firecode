@@ -40,10 +40,7 @@ export class CheckpointConflictError extends Error {
 
 /** 只读会话访问（checkpoint 读/写前的 CAS 读取）。 */
 export interface CheckpointReadContext {
-	sessionManager?: {
-		getBranch?: () => unknown[];
-		getEntries?: () => unknown[];
-	};
+	sessionManager: { getBranch(): unknown[] };
 }
 
 const PHASES = new Set([
@@ -319,10 +316,7 @@ export function readCheckpoint(ctx: CheckpointReadContext): ReviewState | undefi
 }
 
 function latestEntry(ctx: CheckpointReadContext): Record<string, unknown> | undefined {
-	const entries =
-		ctx.sessionManager?.getBranch?.() ??
-		ctx.sessionManager?.getEntries?.() ??
-		[];
+	const entries = ctx.sessionManager.getBranch();
 	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index];
 		if (!isRecord(entry) || entry.type !== "custom") continue;

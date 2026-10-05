@@ -10,7 +10,7 @@ export type ReviewOutcome =
 	| { status: "none"; runId?: string }
 	| { status: "error"; message: string };
 
-/** 只读 Worker session，解析最近一条 fire-review checkpoint 的判定。 */
+/** 只读 Worker session，解析最近一条 fire-review checkpoint 的判定；会话结束时的一次性兜底读取用它。 */
 export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 	let content: string;
 	try {
@@ -38,7 +38,32 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 		else damage ??= "fire-review checkpoint 格式无效";
 	}
 	if (!latest) return damage ? { status: "error", message: damage } : { status: "none" };
+	return outcomeOf(latest);
+}
 
+/** 会话事件里刚追加的一条记录若是有效 checkpoint，给出它的判定；订阅方据此增量跟进，不重读整份 JSONL。 */
+export function outcomeOfEntry(entry: unknown): ReviewOutcome | undefined {
+	const state = checkpointOf(entry);
+	return state && outcomeOf(state);
+}
+
+/** 审查进行中的轮次与审查者进度；不是审查相的 checkpoint 或不是 checkpoint 都给 undefined。 */
+export interface ReviewProgress {
+	round: number;
+	settled: number;
+	total: number;
+}
+
+export function reviewProgressOf(entry: unknown): ReviewProgress | undefined {
+	const active = checkpointOf(entry)?.active;
+	return active ? { round: active.round, settled: active.settledCount, total: active.reviewers.length } : undefined;
+}
+
+function checkpointOf(entry: unknown): ReviewState | undefined {
+	return isCheckpointEntry(entry) && isValidCheckpoint(entry.data) ? entry.data as ReviewState : undefined;
+}
+
+function outcomeOf(latest: ReviewState): ReviewOutcome {
 	if (latest.phase === "idle") return { status: "none", runId: latest.runId };
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
 	const rounds = latest.history.length;

@@ -6,7 +6,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 
 import { parseEnvelopes, wrapEnvelope } from "../deliver.js";
-import { clip, oneLine } from "../format.js";
+import { clip, oneLine, textOf } from "../format.js";
 import { RAIL, paintBgLine } from "../tools/line.js";
 
 export const WATCHER_MESSAGE_TYPE = "firecode-watcher-note";
@@ -24,19 +24,19 @@ export interface WatcherCard {
 	turnIndex: number;
 }
 
-export function adviceHeadline(card: WatcherCard): string {
+function adviceHeadline(card: WatcherCard): string {
 	return `${LABEL}（${timeMark(card.turnIndex)}）`;
 }
 
 /** 建议自带时点标记：投递时主会话可能已经走远，读的人要知道它看的是哪一刻。 */
-export function timeMark(turnIndex: number): string {
+function timeMark(turnIndex: number): string {
 	return `基于第 ${turnIndex} 回合前的观察`;
 }
 
 export function registerWatcherCardRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(WATCHER_MESSAGE_TYPE, (message, options, theme) => {
 		const advice = parseAdvice(message.content);
-		return advice ? new AdviceLine(advice, options.expanded, theme) : new Text(plainText(message.content), 0, 0);
+		return advice ? new AdviceLine(advice, options.expanded, theme) : new Text(textOf(message.content), 0, 0);
 	});
 }
 
@@ -47,16 +47,10 @@ interface Advice {
 
 /** 信封正文 = 标题行 + 建议 + 权衡声明（末行），与 adviceMessage 同构。 */
 function parseAdvice(content: unknown): Advice | undefined {
-	const body = parseEnvelopes(plainText(content))?.[0]?.body;
+	const body = parseEnvelopes(textOf(content))?.[0]?.body;
 	if (body === undefined) return undefined;
 	const lines = body.split("\n");
 	return { headline: lines[0] ?? "", note: lines.slice(1, -1).join("\n") };
-}
-
-function plainText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content.map((part) => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("\n");
 }
 
 class AdviceLine implements Component {
@@ -73,9 +67,7 @@ class AdviceLine implements Component {
 	render(width: number): string[] {
 		const columns = Math.max(1, width);
 		try {
-			const bgFn = typeof this.theme.bg === "function"
-				? (text: string) => this.theme.bg("toolPendingBg", text)
-				: undefined;
+			const bgFn = (text: string) => this.theme.bg("toolPendingBg", text);
 			if (this.expanded) {
 				const headline = this.theme.fg("warning", clip(oneLine(this.card.headline), columns));
 				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);

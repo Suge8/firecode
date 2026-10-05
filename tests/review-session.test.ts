@@ -16,6 +16,7 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	};
 	const pool = {
 		options: undefined as Record<string, unknown> | undefined,
+		resolveModel: async () => ({ id: "model" }),
 		async spawn(options: Record<string, unknown>) {
 			this.options = options;
 			return {
@@ -28,15 +29,16 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	return { pool, session };
 }
 
+/** 经生产入口 createReviewSessionRunner 跑一场审查会话：池在构造时注入，其余是每次调用的选项。 */
 async function runner() {
-	return await loadFirecodeModule("review/session.js") as {
-		runReviewSession: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	const { createReviewSessionRunner } = await loadFirecodeModule("review/session.js") as {
+		createReviewSessionRunner: (pool: unknown) => (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
 	};
+	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => createReviewSessionRunner(pool)(options) };
 }
 
 const base = (pool: unknown) => ({
 	pool,
-	resolveModel: async () => ({ id: "model" }),
 	role: "reviewer",
 	model: "provider/model",
 	thinking: "high",

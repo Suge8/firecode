@@ -1,9 +1,10 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { Container, MouseRegion, Spacer, type Component } from "@earendil-works/pi-tui";
+import { textOf } from "../format.js";
+import { assistantFacts } from "./host.js";
 
 export type AssistantActivity = "thinking" | "replying";
-type AssistantData = { contentContainer: Container; lastMessage?: AssistantMessage; isStreaming: boolean };
+type AssistantData = ReturnType<typeof assistantFacts>;
 
 /** 流式中的助手在做什么：最后一块是有字的正文即在回复，其余（还没内容、思考、空块）都算思考。 */
 function activity(data: AssistantData): AssistantActivity | undefined {
@@ -26,7 +27,7 @@ function withoutThinking(children: readonly Component[]): Component[] {
 
 /** 宿主在 contentContainer 内只给思考块包 MouseRegion。 */
 export function hasThinking(source: AssistantMessageComponent): boolean {
-	return (source as unknown as AssistantData).contentContainer.children.some((child) => child instanceof MouseRegion);
+	return assistantFacts(source).contentContainer.children.some((child) => child instanceof MouseRegion);
 }
 
 /** 正文和错误复用原组件；折叠态藏起思考块。 */
@@ -34,7 +35,7 @@ export function assistantView(source: AssistantMessageComponent, expanded: boole
 	body?: Component;
 	activity?: AssistantActivity;
 } {
-	const data = source as unknown as AssistantData;
+	const data = assistantFacts(source);
 	const children = data.contentContainer.children;
 	const thinking = hasThinking(source);
 	const visible = expanded || !thinking ? children : withoutThinking(children);
@@ -58,6 +59,6 @@ export function assistantView(source: AssistantMessageComponent, expanded: boole
 
 /** 助手消息里的正文文字（不含思考与工具调用），中间回复的一行预览用它取首句。 */
 export function replyText(source: AssistantMessageComponent): string {
-	const message = (source as unknown as AssistantData).lastMessage;
-	return (message?.content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n").trim();
+	const message = assistantFacts(source).lastMessage;
+	return textOf(message?.content).trim();
 }

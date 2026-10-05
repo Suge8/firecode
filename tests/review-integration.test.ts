@@ -527,6 +527,7 @@ describe("registerReview wiring", () => {
 			setWidget: (key: string, next: unknown) => {
 				if (key === "fire-review" && next !== undefined) widgetInstalled = true;
 			},
+			getEditorComponent: () => undefined,
 			setEditorComponent: (next: unknown) => {
 				if (next !== undefined) editorLocked = true;
 			},
@@ -550,6 +551,7 @@ describe("registerReview wiring", () => {
 		Object.assign(ctx.ui, {
 			setWidget: () => {},
 			setWorkingVisible: () => {},
+			getEditorComponent: () => undefined,
 			setEditorComponent: (factory?: typeof editorFactory) => { editorFactory = factory; },
 		});
 		const command = registered.commands.get("fire-review") as {
@@ -565,7 +567,7 @@ describe("registerReview wiring", () => {
 		);
 		editor.handleInput("\x1b");
 		await flush();
-		expect(ctx.notices).toContain("⏸ 审查已取消\n已按你的操作停止");
+		expect(ctx.notices).toContain("审查已取消\n已按你的操作停止");
 		expect(registered.sent.some((message) =>
 			(message as { details?: { kind?: string } }).details?.kind === "cancel"
 		)).toBe(false);

@@ -19,7 +19,9 @@ import { registerMaster } from "./master/index.js";
 import { currentSubsessionRole } from "./master/role.js";
 import { registerWatcher } from "./watcher/index.js";
 
-const REGISTRARS: Record<Exclude<Feature, "review" | "master" | "watcher" | "statusbar" | "bark">, (pi: ExtensionAPI) => void> = {
+type SimpleFeature = Exclude<Feature, "review" | "master" | "watcher" | "statusbar" | "bark">;
+
+const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
 	tools: registerToolRendering,
 	presets: registerPresets,
@@ -29,15 +31,18 @@ const REGISTRARS: Record<Exclude<Feature, "review" | "master" | "watcher" | "sta
 	openaiNative: registerOpenAINative,
 };
 
+/** 只属于交互主会话的功能：子会话（Worker、观察员、审查者）没有界面与命令入口，注册了只会白占资源。 */
+const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "rename", "stats"]);
+
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
 
 export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
-	const { config, problems } = loadConfig();
+	const { config, problems, featuresBroken } = loadConfig();
 	const subsession = role !== "main";
 	const reviewEnabled = config.features.review !== false;
-	for (const [feature, register] of Object.entries(REGISTRARS)) {
-		const enabled = config.features[feature as Exclude<Feature, "review" | "master" | "watcher" | "statusbar" | "bark">] !== false;
-		if (enabled) register(pi);
+	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {
+		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
+		register(pi);
 	}
 	if (config.features.statusbar !== false) registerStatusBar(pi, subsession);
 	if (config.features.bark !== false) registerBark(pi, subsession);
@@ -47,7 +52,7 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	registerHerdrDisplay(pi, subsession);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, reviewEnabled, problems.includes("features 必须是对象"));
+	registerReview(pi, reviewEnabled, featuresBroken);
 
 	if (problems.length === 0) return;
 	pi.on("session_start", (_event, ctx) => {

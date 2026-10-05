@@ -80,6 +80,8 @@ async function scene(options: { withMaster?: boolean; replyLines?: number } = {}
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const read = s.tool("read", { path: "/project/a.ts" });
 	s.complete(read);
 	const bash = s.tool("bash", { command: "bun test" });
@@ -100,6 +102,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	expect(s.lines().join("\n")).not.toContain("private full result");
 
 	s.complete(bash);
+	feed(s, false);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
@@ -143,6 +146,8 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 
 test("摘要优先显示运行项，工具失败不计数、不画红叉，切档不改聊天树", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const running = s.tool("bash", { command: "long-running" });
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	s.complete(s.tool("read", { path: "finished" }));
@@ -157,6 +162,7 @@ test("摘要优先显示运行项，工具失败不计数、不画红叉，切�
 			for (const line of s.lines(width)) expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
 	s.complete(running);
+	feed(s, false);
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 });
@@ -245,6 +251,8 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 
 test("首条思考即显示过程状态，思考完成后摘要行留在原位，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
@@ -264,6 +272,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	};
 	const originalMessage = structuredClone(message);
 	assistant.updateContent(message, false);
+	feed(s, false);
 	let clicks = 0;
 	assistant.addChild(new s.tui.MouseRegion(new s.tui.Text("原生额外内容", 0, 0), () => { clicks++; return { handled: true }; }));
 	const originalTree = assistant.children;
@@ -297,6 +306,8 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 
 test("思考期间异常和截断诊断不会被思考折叠吞掉", async () => {
 	const s = await scene();
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
 	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
 	s.chat.addChild(assistant);
@@ -313,6 +324,8 @@ test("思考期间异常和截断诊断不会被思考折叠吞掉", async () =>
 
 test("真实子代理调用与池查询纳入过程组，保留原生动作和列表摘要，详情按需展开", async () => {
 	const s = await scene({ withMaster: true });
+	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
+	feed(s, true);
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -322,6 +335,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
 		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
 	} });
+	feed(s, false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 	expect(s.lines().join("\n")).not.toContain("worker-one");
@@ -1003,4 +1017,40 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	const rows = raw.filter((line: string) => stripVTControlCharacters(line).trim().startsWith("↳"));
 	expect(rows.map((line: string) => stripVTControlCharacters(line).trim())).toEqual(cases.map((entry) => entry.row));
 	expect(rows.map((line: string) => line.includes(s.ui.theme.fg("error", "↳")))).toEqual(cases.map((entry) => entry.red));
+});
+
+test("摘要行“运行中”只认会话进行中：会话已歇下时残留的未完成工具行（如重载前被打断）不再点火苗", async () => {
+	const s = await scene();
+	hostUser(s, "开工");
+	s.tool("bash", { command: "被打断的命令" });
+	expect(s.lines().filter((line: string) => new RegExp(`^${FLAME}`).test(line))).toEqual([]);
+	feed(s, true);
+	expect(s.lines().find((line: string) => new RegExp(`^${FLAME} 操作`).test(line))).toBeDefined();
+});
+
+test("宿主组件形状不符时不安装过程分组：明确提示，聊天树保持原生渲染", async () => {
+	const s = await scene();
+	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	// 模拟宿主升级后私有字段改名：助手消息不再有 isStreaming。
+	delete (message as any).isStreaming;
+	expect(() => s.chat.addChild(message)).toThrow(/过程分组已停用.*isStreaming/u);
+	expect(s.chat.render).toBe(s.originalRender);
+});
+
+test("宿主形状不符出现在全局展开补丁里时同样整体退回原生：补丁还原并提示，不让宿主的展开操作抛适配异常", async () => {
+	const host = await import(PI_CODING_AGENT_URL) as any;
+	const pristine = host.CustomMessageComponent.prototype.setExpanded;
+	const s = await scene();
+	expect(host.CustomMessageComponent.prototype.setExpanded).not.toBe(pristine);
+	const card = new s.host.CustomMessageComponent({ role: "custom", customType: "x", content: "正文", display: true, timestamp: 0 });
+	// 模拟宿主升级后私有字段改名：自定义消息不再有 message。
+	delete (card as any).message;
+	let notice = "";
+	try {
+		card.setExpanded(true);
+	} catch (error) {
+		notice = String(error);
+	}
+	expect(notice).toMatch(/过程分组已停用.*message/u);
+	expect(host.CustomMessageComponent.prototype.setExpanded).toBe(pristine);
 });

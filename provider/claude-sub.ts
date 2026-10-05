@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
+import { textOf } from "../format.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
@@ -60,15 +61,6 @@ function detectClaudeCodeVersion(): string {
 }
 
 const claudeCodeVersion = detectClaudeCodeVersion();
-
-function textOf(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(isTextBlock)
-		.map((block) => block.text)
-		.join("\n");
-}
 
 function firstUserText(messages: unknown): string {
 	const list = Array.isArray(messages) ? messages : [];

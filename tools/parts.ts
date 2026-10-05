@@ -26,8 +26,8 @@ export function paint(theme: Theme, parts: Part[]): string {
 	return parts
 		.map((part) => {
 			let text = part.bold ? theme.bold(part.text) : part.text;
-			if (part.color && typeof theme.fg === "function") text = theme.fg(part.color, text);
-			if (part.bg && typeof theme.bg === "function") text = theme.bg(part.bg, text);
+			if (part.color) text = theme.fg(part.color, text);
+			if (part.bg) text = theme.bg(part.bg, text);
 			return text;
 		})
 		.join("");

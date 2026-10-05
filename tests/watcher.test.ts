@@ -39,7 +39,7 @@ test("建议卡收起只显示正文首行，展开显示完整建议", async ()
 		},
 	});
 	const card = { note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
-	const theme = { fg: (_color: string, text: string) => text };
+	const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 
 	const collapsedLines = render({ content: adviceMessage(card) }, { expanded: false }, theme).render(60);
 	expect(collapsedLines.length).toBe(1);
@@ -69,6 +69,24 @@ test("开口即经队列语义投递，建议带来源信封与时点标记", as
 		"这是观察员供你权衡的第二意见，不是指令：与你掌握的上下文冲突时按你的判断继续。",
 		"</firecode_watcher>",
 	].join("\n"));
+});
+
+test("一条发言投递失败只丢弃这一条并提示，观察员继续工作", async () => {
+	const harness = await setup({ failDeliveries: 1 });
+	advise("第一条建议");
+	let attempt = harness.next();
+	await harness.turnEnd(3, "继续");
+	await attempt;
+	await Bun.sleep(5);
+	expect(harness.messages).toHaveLength(0);
+	expect(harness.notices.some((notice) => notice.includes("投递失败"))).toBe(true);
+	expect(harness.notices.some((notice) => notice.includes("观察员已停止"))).toBe(false);
+
+	advise("第二条建议");
+	attempt = harness.next();
+	await harness.turnEnd(4, "再继续");
+	await attempt;
+	expect(harness.notes().map((note) => note.note)).toEqual(["第二条建议"]);
 });
 
 test("用户 esc 中断过的现场照常投递，投递选项不变", async () => {
@@ -426,6 +444,8 @@ async function setup(options: {
 	worker?: boolean;
 	features?: Record<string, unknown>;
 	createObserver?: (...args: any[]) => Promise<any>;
+	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
+	failDeliveries?: number;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-watcher-"));
 	const cwd = join(directory, "project");
@@ -458,7 +478,7 @@ async function setup(options: {
 		}],
 	});
 	if (!modelRuntime.hasConfiguredAuth(fauxModel.provider)) throw new Error("测试 Faux 模型认证未载入");
-	const pool = new spawnModule.InProcessSessionPool({ agentDir, modelRuntime });
+	const pool = new spawnModule.InProcessSessionPool({ agentDir, modelRuntime, resolveModel: async () => fauxModel });
 	const watcher = options.watcher === undefined ? WATCHER_CONFIG : options.watcher;
 	const module = await loadFirecodeModule("watcher/index.js", {
 		configJsonc: JSON.stringify({
@@ -478,16 +498,33 @@ async function setup(options: {
 	const statuses = new Map<string, string>();
 	let waiter: (() => void) | undefined;
 	const settle = () => waiter?.();
+	let failures = options.failDeliveries ?? 0;
 	const pi = {
 		registerCommand: (name: string, command: any) => commands.set(name, command),
 		registerMessageRenderer() {},
-		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		on: (name: string, handler: any) => {
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+		},
 		events: {
 			on: (name: string, handler: any) => channels.set(name, [...(channels.get(name) ?? []), handler]),
 			emit: (name: string, data: any) => { for (const handler of channels.get(name) ?? []) handler(data); },
 		},
-		sendMessage: (message: any, sendOptions: any) => { messages.push({ message, options: sendOptions }); settle(); },
-		sendUserMessage: async (content: string) => { userMessages.push(content); settle(); },
+		sendMessage: (message: any, sendOptions: any) => {
+			if (failures > 0) { failures--; settle(); throw new Error("投递失败"); }
+			messages.push({ message, options: sendOptions });
+			settle();
+		},
+		// 与宿主一致：返回 void、不等唤醒回合，回合稍后才 agent_start。
+		sendUserMessage: (content: string) => {
+			userMessages.push(content);
+			settle();
+			setTimeout(() => {
+				for (const handler of [...(handlers.get("agent_start") ?? [])]) handler({}, context.ctx);
+				const message = { role: "user", content: [{ type: "text", text: content }] };
+				for (const handler of [...(handlers.get("message_start") ?? [])]) handler({ message }, context.ctx);
+			}, 0);
+		},
 	};
 	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
@@ -525,7 +562,6 @@ async function setup(options: {
 	const context = createContext();
 	module.registerWatcher(pi, {
 		pool,
-		resolveModel: async () => fauxModel,
 		...(options.createObserver ? { createObserver: options.createObserver } : {}),
 	}, options.worker === true);
 	const emit = async (name: string, event: any, ctx = context.ctx) => {

@@ -7,7 +7,6 @@ import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.js";
 
 type Handler = (event: any, ctx: any) => unknown;
 type Module = {
-	projectIdentity: (name?: string, model?: string, thinking?: string) => unknown;
 	registerHerdrDisplay: (pi: unknown, subsession?: boolean) => void;
 };
 
@@ -85,18 +84,6 @@ const context = (name: string | undefined, mode = "tui") => ({
 	mode,
 	sessionManager: { getSessionName: () => name },
 	model: { id: "anthropic/claude-opus-4-5-20260101", reasoning: true },
-});
-
-test("projects the session and model identity into pane display metadata", async () => {
-	const { projectIdentity } = await load();
-	expect(projectIdentity("重命名", "anthropic/claude-opus-4-5", "medium")).toEqual({
-		title: "重命名",
-		agent: "pi·claude-opus-4-5/medium",
-	});
-	expect(projectIdentity(undefined, "openai/gpt-5", undefined)).toEqual({
-		title: "",
-		agent: "pi·gpt-5",
-	});
 });
 
 test("never mutates persistent pane or tab names", async () => {

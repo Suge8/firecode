@@ -56,13 +56,26 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect(harness.activeTools).toContain("subagents");
 });
 
-test("status 每个子代理一行以角色为主、模型短名次之", async () => {
-	const { statusText } = await loadFirecodeModule("master/index.js") as any;
+test("/fire-master status 每个子代理一行，以角色为主、模型短名次之", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("完成")]);
+	for (const [worker, role] of [["scout", "工程师"], ["verify", "设计师"]]) {
+		const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action: "start", worker, prompt: "执行", role });
+		await settled;
+	}
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toBe("scout 工程师·空闲 worker\nverify 设计师·空闲 worker-2");
+});
 
-	expect(statusText([
-		{ name: "侦察", role: "调研员", status: "working", model: "openai-codex/gpt-5.1-codex-mini" },
-		{ name: "验收", role: "工程师", status: "reviewing", model: "anthropic/claude-sonnet-4-5" },
-	])).toBe("侦察 调研员·工作 gpt-5.1-codex-mini\n验收 工程师·审查 claude-sonnet-4-5");
+test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），不写死家目录", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "where", prompt: "执行", role: "工程师" });
+	await settled;
+	const files = await readdir(join(harness.agentDir, "tmp"));
+	expect(files).toContain(`firecode-master-${harness.sessionId}.json`);
 });
 
 test("边框身份只发布“指挥官”，子代理进出不改变它", async () => {
@@ -326,24 +339,61 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	expect(working()).toEqual([true, false, true, false]);
 });
 
-test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒的投递完成后才归零", async () => {
-	const harness = await setup(true, { deferUserMessage: true });
+test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒要等唤醒回合开始才归零（宿主 sendUserMessage 不等回合）", async () => {
+	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	await harness.execute({ action: "start", worker: "late", prompt: "只回复完成", role: "工程师", thinking: "low" });
 	await harness.userMessageStarted;
-	await Bun.sleep(0);
+	await Bun.sleep(5);
 	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
 	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
-	// worker 已落定为 idle，事件正在前门投递：不能归零，否则会话会在唤醒前出现“歇下”缝隙。
+	// worker 已落定为 idle，前门消息已发出但唤醒回合还没开始：不能归零，否则会话会在唤醒前误报一次“歇下”。
 	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
 	expect(counts()).toEqual([1]);
 	expect(working()).toEqual([true]);
 
-	harness.releaseUserMessage();
+	await harness.wake();
 	await Bun.sleep(5);
 	expect(counts()).toEqual([1, 0]);
 	expect(working()).toEqual([true, false]);
+	await harness.command("");
+});
+
+test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
+	const harness = await setup(true, { holdWake: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("被拒的结果")]);
+	await harness.execute({ action: "start", worker: "rejected", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await Bun.sleep(5);
+	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
+	const envelope = harness.userMessages[0];
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event"]);
+
+	// 宿主在开回合前拒绝了前门消息（扩展订阅不到）；之后用户自己发消息开了一个回合。
+	harness.idle = false;
+	await harness.userTurn("我自己的新问题");
+	await Bun.sleep(5);
+	expect(harness.messages).toEqual([
+		{ message: expect.objectContaining({ content: envelope }), options: { deliverAs: "steer" } },
+	]);
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
+	expect(counts()).toEqual([1, 0]);
+	await harness.command("");
+});
+
+test("前门唤醒正常时只确认一次，不重复补投", async () => {
+	const harness = await setup(true, { holdWake: true });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "woken", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await harness.userMessageStarted;
+	await harness.wake();
+	await harness.userTurn("之后用户又问了一句");
+	await Bun.sleep(5);
+	expect(harness.messages).toEqual([]);
+	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
 	await harness.command("");
 });
 
@@ -602,7 +652,7 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 });
 
 test("空闲前门投递未完成时替换会话，旧投递不得确认到新 runtime", async () => {
-	const harness = await setup(true, { deferUserMessage: true });
+	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
 	faux.setResponses([fauxAssistantMessage("旧会话结果")]);
 	await harness.execute({
@@ -612,7 +662,7 @@ test("空闲前门投递未完成时替换会话，旧投递不得确认到新 r
 	const appendedBeforeReplacement = harness.appended.length;
 
 	await harness.replaceSession();
-	harness.releaseUserMessage();
+	await harness.wake();
 	await Bun.sleep(0);
 
 	expect(harness.appended).toHaveLength(appendedBeforeReplacement);
@@ -663,7 +713,8 @@ test("主回合空闲时，并发落定合并走前门用户消息，投递前�
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	release();
 	await delivered;
-	await Bun.sleep(0);
+	// 前门消息发出后，唤醒回合稍后才开始；ack 在回合开始之后写。
+	await Bun.sleep(5);
 	expect(harness.messages).toEqual([]);
 	expect(harness.userMessages).toHaveLength(1);
 	expect(harness.userMessages[0]).toContain("结果 A");
@@ -1254,7 +1305,7 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () => {
 	const harness = await setup(false);
 	const state = await loadFirecodeModule("master/state.js") as any;
-	const path = state.masterStatePath(harness.sessionId);
+	const path = state.masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, JSON.stringify({ version: 7, workers: [] }));
 	try {
@@ -1296,6 +1347,34 @@ test("显式 observer 角色不注册 Master 工具面", async () => {
 	expect(commands.has("fire-master")).toBe(false);
 	expect(tools.has("subagents")).toBe(false);
 	expect(handlers.has("tool_call")).toBe(true);
+});
+
+test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
+	const harness = await loadFirecodeModule("role-harness.js", {
+		configJsonc: JSON.stringify({
+			features: await featuresOnly("header", "tools", "presets", "rename", "stats"),
+			keys: { rename: "alt+r" },
+		}),
+		extraFiles: {
+			"role-harness.ts": [
+				'import firecode from "./index.js";',
+				'import { withSubsessionRole } from "./master/role.js";',
+				'export const register = (pi: unknown) => withSubsessionRole("worker", async () => firecode(pi as never));',
+			].join("\n"),
+		},
+	}) as { register: (pi: unknown) => Promise<void> };
+	const registered: string[] = [];
+	await harness.register({
+		registerMessageRenderer() {}, registerEntryRenderer: (name: string) => registered.push(`entry:${name}`),
+		registerShortcut: (key: string) => registered.push(`shortcut:${key}`),
+		registerFlag: (name: string) => registered.push(`flag:${name}`),
+		registerCommand: (name: string) => registered.push(`command:${name}`),
+		registerTool: (tool: { name: string }) => registered.push(`tool:${tool.name}`),
+		getActiveTools: () => [], setActiveTools() {},
+		on: () => () => {},
+		events: { on: () => () => {}, emit() {} },
+	});
+	expect(registered).toEqual([]);
 });
 
 test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
@@ -1357,7 +1436,8 @@ async function setup(activate = true, options: {
 	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
 	inputGate?: boolean;
 	autoActivate?: boolean;
-	deferUserMessage?: boolean;
+	/** 前门唤醒回合不自动开始：宿主 sendUserMessage 立即返回，agent_start 由测试 wake() 发出。 */
+	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
 	promptFiles?: Record<string, string>;
@@ -1416,6 +1496,10 @@ async function setup(activate = true, options: {
 	const pool = new (spawnModule as any).InProcessSessionPool({
 		agentDir,
 		modelRuntime,
+		resolveModel: async (id: string) => {
+			await (globalThis as any).__modelGate;
+			return id === "test/worker-2" ? alternateModel : fauxModel;
+		},
 		...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
 	});
 	const module = await loadFirecodeModule("master/index.js", {
@@ -1442,10 +1526,6 @@ async function setup(activate = true, options: {
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
-	let releaseUserMessage = () => {};
-	const userMessageGate = options.deferUserMessage
-		? new Promise<void>((resolve) => { releaseUserMessage = resolve; })
-		: Promise.resolve();
 	let markUserMessageStarted!: () => void;
 	const userMessageStarted = new Promise<void>((resolve) => { markUserMessageStarted = resolve; });
 	let activeTools = ["read", "bash", "edit", "write"];
@@ -1455,7 +1535,10 @@ async function setup(activate = true, options: {
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
-		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+		on: (name: string, handler: any) => {
+			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+		},
 		events: { on() {}, emit: (channel: string, payload: any) => { emitted.push([channel, payload]); } },
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
@@ -1466,13 +1549,22 @@ async function setup(activate = true, options: {
 			messages.push({ message, options });
 			onMessage?.();
 		},
-		sendUserMessage: async (content: string) => {
+		// 与宿主一致：扩展的 sendUserMessage 返回 void、不等唤醒回合；回合稍后才 agent_start。
+		sendUserMessage: (content: string) => {
 			userMessages.push(content);
 			markUserMessageStarted();
-			await userMessageGate;
 			onMessage?.();
+			if (!options.holdWake) setTimeout(() => void wake(), 0);
 		},
 	};
+	/** 宿主开一个回合并记录它的第一条用户消息（与宿主事件顺序一致：agent_start 在前，message_start 在后）。 */
+	const turn = async (text: string) => {
+		for (const handler of [...(handlers.get("agent_start") ?? [])]) await handler({}, ctx);
+		const message = { role: "user", content: [{ type: "text", text }] };
+		for (const handler of [...(handlers.get("message_start") ?? [])]) await handler({ message }, ctx);
+	};
+	/** 前门消息唤起的回合真正开始：宿主记录了这条信封消息本身。 */
+	const wake = () => turn(userMessages.at(-1)!);
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
 	let sessionId = crypto.randomUUID();
@@ -1498,10 +1590,6 @@ async function setup(activate = true, options: {
 		},
 	};
 	module.registerMaster(pi, {
-		resolveModel: async (id: string) => {
-			await (globalThis as any).__modelGate;
-			return id === "test/worker-2" ? alternateModel : fauxModel;
-		},
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
 	});
@@ -1527,7 +1615,9 @@ async function setup(activate = true, options: {
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		userMessageStarted,
-		releaseUserMessage,
+		wake,
+		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
+		userTurn: (text: string) => turn(text),
 		command,
 		emit: async (name: string, event: any) => {
 			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);

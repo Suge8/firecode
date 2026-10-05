@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
@@ -14,36 +14,6 @@ const worker = (disposition?: "pending" | "reminded") => ({
 	...(disposition ? { disposition } : {}),
 });
 
-test("有待拍板事件时升 timeSensitive 并带副标题，否则 active 无副标题", async () => {
-	const { buildBarkPayload } = await loadFirecodeModule("session/bark.ts") as any;
-	const base = { title: "s", body: "b", group: "g", sessionId: "sid" };
-	const urgent = buildBarkPayload({ ...base, awaitingDecision: true });
-	expect(urgent.level).toBe("timeSensitive");
-	expect(urgent.subtitle).toBe("待拍板");
-	const normal = buildBarkPayload({ ...base, awaitingDecision: false });
-	expect(normal.level).toBe("active");
-	expect(normal.subtitle).toBeUndefined();
-	// 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知。
-	expect(urgent.id).toBe("sid");
-});
-
-test("v8 待发落 Worker 触发待拍板，空池、文件缺失与损坏均不触发", async () => {
-	const { hasPendingDisposition } = await loadFirecodeModule("session/bark.ts") as any;
-	const dir = await mkdtemp(join(tmpdir(), "firecode-bark-"));
-	try {
-		const path = join(dir, "state.json");
-		await writeFile(path, JSON.stringify({ version: 8, workers: [worker("pending")] }));
-		expect(hasPendingDisposition(path)).toBe(true);
-		await writeFile(path, JSON.stringify({ version: 8, workers: [worker()] }));
-		expect(hasPendingDisposition(path)).toBe(false);
-		expect(hasPendingDisposition(join(dir, "missing.json"))).toBe(false);
-		await writeFile(path, "not json");
-		expect(hasPendingDisposition(path)).toBe(false);
-	} finally {
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
 const realFetch = globalThis.fetch;
 const realAgentDir = process.env.PI_CODING_AGENT_DIR;
 afterEach(async () => {
@@ -53,10 +23,17 @@ afterEach(async () => {
 	await cleanupFirecodeModules();
 });
 
-async function barkHarness(run: (h: { emit: (event: string, ...args: unknown[]) => void; ctx: unknown }) => Promise<void>) {
+async function barkHarness(
+	run: (h: { emit: (event: string, ...args: unknown[]) => void; ctx: unknown }) => Promise<void>,
+	poolState?: string,
+) {
 	const home = await mkdtemp(join(tmpdir(), "firecode-bark-home-"));
 	try {
 		await writeFile(join(home, "bark-key"), "https://bark.test/key/\n");
+		if (poolState !== undefined) {
+			await mkdir(join(home, "tmp"));
+			await writeFile(join(home, "tmp", "firecode-master-sid.json"), poolState);
+		}
 		process.env.PI_CODING_AGENT_DIR = home;
 		const pushes: string[] = [];
 		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
@@ -88,4 +65,26 @@ test("会话歇下时推送最后一条回复", async () => {
 		emit("agent_settled", {}, ctx);
 	});
 	expect(pushes.map((body) => JSON.parse(body).body)).toEqual(["已完成"]);
+});
+
+test("子代理池有待发落事件时升 timeSensitive 并带“待拍板”副标题；空池、文件缺失与损坏都按普通通知", async () => {
+	const settle = async ({ emit, ctx }: { emit: (event: string, ...args: unknown[]) => void; ctx: unknown }) => {
+		emit("agent_start", {}, ctx);
+		emit("message_end", reply("要你决定"));
+		emit("agent_settled", {}, ctx);
+	};
+	const pool = (disposition?: "pending") => JSON.stringify({ version: 8, workers: [worker(disposition)] });
+	const cases: Array<[string | undefined, string, string | undefined]> = [
+		[pool("pending"), "timeSensitive", "待拍板"],
+		[pool(), "active", undefined],
+		[undefined, "active", undefined],
+		["not json", "active", undefined],
+	];
+	for (const [state, level, subtitle] of cases) {
+		const [push] = (await barkHarness(settle, state)).map((body) => JSON.parse(body));
+		expect(push.level).toBe(level);
+		expect(push.subtitle).toBe(subtitle);
+		// 同会话固定 id：新通知经 APNs CollapseID 顶掉旧通知。
+		expect(push.id).toBe("sid");
+	}
 });

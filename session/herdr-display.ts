@@ -16,7 +16,7 @@ const nextSeq = () => (seq += 1);
 
 type Identity = { title: string; agent: string };
 
-export function projectIdentity(
+function projectIdentity(
 	sessionName: string | undefined,
 	modelId: string | undefined,
 	thinking: string | undefined,

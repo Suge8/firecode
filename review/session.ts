@@ -1,8 +1,8 @@
-import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevelValue } from "../config.js";
 import type { InProcessSessionPool } from "../master/spawn.js";
 import type { PromptLayers } from "./prompt.js";
+import { textOf } from "../format.js";
 
 export type ReviewSessionResult =
 	| { kind: "output"; text: string }
@@ -13,7 +13,6 @@ export type ReviewSessionResult =
 
 export interface ReviewSessionOptions {
 	pool: InProcessSessionPool;
-	resolveModel(id: string): Promise<Model<any>>;
 	role: "reviewer" | "advisor";
 	model: string;
 	thinking: ThinkingLevelValue;
@@ -25,24 +24,21 @@ export interface ReviewSessionOptions {
 }
 
 export type ReviewSessionRunner = (
-	options: Omit<ReviewSessionOptions, "pool" | "resolveModel">,
+	options: Omit<ReviewSessionOptions, "pool">,
 ) => Promise<ReviewSessionResult>;
 
-export function createReviewSessionRunner(
-	pool: InProcessSessionPool,
-	resolveModel: ReviewSessionOptions["resolveModel"],
-): ReviewSessionRunner {
-	return (options) => runReviewSession({ ...options, pool, resolveModel });
+export function createReviewSessionRunner(pool: InProcessSessionPool): ReviewSessionRunner {
+	return (options) => runReviewSession({ ...options, pool });
 }
 
-export async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSessionResult> {
+async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSessionResult> {
 	if (options.signal?.aborted) return { kind: "aborted" };
 	let spawned: Awaited<ReturnType<InProcessSessionPool["spawn"]>>;
 	try {
 		spawned = await options.pool.spawn({
 			cwd: options.cwd,
 			role: options.role,
-			model: await options.resolveModel(options.model),
+			model: await options.pool.resolveModel(options.model),
 			thinking: options.thinking,
 			tools: [...new Set(options.tools)].filter((tool) => tool !== "write" && tool !== "edit"),
 			systemPrompt: { mode: "replace", text: clean(options.prompt.system) },
@@ -65,7 +61,7 @@ export async function runReviewSession(options: ReviewSessionOptions): Promise<R
 	const unsubscribe = spawned.session.subscribe((event) => {
 		const assistant = assistantMessage(event);
 		if (assistant) {
-			finalText = messageText(assistant.content);
+			finalText = textOf(assistant.content);
 			finalError = assistant.stopReason === "error"
 				? assistant.errorMessage || "model error"
 				: undefined;
@@ -103,17 +99,6 @@ function assistantMessage(event: AgentSessionEvent): {
 	if (event.type === "message_end") return event.message.role === "assistant" ? event.message : undefined;
 	if (event.type !== "agent_end") return undefined;
 	return [...event.messages].reverse().find((message) => message.role === "assistant");
-}
-
-function messageText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part): part is { type: "text"; text: string } =>
-			typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text"
-			&& typeof (part as { text?: unknown }).text === "string")
-		.map((part) => part.text)
-		.join("\n");
 }
 
 function clean(text: string): string {

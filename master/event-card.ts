@@ -5,7 +5,7 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Text } from "@earendil-works/pi-tui";
-import { clip, firstSentence, oneLine } from "../format.js";
+import { clip, firstSentence, oneLine, textOf } from "../format.js";
 import { parseEnvelopes } from "../deliver.js";
 import { machineEntries } from "../tools/machine.js";
 import { MASTER_EVENT_TYPE } from "./event-format.js";
@@ -22,7 +22,7 @@ class MasterEventCard implements Component {
 	private readonly fallback: Component;
 
 	constructor(content: string | (string | unknown)[], expanded: boolean, theme: Theme) {
-		const text = plainContent(content);
+		const text = textOf(content);
 		this.fallback = new Text(text, 0, 0);
 		let card: Component | undefined;
 		try {
@@ -84,16 +84,4 @@ function card(theme: Theme, children: Component[]): Component {
 	const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
 	for (const child of children) box.addChild(child);
 	return box;
-}
-
-function plainContent(content: string | (string | unknown)[]): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) =>
-			typeof part === "object" && part !== null && "text" in part
-				? String((part as { text: unknown }).text)
-				: "")
-		.filter(Boolean)
-		.join("\n");
 }

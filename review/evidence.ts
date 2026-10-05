@@ -10,6 +10,7 @@
  * toolResult 正文仍跳过（输出体积大且非一手证据——审查者应自行重跑验证命令）。
  */
 import type { Language } from "../config.js";
+import { textOf } from "../format.js";
 
 export const DEFAULT_EVIDENCE_TOKENS = 24_000;
 /** 单条消息渲染上限，防单条超长消息撑爆预算。 */
@@ -91,7 +92,7 @@ function renderEntry(
 			if (message.role === "user")
 				return [
 					{
-						text: `## ${userLabel(language)}\n${clip(messageText(message.content))}`,
+						text: `## ${userLabel(language)}\n${clip(textOf(message.content))}`,
 						role: "user" as const,
 					},
 				];
@@ -101,7 +102,7 @@ function renderEntry(
 		}
 		case "custom_message": {
 			if (entry.display !== true) return [];
-			return [{ text: `## ${customLabel(language, String(entry.customType ?? ""))}\n${clip(messageText(entry.content))}` }];
+			return [{ text: `## ${customLabel(language, String(entry.customType ?? ""))}\n${clip(textOf(entry.content))}` }];
 		}
 		case "compaction":
 			return typeof entry.summary === "string" && entry.summary
@@ -148,7 +149,7 @@ function assistantBody(
 		.map((part) => toolCallLine(asRecord(part), language, failedCalls))
 		.filter(Boolean)
 		.join("\n");
-	const body = clip(messageText(content));
+	const body = clip(textOf(content));
 	return [body, trail].filter(Boolean).join("\n");
 }
 
@@ -180,19 +181,6 @@ const TOOL_LINE_MAX_CHARS = 200;
 function clipLine(text: string) {
 	const single = text.replace(/\s+/gu, " ").trim();
 	return single.length <= TOOL_LINE_MAX_CHARS ? single : `${single.slice(0, TOOL_LINE_MAX_CHARS)}…`;
-}
-
-function messageText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => {
-			const record = asRecord(part);
-			return record?.type === "text" && typeof record.text === "string"
-				? record.text
-				: "";
-		})
-		.join("\n");
 }
 
 function clip(text: string) {

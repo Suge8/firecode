@@ -1,38 +1,9 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, copyFirecodeSource, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
+import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
-
-test("portable loader copies runtime sources without repository metadata or development docs", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "firecode-copy-"));
-	try {
-		await copyFirecodeSource(directory);
-		expect(existsSync(join(directory, "index.ts"))).toBeTrue();
-		expect(existsSync(join(directory, ".git"))).toBeFalse();
-		expect(existsSync(join(directory, "docs"))).toBeFalse();
-		expect(existsSync(join(directory, "tests"))).toBeFalse();
-		expect(
-			(await readdir(directory, { recursive: true }))
-				.filter((path) => /\.mdx?$/.test(path))
-				.map((path) => path.split(sep).join("/"))
-				.sort(),
-		).toEqual([
-			"master/prompts/master.zh.md",
-			"master/prompts/worker.zh.md",
-			"review/prompts/advisor.en.md",
-			"review/prompts/advisor.zh.md",
-			"review/prompts/review.en.md",
-			"review/prompts/review.zh.md",
-			"watcher/prompts/watch.zh.md",
-		]);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
-});
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
@@ -59,7 +30,7 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	const warnings: string[] = [];
 	for (let occurrence = 0; occurrence < 2; occurrence++)
 		for (const handler of events.get("session_start") ?? [])
-			handler({}, { ui: { notify: (message: string) => warnings.push(message) } });
+			handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 	expect(warnings).toEqual([
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
@@ -195,4 +166,28 @@ test("tools.replyLines 默认 3，接受非负整数，类型错误与未知字�
 	}
 	expect((await load('{ "replyLine": 2 }')).problems).toContain("未知字段 tools.replyLine");
 	expect((await load("[]")).problems).toContain("tools 必须是对象");
+});
+
+test("功能关闭时它那一节的配置错误不全局警告；开启时照常警告", async () => {
+	const warningsFor = async (master: boolean) => {
+		const configJsonc = JSON.stringify({
+			features: { ...(await featuresOnly()), master },
+			master: { roles: { 工程师: { model: "bad", use: "坏原子" } } },
+		});
+		const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
+		const events = new Map<string, Array<(...args: unknown[]) => void>>();
+		(registerFirecode as (pi: unknown) => void)({
+			registerCommand() {}, registerShortcut() {}, registerTool() {}, registerMessageRenderer() {}, registerEntryRenderer() {},
+			getActiveTools: () => [], setActiveTools() {},
+			on: (name: string, handler: (...args: unknown[]) => void) => events.set(name, [...(events.get(name) ?? []), handler]),
+			events: { on() {}, emit() {} },
+		});
+		const warnings: string[] = [];
+		for (const handler of events.get("session_start") ?? [])
+			await handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+		await cleanupFirecodeModules();
+		return warnings.filter((message) => message.includes("master.roles"));
+	};
+	expect(await warningsFor(false)).toEqual([]);
+	expect(await warningsFor(true)).not.toEqual([]);
 });

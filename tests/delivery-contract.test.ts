@@ -156,3 +156,43 @@ export default function (pi) {
 		session.dispose();
 	}
 }, 10_000);
+
+test("宿主契约：扩展 API 的 sendUserMessage 立即返回、不等唤醒回合；唤醒回合在 agent_start 后原样记录这条用户消息", async () => {
+	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-void-"));
+	const cwd = join(directory, "project");
+	const agentDir = join(directory, "agent");
+	const extensionsDir = join(agentDir, "extensions");
+	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
+	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
+	await writeFile(join(extensionsDir, "wake.ts"), `
+export default function (pi) {
+	const order = (globalThis.__wakeOrder = []);
+	pi.on("agent_start", () => { order.push("agent_start"); });
+	pi.on("message_start", ({ message }) => {
+		if (message.role === "user") order.push("user:" + (typeof message.content === "string" ? message.content : message.content.map((part) => part.text).join("")));
+	});
+	pi.registerCommand("wake", { handler: async () => {
+		const returned = pi.sendUserMessage("woken from extension");
+		order.push(returned === undefined ? "returned-void" : "returned-value");
+	} });
+}
+`);
+	faux = registerFauxProvider();
+	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	const model = faux.getModel();
+	const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") });
+	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
+	faux.setResponses([fauxAssistantMessage("woken")]);
+	const { session } = await createAgentSession({ cwd, agentDir, model, modelRuntime, sessionManager: SessionManager.inMemory(cwd) });
+	try {
+		await session.bindExtensions({ mode: "print" });
+		await session.prompt("/wake");
+		while (!(globalThis as any).__wakeOrder.includes("agent_start")) await new Promise((resolve) => setTimeout(resolve, 5));
+		await session.waitForIdle();
+		// 唤醒回合的第一条用户消息就是这条正文原样：deliver 据此确认送达，而不是见到任何 agent_start 就算。
+		expect((globalThis as any).__wakeOrder).toEqual(["returned-void", "agent_start", "user:woken from extension"]);
+	} finally {
+		delete (globalThis as any).__wakeOrder;
+		session.dispose();
+	}
+}, 10_000);

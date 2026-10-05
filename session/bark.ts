@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { watchBusy } from "../busy.js";
 import { loadMasterState, masterStatePath } from "../master/state.js";
+import { textOf } from "../format.js";
 
 // 与运行配置同一个 Pi Agent 目录（默认 ~/.pi/agent，含 PI_CODING_AGENT_DIR 覆写）。
 const keyFile = () => path.join(getAgentDir(), "bark-key");
@@ -22,7 +23,7 @@ const MAX_BODY_LENGTH = 200;
 // pi.dev 的 logo 是白色透明背景 SVG，通知图标不支持矢量图；经 wsrv.nl 转黑底 PNG。
 const ICON_URL = "https://wsrv.nl/?url=pi.dev/logo.svg&w=256&h=256&output=png&bg=black";
 
-export interface BarkPayload {
+interface BarkPayload {
 	title: string;
 	subtitle?: string;
 	body: string;
@@ -32,7 +33,7 @@ export interface BarkPayload {
 	icon: string;
 }
 
-export function buildBarkPayload(input: {
+function buildBarkPayload(input: {
 	title: string;
 	body: string;
 	group: string;
@@ -51,7 +52,7 @@ export function buildBarkPayload(input: {
 }
 
 /** 只读旁路判定：状态文件损坏由 Master 自己报告与恢复，通知不放大故障，一律按无待拍板降级。 */
-export function hasPendingDisposition(statePath: string): boolean {
+function hasPendingDisposition(statePath: string): boolean {
 	try {
 		return loadMasterState(statePath)?.workers.some((worker) => worker.disposition !== undefined) ?? false;
 	} catch {
@@ -67,7 +68,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;
-		const text = extractText(event.message);
+		const text = textOf(event.message.content).trim();
 		if (text) lastAssistantText = text;
 	});
 
@@ -83,7 +84,7 @@ export function registerBark(pi: ExtensionAPI, subsession = false): void {
 				body: cleanMarkdown(lastAssistantText).slice(0, MAX_BODY_LENGTH),
 				group: dirName,
 				sessionId,
-				awaitingDecision: hasPendingDisposition(masterStatePath(sessionId)),
+				awaitingDecision: hasPendingDisposition(masterStatePath(getAgentDir(), sessionId)),
 			}),
 		);
 	} });
@@ -134,15 +135,6 @@ function encryptPayload(payload: unknown, key: string, iv: string): string {
 	const cipher = crypto.createCipheriv("aes-256-gcm", Buffer.from(key, "utf8"), Buffer.from(iv, "utf8"));
 	const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
 	return Buffer.concat([encrypted, cipher.getAuthTag()]).toString("base64");
-}
-
-function extractText(message: { content?: unknown }): string {
-	const blocks = Array.isArray(message?.content) ? message.content : [];
-	return blocks
-		.filter((block: any) => block?.type === "text" && typeof block.text === "string")
-		.map((block: any) => block.text as string)
-		.join("\n")
-		.trim();
 }
 
 /** 去掉 markdown 标记，通知栏显示纯文字。 */

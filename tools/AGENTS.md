@@ -3,7 +3,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `index.ts` | 包装默认四工具的展示与执行耗时；TUI 会话安装分组，退出释放 |
-| `grouping.ts` | 宿主适配：定位聊天容器，安装渲染/鼠标投影，分离全局展示与单工具正文 |
+| `host.ts` | 宿主适配的唯一处：私有字段读取（逐点校验形状）、原型补丁、聊天容器定位与 TUI 句柄获取；形状不符抛 `HostShapeError`（ADR 0018） |
+| `grouping.ts` | 安装渲染/鼠标投影，分离全局展示与单工具正文；发现聊天容器时自检形状，不符就不安装并提示，渲染中途不符整体退回原生 |
 | `group-view.ts` | 从原组件顺序派生轮、过程组与折叠/展开投影 |
 | `turn-summary.ts` `turn-clock.ts` | 摘要行渲染；时钟只把 `busy.ts` 的会话进行中事实投影到各轮（哪一轮开着、机器消息是否刚到），不记时长 |
 | `round.ts` | 轮记录：歇下边沿把 `busy.ts` 给出的整段事实（时长、终态、均速）写成官方 CustomEntry（零行标记组件），摘要行落定时按能力从聊天树读它；持久化，resume 后仍有数 |
@@ -12,7 +13,7 @@
 | `line.ts` `parts.ts` | 单工具行与着色片段；Master 复用纯渲染部分 |
 | `timing.ts` | 真实工具执行耗时，结果渲染取走即释放 |
 
-改分组前核对宿主 `ToolExecutionComponent`、`AssistantMessageComponent`、`Container` 和 TUI 动态引用。
+改分组前核对宿主 `ToolExecutionComponent`、`AssistantMessageComponent`、`Container` 和 TUI 动态引用；读宿主私有字段只能经 `host.ts`。子会话不注册工具渲染（无界面）。
 原消息与聊天树不改写、不搬移；渲染与鼠标命中使用同一投影。两档展示直接读取 `getToolsExpanded()`，
 不拦截快捷键。过程列表保留原生思考组件与其展开设置；单工具正文仍由宿主工具行持有，其他卡片保持原生行为。
 

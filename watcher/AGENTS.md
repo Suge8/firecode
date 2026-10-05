@@ -34,14 +34,15 @@ compaction、会话切换或观察会话自身上下文超过阈值时，丢弃�
 句缝追加；歇透时改走 `sendUserMessage` 前门唤起（用户消息形态，见根 AGENTS.md 硬约束）；Esc 打断后同样
 照发。建议自带时点标记（「基于第 N 回合前的观察」），投递时主会话可能已经走远；时点标记只在完整卡里，过程列表的 ↳ 行只写“观察员 + 建议首句”。进入模型上下文的正文包在
 `<firecode_watcher>` 信封里（格式由根级 `deliver.ts` 拥有），权衡声明位于信封末行；展示卡没有独立数据，从信封正文解析标题与建议。收束为单通道的权衡见
-[ADR 0011](../docs/adr/0011-watcher-single-channel-delivery.md)。
+[ADR 0011](../docs/adr/0011-watcher-single-channel-delivery.md)。歇透时的前门投递以宿主记录这条消息为送达，没进回合就改走 steer 补投（ADR 0017），
+送达前观察员不评估新增量；一条发言投递失败只丢弃这一条并提示，观察员照常工作——建议过时后重投没有价值。
 
 ## 配置
 
 `watcher` 节：`enabled`（默认 true，新会话自动激活）、`model`（必须显式配置的模型原子，含思考档）、`context`
 （默认 `minimal`）。节缺失、字段缺失、未知字段、类型错误，以及 `features.watcher` 开关本身写错（字符串
 `"false"` 会因 `!== false` 静默启用）都算配置问题：观察员拒绝启动并在 `session_start` 警告一次，
-绝不回退默认模型。模型必须能在内置 provider 解析——扩展注册的 provider（如 antigravity）在
+绝不回退默认模型。模型由子会话池解析（`master/spawn.ts`），必须能在内置 provider 或 models.json 解析——扩展注册的 provider（如 antigravity）在
 子会话里不可解析，解析失败时报错引导改用内置 provider 模型。
 
 裸 `/fire-watch` 翻转当前会话，不写回配置。启用时通过 `setStatus` 发布“观察员”，关闭或故障停用时清除；

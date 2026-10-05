@@ -12,20 +12,16 @@
  */
 import { randomUUID } from "node:crypto";
 import { wrapEnvelope } from "../deliver.js";
-import type { Model } from "@earendil-works/pi-ai";
 import {
-	getAgentDir,
-	ModelRuntime,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type Language, type ReviewConfig } from "../config.js";
+import { loadConfig, type Language, type ReviewConfig, type Section } from "../config.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
-	CHECKPOINT_TYPE,
 	CheckpointConflictError,
 	type CheckpointStamp,
 	readCheckpoint,
@@ -117,7 +113,6 @@ interface ReviewRuntime {
 
 interface ReviewDependencies {
 	pool?: InProcessSessionPool;
-	resolveModel?: (id: string) => Promise<Model<any>>;
 	runSession?: ReviewSessionRunner;
 }
 
@@ -136,10 +131,7 @@ export function registerReview(
 	registerCardRenderer(pi);
 	const rt: ReviewRuntime = {
 		pi,
-		runSession: dependencies.runSession ?? createReviewSessionRunner(
-			dependencies.pool ?? new InProcessSessionPool(),
-			dependencies.resolveModel ?? resolveConfiguredModel,
-		),
+		runSession: dependencies.runSession ?? createReviewSessionRunner(dependencies.pool ?? new InProcessSessionPool()),
 		controller: undefined,
 		queue: Promise.resolve(),
 	};
@@ -238,33 +230,9 @@ function notifyEffectFailure(rt: ReviewRuntime, error: unknown) {
 	);
 }
 
-/**
- * 读 review 配置；存在配置问题就不交出可用配置。
- * 命令与恢复两个入口共用：任何一个静默回退默认模型都会花真钱跑错模型。
- */
-function loadReviewConfig(): { config: ReviewConfig } | { error: string } {
-	let loaded: ReturnType<typeof loadConfig>;
-	try {
-		loaded = loadConfig();
-	} catch (error) {
-		return {
-			error: `fire-review 配置读取失败：${error instanceof Error ? error.message : String(error)}`,
-		};
-	}
-	// 三类都必须阻断：文件整体解析不了、review 节自身有错、
-	// 以及 features.review 开关类型错（字符串 "false" 会因 `!== false` 静默启用付费审查）。
-	const problems = loaded.problems.filter(
-		(problem) =>
-			problem.startsWith("review") ||
-			problem.startsWith("未知字段 review.") ||
-			problem.startsWith("config.jsonc") ||
-			problem.startsWith("features"),
-	);
-	if (problems.length > 0)
-		return { error: `fire-review 配置有问题，已停止：${problems.join("；")}` };
-	if (!loaded.config.review.advisor.model || loaded.config.review.reviewers.length === 0)
-		return { error: "fire-review 配置有问题，已停止：请显式完整配置 review" };
-	return { config: loaded.config.review };
+/** 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。 */
+function loadReviewConfig(): Section<ReviewConfig> {
+	return loadConfig().review;
 }
 
 function limitsOf(config: ReviewConfig): ReviewLimits {
@@ -549,34 +517,25 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 				: writeCheckpoint(rt.pi, active.ctx, state, persisted);
 		return true;
 	} catch (error) {
-		if (error instanceof CheckpointConflictError) {
-			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+		// 冲突与写入失败共用的收口：停写、释放占用、中止在途动作并告知。
+		const halt = (message: string, level: "warning" | "error") => {
 			setOccupancy(rt, active, false);
 			active.persistedStamp = undefined;
 			active.signal.abort();
 			active.actionController?.abort();
-			if (active.ctx.hasUI)
-				active.ctx.ui.notify(
-					active.config.language === "en"
-						? "fire-review checkpoint conflict; review stopped."
-						: "fire-review checkpoint 冲突，已停止审查。",
-					"warning",
-				);
+			if (active.ctx.hasUI) active.ctx.ui.notify(message, level);
+		};
+		const en = active.config.language === "en";
+		if (error instanceof CheckpointConflictError) {
+			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+			halt(en ? "fire-review checkpoint conflict; review stopped." : "fire-review checkpoint 冲突，已停止审查。", "warning");
 			void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 			return false;
 		}
 		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
-		setOccupancy(rt, active, false);
-		active.persistedStamp = undefined;
-		active.signal.abort();
-		active.actionController?.abort();
-		if (active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
-					: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`,
-				"error",
-			);
+		halt(en
+			? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
+			: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`, "error");
 		clearUi(active);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
@@ -766,16 +725,6 @@ async function runEffects(rt: ReviewRuntime, effects: ReviewEffect[]) {
 	}
 }
 
-async function resolveConfiguredModel(id: string): Promise<Model<any>> {
-	const runtime = await ModelRuntime.create({
-		authPath: `${getAgentDir()}/auth.json`,
-		modelsPath: `${getAgentDir()}/models.json`,
-	});
-	const slash = id.indexOf("/");
-	const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-	if (!model) throw new Error(`找不到模型：${id}；审查会话只能使用内置 provider 的模型`);
-	return model;
-}
 
 function reviewerModelConfig(model: ReviewConfig["advisor"], config: ReviewConfig): ReviewModelConfig {
 	return {
@@ -971,8 +920,8 @@ function sendCard(rt: ReviewRuntime, card: CardData) {
 		if (card.reason === "user" && active.ctx.hasUI)
 			active.ctx.ui.notify(
 				active.config.language === "en"
-					? "⏸ Review cancelled\nStopped by user"
-					: "⏸ 审查已取消\n已按你的操作停止",
+					? "Review cancelled\nStopped by user"
+					: "审查已取消\n已按你的操作停止",
 				"info",
 			);
 		return;
@@ -1041,5 +990,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// 导出供测试用（纯函数 / 类型）
-export { CHECKPOINT_TYPE };

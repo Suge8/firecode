@@ -26,7 +26,7 @@ let reviewTitleActive = false;
  */
 export function lockEditor(ctx: ExtensionContext, cancel: () => void): () => void {
 	if (ctx.hasUI === false || typeof ctx.ui.setEditorComponent !== "function") return () => {};
-	const previous = ctx.ui.getEditorComponent?.();
+	const previous = ctx.ui.getEditorComponent();
 	ctx.ui.setEditorComponent((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => {
 		const frame = previous?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
 		return new ReviewEditor(tui, theme, keybindings, cancel, frame);

@@ -5,6 +5,10 @@ import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 afterEach(cleanupFirecodeModules);
 
+/** 同名事件保留全部处理器（busy.ts 与 statusbar 都订阅生命周期事件），按注册顺序依次调用。 */
+const chain = (previous: Function | undefined, next: Function): Function =>
+	previous ? (...args: unknown[]) => { previous(...args); return next(...args); } : next;
+
 test("输入框外壳：标题即时取首条消息，状态嵌进上下边框，独立底栏 0 行", async () => {
 	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
@@ -37,7 +41,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 		},
 	};
 	registerStatusBar({
-		on: (event: string, fn: Function) => events.set(event, fn),
+		on: (event: string, fn: Function) => events.set(event, chain(events.get(event), fn)),
 		events: { on: (channel: string, fn: Function) => bus.set(channel, fn) },
 		getThinkingLevel: () => "medium",
 	});
@@ -117,7 +121,7 @@ test("审查期间上边框只显示一处审查进度，窄屏逐级退让：�
 			},
 		},
 	};
-	registerStatusBar({ on: (event: string, fn: Function) => events.set(event, fn), events: { on: (channel: string, fn: Function) => bus.set(channel, fn) }, getThinkingLevel: () => "high" });
+	registerStatusBar({ on: (event: string, fn: Function) => events.set(event, chain(events.get(event), fn)), events: { on: (channel: string, fn: Function) => bus.set(channel, fn) }, getThinkingLevel: () => "high" });
 	events.get("session_start")!({}, ctx);
 	events.get("agent_start")!({}, ctx);
 	bus.get("herdr:blocked")!({ active: true, label: "对抗审查进行中", progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });

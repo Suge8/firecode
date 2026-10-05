@@ -51,17 +51,38 @@ interface HeldSession {
 	releasing?: Promise<void>;
 }
 
-const SESSION_WRITERS = new Set<string>();
+// 单写者登记必须进程唯一：宿主按文件重新求值模块图（见 role.ts），模块级集合在副本间互不可见。
+const WRITERS_KEY = Symbol.for("firecode.session-writers");
+const SESSION_WRITERS = ((globalThis as Record<symbol, unknown>)[WRITERS_KEY] ??= new Set<string>()) as Set<string>;
 
-/** 全插件唯一的进程内子会话入口；池同时是 JSONL 单写者登记。 */
+export interface PoolEnvironment {
+	agentDir?: string;
+	modelRuntime?: ModelRuntime;
+	idleTimeoutMs?: number;
+	/** 模型原子 id（provider/model）解析；默认用池内缓存的一份 ModelRuntime。 */
+	resolveModel?: (id: string) => Promise<Model<any>>;
+}
+
+/** 全插件唯一的进程内子会话入口：模型解析、单写者登记与热会话生命周期都在这里。 */
 export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
+	private runtime?: Promise<ModelRuntime>;
+	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
 
-	constructor(private readonly environment: {
-		agentDir?: string;
-		modelRuntime?: ModelRuntime;
-		idleTimeoutMs?: number;
-	} = {}) {}
+	constructor(private readonly environment: PoolEnvironment = {}) {}
+
+	/**
+	 * 把 "provider/model" 解析成模型。ModelRuntime 每个池只建一次（auth.json 与 models.json 只读一次），解析与建子会话共用；
+	 * 扩展注册的 provider 在这里不可见，只能用内置 provider 与 models.json 里的模型。
+	 */
+	async resolveModel(id: string): Promise<Model<any>> {
+		if (this.environment.resolveModel) return this.environment.resolveModel(id);
+		const runtime = await this.modelRuntime();
+		const slash = id.indexOf("/");
+		const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
+		if (!model) throw new Error(`找不到模型：${id}；子会话只能使用内置 provider 或 models.json 里的模型`);
+		return model;
+	}
 
 	async spawn(options: SpawnSessionOptions): Promise<SpawnedSession> {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
@@ -96,7 +117,8 @@ export class InProcessSessionPool {
 			const result = await createAgentSession({
 				cwd: options.cwd,
 				agentDir: this.environment.agentDir,
-				modelRuntime: this.environment.modelRuntime,
+				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
+				modelRuntime: await this.modelRuntime(),
 				model: options.model,
 				thinkingLevel: options.thinking,
 				tools: options.tools,
@@ -120,6 +142,20 @@ export class InProcessSessionPool {
 			prompt: (text) => created.prompt(text),
 			dispose: () => this.release(held),
 		};
+	}
+
+	/** 热会话被释放（空闲到期或 dispose）后通知持有方放掉对它的订阅与引用；返回退订函数。 */
+	onRelease(listener: (sessionPath: string) => void): () => void {
+		this.releaseListeners.add(listener);
+		return () => this.releaseListeners.delete(listener);
+	}
+
+	private modelRuntime(): Promise<ModelRuntime> {
+		const agentDir = this.environment.agentDir ?? getAgentDir();
+		this.runtime ??= this.environment.modelRuntime
+			? Promise.resolve(this.environment.modelRuntime)
+			: ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
+		return this.runtime;
 	}
 
 	has(sessionPath: string): boolean {
@@ -162,7 +198,10 @@ export class InProcessSessionPool {
 				await held.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			} finally {
 				held.session.dispose();
-				if (held.sessionPath) SESSION_WRITERS.delete(held.sessionPath);
+				if (held.sessionPath) {
+					SESSION_WRITERS.delete(held.sessionPath);
+					for (const listener of this.releaseListeners) listener(held.sessionPath);
+				}
 			}
 		})();
 		return held.releasing;
