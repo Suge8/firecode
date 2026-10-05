@@ -958,16 +958,18 @@ test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为
 	expect(row).toContain(s.ui.theme.fg("error", "↳"));
 });
 
-test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：成败只由信封决定，被中断不算失败", async () => {
+test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：红色 = 失败 = 计数只由“错误：”决定，被中断不算失败，只有落定类事件高亮", async () => {
 	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
 	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
-	const event = (body: string) => wrapEnvelope("firecode_master_event", withElapsed(body, { run: 8 * 60_000, task: 19 * 60_000 }));
+	const event = (produced: unknown) => wrapEnvelope("firecode_master_event", withElapsed(produced, { run: 8 * 60_000, task: 19 * 60_000 }));
 	const cases = [
 		{ title: "fix-auth 已返回", body: masterEvent.returned("fix-auth", "刷新改为单飞。更多细节"), row: "↳ fix-auth 已返回 · 8m 刷新改为单飞。", red: false },
 		{ title: "perf 失败", body: masterEvent.failed("perf", "429 Too Many Requests"), row: "↳ perf 失败 · 8m 429 Too Many Requests", red: true },
 		{ title: "lint 被中断", body: masterEvent.interrupted("lint"), row: "↳ lint 被中断 · 8m 会话与审查义务均已保留", red: false },
 		{ title: "docs 审查通过（2 轮）", body: masterEvent.review("docs", { status: "passed", runId: "r", rounds: 2 }, "## 交付\n- 修好了。"), row: "↳ docs 审查通过（2 轮） · 8m 修好了。", red: false },
-		{ title: "ui 审查停止（3 轮）", body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查停止（3 轮） · 8m 收敛不了，交还用户。", red: true },
+		{ title: "ui 审查停止（3 轮）", body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停", red: true },
+		{ title: "api 审查未完成", body: masterEvent.review("api", { status: "failed", runId: "r", rounds: 1, reason: "审查会话超时。" }, "实现完成。"), row: "↳ api 审查未完成 · 8m 审查会话超时。", red: true },
+		{ title: undefined, body: masterEvent.modelSwitched("bench", "a/x/high", "b/y/high", "429"), row: "↳ bench 已切换模型 已切换 a/x/high→b/y/high（429），正在同一会话自动续跑", red: false },
 	];
 	const summaryOf = (s: any) => stripVTControlCharacters(s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!).trimEnd();
 	for (const { title, body } of cases) {
@@ -977,7 +979,8 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 		feed(s, true, 0, 1000);
 		s.tool("bash", { command: "bun test" });
 		hostUser(s, event(body));
-		expect(summaryOf(s)).toMatch(new RegExp(`^${FLAME} ${title.replace(/[()（）]/gu, "\\$&")}$`, "u"));
+		// 非落定事件（模型切换）不高亮：摘要行仍是当前动作。
+		expect(summaryOf(s)).toMatch(new RegExp(`^${FLAME} ${title?.replace(/[()（）]/gu, "\\$&") ?? "操作 \\$ bun test"}$`, "u"));
 		dispose?.();
 		dispose = undefined;
 	}
@@ -989,7 +992,7 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	assistant(s, [{ type: "text", text: "收口" }]);
 	s.settle(3_000, "complete", 0);
 	s.setNow(60_000);
-	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 1 个子代理失败");
+	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 3 个子代理失败");
 	s.ui.setToolsExpanded(true);
 	const raw = s.chat.render(120);
 	const rows = raw.filter((line: string) => stripVTControlCharacters(line).trim().startsWith("↳"));

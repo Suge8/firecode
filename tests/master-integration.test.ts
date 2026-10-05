@@ -460,6 +460,8 @@ test.each([
 	const content = harness.messages.map((entry: any) => entry.message.content).join("\n");
 	expect([...content.matchAll(/<firecode_master_event>\n([^\n]+)/gu)].map((match) => match[1]))
 		.toEqual(["fallback 已返回", "fallback 已切换模型", "fallback 已返回"]);
+	// 模型切换不是落定类事件：耗时行不带“本次运行”。
+	expect(content).not.toMatch(/fallback 已切换模型\n[^\n]+\n耗时：本次运行/u);
 	expect(content).toContain(`已切换 test/worker/medium→test/worker-2/high（${reason}）`);
 	expect(content).toContain("同一会话自动续跑");
 	expect(content).toContain("回复：\n降级后完成");
@@ -698,7 +700,8 @@ test("在飞 send 拒绝；interrupt 落中断标记、定时提醒，首次 sen
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 被中断");
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("interrupted 待续跑");
-	expect(elapsedTail(harness.messages.at(-1).message.content)).toBe("耗时：本次运行 30s · 当前任务 6m40s");
+	// 续跑提醒不是落定类事件：不带“本次运行”，不触发到达高亮。
+	expect(elapsedTail(harness.messages.at(-1).message.content)).toBe("耗时：当前任务 6m40s");
 	const reminded = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(reminded.disposition).toBe("reminded");
 
@@ -1074,6 +1077,7 @@ test("审查以基础设施故障落定时把该轮原因带给指挥官", async
 	await delivered;
 
 	expect(titleOf(harness.messages[1].message.content)).toBe("timed-out 审查未完成");
+	expect(harness.messages[1].message.content).toContain("timed-out 审查未完成\n错误：\n");
 	expect(harness.messages[1].message.content).toContain(TIMEOUT_DETAILS);
 });
 
@@ -1093,6 +1097,7 @@ test("review 命令未启动时明确失败结算并保留审查义务", async (
 		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("审查失败未回传")), 100)),
 	]);
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("review-missing 审查未完成");
+	expect(harness.messages.at(-1).message.content).toContain("review-missing 审查未完成\n错误：\n");
 	expect(harness.messages.at(-1).message.content).toContain("审查未启动");
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
