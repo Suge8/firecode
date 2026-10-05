@@ -113,9 +113,18 @@ export interface FireCodeConfig {
 	tools: ToolsConfig;
 }
 
+/** 一节能否启动的唯一判定：要么交出可用配置，要么给出拒绝启动的原因。 */
+export type Section<T> = { config: T } | { error: string };
+
 export type LoadedConfig = {
 	config: FireCodeConfig;
+	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
 	problems: string[];
+	review: Section<ReviewConfig>;
+	master: Section<MasterConfig>;
+	watcher: Section<WatcherConfig>;
+	/** features 整节类型错误：已安全回退成全关，但那是配置坏而非用户关闭。 */
+	featuresBroken: boolean;
 };
 
 export const CONFIG_PATH = join(getAgentDir(), "extensions", "firecode", "config.jsonc");
@@ -226,15 +235,19 @@ let cached: LoadedConfig | undefined;
 export function loadConfig(): LoadedConfig {
 	if (cached) return cached;
 
-	const problems: string[] = [];
-	const raw = readFile(problems);
+	// 文件级与开关级问题阻断所有付费功能：开关写成字符串 "false" 时 `!== false` 仍会启用。
+	const blocking: string[] = [];
+	const raw = readFile(blocking);
 	// features 省略表示沿用默认全开；只要显式写了，就必须是对象。
 	// 非对象不能回退成 {}，因为 {} 在入口语义里正是「全部启用」。
-	const invalidFeatures = raw.features !== undefined && !isPlainObject(raw.features);
-	if (invalidFeatures) problems.push("features 必须是对象");
-	const features: Partial<Record<Feature, boolean>> = invalidFeatures
+	const featuresBroken = raw.features !== undefined && !isPlainObject(raw.features);
+	if (featuresBroken) blocking.push("features 必须是对象");
+	const features: Partial<Record<Feature, boolean>> = featuresBroken
 		? Object.fromEntries(FEATURES.map((feature) => [feature, false]))
 		: asRecord(raw.features);
+	checkFeatures(features, blocking);
+
+	const problems = [...blocking];
 	const rawKeys = asRecord(raw.keys);
 	const presets = parsePresets(raw.presets, problems);
 	const keys: FireCodeKeys = {
@@ -243,29 +256,41 @@ export function loadConfig(): LoadedConfig {
 			typeof rawKeys.cyclePreset === "string" ? rawKeys.cyclePreset : DEFAULT_KEYS.cyclePreset,
 		fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_KEYS.fast,
 	};
-	checkFeatures(features, problems);
 	checkKeys(keys, presets, problems);
-	// review 写成字符串/数组/null 或缺字段时不能静默补齐：会拿用户未选择的模型真实发起审查。
-	const reviewProblems: string[] = [];
-	if (raw.review !== undefined && !isPlainObject(raw.review))
-		reviewProblems.push("review 必须是对象");
-	const review = parseReviewConfig(asRecord(raw.review), reviewProblems);
-	if (raw.review !== undefined || features.review !== false) problems.push(...reviewProblems);
-	// master 同理：角色表错误会拿错模型真实发起 Worker，不能静默当空对象。
-	if (raw.master !== undefined && !isPlainObject(raw.master))
-		problems.push("master 必须是对象");
-	const master = parseMasterConfig(asRecord(raw.master), problems);
-	// watcher 同理：缺节或模型有误时功能拒绝启动，静默回退会拿用户没配的模型真实发起观察。
-	const watcherProblems: string[] = [];
-	if (raw.watcher !== undefined && !isPlainObject(raw.watcher))
-		watcherProblems.push("watcher 必须是对象");
-	const watcher = parseWatcherConfig(asRecord(raw.watcher), watcherProblems);
-	if (raw.watcher !== undefined || features.watcher !== false) problems.push(...watcherProblems);
-
 	if (raw.tools !== undefined && !isPlainObject(raw.tools)) problems.push("tools 必须是对象");
 	const tools = parseToolsConfig(asRecord(raw.tools), problems);
 
-	cached = { config: { features, keys, presets, review, master, watcher, tools }, problems };
+	// review / master / watcher 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
+	// 节内问题只在功能开启时进全局警告。
+	const section = <T>(
+		name: "review" | "master" | "watcher",
+		label: string,
+		parse: (record: Record<string, unknown>, problems: string[]) => T,
+		incomplete: (config: T) => string | undefined,
+	): { config: T; verdict: Section<T> } => {
+		const own: string[] = [];
+		if (raw[name] !== undefined && !isPlainObject(raw[name])) own.push(`${name} 必须是对象`);
+		const config = parse(asRecord(raw[name]), own);
+		if (features[name] !== false) problems.push(...own);
+		const reasons = [...blocking, ...own];
+		const missing = reasons.length ? undefined : incomplete(config);
+		if (missing) reasons.push(missing);
+		return { config, verdict: reasons.length ? { error: `${label}配置有问题，已停止：${reasons.join("；")}` } : { config } };
+	};
+	const review = section("review", "fire-review ", parseReviewConfig, (config) =>
+		config.advisor.model && config.reviewers.length ? undefined : "请显式完整配置 review");
+	const master = section("master", "Master ", parseMasterConfig, (config) =>
+		config.roles.length ? undefined : "请在 master.roles 至少配置一个角色");
+	const watcher = section("watcher", "观察员", parseWatcherConfig, () => undefined);
+
+	cached = {
+		config: { features, keys, presets, review: review.config, master: master.config, watcher: watcher.config, tools },
+		problems,
+		review: review.verdict,
+		master: master.verdict,
+		watcher: watcher.verdict,
+		featuresBroken,
+	};
 	return cached;
 }
 

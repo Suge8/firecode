@@ -119,12 +119,12 @@ export function registerMaster(
 		return;
 	}
 	let runtime: MasterRuntime | undefined;
-	const loaded = loadMasterConfiguration();
+	const loaded = loadConfig().master;
 	const prompts = loadMasterPrompts();
 	const startupError = "error" in loaded ? loaded.error : "error" in prompts ? prompts.error : undefined;
-	const roster = "error" in loaded ? [] : loaded.roles;
-	const exclusions = "error" in loaded ? [] : loaded.workerExcludeExtensions;
-	const autoActivate = "error" in loaded ? false : loaded.autoActivate;
+	const roster = "error" in loaded ? [] : loaded.config.roles;
+	const exclusions = "error" in loaded ? [] : loaded.config.workerExcludeExtensions;
+	const autoActivate = "error" in loaded ? false : loaded.config.autoActivate;
 	const requirePrompts = () => {
 		if ("error" in prompts) throw new Error(prompts.error);
 		return prompts;
@@ -1010,9 +1010,7 @@ async function resolveConfiguredModel(id: string): Promise<Model<any>> {
 function reviewGateError(): string | undefined {
 	const loaded = loadConfig();
 	if (loaded.config.features.review === false) return "fire-review 已关闭，不能挂审查义务或发起审查";
-	const problems = loaded.problems.filter((problem) =>
-		problem.startsWith("review") || problem.startsWith("未知字段 review.") || problem.startsWith("config.jsonc"));
-	return problems.length ? `fire-review 配置有问题，已停止：${problems.join("；")}` : undefined;
+	return "error" in loaded.review ? loaded.review.error : undefined;
 }
 
 function loadMasterPrompts() {
@@ -1024,19 +1022,6 @@ function loadMasterPrompts() {
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
-}
-
-function loadMasterConfiguration() {
-	let loaded: ReturnType<typeof loadConfig>;
-	try {
-		loaded = loadConfig();
-	} catch (error) {
-		return { error: `Master 配置读取失败：${error instanceof Error ? error.message : String(error)}` };
-	}
-	const problems = loaded.problems.filter((problem) => problem.startsWith("master") || problem.startsWith("未知字段 master.") || problem.startsWith("未知角色 master.") || problem.startsWith("config.jsonc") || problem.startsWith("features"));
-	if (problems.length) return { error: `Master 配置有问题，已停止：${problems.join("；")}` };
-	if (!loaded.config.master.roles.length) return { error: "Master 配置有问题，已停止：请在 master.roles 至少配置一个角色" };
-	return loaded.config.master;
 }
 
 /** 宿主已按 schema 枚举校验过 role，这里只查表。 */

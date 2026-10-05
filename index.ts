@@ -32,7 +32,7 @@ const REGISTRARS: Record<Exclude<Feature, "review" | "master" | "watcher" | "sta
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
 
 export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
-	const { config, problems } = loadConfig();
+	const { config, problems, featuresBroken } = loadConfig();
 	const subsession = role !== "main";
 	const reviewEnabled = config.features.review !== false;
 	for (const [feature, register] of Object.entries(REGISTRARS)) {
@@ -47,7 +47,7 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	registerHerdrDisplay(pi, subsession);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, reviewEnabled, problems.includes("features 必须是对象"));
+	registerReview(pi, reviewEnabled, featuresBroken);
 
 	if (problems.length === 0) return;
 	pi.on("session_start", (_event, ctx) => {

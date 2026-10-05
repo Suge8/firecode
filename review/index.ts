@@ -19,7 +19,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type Language, type ReviewConfig } from "../config.js";
+import { loadConfig, type Language, type ReviewConfig, type Section } from "../config.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
@@ -238,33 +238,9 @@ function notifyEffectFailure(rt: ReviewRuntime, error: unknown) {
 	);
 }
 
-/**
- * 读 review 配置；存在配置问题就不交出可用配置。
- * 命令与恢复两个入口共用：任何一个静默回退默认模型都会花真钱跑错模型。
- */
-function loadReviewConfig(): { config: ReviewConfig } | { error: string } {
-	let loaded: ReturnType<typeof loadConfig>;
-	try {
-		loaded = loadConfig();
-	} catch (error) {
-		return {
-			error: `fire-review 配置读取失败：${error instanceof Error ? error.message : String(error)}`,
-		};
-	}
-	// 三类都必须阻断：文件整体解析不了、review 节自身有错、
-	// 以及 features.review 开关类型错（字符串 "false" 会因 `!== false` 静默启用付费审查）。
-	const problems = loaded.problems.filter(
-		(problem) =>
-			problem.startsWith("review") ||
-			problem.startsWith("未知字段 review.") ||
-			problem.startsWith("config.jsonc") ||
-			problem.startsWith("features"),
-	);
-	if (problems.length > 0)
-		return { error: `fire-review 配置有问题，已停止：${problems.join("；")}` };
-	if (!loaded.config.review.advisor.model || loaded.config.review.reviewers.length === 0)
-		return { error: "fire-review 配置有问题，已停止：请显式完整配置 review" };
-	return { config: loaded.config.review };
+/** 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。 */
+function loadReviewConfig(): Section<ReviewConfig> {
+	return loadConfig().review;
 }
 
 function limitsOf(config: ReviewConfig): ReviewLimits {
