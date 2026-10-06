@@ -3,17 +3,21 @@ import { basename, dirname } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
+	createCodemodeExtension,
 	DefaultResourceLoader,
 	getAgentDir,
 	ModelRuntime,
 	SessionManager,
 	type AgentSession,
+	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { withSubsessionRole, type SubsessionRole } from "./role.js";
 import type { WorkerThinking } from "./state.js";
 
 export const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
+/** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
+const BUILTIN_CODEMODE: InlineExtension = { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true };
 
 export type SessionPersistence =
 	| { type: "memory" }
@@ -98,6 +102,7 @@ export class InProcessSessionPool {
 				cwd: options.cwd,
 				agentDir: this.environment.agentDir ?? getAgentDir(),
 				noContextFiles: !options.contextFiles,
+				extensionFactories: [BUILTIN_CODEMODE],
 				noExtensions: options.isolated,
 				noSkills: options.isolated,
 				noPromptTemplates: options.isolated,
