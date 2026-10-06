@@ -169,15 +169,15 @@ test("点击“+N 个在跑”展开全部、再点收起；点“✓ N 个已�
 	view.click(rowOf("收起"));
 	expect(names(view.text())).toEqual(["run-0", "run-1", "run-2", "· +3 个在跑", "✓ 2 个已完成"]);
 
-	view.click(rowOf("✓ 2 个已完成"));
+	view.click(rowOf("2 个已完成"));
 	const opened = view.text();
-	const doneRows = opened.slice(rowOf("✓ 2 个已完成") + 1);
+	const doneRows = opened.slice(rowOf("2 个已完成") + 1);
 	expect(doneRows.map((line) => line.match(/(done-[ab])/u)?.[1])).toEqual(["done-a", "done-b"]);
 	for (const line of doneRows) expect(line).toMatch(/30s $/u);
 	// 展开行是结果首句，不是千篇一律的“已返回”；没有结果文字时才退回“已返回”。
 	expect(doneRows[0]).toContain("刷新改为单飞。");
 	expect(doneRows[1]).toContain("已返回");
-	view.click(rowOf("✓ 2 个已完成"));
+	view.click(rowOf("2 个已完成"));
 	expect(names(view.text()).at(-1)).toBe("✓ 2 个已完成");
 	expect(view.text().some((line) => /^ {2}\S done-a /u.test(line))).toBe(false);
 
@@ -300,7 +300,8 @@ test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧�
 	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
 	const view = await list([...running, done("types"), done("pen"), { name: "writer", status: "idle" }, { name: "nap", status: "idle" }],
 		{ limit: 4, now: NOW, paint: tagged });
-	const raw = view.raw(100);
+	// 着色标签本身占宽度，放宽到不截断。
+	const raw = view.raw(300);
 	const fold = (count: string) => raw.find((line) => chipOf(line) === ` ${count} `)!;
 	expect(fold("+3 个在跑")).toMatch(/^ {2}<dim>·<\/dim> \{toolPendingBg\}/u);
 	expect(fold("+3 个在跑")).toContain("<dim>run-3 · run-4 · run-5</dim>");
@@ -312,7 +313,7 @@ test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧�
 		expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>|\{\/?\w+\}/gu, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
 	}
 	// 计数后的名字列对齐。
-	const text = view.text(100).map((line) => line.replace(/<\/?\w+>|\{\/?\w+\}/gu, ""));
+	const text = view.text(300).map((line) => line.replace(/<\/?\w+>|\{\/?\w+\}/gu, ""));
 	const column = (needle: string) => {
 		const line = text.find((entry) => entry.includes(needle))!;
 		return Bun.stringWidth(line.slice(0, line.indexOf(needle)));
@@ -336,8 +337,8 @@ test("胶囊底色用背景关闭序列收尾、不带全量重置：任意宽�
 
 test("折叠行名字按宽度少列，不在名字中间截断；展开后收起行同样做成胶囊，已展开的分组不再预览名字", async () => {
 	const running = Array.from({ length: 8 }, (_, index) => ({ name: `worker-${index}`, output: NOW - 1_000 }));
-	const view = await list([...running, done("types")], { limit: 4, now: NOW, paint: tagged });
-	const plain = (width: number) => view.text(width).map((entry) => entry.replace(/<\/?\w+>|\{\/?\w+\}/gu, ""));
+	const view = await list([...running, done("types")], { limit: 4, now: NOW });
+	const plain = (width: number) => view.text(width);
 	const line = plain(40).find((entry) => entry.includes("+5 个在跑"))!;
 	const listed = line.slice(line.indexOf("worker-")).split(" · ");
 	expect(listed.length).toBeGreaterThan(0);
@@ -346,7 +347,9 @@ test("折叠行名字按宽度少列，不在名字中间截断；展开后收�
 	expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
 
 	view.click(plain(40).indexOf(line));
-	expect(view.raw(100).some((entry) => chipOf(entry) === " 收起 ")).toBe(true);
+	const painted = await list([...running, done("types")], { limit: 4, now: NOW, paint: tagged });
+	painted.click(painted.text(300).findIndex((entry) => entry.includes("+5 个在跑")), 300);
+	expect(painted.raw(300).some((entry) => chipOf(entry) === " 收起 ")).toBe(true);
 	view.click(plain(100).findIndex((entry) => entry.includes("1 个已完成")));
 	const header = plain(100).find((entry) => entry.includes("1 个已完成"))!;
 	expect(header).not.toContain("types");
