@@ -1447,7 +1447,7 @@ test("中断事件带耗时", async () => {
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S +1 个空闲/u)]);
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
+	expect(elapsedTail(content)).toBe("耗时：本次运行 30s · 当前任务 30s");
 });
 
 test("审查终态事件带审查自身耗时", async () => {
@@ -1466,7 +1466,7 @@ test("审查终态事件带审查自身耗时", async () => {
 	await delivered;
 	const content = harness.messages.at(-1).message.content as string;
 	expect(content).toContain("审查通过");
-	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
+	expect(elapsedTail(content)).toMatch(/^耗时：本次运行 30s · 当前任务 /);
 });
 
 test("crash 恢复只重投 pending 减 ack 的差集", async () => {
