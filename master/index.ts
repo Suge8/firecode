@@ -4,7 +4,7 @@
  */
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload } from "../busy.js";
+import { HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload, watchBusy } from "../busy.js";
 import { loadConfig, type MasterRole } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS } from "./actions.js";
@@ -58,6 +58,9 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		if (wasBusy !== count > 0)
 			pi.events.emit(HERDR_WORKING_CHANNEL, { active: count > 0, label: HERDR_WORKING_LABEL } satisfies HerdrWorkingPayload);
 	};
+	// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
+	let sessionSince: number | undefined;
+	watchBusy(pi, { onChange: (view) => { sessionSince = view.since; } });
 	const setup: MasterSetup = {
 		pi,
 		pool: dependencies.pool ?? new InProcessSessionPool(),
@@ -68,6 +71,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
 		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
 		publishInFlight,
+		sessionSince: () => sessionSince,
 	};
 	let runtime: MasterRuntime | undefined;
 	registerMasterEventRenderer(pi);

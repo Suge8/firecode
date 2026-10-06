@@ -27,6 +27,8 @@ export interface MasterSetup {
 	wakeQuietMs: number;
 	/** 在飞子代理数的唯一发布口（跨会话保持上次发布值以便配对）。 */
 	publishInFlight(count: number): void;
+	/** 本段会话进行中的起点（busy.ts 的 since，与上边框计时同一事实）；歇下时为 undefined。 */
+	sessionSince(): number | undefined;
 }
 
 export interface CurrentTool {
