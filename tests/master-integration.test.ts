@@ -1413,21 +1413,16 @@ const elapsedTail = (content: string) => content.split("\n").at(-2);
 /** 信封正文第一行：给人看的“<名字> <结果词>”标题。 */
 const titleOf = (content: string) => content.split("\n")[1];
 
-test("落定事件末尾只带 Worker 本次运行耗时，对人没有意义的“当前任务”不再出现", async () => {
+test("事件末尾给指挥官时间信号：落定事件带 Worker 本次运行与当前任务（会话进行中起点，与上边框同一事实）", async () => {
 	const harness = await setup();
-	const settle = async (prompt: string, action: "start" | "send", settleAt: number) => {
-		faux.setResponses([() => { at(settleAt); return fauxAssistantMessage("完成"); }]);
-		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-		await harness.execute({ action, worker: "clock", prompt, ...(action === "start" ? { role: "工程师" } : {}) });
-		await delivered;
-		return harness.messages.at(-1).message.content as string;
-	};
 	at(0);
-	await harness.emit("input", { source: "interactive" });
+	await harness.emit("agent_start", {});
 	at(20);
-	expect(elapsedTail(await settle("开始", "start", 85))).toBe("耗时：本次运行 1m5s");
-	at(110);
-	expect(elapsedTail(await settle("续", "send", 130))).toBe("耗时：本次运行 20s");
+	faux.setResponses([() => { at(85); return fauxAssistantMessage("完成"); }]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "clock", prompt: "开始", role: "工程师" });
+	await delivered;
+	expect(elapsedTail(harness.messages.at(-1).message.content as string)).toBe("耗时：本次运行 1m5s · 当前任务 1m25s");
 });
 
 test("中断事件带耗时", async () => {
