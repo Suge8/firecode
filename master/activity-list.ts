@@ -174,16 +174,19 @@ function renderLines(lines: Line[], width: number, theme: Theme): string[] {
 	const labelWidth = Math.max(0, ...lines.map((line) => ("label" in line ? visibleWidth(line.label) : 0)));
 	return lines.map((line) => {
 		if ("row" in line) return renderActivityRow(line.row, width, nameWidth, theme, showRole);
-		const head = `  ${line.mark} ${theme.fg("muted", underline(line.label))}`;
-		const room = width - visibleWidth(head) - (labelWidth - visibleWidth(line.label)) - 1;
-		const preview = fitNames(line.names, room);
-		const text = preview ? `${head}${" ".repeat(labelWidth - visibleWidth(line.label) + 1)}${theme.fg("dim", preview)}` : head;
+		const head = `  ${line.mark} ${chip(line.label, theme)}`;
+		const pad = labelWidth - visibleWidth(line.label) + 1;
+		const preview = fitNames(line.names, width - visibleWidth(head) - pad);
+		const text = preview ? `${head}${" ".repeat(pad)}${theme.fg("dim", preview)}` : head;
 		return clip(text, width, "end", "");
 	});
 }
 
-/** 点线下划线（终端不支持时退为普通下划线或不显示）：折叠行计数的可点提示。 */
-const underline = (text: string) => `\x1b[4:4m${text}\x1b[24m`;
+/**
+ * 折叠行计数的可点提示：两侧各一格空白、铺工具行同族的中性暗底。theme.bg 以背景关闭（49）收尾、不带全量重置，
+ * clip 在胶囊中间截断也保留这个关闭序列，底色不会被掐断或漏到后面。不用下划线：终端按字形画，数字粗、中文细。
+ */
+const chip = (label: string, theme: Theme) => theme.bg("toolPendingBg", theme.fg("muted", ` ${label} `));
 
 /** 能放下几个名字列几个，只列整名，不在名字中间截断。 */
 function fitNames(names: readonly string[], room: number): string {

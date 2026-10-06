@@ -1,14 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
-/** node 的 stripVTControlCharacters 不认冒号子参数 SGR（如点线下划线 4:4），先剥掉。 */
-const SUBPARAM_SGR = /\x1b\[[0-9;]*:[0-9:;]*m/gu;
 
 afterEach(cleanupFirecodeModules);
 
-const theme = { fg: (_color: string, text: string) => text };
+const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 /** 着色主题：把语义色写成可见标签，断言“黄色”“红色”这类语义而不是 ANSI。 */
-const tagged = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
+const tagged = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bg: (color: string, text: string) => `{${color}}${text}{/${color}}` };
 const NOW = 1_000_000_000;
 const MINUTE = 60_000;
 
@@ -62,7 +60,7 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 		component,
 		opened,
 		get renders() { return renders; },
-		text: (width = 72): string[] => at(() => component.render(width)).map((line: string) => stripVTControlCharacters(line.replace(SUBPARAM_SGR, ""))),
+		text: (width = 72): string[] => at(() => component.render(width)).map((line: string) => stripVTControlCharacters(line)),
 		raw: (width = 72): string[] => at(() => component.render(width)),
 		click: (y: number, width = 72) => at(() => component.handleMouse({
 			type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width, height: 20, shift: false, alt: false, ctrl: false,
@@ -72,7 +70,7 @@ async function list(specs: Spec[] | (() => Spec[]), options: { limit?: number; p
 
 /** 子代理行取名字；折叠行取“标记 计数”（后面的名字预览不算）。 */
 const names = (lines: string[]) => lines.map((line) => line.match(/^ {2}\S ([a-z][a-z0-9-]*) /u)?.[1]
-	?? line.match(/^ {2}(\S (?:\+\d+ 个在跑|\d+ 个已完成|\d+ 个空闲|收起))/u)?.[1] ?? line.trim());
+	?? line.match(/^ {2}(\S) +(\+\d+ 个在跑|\d+ 个已完成|\d+ 个空闲|收起)/u)?.slice(1).join(" ") ?? line.trim());
 const done = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
 	({ name, status: "idle", started: NOW - agoMs - 30_000, settled: [NOW - agoMs, "done", note] });
 const interrupted = (name: string, agoMs = 2 * MINUTE): Spec =>
@@ -171,15 +169,15 @@ test("点击“+N 个在跑”展开全部、再点收起；点“✓ N 个已�
 	view.click(rowOf("收起"));
 	expect(names(view.text())).toEqual(["run-0", "run-1", "run-2", "· +3 个在跑", "✓ 2 个已完成"]);
 
-	view.click(rowOf("✓ 2 个已完成"));
+	view.click(rowOf("2 个已完成"));
 	const opened = view.text();
-	const doneRows = opened.slice(rowOf("✓ 2 个已完成") + 1);
+	const doneRows = opened.slice(rowOf("2 个已完成") + 1);
 	expect(doneRows.map((line) => line.match(/(done-[ab])/u)?.[1])).toEqual(["done-a", "done-b"]);
 	for (const line of doneRows) expect(line).toMatch(/30s $/u);
 	// 展开行是结果首句，不是千篇一律的“已返回”；没有结果文字时才退回“已返回”。
 	expect(doneRows[0]).toContain("刷新改为单飞。");
 	expect(doneRows[1]).toContain("已返回");
-	view.click(rowOf("✓ 2 个已完成"));
+	view.click(rowOf("2 个已完成"));
 	expect(names(view.text()).at(-1)).toBe("✓ 2 个已完成");
 	expect(view.text().some((line) => /^ {2}\S done-a /u.test(line))).toBe(false);
 
@@ -196,7 +194,7 @@ test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样
 		{ name: "p3", status: "idle", launch: 3 },
 	], { now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
-	expect(view.text()[1]).toMatch(/^ {2}\S 3 个空闲 +p1 · p3 · p6$/u);
+	expect(view.text()[1]).toMatch(/^ {2}\S {2}3 个空闲 +p1 · p3 · p6$/u);
 	expect(view.click(rowOf("3 个空闲"))).toMatchObject({ handled: true });
 	const rows = view.text().slice(rowOf("3 个空闲") + 1);
 	expect(rows.map((line) => line.match(/ (p\d) /u)?.[1])).toEqual(["p1", "p3", "p6"]);
@@ -294,22 +292,28 @@ test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两
 	expect(narrow).toMatch(/^ {2}\S slow\s+5(?: 分钟|m )无输出\s*$/u);
 });
 
-const UNDERLINE = (text: string) => `\x1b[4:4m${text}\x1b[24m`;
+/** 胶囊：计数两侧各一格空白，铺工具行同族的中性暗底。 */
+const CHIP = (text: string) => `{toolPendingBg}${text}{/toolPendingBg}`;
+const chipOf = (line: string) => line.match(/\{toolPendingBg\}(.*?)\{\/toolPendingBg\}/u)?.[1].replace(/<\/?\w+>/gu, "");
 
-test("折叠行的可点提示：计数加点线下划线，后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有 … 与箭头", async () => {
+test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧各一格空白），后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有下划线、… 与箭头", async () => {
 	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
 	const view = await list([...running, done("types"), done("pen"), { name: "writer", status: "idle" }, { name: "nap", status: "idle" }],
 		{ limit: 4, now: NOW, paint: tagged });
-	const raw = view.raw(100);
-	const fold = (count: string) => raw.find((line) => line.includes(UNDERLINE(count)))!;
-	expect(fold("+3 个在跑")).toMatch(/^ {2}<dim>·<\/dim> /u);
+	// 着色标签本身占宽度，放宽到不截断。
+	const raw = view.raw(300);
+	const fold = (count: string) => raw.find((line) => chipOf(line) === ` ${count} `)!;
+	expect(fold("+3 个在跑")).toMatch(/^ {2}<dim>·<\/dim> \{toolPendingBg\}/u);
 	expect(fold("+3 个在跑")).toContain("<dim>run-3 · run-4 · run-5</dim>");
 	expect(fold("2 个已完成")).toContain("<dim>types · pen</dim>");
-	expect(fold("2 个空闲")).toMatch(/^ {2}<dim>·<\/dim> /u);
+	expect(fold("2 个空闲")).toMatch(/^ {2}<dim>·<\/dim> \{toolPendingBg\}/u);
 	expect(fold("2 个空闲")).toContain("<dim>writer · nap</dim>");
-	for (const count of ["+3 个在跑", "2 个已完成", "2 个空闲"]) expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>/gu, "").replace(SUBPARAM_SGR, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
+	for (const count of ["+3 个在跑", "2 个已完成", "2 个空闲"]) {
+		expect(fold(count)).not.toMatch(/\x1b\[4/u);
+		expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>|\{\/?\w+\}/gu, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
+	}
 	// 计数后的名字列对齐。
-	const text = view.text(100).map((line) => line.replace(/<\/?\w+>/gu, ""));
+	const text = view.text(300).map((line) => line.replace(/<\/?\w+>|\{\/?\w+\}/gu, ""));
 	const column = (needle: string) => {
 		const line = text.find((entry) => entry.includes(needle))!;
 		return Bun.stringWidth(line.slice(0, line.indexOf(needle)));
@@ -318,20 +322,36 @@ test("折叠行的可点提示：计数加点线下划线，后面暗色列出�
 	expect(column("types")).toBe(column("writer"));
 });
 
-test("折叠行名字按宽度少列，不在名字中间截断；展开后收起行同样加点线下划线，已展开的分组不再预览名字", async () => {
+test("胶囊底色用背景关闭序列收尾、不带全量重置：任意宽度截断都不掐断底色，也不漏到后面的名字", async () => {
+	const ansi = { fg: (_color: string, text: string) => `\x1b[90m${text}\x1b[39m`, bg: (_color: string, text: string) => `\x1b[48;5;236m${text}\x1b[49m` };
+	const view = await list([{ name: "writer", status: "idle" }, { name: "nap", status: "idle" }], { now: NOW, paint: ansi });
+	for (const width of [4, 6, 9, 12, 40]) {
+		const [line] = view.raw(width);
+		expect(line).not.toContain("\x1b[0m");
+		const open = line.indexOf("\x1b[48;5;236m");
+		expect(open).toBeGreaterThanOrEqual(0);
+		expect(line.indexOf("\x1b[49m", open)).toBeGreaterThan(open);
+		expect(line.slice(line.indexOf("\x1b[49m", open))).not.toContain("\x1b[48");
+	}
+});
+
+test("折叠行名字按宽度少列，不在名字中间截断；展开后收起行同样做成胶囊，已展开的分组不再预览名字", async () => {
 	const running = Array.from({ length: 8 }, (_, index) => ({ name: `worker-${index}`, output: NOW - 1_000 }));
 	const view = await list([...running, done("types")], { limit: 4, now: NOW });
-	const line = view.text(40).find((entry) => entry.includes("+5 个在跑"))!;
+	const plain = (width: number) => view.text(width);
+	const line = plain(40).find((entry) => entry.includes("+5 个在跑"))!;
 	const listed = line.slice(line.indexOf("worker-")).split(" · ");
 	expect(listed.length).toBeGreaterThan(0);
 	expect(listed.length).toBeLessThan(5);
 	for (const name of listed) expect(name).toMatch(/^worker-[3-7]$/u);
 	expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
 
-	view.click(view.text(40).indexOf(line));
-	expect(view.raw(100).some((entry) => entry.includes(UNDERLINE("收起")))).toBe(true);
-	view.click(view.text(100).findIndex((entry) => entry.includes("1 个已完成")));
-	const header = view.text(100).find((entry) => entry.includes("1 个已完成"))!;
+	view.click(plain(40).indexOf(line));
+	const painted = await list([...running, done("types")], { limit: 4, now: NOW, paint: tagged });
+	painted.click(painted.text(300).findIndex((entry) => entry.includes("+5 个在跑")), 300);
+	expect(painted.raw(300).some((entry) => chipOf(entry) === " 收起 ")).toBe(true);
+	view.click(plain(100).findIndex((entry) => entry.includes("1 个已完成")));
+	const header = plain(100).find((entry) => entry.includes("1 个已完成"))!;
 	expect(header).not.toContain("types");
-	expect(view.text(100).some((entry) => /^ {2}\S types /u.test(entry))).toBe(true);
+	expect(plain(100).some((entry) => /^ {2}\S types /u.test(entry))).toBe(true);
 });
