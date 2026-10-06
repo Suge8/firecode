@@ -74,6 +74,10 @@ export const masterEvent = {
 };
 
 /** 落定类正文末尾追加 Worker 本次运行耗时（子代理会话写下的轮记录给出）；没有记录或非落定事件不追加，不用别处的计时冒充。 */
-export function withElapsed(event: MasterEvent, { run }: { run?: number }): string {
-	return run === undefined || !event.settled ? event.body : `${event.body}\n耗时：本次运行 ${formatDuration(run)}`;
+export function withElapsed(event: MasterEvent, { run, task }: { run?: number; task?: number }): string {
+	const parts = [
+		...(run === undefined || !event.settled ? [] : [`本次运行 ${formatDuration(run)}`]),
+		...(task === undefined ? [] : [`当前任务 ${formatDuration(task)}`]),
+	];
+	return parts.length ? `${event.body}\n耗时：${parts.join(" · ")}` : event.body;
 }

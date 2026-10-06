@@ -160,7 +160,11 @@ export class Outbox {
 			const round = roundFromEntry(entry);
 			return round && round.at >= since ? [round] : [];
 		});
-		return withElapsed(produced, rounds.length ? { run: rounds.reduce((total, round) => total + round.elapsed, 0) } : {});
+		const sessionSince = this.active.setup.sessionSince();
+		return withElapsed(produced, {
+			...(rounds.length ? { run: rounds.reduce((total, round) => total + round.elapsed, 0) } : {}),
+			...(sessionSince === undefined ? {} : { task: Date.now() - sessionSince }),
+		});
 	}
 }
 
