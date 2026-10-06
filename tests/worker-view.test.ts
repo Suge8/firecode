@@ -116,6 +116,9 @@ async function open(options: {
 	const type = (text: string) => { for (const char of text) component.handleInput(char); };
 	return {
 		component, lines, type, sent, sessionListeners, removedListeners,
+		/** 输入区上横线（状态 · 名字）与下横线（位置 · 模型与提示）。 */
+		top: (width = 100) => lines(width).at(-3)!,
+		bottom: (width = 100) => lines(width).at(-1)!,
 		remove(name: string) {
 			options.workers.splice(options.workers.findIndex((entry) => entry.name === name), 1);
 			for (const listener of [...removedListeners]) listener(name);
@@ -128,7 +131,7 @@ async function open(options: {
 	};
 }
 
-test("打开即一次构建：按 Worker 会话自己的轮记录分轮、摘要行显示记录里的耗时与均速；顶行写名字、角色、模型与状态", async () => {
+test("打开即一次构建：按 Worker 会话自己的轮记录分轮、摘要行显示记录里的耗时与均速；输入区上横线写状态与名字 · 角色，下横线写模型", async () => {
 	const branch = [
 		user("用 bash 跑测试"),
 		reply("先读一下。", "toolUse", [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "/p/a.ts" } }]),
@@ -141,7 +144,8 @@ test("打开即一次构建：按 Worker 会话自己的轮记录分轮、摘要
 	];
 	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession(branch) } });
 	const lines = view.lines();
-	expect(lines[0]).toMatch(/^ tick · 哨兵 · openai-codex\/gpt-6-luna\/low · 空闲/u);
+	expect(view.top()).toMatch(/^─ 空闲 ─+ tick · 哨兵 ─$/u);
+	expect(view.bottom()).toContain("openai-codex/gpt-6-luna/low");
 	expect(lines.filter((line) => /^[✓✗]/u.test(line))).toEqual(["✓ 5.0s · 40 tps", "✓ 2.0s"]);
 	const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
 	expect(at("用 bash 跑测试")).toBeLessThan(at("✓ 5.0s"));
@@ -177,7 +181,8 @@ test("排队中的补话在输入框上方显示一行“排队中：原话”�
 	session.emit({ type: "queue_update", steering: session.steering, followUp: [] });
 	const lines = view.lines();
 	const input = lines.findIndex((line) => line.startsWith("›"));
-	expect(lines[input - 1]).toBe(" 排队中：补一句：顺便报时间");
+	expect(lines[input - 1]).toMatch(/^─/u);
+	expect(lines[input - 2]).toBe(" 排队中：补一句：顺便报时间");
 	session.steering = [];
 	session.emit({ type: "queue_update", steering: [], followUp: [] });
 	expect(view.lines().some((line) => line.includes("排队中"))).toBe(false);
@@ -187,19 +192,19 @@ test("Tab / Shift+Tab 按启动序换子代理，位置 n/N 不随状态跳；�
 	const workers = [worker("a"), worker("b", "working"), worker("c")];
 	const sessions = Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user(`派给 ${entry.name}`)])]));
 	const view = await open({ workers, sessions });
-	expect(view.lines().at(-1)).toMatch(/^ 1\/3 · /u);
+	expect(view.bottom()).toMatch(/^─ 1\/3 ─/u);
 	view.key(TAB);
-	expect(view.lines()[0]).toMatch(/^ b ·/u);
-	expect(view.lines().at(-1)).toMatch(/^ 2\/3 · /u);
+	expect(view.top()).toMatch(/ b · 哨兵 ─$/u);
+	expect(view.bottom()).toMatch(/^─ 2\/3 ─/u);
 	workers[1].status = "idle";
-	expect(view.lines().at(-1)).toMatch(/^ 2\/3 · /u);
+	expect(view.bottom()).toMatch(/^─ 2\/3 ─/u);
 	view.key(SHIFT_TAB);
 	view.key(SHIFT_TAB);
-	expect(view.lines()[0]).toMatch(/^ c ·/u);
+	expect(view.top()).toMatch(/ c · 哨兵 ─$/u);
 	view.type("ab");
 	view.key(LEFT);
 	view.type("X");
-	expect(view.lines()[0]).toMatch(/^ c ·/u);
+	expect(view.top()).toMatch(/ c · 哨兵 ─$/u);
 	expect(view.lines().find((line) => line.startsWith("›"))).toBe("› aXb");
 });
 
@@ -275,7 +280,7 @@ function longBranch() {
 	}
 	return branch;
 }
-const bodyRange = (lines: string[]) => lines.slice(1, lines.findIndex((line) => line.startsWith("›")));
+const bodyRange = (lines: string[]) => lines.slice(0, lines.findIndex((line) => line.startsWith("›")) - 1);
 
 test("点击后被点的行留在视口内；原本跟随末尾的，之后新到的输出仍看得到（锚定只作用于这一次布局变化）", async () => {
 	const session = hotSession(longBranch(), true);
@@ -318,20 +323,22 @@ test("宿主的文字选择不被浮层吃掉：按下、拖动与正文点击�
 	expect(view.click(view.lines().findIndex((line) => line.startsWith("✓")))).toMatchObject({ handled: true });
 });
 
-test("40 列：顶行保住状态字形、状态词与耗时，模型、角色、名字先让；底行保住位置 n/N 与“esc 返回”", async () => {
+test("40 列：上横线保住状态字形、状态词与耗时，名字 · 角色先让；下横线保住位置 n/N 与“esc 返回”，模型与其余提示先让", async () => {
 	const workers = [worker("fix-auth-refresh", "working"), worker("b"), worker("c")];
 	const now = Date.now();
 	const view = await open({
 		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
 		facts: { started: { "fix-auth-refresh": now - 65_000 } },
 	});
-	const [top] = view.lines(40);
-	expect(top).toMatch(/[⠀-⣿] 运行中 1m5s$/u);
-	expect(top).not.toContain("openai-codex");
-	const bottom = view.lines(40).at(-1)!;
-	expect(bottom).toMatch(/^ 1\/3 · /u);
-	expect(bottom).toContain("esc 返回");
+	expect(view.top(40)).toMatch(/^─ [⠀-⣿] 运行中 1m5s /u);
+	expect(view.bottom(40)).toMatch(/^─ 1\/3 ─/u);
+	expect(view.bottom(40)).toMatch(/esc 返回 ─$/u);
 	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripVTControlCharacters(line))).toBeLessThanOrEqual(width);
+	// 横线与主会话输入框同一边框布局：两条横线都铺满宽度，两端是横线。
+	for (const width of [40, 72, 110]) for (const line of [view.top(width), view.bottom(width)]) {
+		expect(Bun.stringWidth(line)).toBe(width);
+		expect(line).toMatch(/^─ .* ─$/u);
+	}
 });
 
 test("顶行的状态与耗时与活动列表读同一份事实：已完成写完成、失败写失败，耗时是本次运行", async () => {
@@ -344,9 +351,9 @@ test("顶行的状态与耗时与活动列表读同一份事实：已完成写�
 			settled: { "done-one": { at: now - 16_000, kind: "done", note: "好了" }, broke: { at: now - 27_000, kind: "failed", note: "坏了" } },
 		},
 	});
-	expect(view.lines()[0]).toMatch(/✓ 完成 14s$/u);
+	expect(view.top()).toMatch(/^─ ✓ 完成 14s ─/u);
 	view.key(TAB);
-	expect(view.lines()[0]).toMatch(/✗ 失败 3\.0s$/u);
+	expect(view.top()).toMatch(/^─ ✗ 失败 3\.0s ─/u);
 });
 
 test("正在看的子代理被移除：顶行写“已移除”，输入框不再收字也不发送，Tab 序列与 n/N 立即去掉它", async () => {
@@ -357,16 +364,16 @@ test("正在看的子代理被移除：顶行写“已移除”，输入框不�
 		send: async (name) => { sent.push(name); },
 	});
 	view.remove("b");
-	expect(view.lines()[0]).toMatch(/^ b · 已移除/u);
+	expect(view.top()).toMatch(/^─ 已移除 ─+ b ─$/u);
 	view.type("还想说");
 	view.key("\r");
 	await Bun.sleep(0);
 	expect(sent).toEqual([]);
 	expect(view.lines().find((line) => line.startsWith("›"))).not.toContain("还想说");
-	expect(view.lines().at(-1)).not.toMatch(/\d\/3/u);
+	expect(view.bottom()).not.toMatch(/\d\/3/u);
 	view.key(TAB);
-	expect(view.lines()[0]).toMatch(/^ c ·/u);
-	expect(view.lines().at(-1)).toMatch(/^ 2\/2 · /u);
+	expect(view.top()).toMatch(/ c · 哨兵 ─$/u);
+	expect(view.bottom()).toMatch(/^─ 2\/2 ─/u);
 });
 
 test("“已发出”只短暂替换按键提示：下一次按键或几秒后恢复提示", async () => {
@@ -402,4 +409,13 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 	view.key("\x1b");
 	const again = await open({ workers, sessions, drafts });
 	expect(again.lines().find((line) => line.startsWith("›"))).toBe("› 给 a 的草稿");
+});
+
+test("视图顶部不再有标题行：正文从第一行开始；“已发出”替换下横线右侧提示，位置 n/N 照留", async () => {
+	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单内容"), reply("好了"), round(1_000)]) } });
+	expect(view.lines()[0]).toContain("派单内容");
+	view.type("补一句");
+	view.key("\r");
+	await Bun.sleep(0);
+	expect(view.bottom()).toMatch(/^─ 1\/1 ─+ 已发出 ─$/u);
 });

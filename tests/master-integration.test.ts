@@ -14,6 +14,8 @@ import {
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
+/** node 的 stripVTControlCharacters 不认冒号子参数 SGR（如点线下划线 4:4），先剥掉。 */
+const SUBPARAM_SGR = /\x1b\[[0-9;]*:[0-9:;]*m/gu;
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
@@ -1895,7 +1897,7 @@ async function setup(activate = true, options: {
 		entries,
 		pool,
 		/** 输入框上方活动列表当前的纯文本行（与宿主一致：组件只建一次，点击状态保留）。 */
-		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line)) as string[] ?? [],
+		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line.replace(SUBPARAM_SGR, ""))) as string[] ?? [],
 		/** 点活动列表里含 label 的那一行。 */
 		clickActivity: (label: string) => {
 			const list = activityList();
