@@ -14,8 +14,6 @@ import {
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
-/** node 的 stripVTControlCharacters 不认冒号子参数 SGR（如点线下划线 4:4），先剥掉。 */
-const SUBPARAM_SGR = /\x1b\[[0-9;]*:[0-9:;]*m/gu;
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
@@ -1221,15 +1219,15 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 	await delivered;
 	expect(harness.activity()).toEqual([
 		expect.stringMatching(/^ {2}✗ broken /u),
-		expect.stringMatching(/^ {2}✓ 1 个已完成/u),
+		expect.stringMatching(/^ {2}✓ +1 个已完成/u),
 	]);
 
 	await harness.execute({ action: "ack", worker: "broken" });
 	await harness.execute({ action: "ack", worker: "fine" });
 	// 发落后的失败行离开置顶组，子代理仍在池里，合进“N 个空闲”。
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 1 个已完成/u), expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ +1 个已完成/u), expect.stringMatching(/^ {2}\S +1 个空闲/u)]);
 	await harness.execute({ action: "kill", worker: "fine" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S +1 个空闲/u)]);
 });
 
 test("活动列表：已完成展开显示结果首句，下一轮人类输入时自动收起；ctrl+o 不展开活动列表", async () => {
@@ -1241,7 +1239,7 @@ test("活动列表：已完成展开显示结果首句，下一轮人类输入�
 		await delivered;
 	}
 	harness.toolsExpanded = true;
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ 2 个已完成/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}✓ +2 个已完成/u)]);
 	harness.clickActivity("2 个已完成");
 	const opened = harness.activity();
 	expect(opened[1]).toMatch(/fix-auth .*刷新改为单飞。/u);
@@ -1453,7 +1451,7 @@ test("中断事件带耗时", async () => {
 	// 被中断不是失败：活动列表里不画 ✗，留在需要处理那一组直到 ack。
 	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}[^✗\s] clock .*被中断/u)]);
 	await harness.execute({ action: "ack", worker: "clock" });
-	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S 1 个空闲/u)]);
+	expect(harness.activity()).toEqual([expect.stringMatching(/^ {2}\S +1 个空闲/u)]);
 	expect(elapsedTail(content)).toBe("耗时：本次运行 30s");
 });
 
@@ -1897,7 +1895,7 @@ async function setup(activate = true, options: {
 		entries,
 		pool,
 		/** 输入框上方活动列表当前的纯文本行（与宿主一致：组件只建一次，点击状态保留）。 */
-		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line.replace(SUBPARAM_SGR, ""))) as string[] ?? [],
+		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line)) as string[] ?? [],
 		/** 点活动列表里含 label 的那一行。 */
 		clickActivity: (label: string) => {
 			const list = activityList();
