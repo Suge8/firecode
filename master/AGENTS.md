@@ -26,7 +26,7 @@ Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派
 
 热冷只属于运行时缓存：池不订阅会话事件自判空闲，只有 Master 在回合落定、中断落定、审查落定时 `markIdle` 才起释放计时，因此 reviewing 中的 Worker（审查期间它自己是闲的，修复回合结束也会落定）不会被释放；释放热会话后池通知持有方，Master 随即退订，不再持有已关闭的会话；到期释放先经该会话的 extensionRunner 发 `session_shutdown`（reason quit）让会话内扩展收口，再 dispose——与宿主替换会话的顺序一致，否则会话里跑着的 fire-review 会成为握着死 ctx 的孤儿。档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 在同步段内删档案与该名下的整条运行时事实（计时器、订阅、当前工具、落定结局一次清掉），再等待 session_shutdown 收口后释放热会话，永不删除 JSONL；start 失败同样只撤自己这一票的事实。异步回写只属于未关闭的当前 runtime；会话关闭先清空当前 runtime 并置 closed，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
 
-档案（v8）存在 Pi Agent 目录（`getAgentDir()`，含 `PI_CODING_AGENT_DIR` 覆写）的 `tmp/firecode-master-<主会话 id>.json`，事件的 pending/ack 存在主会话 JSONL：fork 出的会话带着 pending 却没有档案，重投时可能提到不在池里的 Worker——这是已知边缘，接受。
+档案存在 Pi Agent 目录（`getAgentDir()`，含 `PI_CODING_AGENT_DIR` 覆写）的 `tmp/firecode-master-<主会话 id>.json`，事件的 pending/ack 存在主会话 JSONL：fork 出的会话带着 pending 却没有档案，重投时可能提到不在池里的 Worker——这是已知边缘，接受。
 
 ## 工具契约
 
@@ -66,9 +66,9 @@ Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.
 
 ## 隔离与配置
 
-Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
+Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具；指挥官会话启用了 codemode 时再加 codemode（宿主只给 CLI 主会话注入内置扩展，`spawn.ts` 为子会话自带 builtin codemode，on/only 由同一份 settings 决定；脚本里的嵌套调用照样经过 tool_call 钩子，守卫不失效）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
-Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取 v8 持久化状态，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
+Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取持久化档案，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
 
 ## 全过程视图
 

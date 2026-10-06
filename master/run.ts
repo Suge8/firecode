@@ -13,6 +13,8 @@ import type { MasterRuntime, WorkerLive } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
 export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
+/** Worker 跟随指挥官是否启用 codemode；on/only 由 Worker 会话读到的同一份 settings 决定，不另传。 */
+const CODEMODE_TOOL = "codemode";
 const FAULT_SUMMARY_WIDTH = 80;
 /** 算作“有输出”的子会话事件：模型 token 流与工具执行；活动列表据此判卡住。 */
 const OUTPUT_EVENTS = new Set(["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]);
@@ -33,7 +35,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		role: "worker",
 		model,
 		thinking: worker.thinking,
-		tools: WORKER_TOOLS,
+		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt(), worker.name) },
 		contextFiles: true,
