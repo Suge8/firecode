@@ -12,7 +12,7 @@
 | `run.ts` | 回合编排：打开会话、跑回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视、中断续跑提醒 |
 | `actions.ts` | 七个命令动作的处理函数，表驱动分发 |
 | `list-view.ts` | 工具行、池快照展开与 status 文本，纯投影 |
-| `guard.ts` | Worker 会话里唯一注册的 edit/write checkout 守卫 |
+| `guard.ts` | Worker 会话里唯一注册的 edit/write 守卫：只放行当前 checkout 与系统临时目录 |
 | `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
 | `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
 | `worker-view.ts` | 子代理全过程视图：点活动列表一行打开全屏浮层，用过程组投影看完整记录并可补话 |
@@ -66,7 +66,7 @@ Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.
 
 ## 隔离与配置
 
-Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具；指挥官会话启用了 codemode 时再加 codemode（宿主只给 CLI 主会话注入内置扩展，`spawn.ts` 为子会话自带 builtin codemode，on/only 由同一份 settings 决定；脚本里的嵌套调用照样经过 tool_call 钩子，守卫不失效）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
+Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具；指挥官会话启用了 codemode 时再加 codemode（宿主只给 CLI 主会话注入内置扩展，`spawn.ts` 为子会话自带 builtin codemode，on/only 由同一份 settings 决定；脚本里的嵌套调用照样经过 tool_call 钩子，守卫不失效）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫检查真实路径必须位于当前 checkout 或系统临时目录（交付物写在临时目录是正当用途）；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
 Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取持久化档案，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
 
