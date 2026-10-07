@@ -19,6 +19,7 @@ import { registerMaster } from "./master/index.js";
 import { currentSubsessionRole } from "./master/role.js";
 import { registerWatcher } from "./watcher/index.js";
 import { registerRoundRecorder } from "./round-recorder.js";
+import { registerTruncatedWriteGuard } from "./truncated-write.js";
 
 type SimpleFeature = Exclude<Feature, "review" | "master" | "watcher" | "statusbar" | "bark">;
 
@@ -43,6 +44,7 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	const reviewEnabled = config.features.review !== false;
 	// 轮记录不属于任何可关的功能：每个会话（含子代理）都写，界面、Master 耗时与子代理视图都只读它。
 	registerRoundRecorder(pi);
+	registerTruncatedWriteGuard(pi);
 	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);
