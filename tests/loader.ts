@@ -24,7 +24,7 @@ function piPackagesDirectory(): string {
 	throw new Error("Cannot locate Pi sources; set PI_PACKAGES_DIR to the pi-mono packages directory");
 }
 
-const PI_PACKAGES = piPackagesDirectory();
+export const PI_PACKAGES = piPackagesDirectory();
 export const PI_CODING_AGENT_URL = pathToFileURL(join(PI_PACKAGES, "coding-agent/src/index.ts")).href;
 const PI_CODING_AGENT = PI_CODING_AGENT_URL;
 export const PI_AI_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
