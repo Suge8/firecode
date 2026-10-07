@@ -208,6 +208,10 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 		},
 	});
 	let branch: () => readonly BranchEntry[] = () => [];
+	/**
+	 * 落定态只在三个时点算一次并存下，绘制只读（读分支是整条回溯，不能放进每次按键重绘）：轮记录写入后的发布、
+	 * session_start（重开会话直接显示上一轮，不播落定过渡）、session_tree。不取歇下边沿：那一刻记录未必已写进分支，订阅顺序不定。
+	 */
 	const showRecord = (at?: number) => {
 		shell.showRecord(branch(), at);
 		shell.syncClock();
