@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 const worker = (disposition?: "pending" | "reminded") => ({
 	name: "w1",
@@ -39,15 +40,11 @@ async function barkHarness(
 		const pushes: string[] = [];
 		globalThis.fetch = (async (_url: string, init: { body: string }) => { pushes.push(init.body); return new Response("ok"); }) as never;
 		const { registerBark } = await loadFirecodeModule("session/bark.ts") as any;
-		const handlers = new Map<string, Function[]>();
-		registerBark({
-			on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
-			events: { on() {} },
-			getSessionName: () => "会话",
-		});
+		const fake = fakePi({ getSessionName: () => "会话" });
+		registerBark(fake.pi);
 		const ctx = { cwd: "/tmp/project", isIdle: () => true, sessionManager: { getSessionId: () => "sid" } };
 		await run({
-			emit: (event, ...args) => handlers.get(event)?.forEach((fn) => fn(...args)),
+			emit: (event, ...args) => void fake.fire(event, ...args),
 			ctx,
 		});
 		await Bun.sleep(5);

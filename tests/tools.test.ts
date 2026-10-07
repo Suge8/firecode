@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text };
 const context = (overrides = {}) => ({ state: {}, cwd: "/project", toolCallId: crypto.randomUUID(), isPartial: false, isError: false, expanded: false, ...overrides });
@@ -10,8 +11,9 @@ afterEach(cleanupFirecodeModules);
 
 async function tools() {
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
-	const registered: Record<string, any> = {};
-	registerToolRendering({ on() {}, events: { on: () => () => {} }, registerTool: (tool: any) => { registered[tool.name] = tool; }, registerCommand() {}, registerEntryRenderer() {} });
+	const fake = fakePi();
+	registerToolRendering(fake.pi);
+	const registered = Object.fromEntries(fake.tools);
 	expect(Object.keys(registered).sort()).toEqual(["bash", "edit", "read", "write"]);
 	return registered;
 }

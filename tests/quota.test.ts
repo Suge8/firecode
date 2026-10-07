@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { registerQuota } from "../session/quota.ts";
+import { fakePi } from "./fake-pi.ts";
 
 const anthropic = { limits: [
 	{ kind: "session", percent: 0, is_active: false },
@@ -13,14 +14,10 @@ const codex = { rate_limit: {
 const jwt = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } })).toString("base64url")}.test`;
 
 function setup(fetcher: typeof fetch, oauth = ["openai-codex", "anthropic"]) {
-	let command: any;
-	const events = new Map<string, Function>();
+	const fake = fakePi();
 	const messages: string[] = [];
 	const models = ["openai-codex", "anthropic"].map((provider) => ({ provider, id: "test" }));
-	registerQuota({
-		registerCommand(name, definition) { expect(name).toBe("quota"); command = definition; },
-		on(name: string, handler: Function) { events.set(name, handler); },
-	} as never, fetcher);
+	registerQuota(fake.pi, fetcher);
 	const ctx = {
 		modelRegistry: {
 			getAll: () => models,
@@ -29,7 +26,7 @@ function setup(fetcher: typeof fetch, oauth = ["openai-codex", "anthropic"]) {
 		},
 		ui: { notify: (message: string) => messages.push(message) },
 	};
-	return { run: (args = "") => command.handler(args, ctx), messages, events, ctx };
+	return { run: (args = "") => fake.commands.get("quota").handler(args, ctx), messages, fake, ctx };
 }
 
 test("额度仅由命令并行查询，读取现代 Claude 窗口及 Fable，不把非活跃标记当作无额度", async () => {
@@ -40,7 +37,7 @@ test("额度仅由命令并行查询，读取现代 Claude 窗口及 Fable，不
 		return new Promise<Response>((resolve) => pending.push(() => resolve(Response.json(url.includes("anthropic") ? anthropic : codex))));
 	}) as typeof fetch);
 	expect(calls).toEqual([]);
-	expect(s.events.has("agent_end")).toBe(false);
+	expect(s.fake.handlers.has("agent_end")).toBe(false);
 	const run = s.run();
 	await new Promise((resolve) => setImmediate(resolve));
 	expect(calls).toHaveLength(2);
@@ -88,7 +85,7 @@ test("接口结构变化明确失败，会话退出取消在途查询，不投�
 	const run = s.run();
 	await new Promise((resolve) => setImmediate(resolve));
 	const notices = s.messages.length;
-	s.events.get("session_shutdown")!();
+	void s.fake.fire("session_shutdown");
 	await run;
 	expect(signal?.aborted).toBe(true);
 	expect(s.messages).toHaveLength(notices);

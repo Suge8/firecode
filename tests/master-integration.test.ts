@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node
 import { homedir, tmpdir } from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
+import { fakePi } from "./fake-pi.ts";
 import {
 	cleanupFirecodeModules,
 	featuresOnly,
@@ -898,7 +899,7 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 		isIdle: () => true,
 	};
 	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
-	const active = new MasterRuntime({ pi: { events: { emit() {} } }, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
+	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
 	active.store.dispatch({ type: "UPSERT_WORKER", worker: {
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
 	} });
@@ -1575,20 +1576,11 @@ test("显式 observer 角色不注册 Master 工具面", async () => {
 			].join("\n"),
 		},
 	}) as { register: (pi: unknown) => Promise<void> };
-	const commands = new Map<string, unknown>();
-	const tools = new Map<string, unknown>();
-	const handlers = new Map<string, unknown[]>();
-	await harness.register({
-		registerMessageRenderer() {}, registerEntryRenderer() {}, registerShortcut() {},
-		registerCommand: (name: string, command: unknown) => commands.set(name, command),
-		registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
-		getActiveTools: () => [], setActiveTools() {},
-		on: (name: string, handler: unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-		events: { on() {}, emit() {} },
-	});
-	expect(commands.has("fire-master")).toBe(false);
-	expect(tools.has("subagents")).toBe(false);
-	expect(handlers.has("tool_call")).toBe(true);
+	const fake = fakePi();
+	await harness.register(fake.pi);
+	expect(fake.commands.has("fire-master")).toBe(false);
+	expect(fake.tools.has("subagents")).toBe(false);
+	expect(fake.handlers.has("tool_call")).toBe(true);
 });
 
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
@@ -1605,18 +1597,9 @@ test("子会话不注册只属于交互主会话的功能：横幅、工具渲�
 			].join("\n"),
 		},
 	}) as { register: (pi: unknown) => Promise<void> };
-	const registered: string[] = [];
-	await harness.register({
-		registerMessageRenderer() {}, registerEntryRenderer: (name: string) => registered.push(`entry:${name}`),
-		registerShortcut: (key: string) => registered.push(`shortcut:${key}`),
-		registerFlag: (name: string) => registered.push(`flag:${name}`),
-		registerCommand: (name: string) => registered.push(`command:${name}`),
-		registerTool: (tool: { name: string }) => registered.push(`tool:${tool.name}`),
-		getActiveTools: () => [], setActiveTools() {},
-		on: () => () => {},
-		events: { on: () => () => {}, emit() {} },
-	});
-	expect(registered).toEqual([]);
+	const fake = fakePi();
+	await harness.register(fake.pi);
+	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
 test("指挥官启用 codemode 时 Worker 也能经 codemode 脚本调用工具", async () => {
@@ -1643,17 +1626,8 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 		}),
 	}) as any;
 	const register = (worker = false) => {
-		const handlers = new Map<string, any[]>();
-		const commands = new Map<string, any>();
-		const tools = new Map<string, any>();
-		module.registerMaster({
-			registerMessageRenderer() {},
-			registerCommand: (name: string, command: any) => commands.set(name, command),
-			registerTool: (tool: any) => tools.set(tool.name, tool),
-			getActiveTools: () => [], setActiveTools() {},
-			on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-			events: { on() {}, emit() {} },
-		}, {}, worker);
+		const { pi, handlers, commands, tools } = fakePi();
+		module.registerMaster(pi, {}, worker);
 		return { handlers, commands, tools };
 	};
 
@@ -1781,42 +1755,19 @@ async function setup(activate = true, options: {
 			},
 		}),
 	}) as any;
-	const commands = new Map<string, any>();
-	const tools = new Map<string, any>();
-	const handlers = new Map<string, any[]>();
+	const fake = fakePi();
+	const { commands, tools, sent: messages, appended, userMessages, emitted } = fake;
 	const notices: string[] = [];
-	const messages: any[] = [];
-	const appended: Array<[string, any]> = [];
 	const entries: any[] = [];
-	const userMessages: string[] = [];
-	const emitted: [string, any][] = [];
-	const channels = new Map<string, any[]>();
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
 	let markUserMessageStarted!: () => void;
 	const userMessageStarted = new Promise<void>((resolve) => { markUserMessageStarted = resolve; });
 	let activeTools = options.activeTools ?? ["read", "bash", "edit", "write"];
-	const pi = {
-		registerMessageRenderer() {},
-		registerCommand: (name: string, command: any) => commands.set(name, command),
-		registerTool: (tool: any) => tools.set(tool.name, tool),
+	const pi = Object.assign(fake.pi, {
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
-		on: (name: string, handler: any) => {
-			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
-		},
-		events: {
-			on: (channel: string, handler: any) => {
-				channels.set(channel, [...(channels.get(channel) ?? []), handler]);
-				return () => {};
-			},
-			emit: (channel: string, payload: any) => {
-				emitted.push([channel, payload]);
-				for (const handler of channels.get(channel) ?? []) handler(payload);
-			},
-		},
 		appendEntry: (type: string, data: any) => {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
@@ -1833,12 +1784,12 @@ async function setup(activate = true, options: {
 			onMessage?.();
 			if (!options.holdWake) setTimeout(() => void wake(), 0);
 		},
-	};
+	});
 	/** 宿主开一个回合并记录它的第一条用户消息（与宿主事件顺序一致：agent_start 在前，message_start 在后）。 */
 	const turn = async (text: string) => {
-		for (const handler of [...(handlers.get("agent_start") ?? [])]) await handler({}, ctx);
+		await fake.fire("agent_start", {}, ctx);
 		const message = { role: "user", content: [{ type: "text", text }] };
-		for (const handler of [...(handlers.get("message_start") ?? [])]) await handler({ message }, ctx);
+		await fake.fire("message_start", { message }, ctx);
 	};
 	/** 前门消息唤起的回合真正开始：宿主记录了这条信封消息本身。 */
 	const wake = () => turn(userMessages.at(-1)!);
@@ -1911,13 +1862,11 @@ async function setup(activate = true, options: {
 		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
 		userTurn: (text: string) => turn(text),
 		command,
-		emit: async (name: string, event: any) => {
-			for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
-		},
+		emit: (name: string, event: any) => fake.fire(name, event, ctx),
 		replaceSession: async () => {
 			sessionId = crypto.randomUUID();
 			entries.length = 0;
-			for (const handler of handlers.get("session_start") ?? []) await handler({}, ctx);
+			await fake.fire("session_start", {}, ctx);
 		},
 		agentDir,
 		model: fauxModel,
@@ -1929,7 +1878,7 @@ async function setup(activate = true, options: {
 			.map(([name, schema]: [string, any]) => [name, schema.description])) as Record<string, string>,
 		systemPrompt: async (initial: string) => {
 			let event = { systemPrompt: initial };
-			for (const handler of handlers.get("before_agent_start") ?? []) {
+			for (const handler of fake.handlers.get("before_agent_start") ?? []) {
 				const result = await handler(event, ctx);
 				if (result?.systemPrompt) event = { systemPrompt: result.systemPrompt };
 			}

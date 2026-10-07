@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { cleanupFirecodeModules, featuresOnly, loadFirecodeModule } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
@@ -17,19 +18,12 @@ async function recordedRounds(role: "main" | "worker", features: string[]) {
 			].join("\n"),
 		},
 	}) as { register: (pi: unknown, role: string) => Promise<void> };
-	const handlers = new Map<string, Function[]>();
-	const appended: [string, unknown][] = [];
-	await harness.register({
-		registerMessageRenderer() {}, registerEntryRenderer() {}, registerShortcut() {}, registerFlag() {},
-		registerCommand() {}, registerTool() {}, getActiveTools: () => [], setActiveTools() {}, getAllTools: () => [],
-		on: (name: string, handler: Function) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); return () => {}; },
-		events: { on: () => () => {}, emit() {} },
-		appendEntry: (type: string, data: unknown) => appended.push([type, data]),
-	}, role);
+	const fake = fakePi();
+	await harness.register(fake.pi, role);
 	const ctx = { isIdle: () => true, signal: { aborted: false }, hasUI: false, mode: "print" };
 	for (const name of ["agent_start", "agent_end", "agent_settled"])
-		for (const handler of handlers.get(name) ?? []) await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-	return appended.filter(([type]) => type === "firecode-round").map(([, data]) => data);
+		await fake.fire(name, { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+	return fake.appended.filter(([type]) => type === "firecode-round").map(([, data]) => data);
 }
 
 test("轮记录在每个会话里由同一段代码写：主会话与子代理会话都写，且每段只写一条", async () => {
