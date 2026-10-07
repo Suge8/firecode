@@ -1,7 +1,7 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
 import {
@@ -1663,11 +1663,15 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 	expect(workerRegistration.tools.size).toBe(0);
 	expect(workerRegistration.handlers.has("session_start")).toBe(false);
 	const workerGuard = workerRegistration.handlers.get("tool_call")?.[0];
-	expect(await workerGuard({ toolName: "write", input: { path: "../outside.ts" } }, ctx)).toEqual({
+	const outside = join(homedir(), "firecode-guard-probe", "outside.ts");
+	expect(await workerGuard({ toolName: "write", input: { path: outside } }, ctx)).toEqual({
 		block: true,
-		reason: "子代理只能修改当前 checkout：../outside.ts",
+		reason: `子代理只能修改当前 checkout 或系统临时目录：${outside}`,
 	});
 	expect(await workerGuard({ toolName: "edit", input: { path: "inside.ts" } }, ctx)).toBeUndefined();
+	// 交付物（调研报告、评测产物）写到临时目录是正当用途，不该逼 Worker 改用 bash 绕过守卫。
+	expect(await workerGuard({ toolName: "write", input: { path: join(tmpdir(), "fc-report", "notes.md") } }, ctx)).toBeUndefined();
+	expect(await workerGuard({ toolName: "write", input: { path: "/tmp/fc-report/notes.md" } }, ctx)).toBeUndefined();
 
 	const masterRegistration = register();
 	expect(masterRegistration.commands.has("fire-master")).toBe(true);
