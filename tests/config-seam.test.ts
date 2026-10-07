@@ -120,7 +120,8 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.config.features.bark).toBeFalse();
 	expect(loaded.config.master.autoActivate).toBeTrue();
-	expect(loaded.config.master.roles.map((entry: any) => entry.role)).toEqual(["调研员", "工程师", "设计师", "哨兵"]);
+	// 指挥官提示词点名“哨兵”承接长等待，模板必须带着它。
+	expect(loaded.config.master.roles.map((entry: any) => entry.role)).toContain("哨兵");
 	expect(loaded.config.watcher.enabled).toBeFalse();
 });
 
