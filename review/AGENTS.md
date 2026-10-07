@@ -42,16 +42,15 @@ AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill �
 
 结果卡渲染器始终注册（即使 feature 关闭），使用 pi 原生背景卡与完整 Markdown：通过为绿底，未通过、
 终止与异常为红底，其余为紫底；标题前是单色字形，字形与语义色按卡种类在 `card.ts` 的 `MARKS` 一处定义（构建时写进
-details.icon，渲染时按种类上色）：通过 `✓` 绿、未通过/终止 `✗` 红、超时/异常 `◌` 红、取消 `‖` 灰，开始与顾问卡用审查金色 `⠿`，不用 emoji 与品牌火焰；排队相不发卡，开始卡只发第 1 轮，后续轮边界由结果卡轮号承担。reload 与
+details.icon，渲染时按种类上色），不用 emoji 与品牌火焰；排队相不发卡，开始卡只发第 1 轮，后续轮边界由结果卡轮号承担。reload 与
 live 外观一致，渲染器永不抛异常（details 校验失败降级 content 纯文本）。每轮 findings 只完整显示一次；
 达到顾问阈值时先显示失败卡，若顾问裁定 stop，终止卡只显示顾问裁决，不再复制同一份 findings。
 
 顾问卡与审查结果卡同构：裁决进标题（顾问指引 · 继续修复），正文首行为粗体模型分节，三段正文标题加粗且
 段间补空行（Markdown 把单换行折进同段，不补会糊成一块）。
 
-主会话审查进度不由本模块绘制：执行器经占用频道发布 `ReviewProgress`（阶段、轮次、通过/阻断/总票数，只有审查相的票数可数），
-由输入框外壳嵌进上边框，编辑器上方没有独立审查行。进度只读 reducer 的当前状态，不另派生逐审查者工具进度或摘要；
-执行器不维护计时器。`ui.ts` 只管编辑器接管与终端标题（“审查中 R轮次 · 会话名”）。Working 指示的可见性归 statusbar 管，本模块不写。
+主会话审查进度不由本模块绘制：执行器经占用频道发布 `ReviewProgress`（只有审查相的票数可数），
+由输入框外壳显示。进度只读 reducer 的当前状态，不另派生逐审查者工具进度或摘要；执行器不维护计时器。`ui.ts` 只管编辑器接管与终端标题（“审查中 R轮次 · 会话名”）。Working 指示的可见性归 statusbar 管，本模块不写。
 
 `ui.ts` 等待模型时接管编辑器：禁止输入，esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 与
 `summarizing` 相把输入交还用户。接管时保存 `getEditorComponent()` 的当前工厂，解锁还原它（可能是别的扩展设置的自定义编辑器，
@@ -66,9 +65,8 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 ## 占用信号
 
-审查活跃期双通道：进程内 `herdr:blocked` 频道驱动 herdr 集成的 blocked 状态（集成只转发状态，message
-会被 herdr 丢弃）；频道名、标签与 payload 只在 `occupancy.ts` 定义，输入框外壳与观察员都从这里导入。持有时的 payload 另带活的 `progress` 访问器（返回 `ReviewProgress`），输入框外壳借它显示审查进度，占用是 UI 唯一事实源，
-访问器不重发 true 以免破坏计数配对；`progress` 是进程内求值函数，频道不可序列化转发；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
+审查活跃期双通道：进程内 `herdr:blocked` 频道（定义见 `occupancy.ts`）驱动 herdr 集成的 blocked 状态（集成只转发状态，message
+会被 herdr 丢弃）；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
 投递（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
 
 标签是租约：持有期带 TTL 定时续约（herdr 无“进程退出即清 metadata”接口，crash 残留靠 TTL 自愈，续约
@@ -79,7 +77,7 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 审查政策与 PASS/FAIL 输出契约以 `prompts/review.{zh,en}.md` 为唯一事实源，经 spawn 整体替换系统提示；需求、
 关注点、往轮结果和完整会话记录留在 user prompt，记录中的需求照常生效，但不能反向改写审查职责、工具边界与
-输出契约。审查会话经 `master/spawn.ts` 创建，使用 memory 持久化、整体替换系统提示，关闭自动扩展、Skill、
+输出契约。审查会话使用 memory 持久化，关闭自动扩展、Skill、
 模板和上下文注入；项目约定由审查者按 system policy 主动读取适用的 AGENTS.md。每条 FAIL 发现必须六要素齐全（标题、严重程度、问题、违反的约定与期望、证据、验证命令，标签
 加粗；校验容忍旧措辞与非粗体），同票混入非法发现整票作废为缺席票。有裁决就成轮：一轮里只要有一票 PASS/FAIL，就按有裁决的票形成结论，缺席者（会话故障、超时、输出契约违例）在结论里点名而不阻断；全员缺席才是基础设施不可用。往轮发现清单随轮注入顾问裁决
 （`prompt.ts`），审查者不得原样重提已仲裁事项——僵尸发现的收敛闭环。
@@ -87,8 +85,6 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 审查者的只读是契约而非能力边界：排除 write/edit 只挡住这两个工具，保留的 `bash` 仍能在项目目录执行任意
 命令。保留 bash 是有意的——审查者要跑测试取证；真需要物理隔离得上容器或只读挂载。
 
-config.jsonc 的 `review` 节必须显式完整配置：审查者/顾问模型原子（`provider/model/thinking`）、maxRounds、advisorAfterFailures、
-timeoutMinutes、tools、language；公开包不内置依赖个人认证或偏好的模型。缺节、缺字段、解析失败
-或该节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；活动 checkpoint 保持原样，修好配置并
-重启后继续恢复——静默回退模型会拿用户没配的模型真实发起调用。
+config.jsonc 的 `review` 节必须显式完整配置（字段见 `config.ts`）；公开包不内置依赖个人认证或偏好的模型。
+该节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；活动 checkpoint 保持原样，修好配置并重启后继续恢复。
 不读 pi-flow 的 config.json。

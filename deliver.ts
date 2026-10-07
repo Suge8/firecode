@@ -1,9 +1,8 @@
 /**
  * 统一投递入口（Master 事件与观察员发言共用）：宿主流式中投自定义卡片、经
  * steer 队列在句缝送达；会话歇透时改走 sendUserMessage 前门唤起（只告知不唤醒的
- * 结果改走 inform，歇透时直接追加）——宿主的
- * triggerTurn 唤醒会跳过 before_agent_start（上游缺陷，#33），前门唤醒自带
- * 完整开跑仪式，系统提示注入不随回合抖动。
+ * 结果改走 inform，歇透时直接追加）。唤醒走前门而非 triggerTurn 的原因（#33）与回合中不得立即追加（#28）见根 AGENTS.md 硬约束。
+ * 宿主的扩展 sendUserMessage 返回 void、不等回合：以宿主记录这条消息为送达，没进回合就改走 steer 补投（tests/delivery-contract.test.ts 钉住）。
  *
  * 忙闲判断与发送必须在同一事件循环节拍内完成，两者之间禁止 await：会话落定
  * 是下一节拍的事件，同节拍读到的忙闲不会骑墙；宿主在回合结束前清空 steer

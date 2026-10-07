@@ -12,7 +12,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
-| `header.ts` | 会话启动横幅：半格像素火焰 + 字标分三档（≥83 / 52–82 / <52 列一行），副标题“pi 版本 · 工作目录”放不下时只留目录、从开头按整段省略，启动点亮扫光约 1.5 秒后定格并退订动画时钟 | |
+| `header.ts` | 会话启动横幅 | |
 | `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 思考与工具的过程组/过程列表、轮记录（整段耗时与终态的持久化事后记录）、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 预设、重命名、用量查询、Bark 通知、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
@@ -21,11 +21,11 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
-| `round-recorder.ts` | 轮记录器：会话歇下时把整段时长、终态与均速写成 `firecode-round` CustomEntry 并发布“已写入”；不属于任何可关的功能，主会话与每个子代理会话都注册、与界面无关，记录格式与读取在 `tools/round.ts` |
-| `deliver.ts` | Master 事件与观察员发言共用：信封格式（包裹与识别）的唯一事实源，以及统一投递入口：忙时卡片经 steer 队列，闲时前门唤起并以宿主记录这条消息为送达，没进回合就改走 steer 补投；指挥官没在等的结果走“告知不唤醒”（忙时同样 steer，歇透时直接追加为会话记录） | |
-| `busy.ts` | “会话进行中”单一事实（指挥官回合在跑 \|\| 有子代理在飞 \|\| 主会话审查进行中）：在飞数频道、通用 `herdr:working` 频道，以及唯一的判定、本段起点与“会话歇下”边沿（带整段时长、终态与均速）`watchBusy`；频道名与 payload 只在这里定义 | |
+| `round-recorder.ts` | 轮记录器：歇下时写轮记录；不属于任何可关的功能，主会话与每个子代理会话都注册 | |
+| `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言共用） | |
+| `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及相关频道 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，herdr-display 与 review 占用标签共用 | |
-| `activity.ts` | 子代理活动列表的单行布局（标记、名字列、角色 · 动作、耗时与退让），只有 `master/activity-list.ts` 使用 | |
+| `activity.ts` | 子代理活动列表的单行布局，只有 `master/activity-list.ts` 使用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置，并给出 review/master/watcher 每节能否启动的判定 | |
 
@@ -36,28 +36,23 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（唯一例外：review 的修复反馈与总结提示走 followUp 侧门，见 review/AGENTS.md 已知暴露）：宿主流式中投卡片经 steer 队列，会话歇透时走 `sendUserMessage` 前门唤起，以宿主记录这条消息为送达、没进回合就 steer 补投（宿主的扩展 `sendUserMessage` 返回 void、不等回合）；只告知不唤醒的结果歇透时以不带 `triggerTurn` 的 `sendMessage` 追加（宿主当场写入会话树、追加在末尾，不是下面的回合中追加）。两条红线都是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。忙闲判断与发送必须同一事件循环节拍内完成，中间禁止 await。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（机制见其头注释；唯一例外：review 的修复反馈与总结提示走 followUp 侧门，见 review/AGENTS.md 已知暴露）。两条红线是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，系统提示注入随回合抖动同样整段重写（#33，宿主缺陷，已报上游）。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
 ## 配置
 
 唯一运行配置是 Pi Agent 目录（由官方 `getAgentDir()` 解析，含 `PI_CODING_AGENT_DIR` 覆写）下的
-`extensions/firecode/config.jsonc`；安装流程当场生成完整私人配置。公开的 `config.example.jsonc` 是维护者当前的
-完整推荐配置：除 Bark 外功能全开，Master 在新会话自动激活，Watcher 不自动激活；Watcher 激活后每回合调用模型，priority 按
-供应商规则加价。配置模板只是起始样例，不参与运行时读取。缺失运行配置时关闭可选功能，并在每次
-`session_start` 警告一次；运行中补上配置也需重启 Pi 才生效。改完本机运行配置后，把其中属于推荐配置的部分
+`extensions/firecode/config.jsonc`；用户侧安装与缺失行为见 README。改完本机运行配置后，把其中属于推荐配置的部分
 同步进 `config.example.jsonc`，个人化内容（自定义 instructions、私人扩展名）留在本机。
 
-`tools.replyLines`（非负整数，默认 3）是折叠态每轮显示的中间回复条数，0 表示只留最后一条回复。
-
-配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`（presets、review、master.roles、
-watcher），解析在 `config.ts` 的 `parseModelAtom` 一处收口；旧的分字段与两段式写法一律报配置问题。
+配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`，解析在 `config.ts` 的 `parseModelAtom`
+一处收口；旧的分字段与两段式写法一律报配置问题。
 
 不要新建 keys.json，也不要读项目级配置。快捷键启动时绑定，改完需重启；`ctrl+f` 只改 `openai` 节，其它注释
-保留。未知字段、嵌套未知字段与类型错误都报配置问题；`review`、`master` 与 `watcher` 节有问题时对应功能
-拒绝启动而不是回退默认——静默回退会拿用户没配的模型真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定
-（文件级与 features 问题阻断三节），消费端不再自己筛问题；关闭的功能那一节的问题不进 session_start 全局警告。
+保留。`review`、`master` 与 `watcher` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
+真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定（文件级与 features 问题阻断三节），消费端不再自己筛
+问题；关闭的功能那一节的问题不进 session_start 全局警告。
 子会话只注册与界面无关的功能：横幅、工具渲染、预设、重命名与用量命令只属于交互主会话。
 
 ## 测试
