@@ -4,8 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.js";
+import { fakePi } from "./fake-pi.ts";
 
-type Handler = (event: any, ctx: any) => unknown;
 type Module = {
 	registerHerdrDisplay: (pi: unknown, subsession?: boolean) => void;
 };
@@ -55,7 +55,6 @@ async function register(
 	env: Record<string, string | undefined> = {},
 	subsession = false,
 ) {
-	const handlers = new Map<string, Handler>();
 	const previous = { ...process.env };
 	cleanups.push(async () => {
 		for (const key of Object.keys(process.env))
@@ -71,13 +70,9 @@ async function register(
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
-	(await load()).registerHerdrDisplay({
-		on(name: string, handler: Handler) {
-			handlers.set(name, handler);
-		},
-		getThinkingLevel: () => "medium",
-	} as never, subsession);
-	return handlers;
+	const fake = fakePi({ getThinkingLevel: () => "medium" });
+	(await load()).registerHerdrDisplay(fake.pi, subsession);
+	return fake;
 }
 
 const context = (name: string | undefined, mode = "tui") => ({
@@ -88,9 +83,9 @@ const context = (name: string | undefined, mode = "tui") => ({
 
 test("never mutates persistent pane or tab names", async () => {
 	const herdr = await herdrStub();
-	const handlers = await register(herdr.path);
-	await handlers.get("session_start")?.({}, context("重命名"));
-	await handlers.get("session_info_changed")?.({}, context("重命名"));
+	const pi = await register(herdr.path);
+	await pi.fire("session_start", {}, context("重命名"));
+	await pi.fire("session_info_changed", {}, context("重命名"));
 
 	expect(herdr.requests).toHaveLength(1);
 	expect(herdr.requests[0]).toMatchObject({
@@ -108,11 +103,11 @@ test("never mutates persistent pane or tab names", async () => {
 
 test("retries a failed display report and clears only on quit", async () => {
 	const herdr = await herdrStub(true);
-	const handlers = await register(herdr.path);
-	await handlers.get("session_start")?.({}, context("重命名"));
-	await handlers.get("model_select")?.({}, context("重命名"));
-	await handlers.get("session_shutdown")?.({ reason: "new" }, context("重命名"));
-	await handlers.get("session_shutdown")?.({ reason: "quit" }, context("重命名"));
+	const pi = await register(herdr.path);
+	await pi.fire("session_start", {}, context("重命名"));
+	await pi.fire("model_select", {}, context("重命名"));
+	await pi.fire("session_shutdown", { reason: "new" }, context("重命名"));
+	await pi.fire("session_shutdown", { reason: "quit" }, context("重命名"));
 
 	expect(herdr.requests).toHaveLength(3);
 	expect(herdr.requests[2].params).toMatchObject({
@@ -125,35 +120,35 @@ test("retries a failed display report and clears only on quit", async () => {
 
 test("concurrent same-identity events publish exactly once", async () => {
 	const herdr = await herdrStub();
-	const handlers = await register(herdr.path);
+	const pi = await register(herdr.path);
 	const ctx = context("同一身份");
 	// 不等首次请求返回，密集触发同一身份的三个事件：只允许一次上报。
-	const first = handlers.get("session_start")?.({}, ctx);
-	const second = handlers.get("session_info_changed")?.({}, ctx);
-	const third = handlers.get("model_select")?.({}, ctx);
+	const first = pi.fire("session_start", {}, ctx);
+	const second = pi.fire("session_info_changed", {}, ctx);
+	const third = pi.fire("model_select", {}, ctx);
 	await Promise.all([first, second, third]);
 	expect(herdr.requests).toHaveLength(1);
 });
 
 test("A→B→A rapid switch re-publishes A instead of leaving stale B", async () => {
 	const herdr = await herdrStub();
-	const handlers = await register(herdr.path);
+	const pi = await register(herdr.path);
 	// A 确认送达后，B 入队未返回时切回 A：A 必须重新入队，否则 pane 停在过时的 B。
-	await handlers.get("session_start")?.({}, context("身份-A"));
-	const second = handlers.get("session_info_changed")?.({}, context("身份-B"));
-	const third = handlers.get("session_info_changed")?.({}, context("身份-A"));
+	await pi.fire("session_start", {}, context("身份-A"));
+	const second = pi.fire("session_info_changed", {}, context("身份-B"));
+	const third = pi.fire("session_info_changed", {}, context("身份-A"));
 	await Promise.all([second, third]);
 	expect(herdr.requests.map((item) => item.params.title)).toEqual(["身份-A", "身份-B", "身份-A"]);
 });
 
 test("stays silent outside TUI, inside Master Workers and outside herdr", async () => {
 	const herdr = await herdrStub();
-	const handlers = await register(herdr.path);
-	await handlers.get("session_start")?.({}, context("重命名", "print"));
-	await handlers.get("session_shutdown")?.({ reason: "quit" }, context("重命名", "rpc"));
+	const pi = await register(herdr.path);
+	await pi.fire("session_start", {}, context("重命名", "print"));
+	await pi.fire("session_shutdown", { reason: "quit" }, context("重命名", "rpc"));
 	expect(herdr.requests).toHaveLength(0);
 
-	expect((await register(herdr.path, {}, true)).size).toBe(0);
-	expect((await register(herdr.path, { HERDR_ENV: undefined })).size).toBe(0);
+	expect((await register(herdr.path, {}, true)).handlers.size).toBe(0);
+	expect((await register(herdr.path, { HERDR_ENV: undefined })).handlers.size).toBe(0);
 	expect(herdr.requests).toHaveLength(0);
 });

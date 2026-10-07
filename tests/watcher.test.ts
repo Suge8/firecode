@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fakePi } from "./fake-pi.ts";
 import {
 	cleanupFirecodeModules,
 	loadFirecodeModule,
@@ -32,12 +33,9 @@ afterEach(async () => {
 
 test("建议卡收起只显示正文首行，展开显示完整建议", async () => {
 	const { registerWatcherCardRenderer, adviceMessage, WATCHER_MESSAGE_TYPE } = await loadFirecodeModule("watcher/card.js") as any;
-	let render: any;
-	registerWatcherCardRenderer({
-		registerMessageRenderer: (type: string, renderer: any) => {
-			if (type === WATCHER_MESSAGE_TYPE) render = renderer;
-		},
-	});
+	const fake = fakePi();
+	registerWatcherCardRenderer(fake.pi);
+	const render = fake.messageRenderers.get(WATCHER_MESSAGE_TYPE) as any;
 	const card = { note: "第一行建议很长，需要按宽截断\n第二行必须只在展开时出现", turnIndex: 4 };
 	const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 
@@ -488,28 +486,15 @@ async function setup(options: {
 		}),
 	}) as any;
 
-	const handlers = new Map<string, any[]>();
-	const commands = new Map<string, any>();
-	const channels = new Map<string, any[]>();
-	const messages: any[] = [];
-	const userMessages: string[] = [];
+	const fake = fakePi();
+	const { handlers, commands, sent: messages, userMessages } = fake;
 	const notices: string[] = [];
 	let idle = false;
 	const statuses = new Map<string, string>();
 	let waiter: (() => void) | undefined;
 	const settle = () => waiter?.();
 	let failures = options.failDeliveries ?? 0;
-	const pi = {
-		registerCommand: (name: string, command: any) => commands.set(name, command),
-		registerMessageRenderer() {},
-		on: (name: string, handler: any) => {
-			handlers.set(name, [...(handlers.get(name) ?? []), handler]);
-			return () => handlers.set(name, (handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
-		},
-		events: {
-			on: (name: string, handler: any) => channels.set(name, [...(channels.get(name) ?? []), handler]),
-			emit: (name: string, data: any) => { for (const handler of channels.get(name) ?? []) handler(data); },
-		},
+	const pi = Object.assign(fake.pi, {
 		sendMessage: (message: any, sendOptions: any) => {
 			if (failures > 0) { failures--; settle(); throw new Error("投递失败"); }
 			messages.push({ message, options: sendOptions });
@@ -520,12 +505,12 @@ async function setup(options: {
 			userMessages.push(content);
 			settle();
 			setTimeout(() => {
-				for (const handler of [...(handlers.get("agent_start") ?? [])]) handler({}, context.ctx);
+				void fake.fire("agent_start", {}, context.ctx);
 				const message = { role: "user", content: [{ type: "text", text: content }] };
-				for (const handler of [...(handlers.get("message_start") ?? [])]) handler({ message }, context.ctx);
+				void fake.fire("message_start", { message }, context.ctx);
 			}, 0);
 		},
-	};
+	});
 	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const createContext = () => {
@@ -564,9 +549,7 @@ async function setup(options: {
 		pool,
 		...(options.createObserver ? { createObserver: options.createObserver } : {}),
 	}, options.worker === true);
-	const emit = async (name: string, event: any, ctx = context.ctx) => {
-		for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
-	};
+	const emit = (name: string, event: any, ctx = context.ctx) => fake.fire(name, event, ctx);
 	await emit("session_start", { type: "session_start", reason: "startup" });
 	return {
 		messages,

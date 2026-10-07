@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { fakePi } from "./fake-pi.ts";
 import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 let dispose: (() => void) | undefined;
@@ -20,12 +21,7 @@ async function scene(options: { withMaster?: boolean; replyLines?: number; scrol
 	let now = 0;
 	const clock = new (clockModule.TurnClock as any)(() => now);
 	host.initTheme("dark");
-	const tools = new Map<string, any>();
-	let roundRenderer: Function | undefined;
-	const api = {
-		on() {}, events: { on: () => () => {}, emit() {} }, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, registerMessageRenderer() {},
-		registerEntryRenderer: (_type: string, renderer: Function) => { roundRenderer = renderer; },
-	};
+	const { pi: api, tools, entryRenderers } = fakePi();
 	toolsModule.registerToolRendering(api);
 	if (withMaster) {
 		const { registerMaster } = await loadFirecodeModule("master/index.ts");
@@ -71,7 +67,7 @@ async function scene(options: { withMaster?: boolean; replyLines?: number; scrol
 	const settle = (elapsed: number, outcome = "complete", at = now, tps?: number) => {
 		const entry = new tui.Container();
 		entry.addChild(new tui.Spacer(1));
-		entry.addChild(roundRenderer!({ data: { elapsed, outcome, ...(tps ? { tps } : {}) }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
+		entry.addChild((entryRenderers.get("firecode-round") as Function)({ data: { elapsed, outcome, ...(tps ? { tps } : {}) }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
 		(entry as any).hasContent = () => true;
 		(entry as any).setExpanded = () => {};
 		chat.addChild(entry);
@@ -243,11 +239,11 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	s.complete(s.tool("read", { path: "b" }));
 	expect(Container.prototype.addChild).toBe(addChild);
 	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
-	const events = new Map<string, Function>();
+	const fake = fakePi();
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
-	registerToolRendering({ on: (name: string, handler: Function) => events.set(name, handler), events: { on: () => () => {} }, registerTool() {}, registerCommand() {}, registerEntryRenderer() {} });
-	events.get("session_start")!({}, { mode: "rpc" });
-	events.get("session_shutdown")!();
+	registerToolRendering(fake.pi);
+	void fake.fire("session_start", {}, { mode: "rpc" });
+	void fake.fire("session_shutdown");
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	dispose?.();
 	dispose = undefined;

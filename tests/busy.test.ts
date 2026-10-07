@@ -1,20 +1,17 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
 /** 会话歇下边沿：sessionBusy（指挥官回合在跑 || 有子代理在飞）由真变假时恰好触发一次。 */
 async function harness() {
 	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
-	const handlers = new Map<string, Function[]>();
-	const bus = new Map<string, Function[]>();
+	const fake = fakePi();
+	const pi = fake.pi;
 	let settled = 0;
 	let result: any;
 	let view: any;
-	const pi = {
-		on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
-		events: { on: (channel: string, fn: Function) => { bus.set(channel, [...(bus.get(channel) ?? []), fn]); return () => {}; } },
-	};
 	watchBusy(pi, { onChange: (next: any) => { view = next; }, onSettled: (_ctx: unknown, settledResult: unknown) => { settled++; result = settledResult; } });
 	let idle = true;
 	let aborted = false;
@@ -23,21 +20,21 @@ async function harness() {
 		set idle(value: boolean) { idle = value; },
 		/** 宿主当前回合的中断信号（用户 Esc 等）。 */
 		set aborted(value: boolean) { aborted = value; },
-		review: (active: boolean) => bus.get("herdr:blocked")?.forEach((fn) => fn(active ? { active, label: "审查", progress: () => undefined } : { active })),
+		review: (active: boolean) => fake.pi.events.emit("herdr:blocked", active ? { active, label: "审查", progress: () => undefined } : { active }),
 		get settled() { return settled; },
 		get result() { return result; },
 		get view() { return view; },
-		agentStart: () => handlers.get("agent_start")?.forEach((fn) => fn({}, ctx)),
-		request: () => handlers.get("before_provider_request")?.forEach((fn) => fn({}, ctx)),
-		response: (output: number, stopReason = "stop") => handlers.get("message_end")?.forEach((fn) => fn({ message: { role: "assistant", usage: { output }, stopReason } }, ctx)),
-		compact: (name: string, event = {}) => handlers.get(name)?.forEach((fn) => fn(event, ctx)),
-		agentEnd: (stopReason?: string) => handlers.get("agent_end")?.forEach((fn) => fn({ messages: stopReason ? [{ role: "assistant", stopReason }] : [] }, ctx)),
-		agentSettled: () => handlers.get("agent_settled")?.forEach((fn) => fn({}, ctx)),
-		inFlight: (inFlight: number, teardown?: boolean) => bus.get("firecode:workers")?.forEach((fn) => fn({ inFlight, ...(teardown ? { teardown } : {}) })),
-		shutdown: () => handlers.get("session_shutdown")?.forEach((fn) => fn({ reason: "quit" }, ctx)),
+		agentStart: () => void fake.fire("agent_start", {}, ctx),
+		request: () => void fake.fire("before_provider_request", {}, ctx),
+		response: (output: number, stopReason = "stop") => void fake.fire("message_end", { message: { role: "assistant", usage: { output }, stopReason } }, ctx),
+		compact: (name: string, event = {}) => void fake.fire(name, event, ctx),
+		agentEnd: (stopReason?: string) => void fake.fire("agent_end", { messages: stopReason ? [{ role: "assistant", stopReason }] : [] }, ctx),
+		agentSettled: () => void fake.fire("agent_settled", {}, ctx),
+		inFlight: (inFlight: number, teardown?: boolean) => fake.pi.events.emit("firecode:workers", { inFlight, ...(teardown ? { teardown } : {}) }),
+		shutdown: () => void fake.fire("session_shutdown", { reason: "quit" }, ctx),
 		watch: (onSettled: Function) => watchBusy(pi, { onSettled }),
-		handlers,
-		bus,
+		handlers: fake.handlers,
+		bus: fake.channels,
 	};
 }
 

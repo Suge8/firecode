@@ -1,6 +1,5 @@
 /**
- * Bark 通知：会话真正歇下（agent_settled、指挥官空闲且在飞子代理数为 0）时，
- * 把最后一条回复推送到 iPhone 的 Bark App。
+ * Bark 通知：会话歇下（busy.ts 的歇下边沿，恰好一次）时，把最后一条回复推送到 iPhone 的 Bark App。
  *
  * - 子代理会话不发通知，通知统一由指挥官会话发出。
  * - 子代理池里有待发落消息时升 timeSensitive 并带副标题，可穿透专注模式；平时为默认 active。

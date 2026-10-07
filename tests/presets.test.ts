@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { parseJsonc } from "../jsonc.ts";
 import { FIRECODE_DIR, cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
@@ -17,16 +18,10 @@ test("binds exactly the shortcuts declared by preset key fields", async () => {
 		.filter((key): key is string => !!key);
 	expect(declared.length).toBeGreaterThan(0);
 
-	const shortcuts: string[] = [];
+	const fake = fakePi();
 	const { registerPresets } = await loadFirecodeModule("session/presets.ts", { configJsonc });
-	(registerPresets as (pi: unknown) => void)({
-		registerFlag() {},
-		registerShortcut(key: string) {
-			shortcuts.push(key);
-		},
-		registerCommand() {},
-		on() {},
-	} as never);
+	(registerPresets as (pi: unknown) => void)(fake.pi);
+	const shortcuts = [...fake.shortcuts.keys()];
 
 	for (const key of declared) expect(shortcuts).toContain(key);
 	expect(shortcuts).toContain(keys.cyclePreset);
@@ -53,24 +48,15 @@ async function presetHost() {
 		"test/plain": { provider: "test", id: "plain" },
 	};
 	const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-	const handlers = new Map<string, Function[]>();
-	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, recordedTools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined };
-	const emit = async (name: string, event: unknown = {}) => {
-		let result: unknown;
-		for (const handler of handlers.get(name) ?? []) result = (await handler(event, ctx)) ?? result;
-		return result;
-	};
+	const emit = (name: string, event: unknown = {}) => fake.fire(name, event, ctx);
 	const ctx = {
 		get model() { return state.model; },
 		modelRegistry: { find: (provider: string, id: string) => models[`${provider}/${id}`] },
 		sessionManager: { getEntries: () => state.branch, getBranch: () => state.branch },
 		ui: { notify() {}, setStatus: (_key: string, text?: string) => { state.status = text; }, theme: { fg: (_color: string, text: string) => text } },
 	};
-	(registerPresets as (pi: unknown) => void)({
-		registerFlag() {}, registerShortcut() {}, getFlag: () => undefined,
-		registerCommand: (name: string, command: never) => commands.set(name, command),
-		on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+	const fake = fakePi({
 		getThinkingLevel: () => state.thinking,
 		setThinkingLevel: (level: string) => { state.thinking = level; },
 		setModel: async (model: typeof state.model) => {
@@ -84,6 +70,7 @@ async function presetHost() {
 		getAllTools: () => DEFAULT_TOOLS.map((name) => ({ name })),
 		appendEntry: (customType: string, data: unknown) => state.branch.push({ type: "custom", customType, data }),
 	});
+	(registerPresets as (pi: unknown) => void)(fake.pi);
 	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再发 session_start。 */
 	const reopen = async (restoredModel: string) => {
 		state.model = models[restoredModel];
@@ -92,7 +79,7 @@ async function presetHost() {
 	};
 	const instructions = async () =>
 		((await emit("before_agent_start", { systemPrompt: "BASE" })) as { systemPrompt?: string } | undefined)?.systemPrompt ?? "BASE";
-	const preset = (name: string) => commands.get("preset")!.handler(name, ctx);
+	const preset = (name: string) => fake.commands.get("preset").handler(name, ctx);
 	return { state, emit, reopen, instructions, preset, models, DEFAULT_TOOLS };
 }
 

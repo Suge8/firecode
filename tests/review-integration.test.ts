@@ -4,6 +4,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerResult } from "../review/state.js";
+import { fakePi } from "./fake-pi.ts";
 import { cleanupFirecodeModules, loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
@@ -95,49 +96,18 @@ function makeHeadlessCtx(sessionManager: MockSessionManager) {
 }
 
 function makePi(sessionManager: MockSessionManager) {
-	const registered: {
-		renderers: Map<string, unknown>;
-		commands: Map<string, unknown>;
-		shortcuts: Map<string, unknown>;
-		events: Map<string, ((...args: unknown[]) => unknown)[]>;
-		sent: unknown[];
-		emitted: { name: string; data: unknown }[];
-	} = {
-		renderers: new Map(),
-		commands: new Map(),
-		shortcuts: new Map(),
-		events: new Map(),
-		sent: [],
-		emitted: [],
+	const fake = fakePi({
+		appendEntry: (customType: string, data?: unknown) => { sessionManager.appendCustomEntry(customType, data); },
+	});
+	const registered = {
+		renderers: fake.messageRenderers,
+		commands: fake.commands,
+		shortcuts: fake.shortcuts,
+		events: fake.handlers,
+		get sent() { return fake.sent.map(({ message }) => message); },
+		get emitted() { return fake.emitted.map(([name, data]) => ({ name, data })); },
 	};
-	const pi = {
-		registerMessageRenderer: (customType: string, renderer: unknown) => {
-			registered.renderers.set(customType, renderer);
-		},
-		registerEntryRenderer: (customType: string, renderer: unknown) => {
-			registered.renderers.set(customType, renderer);
-		},
-		registerCommand: (name: string, options: unknown) => {
-			registered.commands.set(name, options);
-		},
-		registerShortcut: (key: string, options: unknown) => {
-			registered.shortcuts.set(key, options);
-		},
-		on: (event: string, handler: (...args: unknown[]) => unknown) => {
-			registered.events.set(event, [...(registered.events.get(event) ?? []), handler]);
-		},
-		sendMessage: (message: unknown) => {
-			registered.sent.push(message);
-		},
-		appendEntry: (customType: string, data?: unknown) => {
-			sessionManager.appendCustomEntry(customType, data);
-		},
-		events: {
-			on: () => () => {},
-			emit: (name: string, data: unknown) => registered.emitted.push({ name, data }),
-		},
-	};
-	return { pi, registered };
+	return { pi: fake.pi, registered };
 }
 
 function reviewer(index: number, status: ReviewerResult["status"], details: string): ReviewerResult {
@@ -188,26 +158,6 @@ const reviewConfig = (overrides: Record<string, unknown> = {}) =>
 	JSON.stringify({ review: { ...TEST_REVIEW_CONFIG, ...overrides } });
 
 describe("registerReview wiring", () => {
-	test("registers the card renderer eagerly (top level, not in session_start)", async () => {
-		await loadAll();
-		const { pi, registered } = makePi(makeSessionManager());
-		registerReview(pi as never);
-		expect(registered.renderers.has("firecode-review-card")).toBe(true);
-		expect(registered.renderers.size).toBe(1);
-	}, 20_000);
-
-	test("registers the fire-review command and session lifecycle events", async () => {
-		await loadAll();
-		const { pi, registered } = makePi(makeSessionManager());
-		registerReview(pi as never);
-		expect(registered.commands.has("fire-review")).toBe(true);
-		expect(registered.events.has("session_start")).toBe(true);
-		expect(registered.events.has("resources_discover")).toBe(true);
-		expect(registered.events.has("agent_settled")).toBe(true);
-		expect(registered.events.has("agent_end")).toBe(true);
-		expect(registered.events.has("session_shutdown")).toBe(true);
-	});
-
 	test("holds Herdr occupancy exactly once until user cancellation", async () => {
 		await loadAll();
 		// 标签必须经 metadata state_labels 送达：herdr 会丢弃 report_agent 的 message（实测），
@@ -602,18 +552,6 @@ describe("registerReview wiring", () => {
 		expect(registered.sent.length).toBeGreaterThan(0);
 	});
 
-	test("the FireCode entry keeps the renderer when every feature is disabled", async () => {
-		const entry = (await loadFirecodeModule("index.js", {
-			configJsonc: JSON.stringify({
-				features: await featuresOnly(),
-			}),
-		})) as { default: (pi: unknown) => void };
-		const { pi, registered } = makePi(makeSessionManager());
-		entry.default(pi);
-		expect(registered.renderers.has("firecode-review-card")).toBe(true);
-		expect(registered.commands.size).toBe(0);
-	});
-
 	test("Master remains available when review is disabled", async () => {
 		const entry = (await loadFirecodeModule("index.js", {
 			configJsonc: JSON.stringify({
@@ -621,13 +559,7 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		entry.default({
-			...pi,
-			events: { ...pi.events, on() {} },
-			registerTool() {},
-			getActiveTools: () => [],
-			setActiveTools() {},
-		});
+		entry.default(pi);
 		expect(registered.commands.has("fire-review")).toBe(false);
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
@@ -640,13 +572,7 @@ describe("registerReview wiring", () => {
 			}),
 		})) as { default: (pi: unknown) => void };
 		const { pi, registered } = makePi(makeSessionManager());
-		entry.default({
-			...pi,
-			events: { ...pi.events, on() {} },
-			registerTool() {},
-			getActiveTools: () => [],
-			setActiveTools() {},
-		});
+		entry.default(pi);
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
 

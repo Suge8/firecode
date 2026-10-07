@@ -2,36 +2,23 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
+import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
-	const commands: string[] = [];
-	const shortcuts: string[] = [];
-	const tools: string[] = [];
-	const renderers: string[] = [];
-	const events = new Map<string, Array<(...args: unknown[]) => void>>();
-	const pi = {
-		registerCommand: (name: string) => commands.push(name),
-		registerShortcut: (key: string) => shortcuts.push(key),
-		registerTool: ({ name }: { name: string }) => tools.push(name),
-		registerMessageRenderer: (name: string) => renderers.push(name),
-		on: (name: string, handler: (...args: unknown[]) => void) =>
-			events.set(name, [...(events.get(name) ?? []), handler]),
-		events: { on: () => () => {}, emit() {} },
-	};
+	const fake = fakePi();
 
-	(registerFirecode as (pi: unknown) => void)(pi);
+	(registerFirecode as (pi: unknown) => void)(fake.pi);
 
-	expect(commands).toEqual([]);
-	expect(shortcuts).toEqual([]);
-	expect(tools).toEqual([]);
-	expect(renderers).toEqual(["firecode-review-card"]);
+	expect([...fake.commands.keys()]).toEqual([]);
+	expect([...fake.shortcuts.keys()]).toEqual([]);
+	expect([...fake.tools.keys()]).toEqual([]);
+	expect([...fake.messageRenderers.keys()]).toEqual(["firecode-review-card"]);
 	const warnings: string[] = [];
 	for (let occurrence = 0; occurrence < 2; occurrence++)
-		for (const handler of events.get("session_start") ?? [])
-			handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+		await fake.fire("session_start", {}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 	expect(warnings).toEqual([
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
@@ -47,21 +34,12 @@ test.each([
 		keys: { rename: "alt+r" },
 	});
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
-	const commands: string[] = [];
-	const shortcuts: string[] = [];
-	const entryRenderers: string[] = [];
-	(registerFirecode as (pi: unknown) => void)({
-		registerCommand: (name: string) => commands.push(name),
-		registerShortcut: (key: string) => shortcuts.push(key),
-		registerMessageRenderer() {},
-		registerEntryRenderer: (name: string) => entryRenderers.push(name),
-		on() {},
-		events: { on: () => () => {}, emit() {} },
-	});
+	const fake = fakePi();
+	(registerFirecode as (pi: unknown) => void)(fake.pi);
 
-	expect(entryRenderers).toEqual([]);
-	expect(commands).toEqual(expectedCommands);
-	expect(shortcuts).toEqual(expectedShortcuts);
+	expect([...fake.entryRenderers.keys()]).toEqual([]);
+	expect([...fake.commands.keys()]).toEqual(expectedCommands);
+	expect([...fake.shortcuts.keys()]).toEqual(expectedShortcuts);
 });
 
 test("Master 角色对象严格解析原子与 fallback", async () => {
@@ -177,16 +155,10 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 			master: { roles: { 工程师: { model: "bad", use: "坏原子" } } },
 		});
 		const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
-		const events = new Map<string, Array<(...args: unknown[]) => void>>();
-		(registerFirecode as (pi: unknown) => void)({
-			registerCommand() {}, registerShortcut() {}, registerTool() {}, registerMessageRenderer() {}, registerEntryRenderer() {},
-			getActiveTools: () => [], setActiveTools() {},
-			on: (name: string, handler: (...args: unknown[]) => void) => events.set(name, [...(events.get(name) ?? []), handler]),
-			events: { on() {}, emit() {} },
-		});
+		const fake = fakePi();
+		(registerFirecode as (pi: unknown) => void)(fake.pi);
 		const warnings: string[] = [];
-		for (const handler of events.get("session_start") ?? [])
-			await handler({}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+		await fake.fire("session_start", {}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 		await cleanupFirecodeModules();
 		return warnings.filter((message) => message.includes("master.roles"));
 	};
