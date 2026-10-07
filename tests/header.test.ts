@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, jest, test } from "bun:test";
 import { cleanupFirecodeModules, loadFirecodeModule, PI_TUI_URL } from "./loader.js";
+import { fakePi } from "./fake-pi.ts";
 
 type Header = { render(width: number): string[]; dispose?(): void };
 type Factory = (tui: { requestRender(): void }, theme: unknown) => Header;
@@ -12,10 +13,10 @@ afterAll(cleanupFirecodeModules);
 /** 经真实注册入口拿到横幅：session_start 时宿主收到的组件，以及它请求重绘的次数。 */
 async function mountHeader(cwd = "/tmp/project") {
 	const { registerHeader } = await loadFirecodeModule("header.ts") as { registerHeader(pi: unknown): void };
-	let onStart: ((event: unknown, ctx: unknown) => void) | undefined;
-	registerHeader({ on: (name: string, handler: never) => { if (name === "session_start") onStart = handler; } });
+	const fake = fakePi();
+	registerHeader(fake.pi);
 	let factory: Factory | undefined;
-	onStart?.({}, { cwd, ui: { setHeader: (next: Factory) => { factory = next; } } });
+	void fake.fire("session_start", {}, { cwd, ui: { setHeader: (next: Factory) => { factory = next; } } });
 	const tui = { renders: 0, requestRender() { tui.renders++; } };
 	return { header: factory!(tui, {}), tui };
 }
