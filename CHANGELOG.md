@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-09
+
 ### Added
 
 - English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. The header, input-box shell, tool rows, providers, the watcher and Master (activity list, Worker view, events, tool descriptions and both prompts), review (cards, prompts, notices, validation errors) and the session commands (`/preset`, `/quota`, `/tokens`, herdr sidebar labels) are bilingual too. Review output parsing and review-card previews keep accepting both languages' field names, so sessions that cross a language switch still resume cleanly.
@@ -15,14 +17,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Breaking:** `review.language` is removed in favour of the top-level `language`; the old key is reported as an unknown field.
 - **Breaking:** the Fast toggle shortcut now defaults to `Ctrl+Shift+S` (was `Ctrl+F`, which collided with Pi's built-in `tui.editor.cursorRight` and produced an "Extension issues" warning on every fresh install). `/fast` is unchanged.
 - **Breaking:** session rename is no longer an extension shortcut: pressing Pi's own rename key (`app.session.rename`, `Ctrl+R` by default, follows `keybindings.json`) in the input box now opens the rename prompt. The `keys.rename` setting, the `features.rename` switch and the `/rename` command are removed (use Pi's `/name`); the removed settings are reported as unknown. Rename now ships with the input-box shell, so it needs `features.statusbar`.
-- README rewritten around the review loop, sub-agent view and watcher, with a delegation-size comparison; install is now a single command.
-
-## [1.1.0] - 2026-10-08
-
-### Changed
-
+- herdr: FireCode is now the only agent-state reporter for its pane. The sidebar stays `working` while sub-agents run after the main turn ends, and during `/fire-review`. Uninstall herdr's official pi integration (don't click "install" in herdr settings), or the two will overwrite each other.
 - The npm package now ships a single bundled `dist/index.js` (121 kB) instead of TypeScript sources; review the source on GitHub.
-- New logo and README (English and Chinese) with a comparison against similar tools.
+- New logo and README (English and Chinese) built around automatic review, sub-agent status and a light core, with comparisons against similar tools.
 
 ### Fixed
 
@@ -69,6 +66,6 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/Suge8/firecode/compare/v1.0.0...v1.1.0
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Suge8/firecode/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Suge8/firecode/compare/v0.8.1...v1.0.0
