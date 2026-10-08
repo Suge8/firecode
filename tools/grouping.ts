@@ -11,7 +11,6 @@ const OWNER = Symbol.for("pi.firecode.tool-groups");
 const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
 
 export interface GroupOptions {
-	replyLines: number;
 	clock: TurnClock;
 }
 
@@ -96,7 +95,7 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 			};
 		});
 		const env: ProjectionEnv = {
-			ui, clock: options.clock, replyLines: options.replyLines, headless: {},
+			ui, clock: options.clock, headless: {},
 			toggleRow: (row) => {
 				toggleToolDetails(row, originalExpand);
 				tui.requestRender();

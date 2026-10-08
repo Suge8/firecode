@@ -67,12 +67,6 @@ export interface WatcherConfig extends ModelAtom {
 	context: WatcherContext;
 }
 
-/** tools 节：折叠态每轮最多显示几条中间回复（0 = 只留最后一条回复）。 */
-export interface ToolsConfig {
-	replyLines: number;
-}
-
-const DEFAULT_REPLY_LINES = 3;
 
 export const FEATURES = [
 	"header",
@@ -89,6 +83,9 @@ export const FEATURES = [
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
+
+/** 顶层只认这些节；openai 节由 provider/openai-native 自己解析。 */
+const SECTIONS = ["features", "keys", "openai", "presets", "review", "master", "watcher"];
 
 export const DEFAULT_KEYS = {
 	rename: "ctrl+r",
@@ -107,7 +104,6 @@ export interface FireCodeConfig {
 	review: ReviewConfig;
 	master: MasterConfig;
 	watcher: WatcherConfig;
-	tools: ToolsConfig;
 }
 
 /** 一节能否启动的唯一判定：要么交出可用配置，要么给出拒绝启动的原因。 */
@@ -244,6 +240,7 @@ export function loadConfig(): LoadedConfig {
 	checkFeatures(features, blocking);
 
 	const problems = [...blocking];
+	for (const key of Object.keys(raw)) if (!SECTIONS.includes(key)) problems.push(`未知配置节 ${key}`);
 	const rawKeys = asRecord(raw.keys);
 	rejectUnknownKeys(rawKeys, Object.keys(DEFAULT_KEYS), "keys", problems);
 	const presets = parsePresets(raw.presets, problems);
@@ -252,8 +249,6 @@ export function loadConfig(): LoadedConfig {
 		fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_KEYS.fast,
 	};
 	checkKeys(keys, presets, problems);
-	if (raw.tools !== undefined && !isPlainObject(raw.tools)) problems.push("tools 必须是对象");
-	const tools = parseToolsConfig(asRecord(raw.tools), problems);
 
 	// review / master / watcher 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
 	// 节内问题只在功能开启时进全局警告。
@@ -279,7 +274,7 @@ export function loadConfig(): LoadedConfig {
 	const watcher = section("watcher", "观察员", parseWatcherConfig, () => undefined);
 
 	cached = {
-		config: { features, keys, presets, review: review.config, master: master.config, watcher: watcher.config, tools },
+		config: { features, keys, presets, review: review.config, master: master.config, watcher: watcher.config },
 		problems,
 		review: review.verdict,
 		master: master.verdict,
@@ -473,17 +468,6 @@ function masterFallback(value: unknown, field: string, problems: string[]): Mode
 		return [];
 	}
 	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));
-}
-
-// ---- tools 节 ----
-
-function parseToolsConfig(raw: Record<string, unknown>, problems: string[]): ToolsConfig {
-	rejectUnknownKeys(raw, ["replyLines"], "tools", problems);
-	const value = raw.replyLines;
-	if (value === undefined) return { replyLines: DEFAULT_REPLY_LINES };
-	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return { replyLines: value };
-	problems.push("tools.replyLines 必须是非负整数");
-	return { replyLines: DEFAULT_REPLY_LINES };
 }
 
 // ---- watcher 节 ----

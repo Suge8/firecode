@@ -31,7 +31,6 @@ const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = {
 };
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
-const REPLY_LINES = 3;
 /** 名字被迫截短时至少留的宽度；再窄就不写名字。 */
 const MIN_NAME = 6;
 /** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。model 是模型原子的位置。 */
@@ -310,7 +309,7 @@ export class WorkerView implements Component, Focusable {
 	private env(record: WorkerRecord): ProjectionEnv {
 		return {
 			ui: { theme: this.theme, getToolsExpanded: () => record.expanded },
-			clock: record.clock, replyLines: REPLY_LINES, headless: this.headless,
+			clock: record.clock, headless: this.headless,
 			toggleRow: (row) => {
 				row.setExpanded(!(row as unknown as { expanded: boolean }).expanded);
 				this.tui.requestRender();

@@ -82,7 +82,7 @@ async function open(options: {
 	disposeGroups = grouping.installGroupPatch({
 		theme, getToolsExpanded: () => false, setToolsExpanded() {}, notify(message: string) { throw new Error(message); },
 		setWidget(_key: string, factory?: (tui: unknown) => unknown) { factory?.(reference); },
-	}, { replyLines: 3, clock: new clockModule.TurnClock() });
+	}, { clock: new clockModule.TurnClock() });
 	const sessionListeners = new Set<(name: string) => void>();
 	const removedListeners = new Set<(name: string) => void>();
 	const sent: [string, string][] = [];
