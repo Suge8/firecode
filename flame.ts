@@ -57,8 +57,8 @@ export function onFrame(listener: () => void): () => void {
 /** 按帧量化的绝对秒数；所有火苗共用同一相位基准。 */
 const frameSeconds = () => Math.floor(Date.now() / FRAME_MS) / FPS;
 
-const clamp = (value: number) => Math.min(1, Math.max(0, value));
-const easeOut = (k: number) => 1 - (1 - clamp(k)) ** 3;
+export const clamp = (value: number) => Math.min(1, Math.max(0, value));
+export const easeOut = (k: number) => 1 - (1 - clamp(k)) ** 3;
 
 export function mix(from: Rgb, to: Rgb, k: number): Rgb {
 	const t = clamp(k);
@@ -122,16 +122,12 @@ export function flame(cells: 1 | 3, phase: number): string {
 	return out;
 }
 
-export type Settle = "done" | "failed";
-
 /**
  * 落定标记：歇下那一刻就是 ✓/✗（与定格文字同帧出现，不留冷却中的火苗残帧），颜色在 0.4 秒内从火焰橙转到终色。
  */
-export function settleMark(kind: Settle, sinceMs: number): string {
-	const k = easeOut(sinceMs / SETTLE_MS);
-	return kind === "done"
-		? paint(mix(HEAT_COLORS.orange, HEAT_COLORS.green, k), "✓")
-		: paint(mix(HEAT_COLORS.orange, HEAT_COLORS.fail, k), "✗");
+export function settleMark(kind: "done" | "failed", sinceMs: number): string {
+	const done = kind === "done";
+	return paint(mix(HEAT_COLORS.orange, done ? HEAT_COLORS.green : HEAT_COLORS.fail, easeOut(sinceMs / SETTLE_MS)), done ? "✓" : "✗");
 }
 
 /** 落定过渡是否仍在播放；调用方据此决定是否继续订阅时钟。 */

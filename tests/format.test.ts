@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
 
 test("单行裁剪保留字素、完整颜色与链接控制序列，不重置外层背景", async () => {
 	const { clip } = await loadFirecodeModule("format.ts") as any;
@@ -55,6 +53,11 @@ test("一行预览的首句认 Markdown：跳过标题、列表符、序号、�
 		["**结论**：没问题。", "结论：没问题。"],
 		["改动如下：\n- a.ts\n- b.ts", "改动如下：a.ts"],
 		["## 交付", "交付"],
+		["标准输出：\n\nhello world\n后面的细节", "标准输出：hello world"],
+		["Result:\nok", "Result: ok"],
+		["output:\nok。其余", "output: ok。"],
+		["说明：\n\n```\n**粗体** 与 `code` 与 [链接](http://x.test)\n```", "说明：粗体 与 code 与 链接"],
+		["命令输出：\n```text\ndone\n```\n**加粗**结尾", "命令输出：done"],
 	]) expect(firstSentence(text)).toBe(expected);
 });
 

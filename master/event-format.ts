@@ -31,7 +31,7 @@ const notice = (...parts: (string | undefined)[]): MasterEvent => ({ body: lines
  * 一次运行里用户在子代理全过程视图直接说的话（按顺序）。有就在标题结果词后注明来源、正文先列原话：
  * 指挥官据此知道这次运行不是它派的，只记下不向用户复述；成败、发落、在飞数与普通 send 完全相同。
  */
-export type ViewPrompts = readonly string[];
+type ViewPrompts = readonly string[];
 const runTitle = (name: string, word: string, view: ViewPrompts) => `${name} ${word}${view.length ? msg.event.viewMark : ""}`;
 const youSaid = (view: ViewPrompts) => view.map(msg.event.youSaid);
 

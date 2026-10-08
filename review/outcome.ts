@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { CHECKPOINT_TYPE, isValidCheckpoint, refusalOf } from "./checkpoint.js";
+import { isCheckpointEntry, isValidCheckpoint, refusalOf } from "./checkpoint.js";
 import { msg } from "./messages.js";
 import type { ReviewState } from "./state.js";
 
@@ -20,7 +20,7 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 		content = readFileSync(sessionPath, "utf8");
 	} catch (error) {
 		if (isMissingFile(error)) return { status: "none" };
-		return { status: "error", message: msg.failure.cannotReadSession(errorMessage(error)) };
+		return { status: "error", message: msg.failure.cannotReadSession(error instanceof Error ? error.message : String(error)) };
 	}
 
 	let latest: ReviewOutcome | undefined;
@@ -52,13 +52,13 @@ export function outcomeOfEntry(entry: unknown): ReviewOutcome | undefined {
 }
 
 /** 审查进行中的轮次与审查者进度；不是审查相的 checkpoint 或不是 checkpoint 都给 undefined。 */
-export interface ReviewProgress {
+export interface ReviewRoundProgress {
 	round: number;
 	settled: number;
 	total: number;
 }
 
-export function reviewProgressOf(entry: unknown): ReviewProgress | undefined {
+export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefined {
 	const active = checkpointOf(entry)?.active;
 	return active ? { round: active.round, settled: active.settledCount, total: active.reviewers.length } : undefined;
 }
@@ -85,18 +85,6 @@ function outcomeOf(latest: ReviewState): ReviewOutcome {
 	return { status: "failed", runId: latest.runId, rounds, reason: last?.details?.trim() || result || "unknown" };
 }
 
-function isCheckpointEntry(value: unknown): value is { data: unknown } {
-	return typeof value === "object" && value !== null
-		&& (value as Record<string, unknown>).type === "custom"
-		&& (value as Record<string, unknown>).customType === CHECKPOINT_TYPE
-		&& "data" in value;
-}
-
 function isMissingFile(error: unknown): boolean {
-	return typeof error === "object" && error !== null
-		&& (error as { code?: unknown }).code === "ENOENT";
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }

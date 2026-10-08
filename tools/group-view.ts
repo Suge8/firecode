@@ -11,7 +11,7 @@ import { Markdown, Spacer, Text, type Component, type TuiMouseEvent } from "@ear
 import { stripVTControlCharacters } from "node:util";
 import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
-import { toolTarget } from "./actions.js";
+import { toolTargetText } from "./actions.js";
 import { firstSentence, oneLine, textOf } from "../format.js";
 import { ToolLine, resultText, type ActionLine } from "./line.js";
 import { genericArgsParts } from "./parts.js";
@@ -22,9 +22,6 @@ import { msg } from "./messages.js";
 import { combineRounds, type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
-
-type RowData = ToolFacts;
-const rowData = toolFacts;
 
 function actionLine(component: Component | undefined): ActionLine | undefined {
 	return component && "actionWord" in component && typeof component.actionWord === "string"
@@ -89,7 +86,7 @@ function noticeKind(component: Component | undefined, theme: Theme): "warning" |
 	return (["warning", "dim"] as const).find((color) => theme.fg(color, plain) === text);
 }
 
-function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
+function compactLine(row: ToolFacts | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
 		label: row ? row.toolDefinition?.label ?? row.toolName : msg.thinking, value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
@@ -107,7 +104,7 @@ type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures" | "e
 
 /** 一遍扫描段内过程，汇出摘要行需要的全部事实。 */
 function scan(segment: readonly Component[], activity: AssistantActivity | undefined, env: ProjectionEnv): Facts {
-	const running: RowData[] = [];
+	const running: ToolFacts[] = [];
 	let notice: string | undefined;
 	let arrival: Facts["arrival"];
 	const rounds: Round[] = [];
@@ -122,7 +119,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		const settled = entries?.findLast((entry) => entry.duration);
 		const age = settled ? env.clock.arrivalAge(item) : Infinity;
 		if (settled && age < ARRIVAL_FLASH_MS) arrival = { text: settled.title, failed: settled.alarm, age };
-		if (item instanceof ToolExecutionComponent && rowData(item).isPartial) running.push(rowData(item));
+		if (item instanceof ToolExecutionComponent && toolFacts(item).isPartial) running.push(toolFacts(item));
 	}
 	const record = combineRounds(rounds);
 	return { notice, arrival, round: record?.round, earlier: record?.earlier, failures: failed.size, action: actionOf(running.at(-1), activity, env) };
@@ -132,12 +129,12 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
  * 当前动作只说正在发生的事：运行中的工具 > 助手在思考/回复 > 指挥官回合在跑但两头都没动静（等模型）是思考中；
  * 指挥官自己歇着、只在等子代理时没有当前动作，摘要行只留火苗（等待状态与计时只在边框）。
  */
-function actionOf(tool: RowData | undefined, activity: AssistantActivity | undefined, env: ProjectionEnv): SummaryView["action"] {
+function actionOf(tool: ToolFacts | undefined, activity: AssistantActivity | undefined, env: ProjectionEnv): SummaryView["action"] {
 	if (tool) {
 		const line = actionLine(tool.callRendererComponent);
 		return line
 			? { word: line.actionWord, target: line.actionTarget }
-			: { word: tool.toolDefinition?.label ?? tool.toolName, target: toolTarget(tool.toolName, tool.args, tool.cwd).value.map((part) => part.text).join("").trim() };
+			: { word: tool.toolDefinition?.label ?? tool.toolName, target: toolTargetText(tool.toolName, tool.args, tool.cwd) };
 	}
 	if (activity) return { word: msg.activity[activity] };
 	return env.clock.agentRunning ? { word: msg.activity.thinking } : undefined;
@@ -186,7 +183,7 @@ class ToolItem implements Component {
 	) {}
 	invalidate(): void {}
 	render(width: number): string[] {
-		const data = rowData(this.row);
+		const data = toolFacts(this.row);
 		if (!data.expanded) {
 			const renderer = actionLine(data.callRendererComponent) ?? compactLine(data, this.ui.theme);
 			return renderer.render(width);
@@ -196,9 +193,9 @@ class ToolItem implements Component {
 		return lines.slice(this.leadingRows);
 	}
 	handleMouse(event: TuiMouseEvent) {
-		if (rowData(this.row).expanded)
+		if (toolFacts(this.row).expanded)
 			return this.row.handleMouse({ ...event, y: event.y + this.leadingRows, height: event.height + this.leadingRows });
-		if (event.type !== "click" || event.button !== "left" || !rowData(this.row).result) return undefined;
+		if (event.type !== "click" || event.button !== "left" || !toolFacts(this.row).result) return undefined;
 		this.toggle(this.row);
 		return { handled: true };
 	}
@@ -230,7 +227,7 @@ class UserBar implements Component {
 }
 
 /** 投影只用到宿主 UI 的主题与全局展开档位；主会话传 ctx.ui，子代理全过程视图传自己的一份。 */
-export type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded">;
+type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded">;
 
 export interface ProjectionEnv {
 	ui: ProjectionUI;
@@ -416,5 +413,5 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 }
 
 export function toggleToolDetails(row: ToolRow, setExpanded: ToolRow["setExpanded"]): void {
-	setExpanded.call(row, !rowData(row).expanded);
+	setExpanded.call(row, !toolFacts(row).expanded);
 }

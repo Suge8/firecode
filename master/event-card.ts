@@ -1,57 +1,23 @@
 /**
  * Master 事件卡：默认紧凑（每事件一行标题行），ctrl+o 展开完整内容。
- * 数据只来自消息正文里的信封（deliver.ts 是格式的唯一事实源）；渲染器永不抛异常。
+ * 数据只来自消息正文里的信封（deliver.ts 是格式的唯一事实源）；渲染器抛错时宿主退回默认消息渲染。
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Markdown, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, Markdown } from "@earendil-works/pi-tui";
 import { clip, firstSentence, oneLine, textOf } from "../format.js";
 import { parseEnvelopes } from "../deliver.js";
 import { machineEntries } from "../tools/machine.js";
 import { MASTER_EVENT_TYPE } from "./event-format.js";
 
 export function registerMasterEventRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer(
-		MASTER_EVENT_TYPE,
-		(message, options, theme) => new MasterEventCard(message.content, options.expanded, theme),
-	);
+	pi.registerMessageRenderer(MASTER_EVENT_TYPE, (message, options, theme) => {
+		const text = textOf(message.content);
+		return options.expanded ? fullCard(text, theme) : compactCard(text, theme);
+	});
 }
 
-class MasterEventCard implements Component {
-	private readonly card: Component;
-	private readonly fallback: Component;
-
-	constructor(content: string | (string | unknown)[], expanded: boolean, theme: Theme) {
-		const text = textOf(content);
-		this.fallback = new Text(text, 0, 0);
-		let card: Component | undefined;
-		try {
-			card = !expanded ? compactCard(text, theme) : fullCard(text, theme);
-		} catch {
-			card = undefined;
-		}
-		this.card = card ?? this.fallback;
-	}
-
-	render(width: number): string[] {
-		try {
-			return this.card.render(Math.max(1, width));
-		} catch {
-			try {
-				return this.fallback.render(Math.max(1, width));
-			} catch {
-				return [];
-			}
-		}
-	}
-
-	invalidate(): void {
-		this.card.invalidate?.();
-		this.fallback.invalidate?.();
-	}
-}
-
-/** 每个事件一行：标题 + 正文首句；不是信封的旧消息退化为完整内容。 */
+/** 每个事件一行：标题 + 正文首句；不是信封的消息退化为完整内容。 */
 function compactCard(text: string, theme: Theme): Component {
 	const entries = machineEntries(text);
 	if (!entries) return fullCard(text, theme);

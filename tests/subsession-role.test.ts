@@ -1,7 +1,5 @@
-import { afterAll, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader";
-
-afterAll(cleanupFirecodeModules);
+import { expect, test } from "bun:test";
+import { loadFirecodeModule } from "./loader";
 
 // pi 的扩展加载器（jiti，moduleCache: false）在子会话 cwd 变化或宿主 reload 后会重新
 // 求值整个模块图：spawn 侧与子会话入口可能各持一份 role.ts 拷贝。角色标记必须跨拷贝

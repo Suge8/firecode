@@ -1,8 +1,6 @@
-import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { expect, setSystemTime, test } from "bun:test";
+import { loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 /** 会话歇下边沿：sessionBusy（指挥官回合在跑 || 有子代理在飞）由真变假时恰好触发一次。 */
 async function harness() {

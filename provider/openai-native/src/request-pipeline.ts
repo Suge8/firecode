@@ -1,11 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../../../jsonc.js";
 import type { OpenAINativeSettings } from "./config";
 import { replayOpenAINative } from "./native-compaction";
 import { applyOpenAIOptions } from "./options";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 export function rewriteOpenAIProviderRequest(
 	payload: unknown,

@@ -1,25 +1,14 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, featuresOnly, loadFirecodeModule } from "./loader.ts";
+import { expect, test } from "bun:test";
+import { featuresOnly, loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 /** 按会话角色注册整个 FireCode，跑一个回合，返回写进会话的轮记录。 */
 async function recordedRounds(role: "main" | "worker", features: string[]) {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({ features: await featuresOnly(...features) }),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown, role: string) => role === "main"',
-				'	? Promise.resolve(firecode(pi as never))',
-				'	: withSubsessionRole(role as never, async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown, role: string) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi, role);
+	registerFirecode(fake.pi, role);
 	const ctx = { isIdle: () => true, signal: { aborted: false }, hasUI: false, mode: "print" };
 	for (const name of ["agent_start", "agent_end", "agent_settled"])
 		await fake.fire(name, { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
@@ -28,7 +17,6 @@ async function recordedRounds(role: "main" | "worker", features: string[]) {
 
 test("轮记录在每个会话里由同一段代码写：主会话与子代理会话都写，且每段只写一条", async () => {
 	expect(await recordedRounds("main", ["tools"])).toEqual([{ elapsed: expect.any(Number), outcome: "complete" }]);
-	await cleanupFirecodeModules();
 	expect(await recordedRounds("worker", ["tools", "master"])).toEqual([{ elapsed: expect.any(Number), outcome: "complete" }]);
 });
 

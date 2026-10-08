@@ -80,6 +80,9 @@ class Shell {
 		this.stopClock?.();
 		this.stopClock = undefined;
 		this.requestRender = () => {};
+		this.busy = IDLE;
+		this.settled = undefined;
+		this.review = undefined;
 	}
 
 	sync(view: BusyView): void {
@@ -189,8 +192,7 @@ class ShellEditor extends CustomEditor {
 	}
 }
 
-export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
-	if (subsession) return;
+export function registerStatusBar(pi: ExtensionAPI): void {
 	const shell = new Shell();
 	const updateTitle = (ctx: ExtensionContext, incoming?: MessageStartEvent["message"]) => {
 		shell.title = displayTitle(ctx, incoming);
@@ -248,9 +250,6 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 	pi.on("model_select", () => shell.requestRender());
 	pi.on("session_shutdown", (_event, ctx) => {
 		shell.dispose();
-		shell.busy = IDLE;
-		shell.settled = undefined;
-		shell.review = undefined;
 		ctx.ui.setFooter(undefined);
 		ctx.ui.setEditorComponent(undefined);
 	});

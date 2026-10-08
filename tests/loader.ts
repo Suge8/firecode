@@ -9,7 +9,6 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const FIRECODE_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-const SOURCE_DIR = FIRECODE_DIR;
 
 function piPackagesDirectory(): string {
 	if (process.env.PI_PACKAGES_DIR) return process.env.PI_PACKAGES_DIR;
@@ -26,11 +25,9 @@ function piPackagesDirectory(): string {
 
 export const PI_PACKAGES = piPackagesDirectory();
 export const PI_CODING_AGENT_URL = pathToFileURL(join(PI_PACKAGES, "coding-agent/src/index.ts")).href;
-const PI_CODING_AGENT = PI_CODING_AGENT_URL;
 export const PI_AI_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
 export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.ts")).href;
-const PI_AI = PI_AI_URL;
-const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
+export const PI_TUI_URL = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
 /** 测试默认中文：配置未写 language 时 FireCode 跟随系统 locale，这里固定它，断言才与机器无关。 */
 process.env.LC_ALL = "zh_CN.UTF-8";
@@ -68,10 +65,10 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 });
 
 async function copyFirecodeSource(destination: string): Promise<void> {
-	await cp(SOURCE_DIR, destination, {
+	await cp(FIRECODE_DIR, destination, {
 		recursive: true,
 		filter: (source) => {
-			const path = relative(SOURCE_DIR, source);
+			const path = relative(FIRECODE_DIR, source);
 			const [root] = path.split(sep);
 			if (NON_RUNTIME_ROOTS.has(root)) return false;
 			if (![".md", ".mdx"].includes(extname(path))) return true;
@@ -91,17 +88,13 @@ async function rewriteImports(directory: string): Promise<void> {
 		}
 		if (!entry.name.endsWith(".ts")) continue;
 		const source = (await readFile(path, "utf8"))
-			.replaceAll('"@earendil-works/pi-coding-agent"', JSON.stringify(PI_CODING_AGENT))
-			.replaceAll('"@earendil-works/pi-ai"', JSON.stringify(PI_AI))
-			.replaceAll('"@earendil-works/pi-tui"', JSON.stringify(PI_TUI));
+			.replaceAll('"@earendil-works/pi-coding-agent"', JSON.stringify(PI_CODING_AGENT_URL))
+			.replaceAll('"@earendil-works/pi-ai"', JSON.stringify(PI_AI_URL))
+			.replaceAll('"@earendil-works/pi-tui"', JSON.stringify(PI_TUI_URL));
 		await writeFile(path, source);
 	}
 }
 
-/**
- * 加载插件内某个模块，例如 `tools/index.ts`、`session/presets.ts`。
- * `configJsonc` 可覆写或移除测试 Agent 目录里的运行配置，用于验证配置边界。
- */
 /** 与 loadFirecodeModule 同一份副本里某个模块的绝对路径：供测试写进子会话扩展文件，让子会话加载同一份代码。 */
 export async function firecodeModulePath(
 	entry: string,
@@ -110,6 +103,10 @@ export async function firecodeModulePath(
 	return join(await copyFor(entry, options), entry);
 }
 
+/**
+ * 加载插件内某个模块，例如 `tools/index.ts`、`session/presets.ts`。
+ * `configJsonc` 可覆写或移除测试 Agent 目录里的运行配置，用于验证配置边界。
+ */
 export async function loadFirecodeModule(
 	entry: string,
 	options: {
@@ -155,7 +152,7 @@ async function prepareCopy(
 	}
 	await rewriteImports(directory);
 	const configModule = join(directory, "config-file.ts");
-	const getAgentDirImport = `import { getAgentDir } from ${JSON.stringify(PI_CODING_AGENT)};`;
+	const getAgentDirImport = `import { getAgentDir } from ${JSON.stringify(PI_CODING_AGENT_URL)};`;
 	const configSource = await readFile(configModule, "utf8");
 	if (!configSource.includes(getAgentDirImport)) throw new Error("FireCode config path seam changed");
 	await writeFile(
@@ -168,11 +165,6 @@ async function prepareCopy(
 	}
 	return directory;
 }
-
-/** 副本按配置共享、进程退出才删；保留这个钩子让各用例的 afterEach 写法不变。 */
-export async function cleanupFirecodeModules(): Promise<void> {}
-
-export const PI_TUI_URL = PI_TUI;
 
 /** 注册入口测试只开启指定功能，其余开关从运行配置的唯一功能清单派生。 */
 export async function featuresOnly(...enabled: string[]): Promise<Record<string, boolean>> {

@@ -12,19 +12,15 @@ import { msg } from "./messages.js";
 const PROMPTS = new URL("./prompts/", import.meta.url);
 const OBSERVER_TOOLS = ["read", "grep", "find", "ls", "advise"];
 
-export interface Advice {
-	note: string;
-}
-
 export interface Observer {
 	/** 喂一段增量并等待评估；至多返回一条建议。 */
-	evaluate(increment: string): Promise<Advice | undefined>;
+	evaluate(increment: string): Promise<string | undefined>;
 	/** 观察会话自身上下文占比（百分数），未知时 undefined。 */
 	contextPercent(): number | undefined;
 	dispose(): Promise<void>;
 }
 
-export interface ObserverOptions {
+interface ObserverOptions {
 	cwd: string;
 	model: Model<any>;
 	thinking: ThinkingLevelValue;
@@ -32,14 +28,14 @@ export interface ObserverOptions {
 }
 
 export async function createObserver(options: ObserverOptions): Promise<Observer> {
-	let advice: Advice | undefined;
+	let advice: string | undefined;
 	const spawned = await options.pool.spawn({
 		cwd: options.cwd,
 		role: "observer",
 		model: options.model,
 		thinking: options.thinking,
 		tools: OBSERVER_TOOLS,
-		customTools: [adviseTool(() => advice, (next) => { advice = next; })],
+		customTools: [adviseTool(() => advice, (note) => { advice = note; })],
 		systemPrompt: { mode: "replace", text: readPrompt(PROMPTS, "watch") },
 		contextFiles: true,
 		persistence: { type: "memory" },
@@ -55,7 +51,7 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 	};
 }
 
-function adviseTool(current: () => Advice | undefined, capture: (advice: Advice) => void) {
+function adviseTool(current: () => string | undefined, capture: (note: string) => void) {
 	return {
 		name: "advise",
 		label: msg.advise.label,
@@ -67,7 +63,7 @@ function adviseTool(current: () => Advice | undefined, capture: (advice: Advice)
 			if (current()) throw new Error(msg.advise.alreadySubmitted);
 			const note = typeof params.note === "string" ? params.note.trim() : "";
 			if (!note) throw new Error(msg.advise.emptyNote);
-			capture({ note });
+			capture(note);
 			return { content: [{ type: "text" as const, text: msg.advise.recorded }], details: undefined };
 		},
 	};

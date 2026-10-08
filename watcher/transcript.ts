@@ -4,7 +4,7 @@
  */
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import type { WatcherContext } from "../config.js";
-import { textOf } from "../format.js";
+import { oneLine, textOf } from "../format.js";
 import { msg } from "./messages.js";
 
 const RESULT_BUDGET = 400;
@@ -45,10 +45,6 @@ const BODY_KEYS = new Set(["content", "oldText", "newText", "old_text", "new_tex
 
 function blocks(content: unknown): Array<Record<string, any>> {
 	return Array.isArray(content) ? content.filter((part) => !!part && typeof part === "object") : [];
-}
-
-function oneLine(text: string): string {
-	return text.replace(/\s+/gu, " ").trim();
 }
 
 function clipText(text: string, budget: number): string {

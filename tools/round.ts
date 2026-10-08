@@ -33,7 +33,6 @@ export function roundMarker(round: Round): Component {
 export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>) =>
 	roundMarker({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
 
-/** 一轮里更早的非完成终态的短标记。 */
 /**
  * 一轮可能有多条记录（中断后又跑了一段，如 /fire-review 或命令触发的再次进行）。合成规则不丢信息：
  * 耗时累加（用户关心这一轮总共花了多久），终态与落定时刻取最后一条（这一轮最终怎样），更早的中断/请求失败
@@ -41,6 +40,7 @@ export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<Sett
  */
 export interface TurnRecord {
 	round: Round;
+	/** 一轮里更早的非完成终态的短标记。 */
 	earlier: string[];
 }
 

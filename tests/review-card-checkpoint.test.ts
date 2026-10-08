@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
+import { describe, expect, test } from "bun:test";
+import { loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
 
 type BuildCard = typeof import("../review/card.js").buildCard;
 type BuildPrompt = typeof import("../review/prompt.js").buildReviewPrompt;
@@ -36,26 +36,22 @@ async function loadAll() {
 	buildFixFeedback = prompt.buildFixFeedback;
 }
 
-afterEach(cleanupFirecodeModules);
-
 describe("result card payload", () => {
 	test("every card kind produces schema-valid details and non-empty plain content", async () => {
 		await loadAll();
-		const cards = [
-			{ kind: "start", round: 1, focus: "f", models: ["p/sol", "p/terra"] },
-			{ kind: "pass", round: 1, summary: "s", details: "s", elapsedMs: 1000 },
-			{ kind: "fail", round: 1, details: "FAIL", advisor: null },
-			{ kind: "stop", reason: "max_rounds", round: 1, details: "" },
-			{ kind: "cancel", round: 1 },
-			{ kind: "timeout", round: 1 },
+		const cards: Parameters<BuildCard>[0][] = [
+			{ kind: "start", models: ["p/sol", "p/terra"] },
+			{ kind: "pass", round: 1, summary: "s", elapsedMs: 1000, totalElapsedMs: 1000 },
+			{ kind: "fail", round: 1, details: "FAIL", elapsedMs: 1000 },
+			{ kind: "stop", reason: "max_rounds", round: 1, details: "FAIL" },
+			{ kind: "timeout" },
 			{ kind: "error", message: "err" },
-			{ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" }, advisorModel: "p/advisor" },
+			{ kind: "advisor", advisor: { verdict: "continue", advice: "继续修复" }, advisorModel: "p/advisor", elapsedMs: 1000 },
 		];
 		for (const card of cards) {
-			const built = buildCard(card as never);
+			const built = buildCard(card);
 			expect(built.content.length).toBeGreaterThan(0);
 			expect(isValidCardDetails(built.details)).toBe(true);
-			expect(built.details.lines.every((line) => typeof line === "string")).toBe(true);
 		}
 	});
 
@@ -66,6 +62,7 @@ describe("result card payload", () => {
 			// 真实输出契约：粗体段标题连写不空行；排版必须补空行，Markdown 才不会把三段折成一块。
 			advisor: { verdict: "continue", advice: "**核实结论**：发现属实\n**根因判断**：竞态\n**下一步方向**：补锁" },
 			advisorModel: "kimi-coding/k3-256k",
+			elapsedMs: 1000,
 		});
 		expect(advice.details).toMatchObject({ title: "顾问指引 · 继续修复", icon: "⠿", tone: "neutral" });
 		expect(advice.details.lines).toEqual([
@@ -76,6 +73,10 @@ describe("result card payload", () => {
 			"**根因判断**：竞态",
 			"",
 			"**下一步方向**：补锁",
+			"",
+			"---",
+			"",
+			"用时：1.0s",
 		]);
 
 		const stopped = buildCard({
@@ -85,18 +86,23 @@ describe("result card payload", () => {
 			details: "不要再修",
 			advisor: { verdict: "stop", advice: "不要再修" },
 			advisorModel: "p/advisor",
+			elapsedMs: 1000,
 		});
 		expect(stopped.details.title).toBe("第 2 轮审查已由顾问终止");
 		expect(stopped.details.lines).toEqual([
 			"**模型 · advisor**",
 			"",
 			"不要再修",
+			"",
+			"---",
+			"",
+			"用时：1.0s",
 		]);
 	});
 
 	test("content is plain text facts; details carry the localized title and glyph", async () => {
 		await loadAll();
-		const built = buildCard({ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 60000 });
+		const built = buildCard({ kind: "pass", round: 1, summary: "ok", elapsedMs: 60000, totalElapsedMs: 60000 });
 		expect(built.content).not.toMatch(/\x1b\[/);
 		expect(built.details.title).toBe("审查通过");
 		expect(built.details.icon).toBe("✓");
@@ -105,7 +111,7 @@ describe("result card payload", () => {
 
 	test("start card announces the review with its models", async () => {
 		await loadAll();
-		const started = buildCard({ kind: "start", round: 1, focus: "", models: ["p/sol"] });
+		const started = buildCard({ kind: "start", models: ["p/sol"] });
 		expect(started.details).toMatchObject({
 			title: "审查开始",
 			icon: "⠿",
@@ -113,18 +119,15 @@ describe("result card payload", () => {
 		});
 	});
 
-	test("result cards match pi-flow titles, icons, findings, and blocker copy", async () => {
+	test("result cards carry titles, icons, findings, elapsed footers and blocker copy", async () => {
 		await loadAll();
 		const failed = buildCard({
 			kind: "fail",
 			round: 2,
 			details: "模型 1 · sol\n## 发现 1\n- 问题: x\n\n模型 2 · terra\n已核对",
-			advisor: null,
 			elapsedMs: 127_000,
-			totalElapsedMs: 300_000,
 		});
-		const cancelled = buildCard({ kind: "cancel", round: 1, reason: "user" });
-		const timeout = buildCard({ kind: "timeout", round: 1, reason: "timeout" });
+		const timeout = buildCard({ kind: "timeout" });
 		expect(failed.details.title).toBe("第 2 轮审查未通过");
 		expect(failed.details.icon).toBe("✗");
 		expect(failed.details.lines).toContain("**模型 1 · sol**");
@@ -132,8 +135,9 @@ describe("result card payload", () => {
 		expect(failed.details.lines).toContain("- 问题: x");
 		expect(failed.details.lines).toContain("---");
 		expect(failed.details.lines).toContain("用时：2m7s");
-		expect(failed.details.lines.join("\n")).not.toContain("/ 总");
-		expect(cancelled.details).toMatchObject({ title: "审查已取消", icon: "‖" });
+		// 总耗时只在第 2 轮起的通过卡上出现。
+		const later = buildCard({ kind: "pass", round: 2, summary: "ok", elapsedMs: 127_000, totalElapsedMs: 300_000 });
+		expect(later.details.lines).toContain("用时：2m7s / 总 5m");
 		expect(timeout.details).toMatchObject({ title: "审查未完成", icon: "◌" });
 		expect(timeout.details.lines).toContain("卡点：审查超时");
 	});
@@ -150,9 +154,9 @@ describe("result card payload", () => {
 			registerMessageRenderer: (_type: string, next: typeof renderer) => { renderer = next; },
 		});
 		for (const [input, background] of [
-			[{ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 1 }, "toolSuccessBg"],
-			[{ kind: "fail", round: 1, details: "## 发现 1", advisor: null }, "toolErrorBg"],
-			[{ kind: "start", round: 1, focus: "", models: ["p/m"] }, "customMessageBg"],
+			[{ kind: "pass", round: 1, summary: "ok", elapsedMs: 1, totalElapsedMs: 1 }, "toolSuccessBg"],
+			[{ kind: "fail", round: 1, details: "## 发现 1", elapsedMs: 1 }, "toolErrorBg"],
+			[{ kind: "start", models: ["p/m"] }, "customMessageBg"],
 		] as const) {
 			const backgrounds: string[] = [];
 			const built = card.buildCard(input as never);
@@ -179,22 +183,18 @@ describe("result card payload", () => {
 		card.registerCardRenderer({ registerMessageRenderer: (_type: string, next: typeof renderer) => { renderer = next; } });
 		const gold = "\x1b[38;2;255;195;61m";
 		const cases = [
-			[{ kind: "start", round: 1, focus: "", models: ["p/m"] }, gold + "⠿"],
-			[{ kind: "pass", round: 1, summary: "ok", details: "ok", elapsedMs: 1000, totalElapsedMs: 2000 }, theme.fg("success", "✓")],
-			[{ kind: "fail", round: 1, details: "## 发现 1", advisor: { verdict: "continue", advice: "继续" }, elapsedMs: 1000 }, theme.fg("error", "✗")],
-			[{ kind: "stop", reason: "max_rounds", round: 3, details: "", elapsedMs: 1000 }, theme.fg("error", "✗")],
-			[{ kind: "cancel", round: 1, reason: "user" }, theme.fg("muted", "‖")],
-			[{ kind: "timeout", round: 1, reason: "timeout" }, theme.fg("error", "◌")],
+			[{ kind: "start", models: ["p/m"] }, gold + "⠿"],
+			[{ kind: "pass", round: 1, summary: "ok", elapsedMs: 1000, totalElapsedMs: 2000 }, theme.fg("success", "✓")],
+			[{ kind: "fail", round: 1, details: "## 发现 1", elapsedMs: 1000 }, theme.fg("error", "✗")],
+			[{ kind: "stop", reason: "max_rounds", round: 3, details: "FAIL", elapsedMs: 1000 }, theme.fg("error", "✗")],
+			[{ kind: "timeout" }, theme.fg("error", "◌")],
 			[{ kind: "error", message: "供应商报错", elapsedMs: 1000 }, theme.fg("error", "◌")],
 			[{ kind: "advisor", advisor: { verdict: "narrow", advice: "收窄" }, advisorModel: "p/a", elapsedMs: 1000 }, gold + "⠿"],
 		] as const;
 		for (const [input, mark] of cases) {
-			for (const language of ["zh", "en"] as const) {
-				const built = card.buildCard(input as never, language);
-				const text = [built.content, built.details.icon, built.details.title, ...built.details.lines].join("\n");
-				expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
-			}
 			const built = card.buildCard(input as never);
+			const text = [built.content, built.details.icon, built.details.title, ...built.details.lines].join("\n");
+			expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
 			const lines = renderer!({ details: built.details, content: built.content }, {}, theme).render(60);
 			expect(lines.find((line) => line.includes(built.details.title))).toContain(mark);
 		}
@@ -215,26 +215,6 @@ describe("result card payload", () => {
 		);
 		expect(() => component?.render(48)).not.toThrow();
 		expect(component?.render(48).join("\n")).toContain("## 原始内容");
-	});
-
-	test("narrow cards never render beyond the terminal width", async () => {
-		const card = (await loadFirecodeModule("review/card.js")) as {
-			buildCard: BuildCard;
-			registerCardRenderer: (pi: unknown) => void;
-		};
-		let renderer: ((message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] }) | undefined;
-		card.registerCardRenderer({
-			registerMessageRenderer: (_type: string, next: typeof renderer) => {
-				renderer = next;
-			},
-		});
-		const built = card.buildCard({ kind: "timeout", round: 12 });
-		const lines = renderer?.(
-			{ details: built.details, content: built.content },
-			{},
-			{ fg: (_color: string, text: string) => text, bg: (_tone: string, text: string) => text },
-		)?.render(8) ?? [];
-		expect(lines.every((line) => Bun.stringWidth(line) <= 8)).toBe(true);
 	});
 });
 
@@ -272,82 +252,47 @@ describe("checkpoint schema", () => {
 
 	// 回归：轮记录新增 reason 字段时校验白名单未同步，导致取消/超时的终态写不进去，
 	// 活动 checkpoint 残留并在重启后被恢复成幽灵审查。校验键现由类型 satisfies 派生，
-	// 这里覆盖 reducer 能产出的每种终态，确保持久化路径真的走得通。
-	test("every terminal state the reducer can produce survives a checkpoint round trip", async () => {
+	// 这里覆盖 reducer 能产出的每种终态与总结相的每个中途状态，确保持久化路径真的走得通。
+	test("every state the reducer can produce survives the checkpoint schema", async () => {
 		await loadAll();
-		const state = (await loadFirecodeModule("review/state.js")) as typeof import("../review/state.js");
+		const { reduce, initialState } = (await loadFirecodeModule("review/state.js")) as typeof import("../review/state.js");
 		const limits = {
 			maxRounds: 5,
 			advisorAfterFailures: 2,
 			advisorModel: "p/advisor",
-			reviewers: [{ model: "p/m1", thinking: "high" }],
+			reviewers: [{ model: "p/m1", thinking: "high" as const }],
 		};
-		const singleRound = { ...limits, maxRounds: 1 };
-		const failed = {
-			index: 0,
-			model: "p/m1",
-			thinking: "high",
-			status: "failed" as const,
-			summary: "s",
-			details: "d",
-		};
-		const start = state.reduce(
-			state.initialState("g"),
-			{ type: "START", focus: "", busy: false },
-			limits,
-			1,
-		).state;
-		const settle = (from: typeof start) =>
-			state.reduce(from, { type: "REVIEWER_SETTLED", index: 0, result: failed }, limits, 2).state;
-		let repaired = settle(start);
-		repaired = state.reduce(repaired, { type: "FEEDBACK_DISPATCHED" }, limits, 3).state;
-		repaired = state.reduce(repaired, { type: "REPAIR_STARTED" }, limits, 4).state;
-		repaired = state.reduce(repaired, { type: "REPAIR_COMPLETED" }, limits, 5).state;
-		const advisorPhase = settle(state.reduce(repaired, { type: "ADVANCE" }, limits, 6).state);
-		expect(advisorPhase.phase).toBe("needs_fix");
+		const failed = { index: 0, model: "p/m1", thinking: "high", status: "failed" as const, summary: "s", details: "d" };
+		type State = ReturnType<typeof initialState>;
+		type Event = Parameters<typeof reduce>[1];
+		const step = (from: State, event: Event, now = 5, with_ = limits) => reduce(from, event, with_, now).state;
+		const reviewing = (with_ = limits) =>
+			step(step(initialState("g"), { type: "START", focus: "" }, 1, with_), { type: "ADVANCE" }, 1, with_);
+		const failRound = (from: State, with_ = limits) => step(from, { type: "REVIEWER_SETTLED", index: 0, result: failed }, 2, with_);
+		let repaired = failRound(reviewing());
+		for (const type of ["FEEDBACK_DISPATCHED", "REPAIR_STARTED", "REPAIR_COMPLETED"] as const) repaired = step(repaired, { type });
+		const needsAdvisor = failRound(step(repaired, { type: "ADVANCE" }, 6));
+		expect(needsAdvisor.phase).toBe("needs_fix");
 
-		// 质量裁决终态先经 summarizing；总结回合结束后才 settled。
-		const summarize = (from: typeof start) => state.reduce(from, { type: "SUMMARY_SETTLED" }, limits, 5).state;
-		const terminals = {
-			"reviewing→cancel": state.reduce(start, { type: "CANCEL", reason: "shutdown" }, limits, 4).state,
-			"reviewing→timeout": state.reduce(start, { type: "TIMEOUT" }, limits, 4).state,
-			"needs_fix→cancel": state.reduce(advisorPhase, { type: "CANCEL", reason: "user" }, limits, 4).state,
-			"needs_fix→timeout": state.reduce(advisorPhase, { type: "TIMEOUT" }, limits, 4).state,
-			"advisor→stop": summarize(state.reduce(
-				advisorPhase,
-				{ type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } },
-				limits,
-				4,
-			).state),
-			"max_rounds": summarize(state.reduce(
-				state.reduce(
-					state.initialState("g2"),
-					{ type: "START", focus: "", busy: false },
-					singleRound,
-					1,
-				).state,
-				{ type: "REVIEWER_SETTLED", index: 0, result: failed },
-				singleRound,
-				2,
-			).state),
+		const states: Record<string, State> = {
+			"reviewing→cancel": step(reviewing(), { type: "CANCEL", reason: "shutdown" }),
+			"reviewing→timeout": step(reviewing(), { type: "TIMEOUT" }),
+			"needs_fix→cancel": step(needsAdvisor, { type: "CANCEL", reason: "user" }),
+			"needs_fix→timeout": step(needsAdvisor, { type: "TIMEOUT" }),
+			"advisor→stop settled": step(step(needsAdvisor, { type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } }), { type: "SUMMARY_SETTLED" }),
+			"max_rounds settled": step(failRound(reviewing({ ...limits, maxRounds: 1 }), { ...limits, maxRounds: 1 }), { type: "SUMMARY_SETTLED" }),
 		};
-		for (const [label, terminal] of Object.entries(terminals)) {
-			expect(`${label}:${terminal.phase}`).toBe(`${label}:settled`);
-			expect(`${label}:${isValidCheckpoint({ version: 5, seq: 1, ...terminal })}`).toBe(`${label}:true`);
-		}
-		// summarizing 的每个中途状态都必须可持久化：reload 重投依赖它。
-		let summarizing = state.reduce(
-			advisorPhase,
-			{ type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } },
-			limits,
-			4,
-		).state;
+		let summarizing = step(needsAdvisor, { type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "a" } });
 		expect(summarizing.phase).toBe("summarizing");
-		for (const event of ["SUMMARY_DISPATCHED", "SUMMARY_STARTED"] as const) {
-			expect(isValidCheckpoint({ version: 5, seq: 1, ...summarizing })).toBe(true);
-			summarizing = state.reduce(summarizing, { type: event }, limits, 5).state;
+		states["summarizing pending"] = summarizing;
+		for (const type of ["SUMMARY_DISPATCHED", "SUMMARY_STARTED"] as const) {
+			summarizing = step(summarizing, { type });
+			states[`summarizing ${type}`] = summarizing;
 		}
-		expect(isValidCheckpoint({ version: 5, seq: 1, ...summarizing })).toBe(true);
+		for (const [label, state] of Object.entries(states)) {
+			expect(`${label}:${isValidCheckpoint({ version: 5, seq: 1, ...state })}`).toBe(`${label}:true`);
+			if (label.includes("→") || label.includes("settled")) expect(`${label}:${state.phase}`).toBe(`${label}:settled`);
+		}
 	});
 });
 

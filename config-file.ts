@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { parseJsonc } from "./jsonc.js";
+import { isRecord, parseJsonc } from "./jsonc.js";
 
 export const CONFIG_PATH = join(getAgentDir(), "extensions", "firecode", "config.jsonc");
 
@@ -33,19 +33,12 @@ export type ConfigFile = {
 };
 
 export function readConfigFile(): ConfigFile {
-	let text: string;
+	let parsed: unknown;
 	try {
-		text = readFileSync(CONFIG_PATH, "utf8");
+		parsed = parseJsonc(readFileSync(CONFIG_PATH, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { raw: {}, fault: { kind: "missing" } };
 		return { raw: {}, fault: { kind: "parse", message: error instanceof Error ? error.message : String(error) } };
 	}
-	try {
-		const parsed: unknown = parseJsonc(text);
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-			return { raw: parsed as Record<string, unknown> };
-		return { raw: {}, fault: { kind: "notObject" } };
-	} catch (error) {
-		return { raw: {}, fault: { kind: "parse", message: error instanceof Error ? error.message : String(error) } };
-	}
+	return isRecord(parsed) ? { raw: parsed } : { raw: {}, fault: { kind: "notObject" } };
 }

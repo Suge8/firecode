@@ -8,7 +8,7 @@ import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } fr
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";
-import type { ReviewProgress } from "../review/outcome.js";
+import type { ReviewRoundProgress } from "../review/outcome.js";
 import { msg as toolsMsg } from "../tools/messages.js";
 import { msg } from "./messages.js";
 import type { WorkerRef } from "./state.js";
@@ -24,7 +24,7 @@ export interface SettledFact {
 export interface ActivityFacts {
 	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "launch">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
-	reviewProgress: ReadonlyMap<string, ReviewProgress>;
+	reviewProgress: ReadonlyMap<string, ReviewRoundProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
@@ -32,8 +32,7 @@ export interface ActivityFacts {
 }
 
 type Toggle = "running" | "done" | "idle";
-/** 一行输出：子代理行，或可点击的折叠行。 */
-/** 折叠行：计数（可点）与收起时被折叠的名字。 */
+/** 一行输出：子代理行，或可点击的折叠行（计数可点，收起时附被折叠的名字）。 */
 type Line = { row: Row } | { label: string; mark: string; toggle: Toggle; names: readonly string[] };
 /** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
 type Target = { toggle: Toggle } | { open: string };

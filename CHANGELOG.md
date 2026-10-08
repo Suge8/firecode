@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Internal cleanup across every module (about 1,500 fewer lines of code and tests): one owner per piece of state, no unused exports, no dead branches or legacy fallbacks. Behaviour is unchanged except as listed here.
+- **Breaking:** sub-agent pool files left by v8 are discarded with a notice instead of being migrated.
+- **Breaking:** review findings must use the field names of the current reviewer prompt; findings written with older wording make the vote invalid.
+- **Breaking:** the OpenAI Fast toggle only reads and writes the `openai` section of `config.jsonc`; the standalone native config file fallback is gone.
+- Queued review cards saved by older versions show as plain text after reload.
+
+### Removed
+
+- Undocumented Claude subscription overrides: `PI_CLAUDE_OAUTH_LOG_FILE`, `PI_CLAUDE_CODE_VERSION_SUFFIX`, `PI_CLAUDE_CODE_ENTRYPOINT`, `PI_CLAUDE_CODE_WORKLOAD`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_WORKLOAD`. `PI_CLAUDE_CODE_VERSION` still works.
+- The `review.background` migration hint; the key is now reported as an unknown field like any other.
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed

@@ -1,4 +1,4 @@
-/** 根目录模块的文案：配置问题、启动提示、写入拦截，以及机器消息（信封）里生产端与折叠界面共用的词汇，以及一段回合的终态字样。 */
+/** 根目录模块的文案：配置问题、启动提示、写入拦截、一段回合的终态字样，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
 import { defineMessages } from "./i18n.js";
 
 export const msg = defineMessages({
@@ -24,7 +24,6 @@ export const msg = defineMessages({
 			modelSegment: (value: string) => `模型段不是 provider/model：${value}`,
 			thinkingLevel: (value: string) => `思考档无效：${value}`,
 			modelAtomFaults: (shape: string, faults: string[]) => `${shape}（${faults.join("；")}）`,
-			reviewBackground: "review.background 已随审查子进程层删除，请直接移除该键",
 			reviewIncomplete: "请显式完整配置 review",
 			reviewReviewers: "review.reviewers 必须包含 1–5 个模型原子",
 			reviewToolsArray: "review.tools 必须是字符串数组",
@@ -73,7 +72,6 @@ export const msg = defineMessages({
 			modelSegment: (value: string) => `model segment is not provider/model: ${value}`,
 			thinkingLevel: (value: string) => `invalid thinking level: ${value}`,
 			modelAtomFaults: (shape: string, faults: string[]) => `${shape} (${faults.join("; ")})`,
-			reviewBackground: "review.background was removed together with the review subprocess layer; delete this key",
 			reviewIncomplete: "Configure review explicitly and completely",
 			reviewReviewers: "review.reviewers must contain 1–5 model atoms",
 			reviewToolsArray: "review.tools must be an array of strings",

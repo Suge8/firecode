@@ -4,9 +4,7 @@ import type { ClipSide } from "../format.js";
 import { msg } from "./messages.js";
 import { commandParts, genericArgsParts, pathValue, type Part } from "./parts.js";
 
-export const LABEL = msg.labels;
-
-export type ToolArgs = {
+type ToolArgs = {
 	path?: string;
 	file_path?: string;
 	offset?: number;
@@ -46,9 +44,13 @@ export function toolTarget(tool: string, args: unknown, cwd: string): { value: P
 	}
 }
 
+/** 目标的纯文本，摘要行与活动列表跟在动作词后面。 */
+export const toolTargetText = (tool: string, args: unknown, cwd: string): string =>
+	toolTarget(tool, args, cwd).value.map((part) => part.text).join("").trim();
+
 /** 一句纯文本动作：动作词 + 目标，如“修改 ./tools/line.ts”；未内置的工具用工具名作动作词。 */
 export function toolActionText(tool: string, args: unknown, cwd: string): string {
-	const word = LABEL[tool as keyof typeof LABEL] ?? tool;
-	const target = toolTarget(tool, args, cwd).value.map((part) => part.text).join("");
+	const word = msg.labels[tool as keyof typeof msg.labels] ?? tool;
+	const target = toolTargetText(tool, args, cwd);
 	return target ? `${word} ${target}` : word;
 }

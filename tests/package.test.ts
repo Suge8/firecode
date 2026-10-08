@@ -12,10 +12,13 @@ function run(command: string[]): string {
 	return result.stdout.toString();
 }
 
+/** 构建会清空并重写 dist：两个用例共用一次构建。 */
+let built: string[] | undefined;
 function packedPaths(): string[] {
+	if (built) return built;
 	run(["bun", "scripts/build.ts"]);
 	const packed = JSON.parse(run(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"]));
-	return (packed[0].files as Array<{ path: string }>).map(({ path }) => path);
+	return (built = (packed[0].files as Array<{ path: string }>).map(({ path }) => path));
 }
 
 test("npm pack ships only the build output and user-facing files", async () => {

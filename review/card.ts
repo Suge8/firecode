@@ -13,23 +13,10 @@ import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-
 import { HEAT_COLORS, paint } from "../flame.js";
 import { formatDuration } from "../format.js";
 import { msg, REDUNDANT_VERDICT_LINES, termPattern } from "./messages.js";
-import type { CardData, StopReason } from "./state.js";
+import { shortModel, type CardData } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
 const VERSION = 1;
-
-const CARD_KINDS = new Set([
-	"queued",
-	"start",
-	"pass",
-	"fail",
-	"stop",
-	"cancel",
-	"timeout",
-	"error",
-	"advisor",
-]);
-const CARD_TONES = new Set(["success", "warning", "error", "neutral", "accent"]);
 
 /**
  * 卡标题前的单色字形与它的语义色，按卡种类一处定义：构建时写进 details.icon，渲染时按种类上色。
@@ -44,13 +31,14 @@ const MARKS = {
 	stop: { glyph: "✗", color: "error" },
 	timeout: { glyph: "◌", color: "error" },
 	error: { glyph: "◌", color: "error" },
-	cancel: { glyph: "‖", color: "muted" },
-} as const satisfies Record<CardData["kind"], { glyph: string; color: "review" | "success" | "error" | "muted" }>;
+} as const satisfies Record<CardData["kind"], { glyph: string; color: "review" | "success" | "error" }>;
+
+const CARD_KINDS: ReadonlySet<string> = new Set(Object.keys(MARKS));
+const TONES = ["success", "warning", "neutral"] as const;
 
 function paintMark(details: CardDetails, theme: Theme): string {
-	const mark = MARKS[details.kind as CardData["kind"]];
-	if (!mark) return details.icon;
-	return mark.color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(mark.color, details.icon);
+	const { color } = MARKS[details.kind];
+	return color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(color, details.icon);
 }
 
 export type CardDetails = {
@@ -58,7 +46,7 @@ export type CardDetails = {
 	kind: CardData["kind"];
 	title: string;
 	lines: string[];
-	tone: "success" | "warning" | "error" | "neutral" | "accent";
+	tone: (typeof TONES)[number];
 	icon: string;
 };
 
@@ -72,7 +60,7 @@ export function isValidCardDetails(value: unknown): value is CardDetails {
 	if (typeof record.title !== "string") return false;
 	if (!Array.isArray(record.lines) || !record.lines.every((line) => typeof line === "string"))
 		return false;
-	if (typeof record.tone !== "string" || !CARD_TONES.has(record.tone)) return false;
+	if (!TONES.includes(record.tone as CardDetails["tone"])) return false;
 	return typeof record.icon === "string";
 }
 
@@ -132,8 +120,7 @@ function nativeCard(details: CardDetails, theme: Theme): Component {
 
 function backgroundFor(tone: CardDetails["tone"]) {
 	if (tone === "success") return "toolSuccessBg" as const;
-	if (tone === "warning" || tone === "error") return "toolErrorBg" as const;
-	return "customMessageBg" as const;
+	return tone === "warning" ? "toolErrorBg" as const : "customMessageBg" as const;
 }
 
 function plainContent(content: string | (string | unknown)[]): string {
@@ -160,10 +147,8 @@ export function buildCard(card: CardData): BuiltCard {
 			return failed(card);
 		case "stop":
 			return stopped(card);
-		case "cancel":
-			return cancelled(card);
 		case "timeout":
-			return timedOut(card);
+			return timedOut();
 		case "error":
 			return errored(card);
 		case "advisor":
@@ -171,86 +156,53 @@ export function buildCard(card: CardData): BuiltCard {
 	}
 }
 
-// "queued" 仍留在 CARD_KINDS：旧会话的排队卡 reload 时要能继续按卡渲染，只是不再新发。
-
 function started(card: Extract<CardData, { kind: "start" }>): BuiltCard {
 	return spec("start", msg.card.started, [msg.card.startedModels(card.models.map(shortModel))], "neutral");
-}
-
-function shortModel(model: string) {
-	return model.split("/").at(-1) || model;
 }
 
 function passed(card: Extract<CardData, { kind: "pass" }>): BuiltCard {
 	const title = qualityTitle(card.round, msg.card.passed);
 	const lines = withFooter(formatReviewResultLines(card.summary), [
-		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1),
+		elapsedLine(card.elapsedMs, card.round > 1 ? card.totalElapsedMs : undefined),
 	]);
 	return spec("pass", title, lines, "success");
 }
 
 function failed(card: Extract<CardData, { kind: "fail" }>): BuiltCard {
 	const title = qualityTitle(card.round, msg.card.failed);
-	const footer = [
-		...(card.advisor?.advice ? [msg.card.advisorNote, ...adviceLines(card.advisor.advice)] : []),
-		...(card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, card.totalElapsedMs, false)]),
-	];
-	return spec("fail", title, withFooter(formatReviewResultLines(card.details), footer), "warning");
+	return spec("fail", title, withFooter(formatReviewResultLines(card.details), [elapsedLine(card.elapsedMs)]), "warning");
 }
 
 function stopped(card: Extract<CardData, { kind: "stop" }>): BuiltCard {
-	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, card.totalElapsedMs, false)];
+	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs)];
 	if (card.reason === "advisor") {
 		const title = qualityTitle(card.round, msg.card.stoppedByAdvisor);
 		const body = [advisorModelLine(card.advisorModel), "", ...adviceLines(card.advisor.advice)];
 		return spec("stop", title, withFooter(body, footer), "warning");
 	}
 	const title = qualityTitle(card.round, msg.card.failed);
-	const body = formatReviewResultLines(card.details || stopReason(card.reason));
+	const body = formatReviewResultLines(card.details);
 	return spec("stop", title, withFooter(body, footer), "warning");
 }
 
-function cancelled(card: Extract<CardData, { kind: "cancel" }>): BuiltCard {
-	return spec("cancel", msg.card.cancelled, [reasonText(card.reason)], "neutral");
-}
-
-function timedOut(_card: Extract<CardData, { kind: "timeout" }>): BuiltCard {
+function timedOut(): BuiltCard {
 	return spec("timeout", msg.card.incomplete, [msg.card.timeoutBlocker, msg.card.timeoutReason], "warning");
-}
-
-/** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
-function reasonText(reason: StopReason) {
-	if (reason === "user") return msg.card.stoppedBy.user;
-	if (reason === "shutdown") return msg.card.stoppedBy.shutdown;
-	return msg.card.stoppedBy.other;
-}
-
-function stopReason(reason: StopReason) {
-	if (reason === "advisor") return msg.card.stopReason.advisor;
-	if (reason === "max_rounds") return msg.card.stopReason.maxRounds;
-	return reasonText(reason);
 }
 
 function errored(card: Extract<CardData, { kind: "error" }>): BuiltCard {
 	const lines = [
 		msg.card.errorBlocker,
 		msg.card.errorReason(card.message),
-		...(card.elapsedMs === undefined ? [] : ["", elapsedLine(card.elapsedMs, card.totalElapsedMs, false)]),
+		...(card.elapsedMs === undefined ? [] : ["", elapsedLine(card.elapsedMs)]),
 	];
 	return spec("error", msg.card.incomplete, lines, "warning");
 }
 
 /** 顾问卡与审查结果卡同构：裁决进标题，正文用粗体模型分节行开头。 */
 function advisorCard(card: Extract<CardData, { kind: "advisor" }>): BuiltCard {
-	const title = msg.card.advisorGuidance(decisionText(card.advisor.verdict));
+	const title = msg.card.advisorGuidance(msg.card.decision[card.advisor.verdict]);
 	const body = [advisorModelLine(card.advisorModel), "", ...adviceLines(card.advisor.advice)];
-	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false)];
-	return spec("advisor", title, withFooter(body, footer), "neutral");
-}
-
-/** 裁决词→人话文案的唯一映射：卡标题与审查活动行共用，防两处文案漂移。 */
-export function decisionText(verdict: "continue" | "narrow" | "stop") {
-	return msg.card.decision[verdict];
+	return spec("advisor", title, withFooter(body, [elapsedLine(card.elapsedMs)]), "neutral");
 }
 
 /** 与审查结果卡的「**模型 N · xxx**」分节行同款式。 */
@@ -278,8 +230,8 @@ function withFooter(lines: string[], footer: string[]) {
 	return [...lines, ...(lines.length > 0 ? ["", "---", ""] : []), ...footer];
 }
 
-function elapsedLine(ms: number, totalMs: number | undefined, showTotal: boolean) {
-	return msg.card.elapsed(formatDuration(ms), showTotal && totalMs !== undefined ? formatDuration(totalMs) : undefined);
+function elapsedLine(ms: number, totalMs?: number) {
+	return msg.card.elapsed(formatDuration(ms), totalMs === undefined ? undefined : formatDuration(totalMs));
 }
 
 /** 模型分节行（“模型 1 · xxx”）与证据行的识别：字段名两种语言都认。 */

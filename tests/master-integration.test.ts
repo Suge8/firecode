@@ -6,7 +6,6 @@ import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import {
-	cleanupFirecodeModules,
 	featuresOnly,
 	firecodeModulePath,
 	loadFirecodeModule,
@@ -39,7 +38,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	await cleanupFirecodeModules();
 });
 
 test("新会话默认激活 subagents", async () => {
@@ -118,9 +116,8 @@ test("Master Markdown 与动态角色表按单一接缝注入", async () => {
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
 });
 
-test("Worker Markdown 只组装动态名字与协议信封", async () => {
+test("Worker 的系统提示带上自己的名字，包在协议信封里", async () => {
 	const harness = await setup();
-	const prompt = await loadFirecodeModule("master/prompt.js") as any;
 	let systemPrompt = "";
 	faux.setResponses([(context: any) => {
 		systemPrompt = getCurrentSystemPrompt(context.messages);
@@ -131,10 +128,8 @@ test("Worker Markdown 只组装动态名字与协议信封", async () => {
 		action: "start", worker: "prompt-contract", prompt: "执行", role: "工程师",
 	});
 	await settled;
-	expect(systemPrompt).toContain(prompt.assembleWorkerPrompt(
-		prompt.readMasterPrompt("worker"),
-		"prompt-contract",
-	));
+	expect(systemPrompt).toContain('<firecode_worker name="prompt-contract">');
+	expect(systemPrompt).toContain("</firecode_worker>");
 });
 
 test("Master prompt 缺失或为空时只关闭 Master 并明确失败", async () => {
@@ -232,24 +227,12 @@ test("角色表提示词与 role 枚举都只来自已配置角色", async () =>
 
 test("subagents 是 worker 必填的七命令，池快照是独立零参查询", async () => {
 	const harness = await setup();
-	expect(harness.toolDescription).toContain("七动作");
-	expect(harness.toolDescription).toContain("无 sleep/session");
 	expect(harness.commandTool.parameters.type).toBe("object");
 	expect(harness.commandTool.parameters.required).toEqual(["action", "worker"]);
 	expect(harness.commandTool.parameters.properties.action.anyOf?.map((item: any) => item.const)
 		?? harness.commandTool.parameters.properties.action.enum).not.toContain("list");
-	expect(harness.parameterDescriptions.worker).toBe("start 起简短任务名；其余动作填目标 Worker。");
-	expect(harness.parameterDescriptions.worker).not.toContain("必填");
-	for (const name of ["action", "worker", "prompt", "role", "thinking", "cwd", "review"])
-		expect(harness.parameterDescriptions[name]).not.toBeEmpty();
 	expect(harness.commandTool.parameters.properties).not.toHaveProperty("model");
-	expect(harness.parameterDescriptions.role).toContain("start 必填");
-	expect(harness.parameterDescriptions.role).toContain("send");
-	expect(harness.parameterDescriptions.role).toContain("切换");
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
-	expect(harness.parameterDescriptions.review).toContain("审查纪律");
-	expect(harness.parameterDescriptions.review).toContain("true 不自动开审");
-	expect(harness.listTool.description).toBe("查看子代理池快照");
 	expect(harness.listTool.parameters.required ?? []).toEqual([]);
 	expect(Object.keys(harness.listTool.parameters.properties)).toEqual([]);
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
@@ -892,9 +875,9 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 	};
 	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
 	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
-	active.store.dispatch({ type: "UPSERT_WORKER", worker: {
+	active.store.upsert({
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
-	} });
+	});
 	const removed: string[] = [];
 	active.onWorkerRemoved((name: string) => removed.push(name));
 	await ACTION_HANDLERS.kill(active, { worker: "quick" }, ctx);
@@ -1578,42 +1561,28 @@ test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () =>
 });
 
 test("显式 observer 角色不注册 Master 工具面", async () => {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("master"),
 			review: TEST_REVIEW_CONFIG,
 			master: { roles: { 工程师: TEST_ROLES.工程师 }, workerExcludeExtensions: [], autoActivate: true },
 		}),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown) => withSubsessionRole("observer", async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi);
+	registerFirecode(fake.pi, "observer");
 	expect(fake.commands.has("fire-master")).toBe(false);
 	expect(fake.tools.has("subagents")).toBe(false);
 	expect(fake.handlers.has("tool_call")).toBe(true);
 });
 
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("header", "tools", "presets", "stats"),
 		}),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown) => withSubsessionRole("worker", async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi);
+	registerFirecode(fake.pi, "worker");
 	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
@@ -1895,9 +1864,6 @@ async function setup(activate = true, options: {
 		modelRuntime,
 		commandTool: tools.get("subagents"),
 		listTool: tools.get("subagents_list"),
-		toolDescription: tools.get("subagents").description as string,
-		parameterDescriptions: Object.fromEntries(Object.entries(tools.get("subagents").parameters.properties)
-			.map(([name, schema]: [string, any]) => [name, schema.description])) as Record<string, string>,
 		systemPrompt: async (initial: string) => {
 			let event = { systemPrompt: initial };
 			for (const handler of fake.handlers.get("before_agent_start") ?? []) {

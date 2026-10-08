@@ -1,18 +1,10 @@
 /** 审查者：进程内 memory 会话 + PASS/FAIL 输出契约解析。 */
-import type { ThinkingLevelValue } from "../config.js";
-import { msg, termPattern } from "./messages.js";
+import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult, ReviewerStatus } from "./state.js";
-import type { ReviewSessionRunner } from "./session.js";
+import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
 
-export interface ReviewModelConfig {
-	model: string;
-	thinking: ThinkingLevelValue;
-	tools: string[];
-	timeoutMs: number;
-}
-
-export interface RunReviewerOptions {
+interface RunReviewerOptions {
 	index: number;
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
@@ -21,7 +13,7 @@ export interface RunReviewerOptions {
 	runSession: ReviewSessionRunner;
 }
 
-export type ParseOutcome = {
+type ParseOutcome = {
 	status: Exclude<ReviewerStatus, "running">;
 	summary: string;
 	details: string;
@@ -31,12 +23,9 @@ export type ParseOutcome = {
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const result = await options.runSession({
 		role: "reviewer",
-		model: options.config.model,
-		thinking: options.config.thinking,
-		tools: options.config.tools,
+		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
-		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
 	});
 	const parsed =
@@ -105,7 +94,7 @@ function tail(text: string) {
 
 // ---- 契约解析（纯函数）----
 
-export function verdictOf(line: string): "PASS" | "FAIL" | undefined {
+function verdictOf(line: string): "PASS" | "FAIL" | undefined {
 	const normalized = line
 		.trim()
 		.replace(/^\*{1,2}(.+?)\*{1,2}$/u, "$1")
@@ -124,7 +113,6 @@ const COMMAND_SEGMENT = new RegExp(`${termPattern((terms) => terms.anchor.comman
 const FILE_ANCHOR = /[\w@./-]*\w\.[a-zA-Z]\w{0,5}\b/u;
 // 不能用 \b 收尾：中文不是\w，「发现 1」里「现」与空格之间不构成词边界。
 const FINDING_HEADING = new RegExp(`^#{1,6}\\s*${termPattern((terms) => terms.finding)}`, "u");
-const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
 const SUGGESTIONS_HEADING_SPLIT = new RegExp(SUGGESTIONS_HEADING.source, "imu");
 
 /** 列表项「**字段名**：值」的行首；value 为空时只匹配到冒号。字段名容忍可选粗体包裹。 */
@@ -136,34 +124,11 @@ const FINDING_ISSUE = bulletField(termPattern((terms) => terms.field.issue), "(.
 /**
  * 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约。
  * 只校验字段存在且非空，不校验取值（如严重程度写“高危”不应被判非法）。
- * extra 是旧版提示词用过的措辞：滚动开放清单里可能混有旧格式发现的复述。
  */
-const FINDING_FIELDS = [
-	{ key: "issue", label: termPattern((terms) => terms.field.issue) },
-	{ key: "evidence", label: termPattern((terms) => terms.field.evidence) },
-	{
-		key: "contract",
-		label: termPattern(
-			(terms) => terms.field.contract,
-			"违反的约定与期望",
-			"违反的契约或期望行为",
-			"违反的契约",
-			"Violated agreement",
-			"Contract or expected behavior violated",
-			"Contract violated",
-		),
-	},
-	{
-		key: "commands",
-		label: termPattern(
-			(terms) => terms.field.commands,
-			"需要运行的验证命令",
-			"Verification commands",
-			"Verification command to run",
-			"Verification commands to run",
-		),
-	},
-] as const;
+const FINDING_FIELDS = (["issue", "evidence", "contract", "commands"] as const).map((key) => ({
+	key,
+	label: termPattern((terms) => terms.field[key]),
+}));
 type FindingField = (typeof FINDING_FIELDS)[number];
 const SEVERITY_LABEL = termPattern((terms) => terms.field.severity);
 /** 提示词规定阻塞发现只有高/中；低严重度必须进建议区，不得驱动修复循环。 */

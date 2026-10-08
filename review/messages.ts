@@ -49,10 +49,13 @@ const ALL_TERMS: readonly Terms[] = [zhTerms, enTerms];
 
 const escapeRegExp = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
-/** 某个字段名在所有语言里的写法（外加调用方给的旧措辞）合成的正则片段。 */
-export function termPattern(pick: (terms: Terms) => string, ...extra: string[]): string {
-	return `(?:${[...ALL_TERMS.map(pick), ...extra].map(escapeRegExp).join("|")})`;
+/** 某个字段名在所有语言里的写法合成的正则片段。 */
+export function termPattern(pick: (terms: Terms) => string): string {
+	return `(?:${ALL_TERMS.map(pick).map(escapeRegExp).join("|")})`;
 }
+
+/** 审查输出里“## 建议（非阻塞）”标题行（整行，两种语言都认）：审查者解析与状态机拆建议区共用这一条。 */
+export const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
 
 /** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题。 */
 export const REDUNDANT_VERDICT_LINES: ReadonlySet<string> = new Set([
@@ -102,9 +105,7 @@ export const msg = defineMessages({
 			passed: zhTerms.passed,
 			failed: zhTerms.failed,
 			round: (round: number, title: string) => `第 ${round} 轮${title}`,
-			advisorNote: "顾问建议",
 			stoppedByAdvisor: "审查已由顾问终止",
-			cancelled: "审查已取消",
 			incomplete: "审查未完成",
 			timeoutBlocker: `${zhTerms.blocker}：审查超时`,
 			timeoutReason: `${zhTerms.reason}：超过总体时限`,
@@ -116,8 +117,6 @@ export const msg = defineMessages({
 				total === undefined
 					? `${zhTerms.elapsed}：${elapsed}`
 					: `${zhTerms.elapsed}：${elapsed} / ${zhTerms.total} ${total}`,
-			stoppedBy: { user: "已按你的操作停止", shutdown: "会话关闭时停止", other: "已停止" },
-			stopReason: { advisor: "顾问建议停止", maxRounds: "已达到最大审查轮数" },
 			decision: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" },
 		},
 		summary: {
@@ -150,13 +149,13 @@ export const msg = defineMessages({
 			advisorScope: "顾问收窄后的范围（以此为准）：",
 			advisorAdvice: "顾问建议：",
 			materialTruncated: (omitted: number) => `[材料截断：省略 ${omitted} 字]`,
-			materialLabel: { passed: "末轮审查结论：", maxRounds: "末轮未通过的发现：", advisorStop: "顾问裁决：" },
+			materialLabel: { passed: "末轮审查结论：", max_rounds: "末轮未通过的发现：", advisor_stop: "顾问裁决：" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
 					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
-				maxRounds: (rounds: number) =>
+				max_rounds: (rounds: number) =>
 					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
-				advisorStop: (rounds: number) =>
+				advisor_stop: (rounds: number) =>
 					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
 			},
 		},
@@ -232,9 +231,7 @@ export const msg = defineMessages({
 			passed: enTerms.passed,
 			failed: enTerms.failed,
 			round: (round: number, title: string) => `Round ${round} ${title}`,
-			advisorNote: "Advisor note",
 			stoppedByAdvisor: "Review stopped by advisor",
-			cancelled: "Review cancelled",
 			incomplete: "Review incomplete",
 			timeoutBlocker: `${enTerms.blocker}: review timed out`,
 			timeoutReason: `${enTerms.reason}: overall time limit exceeded`,
@@ -246,8 +243,6 @@ export const msg = defineMessages({
 				total === undefined
 					? `${enTerms.elapsed}: ${elapsed}`
 					: `${enTerms.elapsed}: ${elapsed} / ${enTerms.total} ${total}`,
-			stoppedBy: { user: "Stopped by user", shutdown: "Stopped when the session closed", other: "Stopped" },
-			stopReason: { advisor: "Advisor recommends stopping", maxRounds: "Maximum review rounds reached" },
 			decision: { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" },
 		},
 		summary: {
@@ -280,13 +275,13 @@ export const msg = defineMessages({
 			advisorScope: "Advisor scope (authoritative):",
 			advisorAdvice: "Advisor note:",
 			materialTruncated: (omitted: number) => `[material truncated: ${omitted} characters omitted]`,
-			materialLabel: { passed: "Final review verdict:", maxRounds: "Final round findings:", advisorStop: "Advisor ruling:" },
+			materialLabel: { passed: "Final review verdict:", max_rounds: "Final round findings:", advisor_stop: "Advisor ruling:" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
 					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why. Summary only: do not change code or run tools; end this turn with the final reply.`,
-				maxRounds: (rounds: number) =>
+				max_rounds: (rounds: number) =>
 					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
-				advisorStop: (rounds: number) =>
+				advisor_stop: (rounds: number) =>
 					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step. Summary only: do not change code or run tools; end this turn with the final reply.`,
 			},
 		},

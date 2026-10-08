@@ -1,3 +1,7 @@
+export function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** 去掉行注释和块注释，字符串内的斜杠不动。不支持尾逗号。 */
 export function parseJsonc(text: string): unknown {
 	let output = "";

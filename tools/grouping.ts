@@ -10,7 +10,7 @@ import type { TurnClock } from "./turn-clock.js";
 const OWNER = Symbol.for("pi.firecode.tool-groups");
 const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
 
-export interface GroupOptions {
+interface GroupOptions {
 	clock: TurnClock;
 }
 

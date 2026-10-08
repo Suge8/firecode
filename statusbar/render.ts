@@ -11,7 +11,7 @@ const GLOW_SPAN = 18;
 const LINE_BASE: Rgb = [78, 74, 70];
 export const SEPARATOR = ` ${paint([88, 84, 79], "·")} `;
 
-export type Line = (text: string) => string;
+type Line = (text: string) => string;
 /** 一条边框的一档候选：左、右两段（已着色）。 */
 export type BorderParts = readonly [left: string, right: string];
 

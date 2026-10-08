@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import {
-	cleanupFirecodeModules,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
@@ -28,7 +27,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	await cleanupFirecodeModules();
 });
 
 test("建议卡收起只显示正文首行，展开显示完整建议", async () => {
@@ -317,7 +315,7 @@ test("评估途中发生压缩时丢弃过期建议，观察员不被拖垮", as
 			dispose() {},
 		},
 		{
-			evaluate: async () => ({ note: "压缩后的建议" }),
+			evaluate: async () => "压缩后的建议",
 			contextPercent: () => 0,
 			dispose() {},
 		},
@@ -326,7 +324,7 @@ test("评估途中发生压缩时丢弃过期建议，观察员不被拖垮", as
 	await harness.turnEnd(1, "压缩前的回合");
 	await started;
 	await harness.emit("session_compact", { type: "session_compact" });
-	finishEvaluation({ note: "压缩前的现场" });
+	finishEvaluation("压缩前的现场");
 	await Bun.sleep(0);
 	expect(harness.messages).toEqual([]);
 	expect(harness.notices).toEqual([]);
@@ -351,7 +349,7 @@ test("评估中切换会话后旧任务不访问旧 ctx，也不关闭新 runtim
 			dispose() {},
 		},
 		{
-			evaluate: async () => ({ note: "新会话仍在工作" }),
+			evaluate: async () => "新会话仍在工作",
 			contextPercent: () => 0,
 			dispose() {},
 		},
@@ -393,7 +391,7 @@ test("Observer 创建中切换会话时释放迟到资源且不执行旧评估",
 				return new Promise<any>((resolve) => { releaseCreation = resolve; });
 			}
 			return {
-				evaluate: async () => ({ note: "新 owner 的建议" }),
+				evaluate: async () => "新 owner 的建议",
 				contextPercent: () => 0,
 				dispose() {},
 			};

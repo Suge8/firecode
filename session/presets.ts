@@ -55,9 +55,9 @@ function describe(preset: Preset): string {
 }
 
 export function registerPresets(pi: ExtensionAPI): void {
-	let presets: Record<string, Preset> = {};
+	// 配置问题由 index.ts 统一提示，这里只取预设。
+	const { presets } = loadConfig().config;
 	let activeName: string | undefined;
-	let activePreset: Preset | undefined;
 	let originalState: OriginalState | undefined;
 	/** 本模块自己切模型期间的 model_select 不算用户切走。 */
 	let applying = false;
@@ -71,21 +71,19 @@ export function registerPresets(pi: ExtensionAPI): void {
 	 * 预设名只在它带来边框看不见的改动（工具集、附加指令）时发布：模型与思考档已显示在输入框下边框，
 	 * 只改这两样的预设再报名字就是同一信息说两遍。
 	 */
-	const updateStatus = (ctx: ExtensionContext) =>
+	const updateStatus = (ctx: ExtensionContext) => {
+		const active = activePreset();
 		ctx.ui.setStatus(
 			"preset",
-			activeName && (activePreset?.tools?.length || activePreset?.instructions)
-				? ctx.ui.theme.fg("accent", title(activeName))
-				: undefined,
+			activeName && (active?.tools?.length || active?.instructions) ? ctx.ui.theme.fg("accent", title(activeName)) : undefined,
 		);
+	};
 
-	const noPresetsHint = (ctx: ExtensionContext) =>
-		ctx.ui.notify(msg.presets.noneDefined, "warning");
+	const activePreset = () => (activeName === undefined ? undefined : presets[activeName]);
 
 	/** 预设状态写进当前分支（与宿主的模型记录同一棵树），null 表示没有预设；重开会话按它恢复。 */
 	function setActive(name: string | undefined, ctx: ExtensionContext): void {
 		activeName = name;
-		activePreset = name === undefined ? undefined : presets[name];
 		if (name === undefined) originalState = undefined;
 		pi.appendEntry(STATE_ENTRY, { name: name ?? null });
 		updateStatus(ctx);
@@ -102,7 +100,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 	}
 
 	/** 先套模型；模型套用失败就整套不套（不动工具、不设预设名），只提示原因。 */
-	async function applyPreset(name: string, preset: Preset, ctx: ExtensionContext): Promise<void> {
+	async function applyPreset(name: string, ctx: ExtensionContext): Promise<void> {
+		const preset = presets[name];
 		// 首次应用前留一份快照，用于恢复默认。
 		const snapshot = activeName === undefined
 			? { model: ctx.model, thinkingLevel: pi.getThinkingLevel(), tools: pi.getActiveTools() }
@@ -132,16 +131,11 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 	/** 当前模型已不是预设的：预设失效。 */
 	function dropIfDiverged(ctx: ExtensionContext): void {
-		if (!activeName || !activePreset || holds(activePreset, ctx.model)) return;
+		const active = activePreset();
+		if (!activeName || !active || holds(active, ctx.model)) return;
 		const name = activeName;
 		setActive(undefined, ctx);
 		ctx.ui.notify(msg.presets.diverged(name), "info");
-	}
-
-	async function activate(name: string, ctx: ExtensionContext): Promise<void> {
-		const preset = presets[name];
-		if (!preset) return;
-		await applyPreset(name, preset, ctx);
 	}
 
 	async function clearPreset(ctx: ExtensionContext): Promise<void> {
@@ -158,7 +152,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	async function showSelector(ctx: ExtensionContext): Promise<void> {
 		const names = Object.keys(presets);
 		if (names.length === 0) {
-			noPresetsHint(ctx);
+			ctx.ui.notify(msg.presets.noneDefined, "warning");
 			return;
 		}
 
@@ -203,16 +197,14 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 		if (!choice) return;
 		if (choice === CLEAR_ITEM) await clearPreset(ctx);
-		else await activate(choice, ctx);
+		else await applyPreset(choice, ctx);
 	}
 
-	const { presets: configured } = loadConfig().config;
-
-	for (const [name, preset] of Object.entries(configured)) {
+	for (const [name, preset] of Object.entries(presets)) {
 		if (!preset.key) continue;
 		pi.registerShortcut(preset.key as never, {
 			description: msg.presets.shortcutDescription(name),
-			handler: (ctx) => activate(name, ctx),
+			handler: (ctx) => applyPreset(name, ctx),
 		});
 	}
 
@@ -234,7 +226,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 				ctx.ui.notify(msg.presets.unknown(name, available), "error");
 				return;
 			}
-			await activate(name, ctx);
+			await applyPreset(name, ctx);
 		},
 	});
 
@@ -244,14 +236,14 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		dropIfDiverged(ctx);
-		if (!activePreset?.instructions) return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${activePreset.instructions}` };
+		const instructions = activePreset()?.instructions;
+		if (!instructions) return;
+		return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
 	});
 
 	/** 同进程内新开/切换会话或切分支复用本模块实例：上一处的预设不带进来。 */
 	const reset = () => {
 		activeName = undefined;
-		activePreset = undefined;
 		originalState = undefined;
 	};
 
@@ -264,13 +256,10 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		reset();
-		// 配置问题由 index.ts 统一提示，这里只取预设。
-		presets = loadConfig().config.presets;
-
 		const flag = pi.getFlag("preset");
 		if (typeof flag === "string" && flag) {
 			if (presets[flag]) {
-				await applyPreset(flag, presets[flag], ctx);
+				await applyPreset(flag, ctx);
 			} else {
 				const available = Object.keys(presets).join(", ") || msg.presets.noneAvailable;
 				ctx.ui.notify(msg.presets.unknown(flag, available), "warning");
@@ -294,7 +283,6 @@ export function registerPresets(pi: ExtensionAPI): void {
 			return;
 		}
 		activeName = name;
-		activePreset = preset;
 		// 应用预设之前的状态不在会话记录里：清除时不动模型，思考档与工具集维持宿主恢复的。
 		originalState = { model: undefined, thinkingLevel: pi.getThinkingLevel(), tools: pi.getActiveTools() };
 	}

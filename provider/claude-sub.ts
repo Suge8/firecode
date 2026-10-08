@@ -7,15 +7,13 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { textOf } from "../format.js";
+import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
-const DEFAULT_ENTRYPOINT = "cli";
 const BILLING_SALT = "59cf53e54c78";
 
 type TextBlock = {
@@ -29,12 +27,8 @@ interface PayloadLike {
 	messages?: unknown;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 function isTextBlock(value: unknown): value is TextBlock {
-	return isObject(value) && value.type === "text" && typeof value.text === "string";
+	return isRecord(value) && value.type === "text" && typeof value.text === "string";
 }
 
 function shouldApply(ctx: ExtensionContext): boolean {
@@ -65,14 +59,11 @@ const claudeCodeVersion = detectClaudeCodeVersion();
 
 function firstUserText(messages: unknown): string {
 	const list = Array.isArray(messages) ? messages : [];
-	const firstUser = list.find((message) => isObject(message) && message.role === "user");
-	return isObject(firstUser) ? textOf(firstUser.content) : "";
+	const firstUser = list.find((message) => isRecord(message) && message.role === "user");
+	return isRecord(firstUser) ? textOf(firstUser.content) : "";
 }
 
 function versionSuffix(messageText: string): string {
-	const explicit = process.env.PI_CLAUDE_CODE_VERSION_SUFFIX;
-	if (explicit) return explicit;
-
 	const sampled = [4, 7, 20].map((index) => messageText[index] ?? "0").join("");
 	return createHash("sha256")
 		.update(`${BILLING_SALT}${sampled}${claudeCodeVersion}`)
@@ -82,24 +73,7 @@ function versionSuffix(messageText: string): string {
 
 function buildBillingHeader(messages: unknown): string {
 	const version = `${claudeCodeVersion}.${versionSuffix(firstUserText(messages))}`;
-	const entrypoint =
-		process.env.PI_CLAUDE_CODE_ENTRYPOINT ?? process.env.CLAUDE_CODE_ENTRYPOINT ?? DEFAULT_ENTRYPOINT;
-	const workload = process.env.PI_CLAUDE_CODE_WORKLOAD ?? process.env.CLAUDE_CODE_WORKLOAD;
-	const workloadPart = workload ? ` cc_workload=${workload};` : "";
-	return `${BILLING_PREFIX} cc_version=${version}; cc_entrypoint=${entrypoint}; cch=00000;${workloadPart}`;
-}
-
-function log(details: Record<string, unknown>): void {
-	const logFile = process.env.PI_CLAUDE_OAUTH_LOG_FILE;
-	if (!logFile) return;
-
-	const path = resolve(logFile);
-	try {
-		mkdirSync(dirname(path), { recursive: true });
-		appendFileSync(path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...details })}\n`, "utf8");
-	} catch {
-		// 调试日志是可选的。
-	}
+	return `${BILLING_PREFIX} cc_version=${version}; cc_entrypoint=cli; cch=00000;`;
 }
 
 function isRevokedTokenFailure(entry: SessionEntry | undefined): entry is SessionMessageEntry {
@@ -129,14 +103,13 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const payload = event.payload;
-		if (!shouldApply(ctx) || !isObject(payload)) return;
+		if (!shouldApply(ctx) || !isRecord(payload)) return;
 
 		const { system, messages } = payload as PayloadLike;
 		const blocks = Array.isArray(system) ? system : [];
 		if (blocks.some((block) => isTextBlock(block) && block.text.startsWith(BILLING_PREFIX))) return;
 
 		const header: TextBlock = { type: "text", text: buildBillingHeader(messages) };
-		log({ event: "billing_header_injected", header: header.text });
 		return { ...payload, system: [header, ...blocks] };
 	});
 

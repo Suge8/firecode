@@ -28,6 +28,8 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `herdr-client.ts` | herdr socket 短连接客户端，只有 herdr 投影使用 | |
 | `activity.ts` | 子代理活动列表的单行布局，只有 `master/activity-list.ts` 使用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
+| `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
+| `jsonc.ts` | JSONC 解析与 `isRecord`（配置、openai 节读写、provider 共用的唯一对象判定） | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置，并给出 review/master/watcher 每节能否启动的判定 | |
 | `config-file.ts` | 运行配置的路径、首次播种、原始读取；不含文案（被 `i18n.ts` 依赖） | |
 | `i18n.ts` `*/messages.ts` | 双语文案机制与各目录文案表，见下「文案」 | |

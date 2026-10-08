@@ -7,6 +7,7 @@ import type {
 	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details";
+import { isRecord } from "../../../jsonc.js";
 import type { ResponsesRequestPayload } from "./native-runtime";
 import {
 	hasAnchoredToolAdditions,
@@ -28,10 +29,6 @@ export type NativeReplayFailureReason =
 export type NativeReplayResult =
 	| { ok: true; payload: ResponsesRequestPayload }
 	| { ok: false; reason: NativeReplayFailureReason };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isResponsesInputContentItem(value: unknown): value is ResponsesInputContentItem {
 	if (!isRecord(value) || typeof value.type !== "string") {

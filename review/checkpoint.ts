@@ -10,6 +10,7 @@
  *   上一次写入值提供，出现不是自己写的 Run ID 才算冲突（CheckpointConflictError）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
 import type {
 	ActiveCheck,
@@ -77,13 +78,7 @@ const ROUND_RESULTS = new Set([
 ]);
 const REVIEWER_STATUSES = new Set(["running", "passed", "failed", "error"]);
 const ADVISOR_VERDICTS = new Set(["continue", "stop", "narrow"]);
-const STOP_REASONS = new Set([
-	"advisor",
-	"max_rounds",
-	"user",
-	"shutdown",
-	"timeout",
-]);
+const STOP_REASONS = new Set(["user", "shutdown", "timeout"]);
 const REPAIR_STATUSES = new Set(["pending", "awaiting_start", "running", "completed"]);
 const SUMMARY_KINDS = new Set(["passed", "max_rounds", "advisor_stop"]);
 const SUMMARY_STATUSES = new Set(["pending", "awaiting_start", "running"]);
@@ -168,10 +163,6 @@ const CHECKPOINT_KEYS = keysOf({
 	roundStartedAt: true,
 	updatedAt: true,
 } satisfies Record<keyof ReviewState | "version" | "seq", true>);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isString(value: unknown): value is string {
 	return typeof value === "string";
@@ -326,28 +317,27 @@ function toCheckpoint(state: ReviewState) {
 
 /** 读当前分支上最近一个 checkpoint；无、损坏或版本不匹配都返回 undefined。 */
 export function readCheckpoint(ctx: CheckpointReadContext): ReviewState | undefined {
-	const entry = latestEntry(ctx);
-	return entry ? (entry as unknown as ReviewState) : undefined;
+	return latestData(ctx) as ReviewState | undefined;
 }
 
-function latestEntry(ctx: CheckpointReadContext): Record<string, unknown> | undefined {
+/** 会话记录里的 checkpoint 条目（数据未必有效）。 */
+export function isCheckpointEntry(value: unknown): value is { data: unknown } {
+	return isRecord(value) && value.type === "custom" && value.customType === CHECKPOINT_TYPE && "data" in value;
+}
+
+function latestData(ctx: CheckpointReadContext): unknown {
 	const entries = ctx.sessionManager.getBranch();
 	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index];
-		if (!isRecord(entry) || entry.type !== "custom") continue;
-		if (entry.customType !== CHECKPOINT_TYPE) continue;
-		if (!isValidCheckpoint(entry.data)) return undefined;
-		return entry.data as Record<string, unknown>;
+		if (isCheckpointEntry(entry)) return isValidCheckpoint(entry.data) ? entry.data : undefined;
 	}
 	return undefined;
 }
 
 /** 读最近一条 checkpoint 的写入凭证；无则 null。 */
 export function readStamp(ctx: CheckpointReadContext): CheckpointStamp | null {
-	const entry = latestEntry(ctx);
-	if (!entry) return null;
-	const data = entry as { runId: string; seq: number };
-	return { runId: data.runId, seq: data.seq };
+	const data = latestData(ctx) as CheckpointStamp | undefined;
+	return data ? { runId: data.runId, seq: data.seq } : null;
 }
 
 function appendCheckpoint(
@@ -361,13 +351,8 @@ function appendCheckpoint(
 	return { runId: state.runId, seq };
 }
 
-/** 新审查首次写入：无条件替换旧终态（不校验旧 Run ID）。 */
-/** 新审查首写：无条件替换旧终态，返回本次写入凭证。 */
-export function beginCheckpoint(
-	pi: ExtensionAPI,
-	_ctx: CheckpointReadContext,
-	state: ReviewState,
-): CheckpointStamp {
+/** 新审查首写：无条件替换旧终态（不校验旧 Run ID），返回本次写入凭证。 */
+export function beginCheckpoint(pi: ExtensionAPI, state: ReviewState): CheckpointStamp {
 	return appendCheckpoint(pi, state, 1);
 }
 
@@ -383,11 +368,7 @@ export function writeCheckpoint(
 	expected: CheckpointStamp,
 ): CheckpointStamp {
 	const current = readStamp(ctx);
-	if (
-		!current ||
-		current.runId !== expected.runId ||
-		current.seq !== expected.seq
-	)
+	if (current?.runId !== expected.runId || current.seq !== expected.seq)
 		throw new CheckpointConflictError();
 	return appendCheckpoint(pi, state, expected.seq + 1);
 }

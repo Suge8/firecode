@@ -6,11 +6,12 @@ import { loadOpenAINativeSettings, togglePriority } from "./config";
 
 const temporaryDirectories: string[] = [];
 
-function createConfig(config: Record<string, unknown>): string {
+/** 写一份 FireCode 配置：`openai` 节是本模块的全部输入，`rest` 是不归本模块管的其余节。 */
+function createConfig(openai: Record<string, unknown>, rest: Record<string, unknown> = {}): string {
 	const directory = mkdtempSync(join(tmpdir(), "pi-openai-native-"));
 	temporaryDirectories.push(directory);
-	const configPath = join(directory, "config.json");
-	writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+	const configPath = join(directory, "config.jsonc");
+	writeFileSync(configPath, `${JSON.stringify({ ...rest, openai }, null, 2)}\n`);
 	return configPath;
 }
 
@@ -20,7 +21,7 @@ afterEach(() => {
 	}
 });
 
-test("loads the extension-adjacent config", () => {
+test("loads the openai section", () => {
 	const configPath = createConfig({
 		nativeCompaction: false,
 		providers: {
@@ -53,56 +54,27 @@ test("fails closed when config is missing or invalid", () => {
 
 	const missing = loadOpenAINativeSettings(`${configPath}.missing`);
 	expect(missing.settings).toEqual({ nativeCompaction: false, providers: {} });
-	expect(missing.warnings[0]).toStartWith("config.json:");
+	expect(missing.warnings[0]).toStartWith("config.jsonc:");
 });
 
-test("toggles priority atomically in the extension config", () => {
-	const configPath = createConfig({
-		nativeCompaction: false,
-		providers: {
-			"openai-codex": { textVerbosity: "low", priority: true },
-		},
-	});
+test("toggles priority atomically and rewrites only the openai section", () => {
+	const rest = { keys: { fast: "ctrl+shift+s" }, presets: { sol: { model: "gpt-5.6-sol" } } };
+	const configPath = createConfig(
+		{ nativeCompaction: false, providers: { "openai-codex": { textVerbosity: "low", priority: true } } },
+		rest,
+	);
 
 	const disabled = togglePriority("openai-codex", configPath);
 	expect(disabled.enabled).toBe(false);
 	expect(disabled.loaded.settings.providers["openai-codex"]).toEqual({ textVerbosity: "low" });
+	expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+		...rest,
+		openai: { nativeCompaction: false, providers: { "openai-codex": { textVerbosity: "low" } } },
+	});
 
 	const enabled = togglePriority("openai-codex", configPath);
 	expect(enabled.enabled).toBe(true);
-	expect(enabled.loaded.settings.providers["openai-codex"]).toEqual({
-		textVerbosity: "low",
-		priority: true,
-	});
-
-	expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-		nativeCompaction: false,
-		providers: {
-			"openai-codex": { textVerbosity: "low", priority: true },
-		},
-	});
-});
-
-test("toggles only the openai section of a firecode config", () => {
-	const configPath = createConfig({
-		keys: { fast: "ctrl+shift+s" },
-		presets: { sol: { model: "gpt-5.6-sol" } },
-		openai: {
-			nativeCompaction: false,
-			providers: { "openai-codex": { textVerbosity: "low", priority: true } },
-		},
-	});
-
-	const disabled = togglePriority("openai-codex", configPath);
-	expect(disabled.enabled).toBe(false);
-	expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-		keys: { fast: "ctrl+shift+s" },
-		presets: { sol: { model: "gpt-5.6-sol" } },
-		openai: {
-			nativeCompaction: false,
-			providers: { "openai-codex": { textVerbosity: "low" } },
-		},
-	});
+	expect(enabled.loaded.settings.providers["openai-codex"]).toEqual({ textVerbosity: "low", priority: true });
 });
 
 test("keeps comments outside the openai section when toggling fast", () => {

@@ -6,6 +6,7 @@ import { PI_AI_COMPAT_URL, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
+const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 const DELIVERY_TEXT = "queued delivery";
 let directory: string | undefined;
 let faux: any;
@@ -17,14 +18,48 @@ afterEach(async () => {
 	directory = undefined;
 });
 
-test("streaming steer delivery preserves the sent prefix and reaches the next request after tool results", async () => {
+const waitTool = {
+	name: "contract_wait",
+	label: "Contract wait",
+	description: "Completes one deterministic tool call",
+	parameters: { type: "object", properties: {}, additionalProperties: false },
+	execute: async () => ({ content: [{ type: "text", text: "tool completed" }], details: {} }),
+};
+
+/** 真实 SDK 会话 + faux 供应商：宿主契约在真实宿主上验证，extension 是写进 Agent 目录的扩展源码。 */
+async function hostSession(extensionSource: string, responses: unknown[], options: Record<string, unknown> = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-contract-"));
 	const cwd = join(directory, "project");
 	const agentDir = join(directory, "agent");
 	const extensionsDir = join(agentDir, "extensions");
 	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
-	await writeFile(join(extensionsDir, "delivery.ts"), `
+	await writeFile(join(extensionsDir, "contract.ts"), extensionSource);
+
+	faux = registerFauxProvider();
+	const model = faux.getModel();
+	const modelRuntime = await ModelRuntime.create({
+		authPath: join(agentDir, "auth.json"),
+		modelsPath: join(agentDir, "models.json"),
+	});
+	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
+	faux.setResponses(responses);
+	const { session } = await createAgentSession({
+		cwd, agentDir, model, modelRuntime, sessionManager: SessionManager.inMemory(cwd), ...options,
+	});
+	return session;
+}
+
+const waitToolOptions = { tools: ["contract_wait"], customTools: [waitTool] };
+const toolCallResponse = fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
+
+test("streaming steer delivery preserves the sent prefix and reaches the next request after tool results", async () => {
+	const requests: any[][] = [];
+	const record = (reply: unknown) => (context: any) => {
+		requests.push(structuredClone(context.messages));
+		return reply;
+	};
+	const session = await hostSession(`
 export default function (pi) {
 	let delivered = false;
 	pi.on("tool_execution_start", () => {
@@ -36,46 +71,7 @@ export default function (pi) {
 		);
 	});
 }
-`);
-
-	faux = registerFauxProvider();
-	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const model = faux.getModel();
-	const modelRuntime = await ModelRuntime.create({
-		authPath: join(agentDir, "auth.json"),
-		modelsPath: join(agentDir, "models.json"),
-	});
-	modelRuntime.registerProvider(model.provider, {
-		baseUrl: model.baseUrl,
-		api: model.api,
-		models: [model],
-	});
-	const requests: any[][] = [];
-	faux.setResponses([
-		(context: any) => {
-			requests.push(structuredClone(context.messages));
-			return fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
-		},
-		(context: any) => {
-			requests.push(structuredClone(context.messages));
-			return fauxAssistantMessage("delivery observed");
-		},
-	]);
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		model,
-		modelRuntime,
-		tools: ["contract_wait"],
-		customTools: [{
-			name: "contract_wait",
-			label: "Contract wait",
-			description: "Completes one deterministic tool call",
-			parameters: { type: "object", properties: {}, additionalProperties: false },
-			execute: async () => ({ content: [{ type: "text", text: "tool completed" }], details: {} }),
-		}],
-		sessionManager: SessionManager.inMemory(cwd),
-	});
+`, [record(toolCallResponse), record(fauxAssistantMessage("delivery observed"))], waitToolOptions);
 
 	try {
 		await session.prompt("start contract run");
@@ -100,52 +96,16 @@ export default function (pi) {
 }, 10_000);
 
 test("idle wake via sendUserMessage runs before_agent_start on every request", async () => {
-	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-wake-"));
-	const cwd = join(directory, "project");
-	const agentDir = join(directory, "agent");
-	const extensionsDir = join(agentDir, "extensions");
-	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
-	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
-	await writeFile(join(extensionsDir, "mark.ts"), `
+	const prompts: string[] = [];
+	const record = (reply: unknown) => (context: any) => {
+		prompts.push(getCurrentSystemPrompt(context.messages));
+		return reply;
+	};
+	const session = await hostSession(`
 export default function (pi) {
 	pi.on("before_agent_start", async (event) => ({ systemPrompt: event.systemPrompt + "\\n\\nGUIDELINES-MARK" }));
 }
-`);
-
-	faux = registerFauxProvider();
-	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const model = faux.getModel();
-	const modelRuntime = await ModelRuntime.create({
-		authPath: join(agentDir, "auth.json"),
-		modelsPath: join(agentDir, "models.json"),
-	});
-	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
-	const prompts: string[] = [];
-	faux.setResponses([
-		(context: any) => {
-			prompts.push(getCurrentSystemPrompt(context.messages));
-			return fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
-		},
-		(context: any) => {
-			prompts.push(getCurrentSystemPrompt(context.messages));
-			return fauxAssistantMessage("woken");
-		},
-	]);
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		model,
-		modelRuntime,
-		tools: ["contract_wait"],
-		customTools: [{
-			name: "contract_wait",
-			label: "Contract wait",
-			description: "Completes one deterministic tool call",
-			parameters: { type: "object", properties: {}, additionalProperties: false },
-			execute: async () => ({ content: [{ type: "text", text: "tool completed" }], details: {} }),
-		}],
-		sessionManager: SessionManager.inMemory(cwd),
-	});
+`, [record(toolCallResponse), record(fauxAssistantMessage("woken"))], waitToolOptions);
 
 	try {
 		// 会话歇透时的前门唤醒：deliver.ts 空闲分支依赖的宿主契约。
@@ -158,13 +118,7 @@ export default function (pi) {
 }, 10_000);
 
 test("宿主契约：扩展 API 的 sendUserMessage 立即返回、不等唤醒回合；唤醒回合在 agent_start 后原样记录这条用户消息", async () => {
-	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-void-"));
-	const cwd = join(directory, "project");
-	const agentDir = join(directory, "agent");
-	const extensionsDir = join(agentDir, "extensions");
-	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
-	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
-	await writeFile(join(extensionsDir, "wake.ts"), `
+	const session = await hostSession(`
 export default function (pi) {
 	const order = (globalThis.__wakeOrder = []);
 	pi.on("agent_start", () => { order.push("agent_start"); });
@@ -176,14 +130,7 @@ export default function (pi) {
 		order.push(returned === undefined ? "returned-void" : "returned-value");
 	} });
 }
-`);
-	faux = registerFauxProvider();
-	const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const model = faux.getModel();
-	const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") });
-	modelRuntime.registerProvider(model.provider, { baseUrl: model.baseUrl, api: model.api, models: [model] });
-	faux.setResponses([fauxAssistantMessage("woken")]);
-	const { session } = await createAgentSession({ cwd, agentDir, model, modelRuntime, sessionManager: SessionManager.inMemory(cwd) });
+`, [fauxAssistantMessage("woken")]);
 	try {
 		await session.bindExtensions({ mode: "print" });
 		await session.prompt("/wake");

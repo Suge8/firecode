@@ -17,7 +17,7 @@ import {
 	type WatcherCard,
 } from "./card.js";
 import { msg } from "./messages.js";
-import { createObserver, type Advice, type Observer } from "./observer.js";
+import { createObserver, type Observer } from "./observer.js";
 import { renderTurn } from "./transcript.js";
 
 /** 观察会话自身上下文占比超过此值即重建。 */
@@ -85,8 +85,8 @@ export function registerWatcher(
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
 	// 建议是当下的第二意见，过时重投没有价值：投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
-	const speak = async (owner: WatcherRuntime, advice: Advice, turnIndex: number) => {
-		const card: WatcherCard = { note: advice.note, turnIndex };
+	const speak = async (owner: WatcherRuntime, note: string, turnIndex: number) => {
+		const card: WatcherCard = { note, turnIndex };
 		try {
 			await deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
 		} catch (error) {

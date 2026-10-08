@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { loadFirecodeModule } from "./loader.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 /** 着色主题：把语义色写成可见标签，断言“黄色”“红色”这类语义而不是 ANSI。 */

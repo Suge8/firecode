@@ -17,7 +17,6 @@ export const msg = defineMessages({
 			cwd: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。",
 			review: "按审查纪律为 start/send 记录义务；true 不自动开审。",
 			onlyInMaster: (tool: string) => `${tool} 只在 Master 中可用`,
-			unknownAction: (action: string) => `未知 subagents action：${action}`,
 		},
 		command: {
 			description: "翻转当前会话的指挥官模式；status 查看状态",
@@ -118,8 +117,6 @@ export const msg = defineMessages({
 		},
 		guard: (path: string) => `子代理只能修改当前 checkout 或系统临时目录：${path}`,
 		state: {
-			legacy: (version: number, current: number) =>
-				`Master Worker Pool 状态是旧版 v${version}（当前 v${current}），不再读取；重新启动指挥官模式会从空池重建，旧运行时进程不会纳入新池，需要手动清理`,
 			invalidJson: (path: string) => `Master Worker Pool 状态不是合法 JSON：${path}`,
 			invalidShape: (path: string) => `Master Worker Pool 状态结构无效：${path}`,
 			missing: (name: string) => `子代理不存在：${name}`,
@@ -184,7 +181,6 @@ export const msg = defineMessages({
 			cwd: "Absolute path of the Worker's working directory; start defaults to the current directory, and send passes it to move an idle Worker to another checkout (the same session is reopened).",
 			review: "Record a review obligation for start/send per the review discipline; true does not start a review automatically.",
 			onlyInMaster: (tool: string) => `${tool} is only available in Master mode`,
-			unknownAction: (action: string) => `Unknown subagents action: ${action}`,
 		},
 		command: {
 			description: "Toggle Master mode for the current session; status shows the state",
@@ -287,8 +283,6 @@ export const msg = defineMessages({
 		},
 		guard: (path: string) => `Workers may only modify the current checkout or the system temp directory: ${path}`,
 		state: {
-			legacy: (version: number, current: number) =>
-				`The Master Worker Pool state is legacy v${version} (current v${current}) and is no longer read; restarting Master mode rebuilds from an empty pool, old runtime processes are not adopted into the new pool and need manual cleanup`,
 			invalidJson: (path: string) => `The Master Worker Pool state is not valid JSON: ${path}`,
 			invalidShape: (path: string) => `The Master Worker Pool state has an invalid structure: ${path}`,
 			missing: (name: string) => `Worker does not exist: ${name}`,

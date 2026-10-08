@@ -1,13 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { fakePi } from "./fake-pi.ts";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
+import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 let dispose: (() => void) | undefined;
 afterEach(async () => {
 	dispose?.();
 	dispose = undefined;
-	await cleanupFirecodeModules();
 });
 
 const FLAME = "[\u2800-\u28ff]";
@@ -716,37 +715,17 @@ test("review 的信封消息归入过程不切段", async () => {
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
 });
 
-test("首句以冒号结尾时并入下一非空行：↳ 行与中间回复共用同一规则", async () => {
+test("中间回复与子代理结果行都经首句规则预览（规则本身见 format.test）", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	assistant(s, [{ type: "text", text: "标准输出：\n\nhello world\n后面的细节" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	assistant(s, [{ type: "text", text: "Result:\nok" }, { type: "toolCall", id: "c2", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "b.ts" }));
 	hostUser(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
-	hostUser(s, WORKER_RESULT("lint", "output:\nok。其余"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 
-	const collapsed = s.lines().map((line: string) => line.trim());
-	expect(collapsed).toContain("标准输出：hello world");
-	expect(collapsed).toContain("Result: ok");
-
+	expect(s.lines().map((line: string) => line.trim())).toContain("标准输出：hello world");
 	s.ui.setToolsExpanded(true);
-	const expanded = s.lines().map((line: string) => line.trim());
-	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
-	expect(expanded).toContain("↳ lint 已返回 · 8m output: ok。");
-});
-
-test("冒号并入下一行时跳过围栏行与空行；预览去掉行内 Markdown 标记", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	assistant(s, [{ type: "text", text: "说明：\n\n```\n**粗体** 与 `code` 与 [链接](http://x.test)\n```" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_RESULT("fix-auth", "命令输出：\n```text\ndone\n```\n**加粗**结尾"));
-	assistant(s, [{ type: "text", text: "收口" }]);
-	expect(s.lines().map((line: string) => line.trim())).toContain("说明：粗体 与 code 与 链接");
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令输出：done");
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
 });
 
 test("异常提醒：宿主提示原文按宽裁剪；多条提示取首条；工具失败不影响标记", async () => {
@@ -868,12 +847,11 @@ test("当前动作只说正在发生的事：工具都完成后等模型是思�
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 回复中$`));
 });
 
-test("↳ 行：标题按信封原样显示，成败色由信封决定，审查卡预览取首条发现或原因，观察员只写建议原文", async () => {
+test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预览取首条发现或原因，观察员只写建议原文", async () => {
 	const s = await scene();
 	const { buildCard } = await loadFirecodeModule("review/card.ts");
 	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
 	const { adviceMessage } = await loadFirecodeModule("watcher/card.ts");
-	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
 	// 与 review 生产端发卡一致：信封正文加卡片 details。
 	const reviewCard = (card: unknown) => {
 		const built = buildCard(card);
@@ -883,10 +861,6 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	};
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n## 交付\n- 修好了 refresh 竞态。", "14m"));
-	hostUser(s, WORKER_FAILED("perf-probe"));
-	hostUser(s, wrapEnvelope("firecode_master_event", withElapsed(masterEvent.review("lint", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "顾问建议停止。" }, ""), { run: 8 * 60_000 })));
-	hostUser(s, "<firecode_master_event>\nfix-auth 被中断\n会话与审查义务均已保留\n</firecode_master_event>");
 	reviewCard({ kind: "fail", round: 1, details: "模型 1 · gpt-5.5\nFAIL\n## 发现 1：刷新竞态未修\n- **严重程度**: 高", advisor: null });
 	reviewCard({ kind: "error", message: "所有审查者均未给出有效结论" });
 	reviewCard({ kind: "pass", round: 2, summary: "模型 1 · gpt-5.5\nPASS\n验证命令 exit 0，核心逻辑已核对。\n证据：文件=a.ts；命令=bun test", details: "", elapsedMs: 95_000 });
@@ -899,10 +873,6 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	const raw = s.chat.render(120);
 	const rows = raw.map((line: string) => stripVTControlCharacters(line).trim()).filter((line: string) => line.startsWith("↳"));
 	expect(rows).toEqual([
-		"↳ fix-auth 审查通过（2 轮） · 14m 修好了 refresh 竞态。",
-		"↳ perf-probe 失败 · 2m 429 Too Many Requests",
-		"↳ lint 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停",
-		"↳ fix-auth 被中断",
 		"↳ 审查未通过 刷新竞态未修",
 		"↳ 审查未完成 所有审查者均未给出有效结论",
 		"↳ 第 2 轮审查通过 验证命令 exit 0，核心逻辑已核对。",
@@ -910,8 +880,8 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	]);
 	const red = s.ui.theme.fg("error", "↳");
 	const toneOf = (needle: string) => raw.find((line: string) => line.includes(needle))!.includes(red);
-	expect(["perf-probe 失败", "lint 审查停止（3 轮）", "审查未通过", "审查未完成"].filter(toneOf)).toEqual(["perf-probe 失败", "lint 审查停止（3 轮）", "审查未通过", "审查未完成"]);
-	expect(["审查通过（2 轮）", "fix-auth 被中断", "第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
+	expect(["审查未通过", "审查未完成"].filter(toneOf)).toEqual(["审查未通过", "审查未完成"]);
+	expect(["第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
 });
 
 test("所有 Master 落定类事件都触发到达高亮，标题原样显示，失败为红", async () => {
