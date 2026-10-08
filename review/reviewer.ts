@@ -1,5 +1,5 @@
 /** 审查者：进程内 memory 会话 + PASS/FAIL 输出契约解析。 */
-import { msg, termPattern } from "./messages.js";
+import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult, ReviewerStatus } from "./state.js";
 import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
@@ -113,7 +113,6 @@ const COMMAND_SEGMENT = new RegExp(`${termPattern((terms) => terms.anchor.comman
 const FILE_ANCHOR = /[\w@./-]*\w\.[a-zA-Z]\w{0,5}\b/u;
 // 不能用 \b 收尾：中文不是\w，「发现 1」里「现」与空格之间不构成词边界。
 const FINDING_HEADING = new RegExp(`^#{1,6}\\s*${termPattern((terms) => terms.finding)}`, "u");
-const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
 const SUGGESTIONS_HEADING_SPLIT = new RegExp(SUGGESTIONS_HEADING.source, "imu");
 
 /** 列表项「**字段名**：值」的行首；value 为空时只匹配到冒号。字段名容忍可选粗体包裹。 */

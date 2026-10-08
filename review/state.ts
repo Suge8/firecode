@@ -11,10 +11,9 @@
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 import type { ModelAtom } from "../config.js";
-import { msg, termPattern } from "./messages.js";
+import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
-const SUGGESTIONS_HEADING = new RegExp(`^##\\s*${termPattern((terms) => terms.suggestions)}`, "iu");
 const ISSUE_LINE = new RegExp(`^[-*+]\\s*(?:\\*\\*)?${termPattern((terms) => terms.field.issue)}(?:\\*\\*)?\\s*[:：]\\s*(.+)$`, "iu");
 
 export type Phase =

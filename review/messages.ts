@@ -54,6 +54,9 @@ export function termPattern(pick: (terms: Terms) => string): string {
 	return `(?:${ALL_TERMS.map(pick).map(escapeRegExp).join("|")})`;
 }
 
+/** 审查输出里“## 建议（非阻塞）”标题行（整行，两种语言都认）：审查者解析与状态机拆建议区共用这一条。 */
+export const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
+
 /** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题。 */
 export const REDUNDANT_VERDICT_LINES: ReadonlySet<string> = new Set([
 	"PASS",
