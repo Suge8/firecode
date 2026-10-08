@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The npm package now ships a single bundled `dist/index.js` (121 kB) instead of TypeScript sources; review the source on GitHub.
+- New logo and README (English and Chinese) with a comparison against similar tools.
+
 ### Fixed
 
 - Native Responses compaction no longer serializes mid-conversation system messages as tool results. It now follows pi-ai's Responses conversion: dropped for models that fold them into the leading prompt, sent in place as a developer/system item for models that accept them (`supportsMidConvoSystemMessages`, which the GPT-5.4+/GPT-6 catalog entries enable). Replay now also drops system messages from the kept pre-compaction window as the host does and no longer misreads a trailing system update as a provider hint. Histories where tools were added mid-conversation cannot be reproduced outside the host, so replay is declined for them.
