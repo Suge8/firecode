@@ -1,48 +1,39 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { FIRECODE_DIR } from "./loader.ts";
 
-const transpiler = new Bun.Transpiler({ loader: "ts" });
+const PROMPT_DIRS = ["master/prompts", "review/prompts", "watcher/prompts"];
+const transpiler = new Bun.Transpiler({ loader: "js" });
 
-function resolveImport(importer: string, specifier: string): string {
-	const target = resolve(dirname(importer), specifier);
-	const candidates = extname(target)
-		? [target, target.replace(/\.js$/, ".ts")]
-		: [target, `${target}.ts`, join(target, "index.ts")];
-	const resolved = candidates.find(existsSync);
-	if (!resolved || !resolved.startsWith(`${FIRECODE_DIR}${sep}`))
-		throw new Error(`无法解析本地运行时 import：${relative(FIRECODE_DIR, importer)} → ${specifier}`);
-	return resolved;
+function run(command: string[]): string {
+	const result = Bun.spawnSync(command, { cwd: FIRECODE_DIR, stderr: "pipe", stdout: "pipe" });
+	if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+	return result.stdout.toString();
 }
 
-async function runtimeClosure(entries: string[]): Promise<string[]> {
-	const pending = entries.map((entry) => resolve(FIRECODE_DIR, entry));
-	const visited = new Set<string>();
-	while (pending.length > 0) {
-		const path = pending.pop()!;
-		if (visited.has(path)) continue;
-		visited.add(path);
-		const source = await readFile(path, "utf8");
-		for (const { path: specifier } of transpiler.scan(source).imports)
-			if (specifier.startsWith(".")) pending.push(resolveImport(path, specifier));
-	}
-	return [...visited].map((path) => relative(FIRECODE_DIR, path).split(sep).join("/")).sort();
+function packedPaths(): string[] {
+	run(["bun", "scripts/build.ts"]);
+	const packed = JSON.parse(run(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"]));
+	return (packed[0].files as Array<{ path: string }>).map(({ path }) => path);
 }
 
-test("npm pack contains the complete local runtime import closure", async () => {
+test("npm pack ships only the build output and user-facing files", async () => {
 	const manifest = await Bun.file(join(FIRECODE_DIR, "package.json")).json();
-	const pack = Bun.spawnSync(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"], {
-		cwd: FIRECODE_DIR,
-		stderr: "pipe",
-		stdout: "pipe",
-	});
-	if (pack.exitCode !== 0) throw new Error(pack.stderr.toString());
-	const packed = new Set(
-		(JSON.parse(pack.stdout.toString())[0].files as Array<{ path: string }>).map(({ path }) => path),
-	);
-	const closure = await runtimeClosure(manifest.pi.extensions);
+	const packed = packedPaths();
 
-	expect(closure.filter((path) => !packed.has(path))).toEqual([]);
+	expect(packed.filter((path) => !path.startsWith("dist/") && !["LICENSE", "README.md", "config.example.jsonc", "package.json"].includes(path))).toEqual([]);
+	expect(packed.filter((path) => path.endsWith(".ts"))).toEqual([]);
+	const entries = (manifest.pi.extensions as string[]).map((entry) => entry.replace(/^\.\//, ""));
+	expect(entries.filter((entry) => !packed.includes(entry))).toEqual([]);
+	const prompts = PROMPT_DIRS.flatMap((dir) => readdirSync(join(FIRECODE_DIR, dir)).map((name) => `dist/${dir}/${name}`));
+	expect(prompts.filter((path) => !packed.includes(path))).toEqual([]);
+});
+
+test("bundle leaves only Node built-ins and host packages to be resolved at load time", async () => {
+	packedPaths();
+	const bundle = await Bun.file(join(FIRECODE_DIR, "dist/index.js")).text();
+	const bare = transpiler.scan(bundle).imports.map(({ path }) => path).filter((path) => !path.startsWith("node:") && !path.startsWith("@earendil-works/"));
+
+	expect(bare).toEqual([]);
 });

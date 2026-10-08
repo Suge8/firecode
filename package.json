@@ -17,37 +17,17 @@
     "pi-extension"
   ],
   "files": [
-    "*.ts",
-    "config.example.jsonc",
-    "master/*.ts",
-    "master/prompts/*.md",
-    "provider/claude-sub.ts",
-    "provider/openai-native/index.ts",
-    "provider/openai-native/src/compact-client.ts",
-    "provider/openai-native/src/config.ts",
-    "provider/openai-native/src/extension.ts",
-    "provider/openai-native/src/native-compaction.ts",
-    "provider/openai-native/src/native-details.ts",
-    "provider/openai-native/src/native-replay.ts",
-    "provider/openai-native/src/native-runtime.ts",
-    "provider/openai-native/src/options.ts",
-    "provider/openai-native/src/request-pipeline.ts",
-    "provider/openai-native/src/responses-input.ts",
-    "!provider/openai-native/src/*.test.ts",
-    "review/*.ts",
-    "review/prompts/*.md",
-    "session/*.ts",
-    "statusbar/*.ts",
-    "tools/*.ts",
-    "watcher/*.ts",
-    "watcher/prompts/*.md"
+    "dist",
+    "config.example.jsonc"
   ],
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "build": "bun scripts/build.ts",
+    "prepack": "bun scripts/build.ts"
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "peerDependencies": {
