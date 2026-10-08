@@ -166,7 +166,7 @@ async function seedHarness(options: { configJsonc: string | null; role?: string;
 		hasUI: options.hasUI ?? true,
 		cwd: "/tmp",
 		ui: new Proxy({ notify: (message: string, level: string) => notices.push([level, message]) }, { get: (target, key) => (target as any)[key] ?? (() => {}) }),
-		sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined },
+		sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => "test-session" },
 	});
 	return { CONFIG_PATH, fake, notices, sessionStart };
 }

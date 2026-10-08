@@ -44,7 +44,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 ## 配置
 
 唯一运行配置是 Pi Agent 目录（由官方 `getAgentDir()` 解析，含 `PI_CODING_AGENT_DIR` 覆写）下的
-`extensions/firecode/config.jsonc`；用户侧安装见 README。文件不存在时，交互主会话首次 `session_start` 把随包模板 `config.example.jsonc` 原样写过去并提示重启（`config.ts` 的 `seedConfig`，构建把模板复制进 `dist` 以便打包后定位）；本次进程仍按“缺失”关闭可选功能，重启后才读新文件。已存在的文件（含内容有问题）绝不覆盖，子会话与非 TUI 模式不写盘，写入失败明确报错。改完本机运行配置后，把其中属于推荐配置的部分
+`extensions/firecode/config.jsonc`；用户侧安装见 README。文件不存在时，主会话在扩展加载时（`registerFirecode`，先于 `loadConfig`）把随包模板 `config.example.jsonc` 原样写过去（`config.ts` 的 `seedConfig`，构建把模板复制进 `dist` 以便打包后定位），本次会话即按新文件生效；不区分 TUI/print/rpc，提示“已生成配置…重启生效”留到有 UI 的 `session_start` 显示一次。已存在的文件（含内容有问题）绝不覆盖，子会话不写盘，写入失败明确报错。改完本机运行配置后，把其中属于推荐配置的部分
 同步进 `config.example.jsonc`，个人化内容（自定义 instructions、私人扩展名）留在本机。
 
 配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`，解析在 `config.ts` 的 `parseModelAtom`

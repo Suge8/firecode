@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- First interactive launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file), then asks you to adjust models and restart.
+- The first main-session launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file) and uses it right away; adjust models and restart when ready.
 
 ## [1.1.0] - 2026-10-08
 

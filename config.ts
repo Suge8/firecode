@@ -126,12 +126,10 @@ export const CONFIG_PATH = join(getAgentDir(), "extensions", "firecode", "config
 /** 随包分发的推荐模板；构建把它复制到 dist 里与本模块相同的相对位置。 */
 const TEMPLATE_PATH = fileURLToPath(new URL("./config.example.jsonc", import.meta.url));
 
-export const CONFIG_MISSING = "config.jsonc 不存在，已关闭可选功能";
-
 /**
  * 首次启动播种：配置不存在时把推荐模板原样写到配置路径，返回 true；已存在（含内容有问题）绝不覆盖，返回 false。
  * 写入失败直接抛出。独占创建（wx）让「存在性检查」与写入是同一步，并发启动也不会互相覆盖。
- * 不重载配置：本进程已按「缺失」注册完功能，模板里的模型要用户确认后重启才生效。
+ * 必须在首次 loadConfig 之前调用（结果被缓存）。
  */
 export function seedConfig(): boolean {
 	mkdirSync(dirname(CONFIG_PATH), { recursive: true });
@@ -146,7 +144,7 @@ export function seedConfig(): boolean {
 
 function readFile(problems: string[]): Record<string, unknown> {
 	if (!existsSync(CONFIG_PATH)) {
-		problems.push(CONFIG_MISSING);
+		problems.push("config.jsonc 不存在，已关闭可选功能");
 		return { features: Object.fromEntries(FEATURES.map((feature) => [feature, false])) };
 	}
 	try {

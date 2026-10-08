@@ -2,8 +2,8 @@
  * FireCode：个人 pi 定制层——启动横幅、状态栏、工具行渲染、预设、会话命名，
  * Claude 订阅适配、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_MISSING, CONFIG_PATH, type Feature, loadConfig, seedConfig } from "./config.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CONFIG_PATH, type Feature, loadConfig, seedConfig } from "./config.js";
 import { registerHeader } from "./header.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
@@ -38,6 +38,7 @@ const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "rename"
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
 
 export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
+	let seeding = seedForMainSession(role);
 	const { config, problems, featuresBroken } = loadConfig();
 	const subsession = role !== "main";
 	const reviewEnabled = config.features.review !== false;
@@ -57,25 +58,28 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
 	registerReview(pi, reviewEnabled, featuresBroken);
 
-	// 首次交互启动补默认配置：只有交互主会话写盘（子会话、print/rpc 不写），运行模式到 session_start 才知道。
-	if (problems.length === 0) return;
-	let seeded = false;
+	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {
-		if (!seeded && !subsession && ctx.mode === "tui" && problems.includes(CONFIG_MISSING)) seeded = trySeed(ctx);
-		const remaining = seeded ? problems.filter((problem) => problem !== CONFIG_MISSING) : problems;
-		if (remaining.length) ctx.ui.notify(`FireCode 配置有问题：${remaining.join("；")}`, "warning");
+		if (seeding && ctx.hasUI) {
+			ctx.ui.notify(seeding.message, seeding.level);
+			seeding = undefined;
+		}
+		if (problems.length) ctx.ui.notify(`FireCode 配置有问题：${problems.join("；")}`, "warning");
 	});
 }
 
-function trySeed(ctx: ExtensionContext): boolean {
+type SeedNotice = { message: string; level: "info" | "error" };
+
+/** 主会话加载时补默认配置，必须先于 loadConfig；子会话不写盘。提示留到 session_start 有 UI 时显示。 */
+function seedForMainSession(role: FirecodeSessionRole): SeedNotice | undefined {
+	if (role !== "main") return undefined;
 	try {
-		if (!seedConfig()) return false;
-		ctx.ui.notify(`已生成配置：${CONFIG_PATH}，按需修改模型后重启生效`, "info");
-		return true;
+		return seedConfig()
+			? { message: `已生成配置：${CONFIG_PATH}，按需修改模型后重启生效`, level: "info" }
+			: undefined;
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
-		ctx.ui.notify(`无法生成配置：${CONFIG_PATH}（${reason}）`, "error");
-		return false;
+		return { message: `无法生成配置：${CONFIG_PATH}（${reason}）`, level: "error" };
 	}
 }
 
