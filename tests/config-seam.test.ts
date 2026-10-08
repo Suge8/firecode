@@ -1,7 +1,10 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
+import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_PACKAGES } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
@@ -26,12 +29,10 @@ test("missing runtime config disables optional behavior and warns on each sessio
 });
 
 test.each([
-	{ feature: "rename", commands: ["rename"], shortcuts: ["alt+r"] },
 	{ feature: "stats", commands: ["quota", "tokens"], shortcuts: [] },
 ])("runtime config enables only $feature behavior", async ({ feature, commands: expectedCommands, shortcuts: expectedShortcuts }) => {
 	const configJsonc = JSON.stringify({
 		features: await featuresOnly(feature),
-		keys: { rename: "alt+r" },
 	});
 	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc });
 	const fake = fakePi();
@@ -91,11 +92,13 @@ test("Master 角色对象严格解析原子与 fallback", async () => {
 	expect(legacyProblems).toEqual(["未知字段 master.models"]);
 });
 
-test("已删除的配置项不被静默忽略：keys.cyclePreset 报未知字段，tools 节报未知配置节", async () => {
+test("已删除的配置项不被静默忽略：features.rename、keys.rename 与 keys.cyclePreset 报未知字段，tools 节报未知配置节", async () => {
 	const { loadConfig } = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({ keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" }, tools: { replyLines: 3 } }),
+		configJsonc: JSON.stringify({ features: { rename: true }, keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" }, tools: { replyLines: 3 } }),
 	});
 	const { problems } = (loadConfig as () => { problems: string[] })();
+	expect(problems.some((problem) => problem.startsWith("未知开关 features.rename"))).toBeTrue();
+	expect(problems).toContain("未知字段 keys.rename");
 	expect(problems).toContain("未知字段 keys.cyclePreset");
 	expect(problems).toContain("未知配置节 tools");
 });
@@ -175,11 +178,24 @@ test("扩展加载时配置缺失：主会话写入随包模板，本次会话�
 	const { CONFIG_PATH, fake, notices, sessionStart } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
-	expect([...fake.commands.keys()]).toContain("rename");
 	await sessionStart();
 	await sessionStart();
 
 	expect(notices).toEqual([["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"]]);
+});
+
+test("全新安装（播种的推荐配置、宿主默认键位）注册的快捷键不与任何宿主键位重叠，启动无冲突提示", async () => {
+	const { fake } = await seedHarness({ configJsonc: null });
+	const { KeybindingsManager } = await import(pathToFileURL(join(PI_PACKAGES, "coding-agent/src/core/keybindings.ts")).href);
+	const hostKeys = new Set(
+		Object.values(KeybindingsManager.create(await mkdtemp(join(tmpdir(), "firecode-keys-"))).getEffectiveConfig())
+			.flatMap((keys) => (Array.isArray(keys) ? keys : [keys]))
+			.map((key) => String(key).toLowerCase()),
+	);
+
+	const registered = [...fake.shortcuts.keys()];
+	expect(registered).not.toEqual([]);
+	expect(registered.filter((key) => hostKeys.has(key.toLowerCase()))).toEqual([]);
 });
 
 test("无界面的主会话也写盘，但不提示", async () => {
