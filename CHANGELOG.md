@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The startup banner now matches the brand logo: a pixel flame with `>_` that runs red to gold, and a bold lowercase `firecode` in an orange-to-gold gradient. It lights up in about a second, then stays still. Terminals narrower than the logo get the one-line banner.
+
 ## [1.0.1] - 2026-10-09
 
 ### Added

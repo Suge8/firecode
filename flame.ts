@@ -65,7 +65,7 @@ export function mix(from: Rgb, to: Rgb, k: number): Rgb {
 	return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
 }
 
-export function heat(value: number): Rgb {
+function heat(value: number): Rgb {
 	const x = clamp(value);
 	for (let index = 1; index < HEAT_STOPS.length; index++) {
 		const [at, color] = HEAT_STOPS[index];
@@ -81,7 +81,7 @@ export function paint(color: Rgb, text: string): string {
 }
 
 /** 三个不可公约频率叠加的火势，0.1–1 之间起伏。 */
-export function flicker(phase: number, t = frameSeconds()): number {
+function flicker(phase: number, t = frameSeconds()): number {
 	const tau = Math.PI * 2;
 	return 0.55
 		+ 0.2 * Math.sin(tau * (1.1 * t + phase))
