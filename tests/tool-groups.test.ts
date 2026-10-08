@@ -715,37 +715,17 @@ test("review 的信封消息归入过程不切段", async () => {
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
 });
 
-test("首句以冒号结尾时并入下一非空行：↳ 行与中间回复共用同一规则", async () => {
+test("中间回复与子代理结果行都经首句规则预览（规则本身见 format.test）", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	assistant(s, [{ type: "text", text: "标准输出：\n\nhello world\n后面的细节" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	assistant(s, [{ type: "text", text: "Result:\nok" }, { type: "toolCall", id: "c2", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "b.ts" }));
 	hostUser(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
-	hostUser(s, WORKER_RESULT("lint", "output:\nok。其余"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 
-	const collapsed = s.lines().map((line: string) => line.trim());
-	expect(collapsed).toContain("标准输出：hello world");
-	expect(collapsed).toContain("Result: ok");
-
+	expect(s.lines().map((line: string) => line.trim())).toContain("标准输出：hello world");
 	s.ui.setToolsExpanded(true);
-	const expanded = s.lines().map((line: string) => line.trim());
-	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
-	expect(expanded).toContain("↳ lint 已返回 · 8m output: ok。");
-});
-
-test("冒号并入下一行时跳过围栏行与空行；预览去掉行内 Markdown 标记", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	assistant(s, [{ type: "text", text: "说明：\n\n```\n**粗体** 与 `code` 与 [链接](http://x.test)\n```" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_RESULT("fix-auth", "命令输出：\n```text\ndone\n```\n**加粗**结尾"));
-	assistant(s, [{ type: "text", text: "收口" }]);
-	expect(s.lines().map((line: string) => line.trim())).toContain("说明：粗体 与 code 与 链接");
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令输出：done");
+	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
 });
 
 test("异常提醒：宿主提示原文按宽裁剪；多条提示取首条；工具失败不影响标记", async () => {
