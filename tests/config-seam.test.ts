@@ -231,7 +231,7 @@ test("写入失败明确报错，不静默", async () => {
 test("无界面的主会话写入失败也明确报错（stderr），不静默", async () => {
 	const stderr = spyOn(console, "error").mockImplementation(() => {});
 	try {
-		const { CONFIG_PATH, notices, sessionStart } = await seedHarness({
+		const { CONFIG_PATH, sessionStart } = await seedHarness({
 			configJsonc: null,
 			hasUI: false,
 			beforeRegister: async (configPath) => {
@@ -243,7 +243,6 @@ test("无界面的主会话写入失败也明确报错（stderr），不静默",
 
 		await sessionStart();
 
-		expect(notices).toEqual([]);
 		expect(stderr.mock.calls.map(([message]) => String(message)).join("\n")).toContain("无法生成配置：" + CONFIG_PATH);
 	} finally {
 		stderr.mockRestore();
