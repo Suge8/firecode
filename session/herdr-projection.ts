@@ -63,9 +63,9 @@ function labelOf(view: BusyView): string | undefined {
 }
 
 /** 返回 settled：等当前发送循环排空，只供测试。 */
-export function registerHerdrProjection(pi: ExtensionAPI, subsession = false): () => Promise<void> {
+export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
 	const env = herdrPaneEnv();
-	if (!env || subsession) return () => Promise.resolve();
+	if (!env) return () => Promise.resolve();
 	const paneId = env.paneId;
 
 	let enabled = false;

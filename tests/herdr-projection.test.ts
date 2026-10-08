@@ -3,11 +3,11 @@ import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadFirecodeModule } from "./loader.js";
+import { featuresOnly, loadFirecodeModule } from "./loader.js";
 import { fakePi } from "./fake-pi.ts";
 
 type Module = {
-	registerHerdrProjection: (pi: unknown, subsession?: boolean) => () => Promise<void>;
+	registerHerdrProjection: (pi: unknown) => () => Promise<void>;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -48,7 +48,7 @@ async function herdrStub(failures = 0) {
 	return { path, requests };
 }
 
-async function register(socketPath: string, env: Record<string, string | undefined> = {}, subsession = false) {
+async function register(socketPath: string, env: Record<string, string | undefined> = {}) {
 	const previous = { ...process.env };
 	cleanups.push(async () => {
 		for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
@@ -59,7 +59,7 @@ async function register(socketPath: string, env: Record<string, string | undefin
 		else process.env[key] = value;
 	}
 	const fake = fakePi({ getThinkingLevel: () => "medium" });
-	const settled = (await load()).registerHerdrProjection(fake.pi, subsession);
+	const settled = (await load()).registerHerdrProjection(fake.pi);
 	return Object.assign(fake, { settled });
 }
 
@@ -245,7 +245,7 @@ test("quit 清身份并 release；reload/new/resume/fork 不 release", async () 
 	expect(herdr.requests[1].params.seq).toBeGreaterThan(herdr.requests[0].params.seq);
 });
 
-test("非 TUI、Master 子会话、herdr 之外一律静默", async () => {
+test("非 TUI、herdr 之外一律静默", async () => {
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
 	await pi.fire("session_start", {}, context("x", { mode: "print" }));
@@ -254,6 +254,22 @@ test("非 TUI、Master 子会话、herdr 之外一律静默", async () => {
 	await pi.settled();
 	expect(herdr.requests).toHaveLength(0);
 
-	expect((await register(herdr.path, {}, true)).handlers.size).toBe(0);
 	expect((await register(herdr.path, { HERDR_ENV: undefined })).handlers.size).toBe(0);
+});
+
+test("子会话不接管 pane：同一 herdr 环境下主会话投影，子会话不发任何请求", async () => {
+	const herdr = await herdrStub();
+	await register(herdr.path);
+	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: JSON.stringify({ features: await featuresOnly() }) }) as any;
+	const sessionStartRequests = async (role: string) => {
+		herdr.requests.length = 0;
+		const fake = fakePi({ registerProvider() {}, getThinkingLevel: () => "medium" });
+		registerFirecode(fake.pi, role);
+		const base = context("x");
+		await fake.fire("session_start", {}, { ...base, cwd: "/tmp", hasUI: true, ui: new Proxy({}, { get: () => () => {} }), sessionManager: { ...base.sessionManager, getBranch: () => [], getEntries: () => [], getSessionId: () => "s" } });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		return herdr.requests.length;
+	};
+	expect(await sessionStartRequests("worker")).toBe(0);
+	expect(await sessionStartRequests("main")).toBeGreaterThan(0);
 });

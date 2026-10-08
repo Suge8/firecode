@@ -192,8 +192,7 @@ class ShellEditor extends CustomEditor {
 	}
 }
 
-export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
-	if (subsession) return;
+export function registerStatusBar(pi: ExtensionAPI): void {
 	const shell = new Shell();
 	const updateTitle = (ctx: ExtensionContext, incoming?: MessageStartEvent["message"]) => {
 		shell.title = displayTitle(ctx, incoming);
