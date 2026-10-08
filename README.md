@@ -18,37 +18,30 @@
 
 <p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
 
-```bash
-pi install npm:pi-firecode
-```
-
-Restart Pi (1.1.0+) and it's ready. The config is created for you on first launch.
 
 ## Why FireCode
 
-I used to stack a dozen Pi extensions. Now this is the only one I keep.
+- **Works out of the box.** The default config is the recommended one, in your language.
+- **Sub-agents under control.** Run them in parallel, pick a model per role, switch automatically on failure, step in any time.
+- **Hands-off review and delivery.** You don't babysit it. What reaches you has already passed review.
+- **An ultra-light core.** Built the Pi way: minimal, so your context stays lean.
+- **Low visual load.** Focus on the results that matter. Everything in between folds away until you open it.
 
-- **Works out of the box.** One install. Sensible defaults, English or Chinese UI.
-- **Sub-agents you actually control.** Run them in parallel, give each role its own model, fall back automatically when a provider fails, and open any of them to watch or redirect it.
-- **Review that doesn't stop at a report.** Several different models check the work, and every problem goes back to the agent until it's fixed.
-- **A light core.** Two small sub-agent tools. Review and the watcher add none.
-- **Nothing to read unless you want to.** Every step in between folds away. You see the answer; tool output opens on demand.
+## Fully automatic review and delivery
 
-## Fully automatic review, all the way to a passing fix
-
-Run `/fire-review` after a change. Different model families review what the agent actually did — the files, the session, the tests they run themselves. Anything they flag goes straight back to the agent to fix, and the next round checks it again. If a fix keeps failing, an advisor model decides whether to push on, narrow the scope or stop.
+Run `/fire-review` after a change and walk away. Any number of models you choose review the work adversarially. Problems go back to the agent to fix, the fix is reviewed again, and nothing reaches you until it passes. If it keeps getting stuck, an advisor model decides what to do next.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 
-Most open-source reviewers hand you a report and stop there:
+Other reviewers hand you a list of problems. FireCode hands you code that's fixed and re-reviewed:
 
-| | Reviewers | Fixes what it finds | Re-checks the fix |
-| --- | --- | --- | --- |
-| **FireCode** | Several model families | Yes, automatically | Yes, until it passes |
-| Qwen Code `/review` | Up to 16 agents, one model | Once, with `--fix` | No |
-| Open Code Review (Alibaba) | One model, file by file | No, you fix and mark | No |
-| PR-Agent / Qodo | Specialist agents, one model | On request | No |
-| multi-model-review (Pi) | Several model families | No | No |
+| | Reviewers | What you get |
+| --- | --- | --- |
+| **FireCode** | Any number of models, reviewing adversarially | **Fixed code that passed re-review** |
+| Qwen Code `/review` | Up to 16 agents, one model | A findings list; `--fix` patches once, no re-review |
+| Open Code Review (Alibaba) | One model, file by file | A findings list to fix yourself |
+| PR-Agent / Qodo | Specialist agents, one model | Comments and suggestions |
+| multi-model-review (Pi) | Several model families | One combined verdict |
 
 ## Clear sub-agent status
 
@@ -56,9 +49,9 @@ Every sub-agent sits above the input box. Click one to read its whole run and ta
 
 <p align="center"><img alt="A sub-agent's full run with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
 
-## A light core
+## An ultra-light core
 
-Sub-agent tools added to every request (tool definitions sent to the model, measured October 2026). Review and the watcher run in their own sessions and add nothing.
+Built the Pi way: sub-agents add just two small tools, and review and the watcher add none. Here is what sub-agent tools cost on every request (tool definitions sent to the model, measured October 2026):
 
 | | Sub-agent tools | Characters |
 | --- | --- | --- |
@@ -69,10 +62,14 @@ Sub-agent tools added to every request (tool definitions sent to the model, meas
 
 ## Also in the box
 
-`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI Fast mode
+`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI Fast mode · Works with Claude subscription login
 
-On a Claude subscription, a request that fails because your login token just rotated is retried once instead of breaking the turn.
+## Install
 
-Turn anything off with `"features": { "<name>": false }` in `~/.pi/agent/extensions/firecode/config.jsonc`.
+```bash
+pi install npm:pi-firecode
+```
+
+Restart Pi (1.1.0+) and it's ready; the config is created on first launch. Turn anything off with `"features": { "<name>": false }` in `~/.pi/agent/extensions/firecode/config.jsonc`.
 
 [Contributing](.github/CONTRIBUTING.md) · MIT © Suge8
