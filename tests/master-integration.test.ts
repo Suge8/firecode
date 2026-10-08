@@ -1587,7 +1587,6 @@ test("子会话不注册只属于交互主会话的功能：横幅、工具渲�
 	const harness = await loadFirecodeModule("role-harness.js", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("header", "tools", "presets", "rename", "stats"),
-			keys: { rename: "alt+r" },
 		}),
 		extraFiles: {
 			"role-harness.ts": [

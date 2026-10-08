@@ -423,3 +423,32 @@ test("落定态在事件时算一次：歇下后反复重绘（按键）不再�
 	shell.start();
 	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
 });
+
+test("输入框里按宿主的改名键（app.session.rename）发布改名请求，其它键不发布", async () => {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+	const { RENAME_REQUEST_CHANNEL } = await loadFirecodeModule("session/rename.ts") as any;
+	let editor: any;
+	const theme = { fg: (_color: string, text: string) => text };
+	const ctx = {
+		isIdle: () => true,
+		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
+			setEditorComponent(factory: any) {
+				const renameKey = { matches: (data: string, action: string) => action === "app.session.rename" && data === "\x12" };
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, renameKey);
+			},
+		},
+	};
+	const fake = fakePi();
+	registerStatusBar(fake.pi);
+	const requests: unknown[] = [];
+	fake.pi.events.on(RENAME_REQUEST_CHANNEL, (data: unknown) => requests.push(data));
+	fake.fire("session_start", {}, ctx);
+
+	editor.handleInput("\x12");
+	editor.handleInput("a");
+
+	expect(requests).toEqual([ctx]);
+});

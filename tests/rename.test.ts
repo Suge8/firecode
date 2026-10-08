@@ -4,81 +4,53 @@ import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
-async function loadRenameSession() {
-	const { registerSessionName } = await loadFirecodeModule("session/rename.ts");
-	return registerSessionName as (pi: unknown) => void;
+async function setup(initialName?: string) {
+	const { registerSessionName, RENAME_REQUEST_CHANNEL } = await loadFirecodeModule("session/rename.ts") as any;
+	let sessionName = initialName;
+	const fake = fakePi({
+		getSessionName: () => sessionName,
+		setSessionName: (name: string) => { sessionName = name; },
+	});
+	registerSessionName(fake.pi);
+	const notices: string[] = [];
+	const prompts: unknown[][] = [];
+	/** 外壳在宿主改名键按下时发布请求；返回时输入框已应答并落定。 */
+	const request = async (answer: string | undefined) => {
+		const ctx = {
+			ui: {
+				input: async (...args: unknown[]) => { prompts.push(args); return answer; },
+				notify: (message: string) => notices.push(message),
+			},
+		};
+		fake.pi.events.emit(RENAME_REQUEST_CHANNEL, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	};
+	return { fake, request, notices, prompts, name: () => sessionName };
 }
 
-test("renames through Pi and binds Ctrl+R", async () => {
-	let sessionName = "old";
-	const notifications: string[] = [];
+test("改名请求弹出输入框（预填当前名字）并改会话名，名字去掉控制字符", async () => {
+	const host = await setup("old");
 
-	const fake = fakePi({
-		setSessionName(name: string) {
-			sessionName = name;
-		},
-		exec() {
-			throw new Error("rename must not call any external CLI");
-		},
-	});
-	(await loadRenameSession())(fake.pi);
+	await host.request("  new\u200b name\n");
 
-	await fake.commands.get("rename").handler("new name", {
-		ui: {
-			notify(message: string) {
-				notifications.push(message);
-			},
-		},
-	});
-
-	expect([...fake.shortcuts.keys()]).toEqual(["ctrl+r"]);
-	expect(sessionName).toBe("new name");
-	expect(notifications).toEqual(["会话已改名：new name"]);
+	expect(host.prompts[0]?.[1]).toBe("old");
+	expect(host.name()).toBe("new name");
+	expect(host.notices).toEqual(["会话已改名：new name"]);
 });
 
-test("Ctrl+R prompts for and applies a session name", async () => {
-	let sessionName = "old";
+test("取消或留空不改会话名", async () => {
+	const host = await setup("old");
 
-	const fake = fakePi({
-		getSessionName() {
-			return sessionName;
-		},
-		setSessionName(name: string) {
-			sessionName = name;
-		},
-	});
-	(await loadRenameSession())(fake.pi);
+	await host.request(undefined);
+	await host.request("   ");
 
-	await fake.shortcuts.get("ctrl+r").handler({
-		hasUI: true,
-		ui: {
-			input: async () => "new name",
-			notify() {},
-		},
-	});
-
-	expect(sessionName).toBe("new name");
+	expect(host.name()).toBe("old");
+	expect(host.notices).toEqual([]);
 });
 
-test("rejects an empty rename without touching the session", async () => {
-	let sessionName = "old";
-	const notifications: Array<[string, string]> = [];
+test("不注册 /rename 命令，也不自占快捷键：键位归宿主的 app.session.rename", async () => {
+	const host = await setup();
 
-	const fake = fakePi({
-		setSessionName(name: string) {
-			sessionName = name;
-		},
-	});
-	(await loadRenameSession())(fake.pi);
-
-	await fake.commands.get("rename").handler("   ", {
-		ui: {
-			notify(message: string, level: string) {
-				notifications.push([message, level]);
-			},
-		},
-	});
-
-	expect(sessionName).toBe("old");
-	expect(notifications).toEqual([["用法：/rename <新名字>", "error"]]);
+	expect([...host.fake.commands.keys()]).toEqual([]);
+	expect([...host.fake.shortcuts.keys()]).toEqual([]);
 });
