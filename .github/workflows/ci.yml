@@ -4,7 +4,7 @@ on:
   pull_request:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, chore/ci]
 
 concurrency:
   group: ci-${{ github.ref }}
