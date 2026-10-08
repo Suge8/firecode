@@ -18,7 +18,6 @@
 
 <p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
 
-
 ## Why FireCode
 
 - **Works out of the box.** The default config is the recommended one, in your language.

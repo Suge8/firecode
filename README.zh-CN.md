@@ -18,7 +18,6 @@
 
 <p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.zh.gif" width="860"></p>
 
-
 ## 为什么用 FireCode
 
 - **开箱即用。** 默认配置就是推荐配置，支持多语言。
