@@ -2,7 +2,7 @@ import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { contextColor } from "../theme.js";
 import { fakePi } from "./fake-pi.ts";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { PI_TUI_URL, cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 const FLAME3 = "[\u2800-\u28ff]{3}";
 
@@ -25,43 +25,72 @@ async function recordRounds(pi: any, branch: unknown[]) {
 
 afterEach(cleanupFirecodeModules);
 
-test("输入框外壳：标题即时取首条消息，状态嵌进上下边框，独立底栏 0 行", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
+interface MountOptions {
+	moduleOptions?: Parameters<typeof loadFirecodeModule>[1];
+	model?: { id: string; reasoning: boolean; contextWindow: number };
+	percent?: number;
+	name?: () => string | undefined;
+	branch?: () => unknown[];
+	statuses?: Map<string, string>;
+	keybindings?: unknown;
+	ui?: Record<string, unknown>;
+	pi?: Record<string, unknown>;
+}
+
+/** 外壳的宿主替身：注册后由 start() 发 session_start，editor/footer 是宿主拿到的组件。 */
+async function mount(options: MountOptions = {}) {
+	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts", options.moduleOptions) as any;
+	const statuses = options.statuses ?? new Map<string, string>();
 	let footer: any;
 	let editor: any;
+	const theme = { fg: (_color: string, text: string) => text };
+	const model = options.model ?? { id: "test-model", reasoning: false, contextWindow: 200_000 };
+	const ctx = {
+		isIdle: () => true,
+		model,
+		getContextUsage: () => ({ percent: options.percent ?? 1, contextWindow: model.contextWindow }),
+		sessionManager: { getSessionName: options.name ?? (() => undefined), getBranch: options.branch ?? (() => []) },
+		ui: {
+			setWorkingVisible() {},
+			setFooter(factory: any) { footer = factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
+			setEditorComponent(factory: any) {
+				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, options.keybindings ?? { matches: () => false });
+			},
+			...options.ui,
+		},
+	};
+	const fake = fakePi(options.pi);
+	registerStatusBar(fake.pi);
+	return {
+		fake, ctx, statuses,
+		footer: () => footer,
+		editor: () => editor,
+		start: () => fake.fire("session_start", {}, ctx),
+		top: (width = 100) => stripVTControlCharacters(editor.render(width)[0]),
+		bottom: (width = 100) => stripVTControlCharacters(editor.render(width).at(-1)),
+	};
+}
+
+
+test("输入框外壳：标题即时取首条消息，状态嵌进上下边框，独立底栏 0 行", async () => {
 	let name: string | undefined;
 	let entries: any[] = [];
 	const workingVisible: boolean[] = [];
-	const statuses = new Map<string, string>([["pi-openai-native-fast", "fast"]]);
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
+	const host = await mount({
 		model: { id: "test-model", reasoning: true, contextWindow: 200_000 },
-		getContextUsage: () => ({ percent: 42.3, contextWindow: 200_000 }),
-		sessionManager: { getSessionName: () => name, getBranch: () => entries },
-		ui: {
-			setWorkingVisible: (visible: boolean) => workingVisible.push(visible),
-			setFooter(factory: any) {
-				footer = factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses });
-			},
-			setEditorComponent(factory: any) {
-				editor = factory?.(
-					{ requestRender() {}, terminal: { rows: 40 } },
-					{ borderColor: (text: string) => text, selectList: {} },
-					{ matches: () => false },
-				);
-			},
-		},
-	};
-	const fake = fakePi({ getThinkingLevel: () => "medium" });
-	registerStatusBar(fake.pi);
-	fake.fire("session_start", {}, ctx);
-	const plain = (line: string) => stripVTControlCharacters(line);
-	const bottom = (width = 100) => plain(editor.render(width).at(-1));
-	const top = (width = 100) => plain(editor.render(width)[0]);
+		percent: 42.3,
+		name: () => name,
+		branch: () => entries,
+		statuses: new Map([["pi-openai-native-fast", "fast"]]),
+		ui: { setWorkingVisible: (visible: boolean) => workingVisible.push(visible) },
+		pi: { getThinkingLevel: () => "medium" },
+	});
+	const { visibleWidth } = await import(PI_TUI_URL) as any;
+	const { fake, ctx, statuses, top, bottom } = host;
+	host.start();
+	const editor = host.editor();
 
-	expect(footer.render(100)).toEqual([]);
+	expect(host.footer().render(100)).toEqual([]);
 	expect(workingVisible).toEqual([false]);
 	expect(bottom()).toContain("新会话");
 	expect(bottom()).toContain("test-model/medium Fast · 42.3%/200k");
@@ -108,35 +137,23 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	for (let width = 1; width <= 120; width++)
 		for (const line of editor.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 	fake.fire("session_shutdown", {}, ctx);
-	expect(footer).toBeUndefined();
-	expect(editor).toBeUndefined();
+	expect(host.footer()).toBeUndefined();
+	expect(host.editor()).toBeUndefined();
 });
 
 test("审查期间上边框只显示一处审查进度（不写“处理中”），窄屏逐级退让：先丢阻断数，再丢票数，最后整段让给指挥官标记", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	let editor: any;
-	const statuses = new Map([["master", "指挥官"]]);
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
+	const { visibleWidth } = await import(PI_TUI_URL) as any;
+	const { fake, ctx, editor: getEditor, start, top } = await mount({
 		model: { id: "gpt-5.5", reasoning: true, contextWindow: 1_000_000 },
-		getContextUsage: () => ({ percent: 12, contextWindow: 1_000_000 }),
-		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => [] },
-		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
-			setEditorComponent(factory: any) {
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
-			},
-		},
-	};
-	const fake = fakePi({ getThinkingLevel: () => "high" });
-	registerStatusBar(fake.pi);
-	fake.fire("session_start", {}, ctx);
+		percent: 12,
+		name: () => "修复登录态偶发失效",
+		statuses: new Map([["master", "指挥官"]]),
+		pi: { getThinkingLevel: () => "high" },
+	});
+	start();
+	const editor = getEditor();
 	fake.fire("agent_start", {}, ctx);
 	fake.pi.events.emit("firecode:review", { active: true, progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });
-	const top = (width: number) => stripVTControlCharacters(editor.render(width)[0]);
 	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
 	expect(top(110)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
 	expect(top(46)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
@@ -197,28 +214,10 @@ test("输入框上边框：状态在左，观察员与指挥官在右，宽度�
 });
 
 test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变忙起连续累计，中途输入与结果唤醒都不重置）/ 全部落定且歇下才定格", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	let editor: any;
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
-		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
-		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
-		sessionManager: { getSessionName: () => undefined, getBranch: () => branch },
-		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
-			setEditorComponent(factory: any) {
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
-			},
-		},
-	};
 	const branch: unknown[] = [humanEntry("开工")];
-	const fake = fakePi();
-	registerStatusBar(fake.pi);
+	const { fake, ctx, start, top } = await mount({ branch: () => branch });
 	await recordRounds(fake.pi, branch);
-	fake.fire("session_start", {}, ctx);
-	const top = () => stripVTControlCharacters(editor.render(100)[0]);
+	start();
 	try {
 		setSystemTime(new Date(1_000_000));
 		fake.fire("agent_start", {}, ctx);
@@ -262,29 +261,11 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 });
 
 test("上边框落定态：均速跟在耗时后，中断与请求失败写明终态", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	let editor: any;
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
-		model: { id: "test-model", reasoning: false, contextWindow: 200_000 },
-		getContextUsage: () => ({ percent: 1, contextWindow: 200_000 }),
-		sessionManager: { getSessionName: () => undefined, getBranch: () => branch },
-		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
-			setEditorComponent(factory: any) {
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
-			},
-		},
-	};
 	const branch: unknown[] = [];
-	const fake = fakePi();
-	registerStatusBar(fake.pi);
+	const { fake, ctx, start, top } = await mount({ branch: () => branch });
 	await recordRounds(fake.pi, branch);
 	const emit = (name: string, event = {}) => fake.fire(name, event, ctx);
-	emit("session_start");
-	const top = () => stripVTControlCharacters(editor.render(100)[0]);
+	start();
 	const round = (at: number, output: number, stopReason: string) => {
 		setSystemTime(new Date(at));
 		branch.push(humanEntry("再来一轮"));
@@ -320,36 +301,24 @@ async function shellWithBusy() {
 		`import { watchBusy as real } from "./busy-real.ts";`,
 		`export function watchBusy(pi, handlers) { globalThis.__fcBusyFeed = handlers; return real(pi, handlers); }`,
 	].join("\n");
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts", {
-		extraFiles: { "busy-real.ts": readFileSync(join(FIRECODE_DIR, "busy.ts"), "utf8"), "busy.ts": stub },
-	}) as any;
-	let editor: any;
-	const statuses = new Map([["master", "指挥官"]]);
 	const branch: unknown[] = [];
 	let branchReads = 0;
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
+	const host = await mount({
+		moduleOptions: { extraFiles: { "busy-real.ts": readFileSync(join(FIRECODE_DIR, "busy.ts"), "utf8"), "busy.ts": stub } },
 		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
-		getContextUsage: () => ({ percent: 1, contextWindow: 1_000_000 }),
-		sessionManager: { getSessionName: () => "修复登录态偶发失效", getBranch: () => { branchReads++; return branch; } },
-		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => statuses }); },
-			setEditorComponent(factory: any) {
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, { matches: () => false });
-			},
-		},
-	};
-	const fake = fakePi({ getThinkingLevel: () => "off" });
-	registerStatusBar(fake.pi);
-	fake.fire("session_start", {}, ctx);
+		name: () => "修复登录态偶发失效",
+		branch: () => { branchReads++; return branch; },
+		statuses: new Map([["master", "指挥官"]]),
+		pi: { getThinkingLevel: () => "off" },
+	});
+	const { fake, ctx, statuses, start } = host;
+	start();
 	const feed = (globalThis as any).__fcBusyFeed;
 	return {
 		statuses,
 		branch,
 		branchReads: () => branchReads,
-		start: () => fake.fire("session_start", {}, ctx),
+		start,
 		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
 		/** 歇下边沿：像 tools 一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
@@ -358,8 +327,8 @@ async function shellWithBusy() {
 			fake.pi.events.emit(ROUND_RECORDED);
 		},
 		review: (progress: Record<string, unknown>) => fake.pi.events.emit("firecode:review", { active: true, progress: () => progress }),
-		top: (width = 110) => stripVTControlCharacters(editor.render(width)[0]),
-		bottom: (width = 110) => stripVTControlCharacters(editor.render(width).at(-1)),
+		top: (width = 110) => host.top(width),
+		bottom: (width = 110) => host.bottom(width),
 	};
 }
 
@@ -400,67 +369,45 @@ test("预设名显示在下边框标题之后、模型之前，不带图标；�
 	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Model · test-model · 1\.0%\/1M ─$/u);
 });
 
-test("上边框落定态与摘要行读同一份事实：一轮多段时按同一合成规则显示整轮（耗时累加、更早的中断追加），不只显示最后一段", async () => {
+test("落定态与摘要行读同一份事实：一轮多段按同一合成规则显示整轮（耗时累加、更早的中断追加）；事件时算一次，歇下后反复重绘（按键）不再读会话分支；重开会话时直接显示上一轮", async () => {
 	const shell = await shellWithBusy();
 	shell.branch.push(humanEntry("上一轮"), roundEntry({ elapsed: 9_000, outcome: "complete" }));
 	shell.branch.push(humanEntry("写一篇冬天散文"), roundEntry({ elapsed: 17_700, outcome: "aborted" }));
 	shell.view({ busy: true, since: Date.now() - 195_000, review: true });
 	shell.view({ busy: false });
 	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
-	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
-});
-
-test("落定态在事件时算一次：歇下后反复重绘（按键）不再读会话分支；重开会话时按分支里的轮记录直接显示上一轮", async () => {
-	const shell = await shellWithBusy();
-	shell.branch.push(humanEntry("写一篇冬天散文"), roundEntry({ elapsed: 17_700, outcome: "aborted" }));
-	shell.view({ busy: true, since: Date.now() - 195_000, agentRunning: true });
-	shell.view({ busy: false });
-	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
+	const settled = /^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u;
 	const reads = shell.branchReads();
-	for (let key = 0; key < 20; key++) expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
+	for (let key = 0; key < 20; key++) expect(shell.top()).toMatch(settled);
 	expect(shell.branchReads()).toBe(reads);
 
 	shell.start();
-	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
+	expect(shell.top()).toMatch(settled);
 });
 
-/** 外壳编辑器的宿主替身：改名键是 \x12，输入框按 answers 依次应答。 */
-function renameHost(answers: Array<string | undefined>, initialName?: string) {
-	let editor: any;
+/** 改名键是 \x12，输入框按 answers 依次应答。 */
+async function renameHost(answers: Array<string | undefined>, initialName?: string) {
 	let sessionName = initialName;
 	const prompts: unknown[][] = [];
 	const notices: string[] = [];
-	const theme = { fg: (_color: string, text: string) => text };
-	const ctx = {
-		isIdle: () => true,
-		sessionManager: { getSessionName: () => sessionName, getBranch: () => [] },
+	const host = await mount({
+		keybindings: { matches: (data: string, action: string) => action === "app.session.rename" && data === "\x12" },
 		ui: {
-			setWorkingVisible() {},
-			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
-			setEditorComponent(factory: any) {
-				const renameKey = { matches: (data: string, action: string) => action === "app.session.rename" && data === "\x12" };
-				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, renameKey);
-			},
 			input: async (...args: unknown[]) => { prompts.push(args); return answers.shift(); },
 			notify: (message: string) => notices.push(message),
 		},
-	};
-	const fake = fakePi({ getSessionName: () => sessionName, setSessionName: (name: string) => { sessionName = name; } });
+		pi: { getSessionName: () => sessionName, setSessionName: (name: string) => { sessionName = name; } },
+	});
+	host.start();
 	return {
-		fake, ctx, prompts, notices,
+		fake: host.fake, prompts, notices,
 		name: () => sessionName,
-		start: async () => {
-			const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-			registerStatusBar(fake.pi);
-			fake.fire("session_start", {}, ctx);
-		},
-		press: async (data: string) => { editor.handleInput(data); await new Promise((resolve) => setTimeout(resolve, 0)); },
+		press: async (data: string) => { host.editor().handleInput(data); await new Promise((resolve) => setTimeout(resolve, 0)); },
 	};
 }
 
 test("输入框里按宿主的改名键（app.session.rename）弹输入框（预填当前名字）改会话名，名字去掉控制字符", async () => {
-	const host = renameHost(["  new\u200b name\n"], "old");
-	await host.start();
+	const host = await renameHost(["  new\u200b name\n"], "old");
 
 	await host.press("\x12");
 
@@ -470,8 +417,7 @@ test("输入框里按宿主的改名键（app.session.rename）弹输入框（�
 });
 
 test("改名取消或留空不改会话名；其它键不弹输入框", async () => {
-	const host = renameHost([undefined, "   "], "old");
-	await host.start();
+	const host = await renameHost([undefined, "   "], "old");
 
 	await host.press("a");
 	expect(host.prompts).toEqual([]);
@@ -484,8 +430,7 @@ test("改名取消或留空不改会话名；其它键不弹输入框", async ()
 });
 
 test("不注册 /rename 命令，也不自占快捷键：键位归宿主的 app.session.rename", async () => {
-	const host = renameHost([]);
-	await host.start();
+	const host = await renameHost([]);
 
 	expect([...host.fake.commands.keys()]).toEqual([]);
 	expect([...host.fake.shortcuts.keys()]).toEqual([]);

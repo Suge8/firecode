@@ -23,14 +23,14 @@ type Usage = {
 	cost?: { total?: number };
 };
 
-export type SessionLine = {
+type SessionLine = {
 	type?: string;
 	timestamp?: string;
 	usage?: Usage;
 	message?: { role?: string; provider?: string; model?: string; usage?: Usage; timestamp?: number };
 };
 
-export type UsageAttribution = {
+type UsageAttribution = {
 	provider: string;
 	model: string;
 	usage: Usage;
@@ -39,7 +39,7 @@ export type UsageAttribution = {
 };
 
 /** 与 pi 的 usage-totals 对齐：assistant 归模型，工具与压缩归 tools/summaries。 */
-export function usageAttribution(entry: SessionLine): UsageAttribution | undefined {
+function usageAttribution(entry: SessionLine): UsageAttribution | undefined {
 	const at = (fallback?: number) => fallback ?? (entry.timestamp ? Date.parse(entry.timestamp) : undefined);
 
 	if (entry.type === "message" && entry.message?.usage) {
