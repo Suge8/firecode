@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_CODING_AGENT_URL } from "./loader.ts";
+import { pathToFileURL } from "node:url";
+import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_PACKAGES } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
@@ -184,7 +185,7 @@ test("扩展加载时配置缺失：主会话写入随包模板，本次会话�
 
 test("全新安装（播种的推荐配置、宿主默认键位）注册的快捷键不与任何宿主键位重叠，启动无冲突提示", async () => {
 	const { fake } = await seedHarness({ configJsonc: null });
-	const { KeybindingsManager } = await import(PI_CODING_AGENT_URL);
+	const { KeybindingsManager } = await import(pathToFileURL(join(PI_PACKAGES, "coding-agent/src/core/keybindings.ts")).href);
 	const hostKeys = new Set(
 		Object.values(KeybindingsManager.create(await mkdtemp(join(tmpdir(), "firecode-keys-"))).getEffectiveConfig())
 			.flatMap((keys) => (Array.isArray(keys) ? keys : [keys]))
