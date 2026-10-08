@@ -87,7 +87,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	fake.fire("agent_start", {}, ctx);
 	expect(top()).toMatch(/处理中 \d/u);
 	let progress = { stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 };
-	fake.pi.events.emit("herdr:blocked", { active: true, label: "对抗审查进行中", progress: () => progress });
+	fake.pi.events.emit("firecode:review", { active: true, progress: () => progress });
 	expect(top()).toMatch(/^─ [\u2800-\u28ff]{3} \S+ · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 审查 第2轮 1\/3 · 1 阻断 /u);
 	// 审查字形是金色盲文转圈点，与火苗同一字符族，靠金色区分。
 	expect(editor.render(100)[0]).toMatch(/\x1b\[38;2;255;195;61m[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u);
@@ -102,7 +102,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(top()).toContain("审查 第2轮 3/3");
 	progress = { stage: "summarizing", round: 2, passed: 0, total: 0, blocked: 0 };
 	expect(top()).toContain("审查 第2轮 总结中");
-	fake.pi.events.emit("herdr:blocked", { active: false });
+	fake.pi.events.emit("firecode:review", { active: false });
 	expect(top()).not.toContain("审查");
 
 	for (let width = 1; width <= 120; width++)
@@ -135,7 +135,7 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	registerStatusBar(fake.pi);
 	fake.fire("session_start", {}, ctx);
 	fake.fire("agent_start", {}, ctx);
-	fake.pi.events.emit("herdr:blocked", { active: true, label: "对抗审查进行中", progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });
+	fake.pi.events.emit("firecode:review", { active: true, progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });
 	const top = (width: number) => stripVTControlCharacters(editor.render(width)[0]);
 	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
 	expect(top(110)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
@@ -357,7 +357,7 @@ async function shellWithBusy() {
 			branch.push(roundEntry(round));
 			fake.pi.events.emit(ROUND_RECORDED);
 		},
-		review: (progress: Record<string, unknown>) => fake.pi.events.emit("herdr:blocked", { active: true, label: "对抗审查进行中", progress: () => progress }),
+		review: (progress: Record<string, unknown>) => fake.pi.events.emit("firecode:review", { active: true, progress: () => progress }),
 		top: (width = 110) => stripVTControlCharacters(editor.render(width)[0]),
 		bottom: (width = 110) => stripVTControlCharacters(editor.render(width).at(-1)),
 	};

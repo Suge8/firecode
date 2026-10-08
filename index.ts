@@ -8,7 +8,7 @@ import { registerHeader } from "./header.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
-import { registerHerdrDisplay } from "./session/herdr-display.js";
+import { registerHerdrProjection } from "./session/herdr-projection.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
@@ -50,8 +50,8 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	if (config.features.statusbar !== false) registerStatusBar(pi, subsession);
 	if (config.features.watcher !== false) registerWatcher(pi, {}, subsession);
 	if (config.features.master !== false) registerMaster(pi, {}, subsession);
-	// herdr 显示投影没有开关：herdr 之外自我禁用，只写显示层。
-	registerHerdrDisplay(pi, subsession);
+	// herdr 投影没有开关：herdr 之外自我禁用。
+	registerHerdrProjection(pi, subsession);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
 	registerReview(pi, reviewEnabled, featuresBroken);

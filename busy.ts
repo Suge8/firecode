@@ -17,17 +17,6 @@ export interface WorkersPayload {
 	teardown?: true;
 }
 
-/**
- * herdr 通用“进行中”频道，与 herdr:blocked 同构：消费者按 active 的 true/false 做计数配对。
- * Master 只在在飞数 0↔正数跃迁时发布，保证配对；指挥官自己的回合 herdr 已由 agent_start/settled 得知。
- */
-export const HERDR_WORKING_CHANNEL = "herdr:working";
-export interface HerdrWorkingPayload {
-	active: boolean;
-	label?: string;
-}
-export const HERDR_WORKING_LABEL = "子代理进行中";
-
 export interface BusyView {
 	agentRunning: boolean;
 	inFlight: number;

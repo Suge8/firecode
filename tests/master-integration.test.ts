@@ -315,7 +315,7 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	expect(idleLine).toContain("落定 1m5s前");
 });
 
-test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，herdr:working 的 active 按 0↔正数配对，停用时收口", async () => {
+test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，停用时收口", async () => {
 	const harness = await setup();
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -323,9 +323,7 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	await settled;
 	await Bun.sleep(0);
 	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
-	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
 	expect(counts()).toEqual([1, 0]);
-	expect(working()).toEqual([true, false]);
 
 	faux.setResponses([fauxAssistantMessage("再来一次")]);
 	const second = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -333,12 +331,10 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	await second;
 	await Bun.sleep(0);
 	expect(counts()).toEqual([1, 0, 1, 0]);
-	expect(working()).toEqual([true, false, true, false]);
 
 	// 停用时在飞数归零；已经归零不再重复发布。
 	await harness.command("");
 	expect(counts()).toEqual([1, 0, 1, 0]);
-	expect(working()).toEqual([true, false, true, false]);
 });
 
 test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒要等唤醒回合开始才归零（宿主 sendUserMessage 不等回合）", async () => {
@@ -349,16 +345,13 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 	await harness.userMessageStarted;
 	await Bun.sleep(5);
 	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
-	const working = () => harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active);
 	// worker 已落定为 idle，前门消息已发出但唤醒回合还没开始：不能归零，否则会话会在唤醒前误报一次“歇下”。
 	expect((await harness.list().then((result) => result.details as any)).workers[0].status).toBe("idle");
 	expect(counts()).toEqual([1]);
-	expect(working()).toEqual([true]);
 
 	await harness.wake();
 	await Bun.sleep(5);
 	expect(counts()).toEqual([1, 0]);
-	expect(working()).toEqual([true, false]);
 	await harness.command("");
 });
 
@@ -477,7 +470,7 @@ test("事件投递失败等待重试期间仍计入在飞", async () => {
 	await harness.command("");
 });
 
-test("停用 Master 时仍有子代理在飞：先发布归零并配对 herdr:working", async () => {
+test("停用 Master 时仍有子代理在飞：先发布归零", async () => {
 	const harness = await setup();
 	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
 	await harness.execute({ action: "start", worker: "slow", prompt: "慢", role: "工程师", thinking: "low" });
@@ -485,7 +478,6 @@ test("停用 Master 时仍有子代理在飞：先发布归零并配对 herdr:wo
 	expect(counts()).toEqual([1]);
 	await harness.command("");
 	expect(counts()).toEqual([1, 0]);
-	expect(harness.emitted.filter(([channel]) => channel === "herdr:working").map(([, payload]) => payload.active)).toEqual([true, false]);
 });
 
 test("主回合忙碌时，subagents 以队列语义完成 start→事件落定→list→kill", async () => {
@@ -1937,10 +1929,10 @@ function mockReviewExtension(
 			description: "mock review",
 			handler: () => {
 				// 与真实 review 一致：审查期间持有占用，会话因此算进行中，审查时长计入子代理的轮记录。
-				pi.events.emit("herdr:blocked", { active: true, label: "审查", progress: () => undefined });
+				pi.events.emit("firecode:review", { active: true, progress: () => undefined });
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
 				globalThis.__reviewTick?.();
-				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)}); pi.events.emit("herdr:blocked", { active: false });`}
+				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)}); pi.events.emit("firecode:review", { active: false });`}
 				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
 			},
 		});
