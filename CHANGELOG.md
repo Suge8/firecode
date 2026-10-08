@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- herdr could keep showing a session as idle while it was working. Each report's sequence number came from the moment Pi started, so after another Pi had run in the same pane (for example one started inside it), herdr treated every later report as stale. Sequence numbers now follow the clock at send time.
+
 ### Changed
 
 - Internal cleanup across every module (about 1,500 fewer lines of code and tests): one owner per piece of state, no unused exports, no dead branches or legacy fallbacks. Behaviour is unchanged except as listed here.
