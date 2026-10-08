@@ -82,7 +82,7 @@ const SECTIONS = ["language", "features", "keys", "openai", "presets", "review",
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
  * （tests/config-seam.test.ts 守这条）。ctrl+shift+s：宿主默认键位里没有，s 取 speed；单个 ctrl+字母已被宿主占满。
  */
-const DEFAULT_KEYS = {
+export const DEFAULT_KEYS = {
 	fast: "ctrl+shift+s",
 } as const;
 
@@ -262,7 +262,7 @@ const FALLBACK_THINKING: ThinkingLevelValue = "medium";
  * 每个字段只报一条问题，且必带目标形状——两段式旧写法会同时踩中两项校验，逐项报错说不出该改成什么。
  * 旧的分字段与两段式写法一律拒绝、不做兼容：兼容层会把三种写法固化成三套事实源。
  */
-function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
+export function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
 	const shape = msg.config.modelAtomShape(field);
 	if (typeof value !== "string" || !value) {
 		problems.push(shape);
@@ -388,7 +388,7 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 // ---- master 节 ----
 
 /** 与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
-function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
+export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
 	for (const key of Object.keys(raw))
 		if (key !== "roles" && key !== "workerExcludeExtensions" && key !== "autoActivate")
 			problems.push(msg.config.unknownField(`master.${key}`));
@@ -426,7 +426,7 @@ const WATCHER_KEYS = ["enabled", "model", "context"] as const;
 const WATCHER_CONTEXTS = new Set<WatcherContext>(["minimal", "full"]);
 
 /** model 必填（含思考档），enabled 默认 true、context 默认 minimal。 */
-function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
+export function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
 	rejectUnknownKeys(raw, WATCHER_KEYS, "watcher", problems);
 	const enabled = booleanValue(raw.enabled, "watcher.enabled", true, problems);
 	// 模型原子必填：缺失或写错时留空模型并记录问题，观察员据此拒绝启动。
