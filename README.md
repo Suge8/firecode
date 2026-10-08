@@ -22,7 +22,7 @@
 pi install npm:pi-firecode
 ```
 
-That's it (Pi 1.1.0 or newer). On first launch FireCode writes its recommended config to `~/.pi/agent/extensions/firecode/config.jsonc`; swap in the models you are logged in to. The interface text is currently in Chinese.
+That's it (Pi 1.1.0 or newer). On first launch FireCode writes its recommended config to `~/.pi/agent/extensions/firecode/config.jsonc`; swap in the models you are logged in to. The interface speaks English or Chinese, following your system language; set `"language"` in the config to pin it.
 
 ## Try this first
 
