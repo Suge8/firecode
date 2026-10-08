@@ -5,9 +5,7 @@
   </picture>
 </p>
 
-<p align="center">
-  Multi-agent orchestration and adversarial code review for <a href="https://pi.dev">Pi</a> — light, persistent, and calm in the terminal.
-</p>
+<p align="center">Parallel sub-agents and adversarial code review for <a href="https://pi.dev">Pi</a> — light, persistent, calm in the terminal.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/pi-firecode"><img alt="npm" src="https://img.shields.io/npm/v/pi-firecode?color=FF7A0F"></a>
@@ -16,40 +14,71 @@
   · <a href="README.zh-CN.md">中文</a>
 </p>
 
-<p align="center">
-  <img alt="FireCode dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860">
-</p>
+<p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
 
-## Quick start
+## Install
 
 ```bash
 pi install npm:pi-firecode
-agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-mkdir -p "$agent_dir/extensions/firecode"
-curl -fsSL https://unpkg.com/pi-firecode/config.example.jsonc -o "$agent_dir/extensions/firecode/config.jsonc"
 ```
 
-Restart Pi (1.1.0 or newer). The template is the maintainer's full setup — swap every `"provider/model/thinking"` atom for models you are logged in to. Upgrade later with `pi update`.
+That's it (Pi 1.1.0 or newer). On first launch FireCode writes its recommended config to `~/.pi/agent/extensions/firecode/config.jsonc`; swap in the models you are logged in to. The interface text is currently in Chinese.
 
-## Why FireCode
+## Try this first
 
-**Review that closes the loop.** `/fire-review` runs several models in parallel against your change. Any FAIL goes straight back to the agent to fix, the next round only re-checks what was flagged, an advisor model steps in after repeated failures to continue, narrow, or stop, and a hard round limit keeps it bounded. Progress is checkpointed into the session, so a reload resumes the review instead of losing it.
+- *"Send three researchers in parallel to summarize `src/`, `test/` and `docs/`, then give me one table."*
+- Make a change, then run `/fire-review`.
+- Turn on `/fire-watch` and let a cheap model keep an eye on each turn.
 
-<p align="center"><img alt="A /fire-review result card" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-review.png" width="720"></p>
+## Review that closes the loop
 
-**Sub-agents that don't get lost.** The commander (`/fire-master`) hands work to role-based sub-agents — each role picks its own model and thinking level, plus a fallback chain that takes over in the same session when a provider fails. Results are written to the session before delivery and re-delivered after a reload. Every sub-agent is listed above the input box; click one to read its full transcript and talk to it directly.
+`/fire-review` has several models review your change in parallel. Every finding goes straight back to the agent, the next round re-checks only what was flagged, and an advisor model steps in when failures repeat. A hard round limit keeps it bounded, and progress is saved in the session, so a reload resumes the review.
 
-<p align="center"><img alt="Three sub-agents running above the input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-subagents.png" width="720"></p>
+```mermaid
+flowchart LR
+  C[Your change] --> R{Reviewers<br/>in parallel}
+  R -- all PASS --> D([Done])
+  R -- any FAIL --> F[Agent fixes<br/>the findings]
+  F --> R2{Re-review<br/>what was flagged}
+  R2 -- PASS --> D
+  R2 -- FAIL again --> A[Advisor:<br/>continue / narrow / stop]
+  A -- continue --> F
+  A -- stop --> H([Handed back to you])
+```
 
-**Light by design.** Delegation is two tools whose definitions total 926 characters. Sub-agents run in-process as Pi SDK sessions — no daemons, no orphans when Pi exits. The npm package is a single 121 kB bundle.
+<p align="center"><img alt="Round 1 fails, the agent fixes the finding, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="780"></p>
 
-**A calm terminal.** Status lives in the input box border. Each request folds into one summary line — duration, speed, the last few interim replies — followed by the final answer. Click a summary or press `Ctrl+O` for every tool call.
+When failures repeat, the advisor checks the findings, names the root cause and sets the next step:
 
-<p align="center"><img alt="A finished request folded into one summary line" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-fold.png" width="720"></p>
+<p align="center"><img alt="Advisor card: verified findings, root cause, next step" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-advisor.png" width="720"></p>
+
+## Sub-agents you can see and steer
+
+The commander (`/fire-master`) hands work to roles you define — each with its own model, thinking level and a fallback chain that takes over in the same session when a provider fails. Results are saved before delivery and re-delivered after a reload. Click any sub-agent above the input box to read its whole run and talk to it directly.
+
+<p align="center"><img alt="A sub-agent's full run, with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
+
+## A watcher that speaks up only when it matters
+
+`/fire-watch` evaluates each turn with a cheap model and stays silent unless the work drifts, over-engineers or misses a contract — then it says one line.
+
+<p align="center"><img alt="The watcher flags a validation that is looser than its comment" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-watcher.png" width="720"></p>
+
+## Light by design
+
+Delegation costs context on every request, so FireCode keeps it small. Characters of tool descriptions plus parameter schemas sent to the model (measured October 2026):
+
+| | Delegation tools | Characters |
+| --- | --- | --- |
+| **FireCode** | 2 | **926** |
+| omp | 2 | 3,140 |
+| Codex CLI (multi-agent v2) | 6 | 4,766 |
+| Codex CLI (multi-agent v1) | 5 | 9,378 |
+| pi-subagents | 2–3 | 4,703–23,182 |
+
+Sub-agents run in-process as Pi sessions — no daemons, nothing left behind when Pi exits. The npm package is a single 124 kB bundle.
 
 ## How it compares
-
-Checked against public docs and source in October 2026.
 
 | | FireCode | Claude Code | Codex CLI | omp | pi-subagents |
 | --- | --- | --- | --- | --- | --- |
@@ -57,34 +86,22 @@ Checked against public docs and source in October 2026.
 | Fallback model chain for sub-agents | Yes | Yes | Not found | Yes | No |
 | Sub-agent results after a reload | Persisted and re-delivered | Transcripts persist | Resumable, best-effort delivery | Revivable, undelivered results dropped | Background runs keep going |
 | Read and steer each sub-agent | Yes | Yes | Yes | Yes | Yes |
-| Delegation tool definitions | 926 chars | — | — | 3,140 chars | — |
 
-## Features
+Checked against public docs and source in October 2026.
+
+## Everything else
 
 | Feature | Entry | What it does |
 | --- | --- | --- |
-| Commander | `/fire-master` (on by default) | Delegates to role-based sub-agents in parallel; live list above the input box |
-| Adversarial review | `/fire-review` | Multi-model review with automatic fix rounds and advisor arbitration |
-| Watcher | `/fire-watch` | A cheap model checks each turn and speaks up only when the work drifts |
-| Input-box status | automatic | Progress, timer, review rounds, title, model and context usage in the border |
-| Turn folding | automatic, `Ctrl+O` | One summary line per request, full detail on demand |
-| Presets | `/preset`, your key bindings | Switch model, thinking level, tools and extra instructions together |
+| Input-box status | automatic | Progress, timer, review round, title, model and context usage live in the input border |
+| Turn folding | automatic, `Ctrl+O` | Each request folds into one summary line — time, speed, the last few interim replies |
+| Presets | `/preset`, your key bindings | Switch model, thinking level, tools and instructions together |
 | Usage | `/quota`, `/tokens` | Claude and Codex subscription quota; local token and cost totals |
-| Claude subscription | automatic | Claude Code attribution; retries once on a 401 caused by token rotation |
+| Claude subscription | automatic | Claude Code attribution; one retry on a 401 caused by token rotation |
 | OpenAI request layer | `Ctrl+F` | Verbosity, Fast mode, optional native context compaction |
 
-Turn any feature off with `"features": { "<name>": false }` in the config. The UI text is in Chinese.
+Turn any feature off with `"features": { "<name>": false }` in the config.
 
-## Development
+## Contributing
 
-Needs [Bun](https://bun.sh/) and a pi-mono checkout — see [CONTRIBUTING](.github/CONTRIBUTING.md).
-
-```bash
-bun test
-bun run typecheck
-bun run build && pi -e .
-```
-
-Architecture, invariants and terms live in `AGENTS.md`, the per-module `AGENTS.md` files and `WORDS.md`.
-
-MIT © Suge8
+See [CONTRIBUTING](.github/CONTRIBUTING.md). MIT © Suge8

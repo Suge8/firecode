@@ -26,8 +26,6 @@ Sleep 400ms
 Enter
 # 子代理约在发出后 6–15 秒间运行
 Sleep 8s
-Screenshot shot-subagents.png
 Wait+Screen@180s /─ ✓ [0-9]/
 Sleep 3s
-Screenshot shot-fold.png
 Sleep 2s
