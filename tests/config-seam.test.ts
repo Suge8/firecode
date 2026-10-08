@@ -1,6 +1,6 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
@@ -226,4 +226,26 @@ test("写入失败明确报错，不静默", async () => {
 	const errors = notices.filter(([level]) => level === "error");
 	expect(errors).toHaveLength(1);
 	expect(errors[0][1]).toContain("无法生成配置：" + CONFIG_PATH);
+});
+
+test("无界面的主会话写入失败也明确报错（stderr），不静默", async () => {
+	const stderr = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const { CONFIG_PATH, notices, sessionStart } = await seedHarness({
+			configJsonc: null,
+			hasUI: false,
+			beforeRegister: async (configPath) => {
+				const configDir = dirname(configPath);
+				await rm(configDir, { recursive: true });
+				await writeFile(configDir, "挡路的文件");
+			},
+		});
+
+		await sessionStart();
+
+		expect(notices).toEqual([]);
+		expect(stderr.mock.calls.map(([message]) => String(message)).join("\n")).toContain("无法生成配置：" + CONFIG_PATH);
+	} finally {
+		stderr.mockRestore();
+	}
 });
