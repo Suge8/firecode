@@ -13,7 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - The recommended `config.example.jsonc` is now in English, including the role names (`researcher`, `engineer`, `batch`, `designer`, `sentinel`) and their `use` text; existing configs are untouched. The Master prompt no longer names any role: it points to roles by their stated use, so role names are entirely up to your config.
 - **Breaking:** `review.language` is removed in favour of the top-level `language`; the old key is reported as an unknown field.
-- **Breaking:** the Fast toggle shortcut now defaults to `Alt+S` (was `Ctrl+F`, which collided with Pi's built-in `tui.editor.cursorRight` and produced an "Extension issues" warning on every fresh install). `/fast` is unchanged.
+- **Breaking:** the Fast toggle shortcut now defaults to `Ctrl+Shift+S` (was `Ctrl+F`, which collided with Pi's built-in `tui.editor.cursorRight` and produced an "Extension issues" warning on every fresh install). `/fast` is unchanged.
 - **Breaking:** session rename is no longer an extension shortcut: pressing Pi's own rename key (`app.session.rename`, `Ctrl+R` by default, follows `keybindings.json`) in the input box now opens the rename prompt. The `keys.rename` setting, the `features.rename` switch and the `/rename` command are removed (use Pi's `/name`); the removed settings are reported as unknown. Rename now ships with the input-box shell, so it needs `features.statusbar`.
 - README rewritten around the review loop, sub-agent view and watcher, with a delegation-size comparison; install is now a single command.
 

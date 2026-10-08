@@ -62,7 +62,7 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 		review: true,
 		master: false,
 	},
-	keys: { fast: "alt+s" },
+	keys: { fast: "ctrl+shift+s" },
 	presets: { deep: { model: "test/deep/high", key: "alt+1" } },
 	review: TEST_REVIEW_CONFIG,
 });

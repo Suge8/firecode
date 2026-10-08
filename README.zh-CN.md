@@ -5,7 +5,9 @@
   </picture>
 </p>
 
-<p align="center">给 <a href="https://pi.dev">Pi</a> 的并行子代理与对抗审查扩展：轻、稳，终端里安静不吵。</p>
+<h3 align="center">我现在唯一保留的 Pi 扩展。</h3>
+
+<p align="center">给 <a href="https://pi.dev">Pi</a> 加上并行子代理、多模型代码审查和更干净的终端界面。装一个就够，开箱即用。</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/pi-firecode"><img alt="npm" src="https://img.shields.io/npm/v/pi-firecode?color=FF7A0F"></a>
@@ -16,93 +18,49 @@
 
 <p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.zh.gif" width="860"></p>
 
-## 安装
-
 ```bash
 pi install npm:pi-firecode
 ```
 
-装完即用（需要 Pi 1.1.0 及以上）。首次启动时 FireCode 会把推荐配置写到 `~/.pi/agent/extensions/firecode/config.jsonc`，把里面的模型换成你已登录的就行。界面支持中英文，默认跟随系统语言，也可以在配置里用 `"language"` 指定。
+重启 Pi（1.1.0 及以上）就能用，配置文件首次启动时自动生成。
 
-## 先试试这几句
+## 为什么用 FireCode
 
-- “派三个 researcher 并行，分别总结 `src/`、`test/`、`docs/` 是做什么的，最后给我一张表。”
-- 改完代码后执行 `/fire-review`。
-- 打开 `/fire-watch`，让便宜模型每回合帮你盯一眼。
+我以前装了一堆 Pi 扩展，现在只留这一个。
 
-## 会自己闭环的审查
+- **开箱即用。** 装一个就行，默认配置直接能用，界面中英文都有。
+- **子代理真正可控。** 多个并行跑，每个角色用自己的模型，供应商出故障自动换备用模型；任何一个都能点开看过程、直接跟它说话。
+- **审查会修问题。** 每次改动由几个模型一起审，挑出的问题打回给代理修，修完再审。
+- **几乎不占上下文。** 委派只给每次请求加两个很小的工具。
+- **好看。** 状态放在输入框边框里，每次请求折成一行。
 
-`/fire-review` 让多个模型并行审查你的改动。每条发现直接交回给代理修，下一轮只复查上一轮指出的问题；连续不过时由顾问模型出面裁决。轮数有硬上限，进度写进会话，重载后接着审。
+## 会修问题的审查
 
-```mermaid
-flowchart LR
-  C[你的改动] --> R{多个模型<br/>并行审查}
-  R -- 全部通过 --> D([完成])
-  R -- 有未通过 --> F[代理按发现修复]
-  F --> R2{只复查<br/>上轮问题}
-  R2 -- 通过 --> D
-  R2 -- 仍未通过 --> A[顾问裁决：<br/>继续 / 收窄 / 叫停]
-  A -- 继续 --> F
-  A -- 叫停 --> H([交还给你])
-```
+改完代码执行 `/fire-review`。审查发现 bug，代理就去修，下一轮只复查这个问题；反复修不好时，顾问模型会出来拿主意。
 
-<p align="center"><img alt="第 1 轮未通过，代理修复后第 2 轮通过" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.zh.gif" width="780"></p>
+<p align="center"><img alt="第 1 轮没过，代理修复后第 2 轮通过" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.zh.gif" width="760"></p>
 
-连续不过时，顾问核实发现、判断根因、给出下一步：
+## 看得见的子代理
 
-<p align="center"><img alt="顾问卡：核实结论、根因判断、下一步方向" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-advisor.zh.png" width="720"></p>
+每个子代理都列在输入框上方，点一下就能看它的完整过程，并直接跟它说话。
 
-## 看得见、管得住的子代理
+<p align="center"><img alt="子代理的完整过程，在它自己的输入框里补一句话" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.zh.png" width="720"></p>
 
-指挥官（`/fire-master`）按你定义的角色派活：每个角色有自己的模型、思考档，还有一条备用模型链，某家供应商出故障时在同一个会话里接着跑。结果先存档再投递，重载后重投。点输入框上方任一子代理，就能看它的全过程并直接跟它说话。
+## 刻意做小
 
-<p align="center"><img alt="子代理全过程视图，在它自己的输入框里补一句话" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.zh.png" width="720"></p>
+委派在每次请求里要占多少上下文（发给模型的工具定义字符数，2026 年 10 月实测）：
 
-## 只在要紧时开口的观察员
-
-`/fire-watch` 每回合用便宜模型评估一次，平时不出声；发现跑偏、过度工程或违背约定时，才说一句。
-
-<p align="center"><img alt="观察员指出校验比注释写的更宽" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-watcher.zh.png" width="720"></p>
-
-## 轻
-
-委派工具每次请求都要占上下文，所以 FireCode 把它压得很小。下表是发给模型的工具描述加参数结构的字符数（2026 年 10 月实测）：
-
-| | 委派工具数 | 字符数 |
+| | 工具数 | 字符数 |
 | --- | --- | --- |
 | **FireCode** | 2 | **926** |
 | omp | 2 | 3,140 |
-| Codex CLI（multi-agent v2） | 6 | 4,766 |
-| Codex CLI（multi-agent v1） | 5 | 9,378 |
+| Codex CLI | 5–6 | 4,766–9,378 |
 | pi-subagents | 2–3 | 4,703–23,182 |
 
-子代理是进程内的 Pi 会话，没有后台进程，Pi 退出不留残余。npm 包是一个 124 kB 的单文件。
+## 还有这些
 
-## 和同类工具对比
+`/fire-watch` 便宜模型帮你盯着，跑偏才开口 · `/preset` 一键切换模型、思考档和工具 · `/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档
 
-| | FireCode | Claude Code | Codex CLI | omp | pi-subagents |
-| --- | --- | --- | --- | --- | --- |
-| 审查 → 修复 → 复审循环 | 多模型、顾问裁决、轮数上限 | 单次（`--fix` 修一次） | 单个审查者，不修复 | 并行审查，不回流修复 | 提示词模板，最多 3 轮 |
-| 子代理备用模型链 | 有 | 有 | 未找到 | 有 | 无 |
-| 重载后子代理的结果 | 持久化并重投 | 记录保留 | 可续派，尽力投递 | 可复活，无人接收的结果丢弃 | 后台运行不受影响 |
-| 查看并干预每个子代理 | 能 | 能 | 能 | 能 | 能 |
+不想要哪个功能，在 `~/.pi/agent/extensions/firecode/config.jsonc` 里写 `"features": { "<名字>": false }` 关掉。
 
-依据 2026 年 10 月的公开文档与源码。
-
-## 其它功能
-
-| 功能 | 入口 | 做什么 |
-| --- | --- | --- |
-| 输入框状态 | 自动 | 进度、计时、审查轮次、标题、模型与上下文占用都在输入框边框里 |
-| 过程折叠 | 自动，`Ctrl+O` | 每次请求折成一行摘要：耗时、均速、最近几条中间回复 |
-| 预设 | `/preset`、你配的快捷键 | 一起切换模型、思考档、工具集与附加指令 |
-| 用量 | `/quota`、`/tokens` | Claude、Codex 订阅剩余额度；本地 token 与成本统计 |
-| Claude 订阅适配 | 自动 | 请求带 Claude Code 归因；令牌换发导致的 401 自动重试一次 |
-| 会话改名 | 输入框里按 `Ctrl+R` | 弹出输入框改当前会话名；用的是 Pi 自带的改名键（`app.session.rename`），在 `keybindings.json` 里改键会同步生效 |
-| OpenAI 请求层 | `/fast`、`Alt+S` | 回答详略、加速档、可选的原生上下文压缩 |
-
-在配置里写 `"features": { "<名字>": false }` 关掉任一功能。界面与提示词的语言（中文/英文）由顶层 `"language": "zh" | "en"` 决定，省略时跟随系统语言，改后重启生效。
-
-## 参与开发
-
-见 [CONTRIBUTING](.github/CONTRIBUTING.md)。MIT © Suge8
+[参与开发](.github/CONTRIBUTING.md) · MIT © Suge8

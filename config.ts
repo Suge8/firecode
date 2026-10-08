@@ -85,10 +85,10 @@ const SECTIONS = ["language", "features", "keys", "openai", "presets", "review",
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
- * （tests/config-seam.test.ts 守这条）。alt+s：宿主默认键位里没有，s 取 speed。
+ * （tests/config-seam.test.ts 守这条）。ctrl+shift+s：宿主默认键位里没有，s 取 speed；单个 ctrl+字母已被宿主占满。
  */
 export const DEFAULT_KEYS = {
-	fast: "alt+s",
+	fast: "ctrl+shift+s",
 } as const;
 
 export type FireCodeKeys = {
