@@ -9,7 +9,6 @@ import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
 import { registerHerdrDisplay } from "./session/herdr-display.js";
-import { registerSessionName } from "./session/rename.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
@@ -26,14 +25,13 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
 	tools: registerToolRendering,
 	presets: registerPresets,
-	rename: registerSessionName,
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
 	openaiNative: registerOpenAINative,
 };
 
 /** 只属于交互主会话的功能：子会话（Worker、观察员、审查者）没有界面与命令入口，注册了只会白占资源。 */
-const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "rename", "stats"]);
+const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats"]);
 
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
 

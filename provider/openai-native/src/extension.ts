@@ -27,7 +27,7 @@ function notifyUnsupportedFastMode(ctx: ExtensionContext): void {
 export default function openAINativeExtension(
 	pi: ExtensionAPI,
 	configPath: string,
-	fastShortcut = "ctrl+f",
+	fastShortcut: string,
 ): void {
 	let loadedSettings = loadOpenAINativeSettings(configPath);
 	let settings = loadedSettings.settings;

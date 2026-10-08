@@ -7,7 +7,6 @@
 		"statusbar": true,
 		"tools": true,
 		"presets": true,
-		"rename": true,
 		"stats": true,
 		"claudeSub": true,
 		"openaiNative": true,
@@ -17,8 +16,7 @@
 	},
 
 	"keys": {
-		"rename": "ctrl+r",
-		"fast": "ctrl+f"
+		"fast": "alt+s"
 	},
 
 	// nativeCompaction 使用 OpenAI 原生上下文压缩；priority 加钱换更快出字，默认关。

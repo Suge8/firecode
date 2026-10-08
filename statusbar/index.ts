@@ -19,6 +19,7 @@ import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type Rev
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
+import { promptRename } from "./rename.js";
 
 /** 展示标题的上限（列）：实际宽度由下边框布局按终端宽度逐级裁。 */
 const TITLE_MAX_WIDTH = 60;
@@ -170,9 +171,11 @@ class ShellEditor extends CustomEditor {
 		keybindings: KeybindingsManager,
 		private readonly shell: Shell,
 		private readonly bottomParts: () => BottomParts,
+		onRename: () => void,
 	) {
 		super(tui, theme, keybindings);
 		shell.requestRender = () => tui.requestRender();
+		this.onAction("app.session.rename", onRename);
 	}
 
 	// 输入过长滚动时让位给宿主的“↑ n more”提示。
@@ -241,7 +244,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 			return { dispose() {}, invalidate() {}, render: () => [] };
 		});
 		ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-			new ShellEditor(tui, theme, keybindings, shell, () => shell.bottom(ctx, pi.getThinkingLevel())));
+			new ShellEditor(tui, theme, keybindings, shell, () => shell.bottom(ctx, pi.getThinkingLevel()),
+				() => void promptRename(pi, ctx)));
 	});
 	pi.on("thinking_level_select", () => shell.requestRender());
 	pi.on("model_select", () => shell.requestRender());
