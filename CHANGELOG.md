@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-09
+
 ### Changed
 
 - The startup banner now matches the brand logo: a pixel flame with `>_` that runs red to gold, and a bold lowercase `firecode` in an orange-to-gold gradient. It lights up in about a second, then stays still. Terminals narrower than the logo get the one-line banner.
@@ -70,6 +72,7 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Suge8/firecode/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Suge8/firecode/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Suge8/firecode/compare/v0.8.1...v1.0.0
