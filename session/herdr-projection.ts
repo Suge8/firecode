@@ -46,7 +46,8 @@ interface Sent {
 const agentKey = (p: Projection) => `${p.working}\u0000${p.resume?.join("\u0000") ?? ""}`;
 const metaKey = (p: Projection) => `${p.title}\u0000${p.agent}\u0000${p.label ?? ""}`;
 
-function identityOf(ctx: ExtensionContext, thinking: string | undefined) {
+function identityOf(ctx: ExtensionContext, pi: ExtensionAPI) {
+	const thinking = ctx.model?.reasoning ? pi.getThinkingLevel() : undefined;
 	const level = thinking && thinking !== "off" ? `/${thinking}` : "";
 	return { title: ctx.sessionManager.getSessionName() ?? "", agent: `pi·${formatModelName(ctx.model?.id)}${level}` };
 }
@@ -144,13 +145,13 @@ export function registerHerdrProjection(pi: ExtensionAPI, subsession = false): (
 	});
 
 	const syncIdentity = (ctx: ExtensionContext) => {
-		if (ctx.mode === "tui") update(identityOf(ctx, ctx.model?.reasoning ? pi.getThinkingLevel() : undefined));
+		if (ctx.mode === "tui") update(identityOf(ctx, pi));
 	};
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		carriedRun = !ctx.isIdle();
 		enabled = true;
-		desired = { ...desired, ...identityOf(ctx, ctx.model?.reasoning ? pi.getThinkingLevel() : undefined), resume: resumeOf(ctx) };
+		desired = { ...desired, ...identityOf(ctx, pi), resume: resumeOf(ctx) };
 		project();
 	});
 	// 覆盖 /rename、快捷键与 pi 自动命名：宿主已把改名收口到这一个事件。
