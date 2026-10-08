@@ -91,6 +91,13 @@ test("Master 角色对象严格解析原子与 fallback", async () => {
 	expect(legacyProblems).toEqual(["未知字段 master.models"]);
 });
 
+test("已删除的轮切预设快捷键 keys.cyclePreset 报未知字段", async () => {
+	const { loadConfig } = await loadFirecodeModule("config.ts", {
+		configJsonc: JSON.stringify({ keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" } }),
+	});
+	expect((loadConfig as () => { problems: string[] })().problems).toContain("未知字段 keys.cyclePreset");
+});
+
 test("preset 只认模型原子，旧的三字段写法被拒", async () => {
 	const { loadConfig } = await loadFirecodeModule("config.ts", {
 		configJsonc: JSON.stringify({

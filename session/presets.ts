@@ -1,6 +1,6 @@
 /**
  * 预设：一键切换模型、思考等级、工具集与附加指令。
- * 入口有 `--preset`、`/preset [名字]`、Option+1-9、Ctrl+Shift+U 循环。
+ * 入口有 `--preset`、`/preset [名字]` 与各预设的 key 快捷键。
  * 预设定义见 firecode/config.jsonc 的 presets 节。
  *
  * 模型、思考档与工具集的事实源是宿主：宿主把它们记在会话里，并在 session_start 之前（切分支时同样）恢复。
@@ -205,25 +205,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		else await activate(choice, ctx);
 	}
 
-	async function cyclePreset(ctx: ExtensionContext): Promise<void> {
-		const names = Object.keys(presets);
-		if (names.length === 0) {
-			noPresetsHint(ctx);
-			return;
-		}
-		const cycle = [CLEAR_ITEM, ...names];
-		const current = cycle.indexOf(activeName ?? CLEAR_ITEM);
-		const next = cycle[current === -1 ? 0 : (current + 1) % cycle.length];
-		if (next === CLEAR_ITEM) await clearPreset(ctx);
-		else await activate(next, ctx);
-	}
-
-	const { keys, presets: configured } = loadConfig().config;
-
-	pi.registerShortcut(keys.cyclePreset as never, {
-		description: "轮切预设",
-		handler: (ctx) => cyclePreset(ctx),
-	});
+	const { presets: configured } = loadConfig().config;
 
 	for (const [name, preset] of Object.entries(configured)) {
 		if (!preset.key) continue;

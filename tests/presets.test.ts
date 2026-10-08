@@ -9,10 +9,7 @@ afterEach(cleanupFirecodeModules);
 
 test("binds exactly the shortcuts declared by preset key fields", async () => {
 	const configJsonc = readFileSync(join(FIRECODE_DIR, "config.example.jsonc"), "utf8");
-	const { presets, keys } = parseJsonc(configJsonc) as {
-		presets: Record<string, { key?: string }>;
-		keys: { cyclePreset: string };
-	};
+	const { presets } = parseJsonc(configJsonc) as { presets: Record<string, { key?: string }> };
 	const declared = Object.values(presets)
 		.map((preset) => preset.key)
 		.filter((key): key is string => !!key);
@@ -24,13 +21,12 @@ test("binds exactly the shortcuts declared by preset key fields", async () => {
 	const shortcuts = [...fake.shortcuts.keys()];
 
 	for (const key of declared) expect(shortcuts).toContain(key);
-	expect(shortcuts).toContain(keys.cyclePreset);
 	// 没写 key 的预设不占用按键。
-	expect(shortcuts).toHaveLength(declared.length + 1);
+	expect(shortcuts).toHaveLength(declared.length);
 });
 
 const PRESET_CONFIG = JSON.stringify({
-	keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u", fast: "ctrl+f" },
+	keys: { rename: "ctrl+r", fast: "ctrl+f" },
 	presets: {
 		deep: { model: "test/deep/high", tools: ["read", "bash"], instructions: "深度模式指令" },
 		quick: { model: "test/quick/low", instructions: "快速模式指令" },
