@@ -10,6 +10,7 @@
  *   上一次写入值提供，出现不是自己写的 Run ID 才算冲突（CheckpointConflictError）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
 import type {
 	ActiveCheck,
@@ -162,10 +163,6 @@ const CHECKPOINT_KEYS = keysOf({
 	roundStartedAt: true,
 	updatedAt: true,
 } satisfies Record<keyof ReviewState | "version" | "seq", true>);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isString(value: unknown): value is string {
 	return typeof value === "string";

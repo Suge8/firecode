@@ -10,6 +10,7 @@
  * toolResult 正文仍跳过（输出体积大且非一手证据——审查者应自行重跑验证命令）。
  */
 import { textOf } from "../format.js";
+import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
 
 const DEFAULT_EVIDENCE_TOKENS = 24_000;
@@ -178,10 +179,6 @@ function isCjk(char: string) {
 		(code >= 0x3400 && code <= 0x4dbf) ||
 		(code >= 0xf900 && code <= 0xfaff)
 	);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

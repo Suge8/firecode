@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { textOf } from "../format.js";
+import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
@@ -26,12 +27,8 @@ interface PayloadLike {
 	messages?: unknown;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 function isTextBlock(value: unknown): value is TextBlock {
-	return isObject(value) && value.type === "text" && typeof value.text === "string";
+	return isRecord(value) && value.type === "text" && typeof value.text === "string";
 }
 
 function shouldApply(ctx: ExtensionContext): boolean {
@@ -62,8 +59,8 @@ const claudeCodeVersion = detectClaudeCodeVersion();
 
 function firstUserText(messages: unknown): string {
 	const list = Array.isArray(messages) ? messages : [];
-	const firstUser = list.find((message) => isObject(message) && message.role === "user");
-	return isObject(firstUser) ? textOf(firstUser.content) : "";
+	const firstUser = list.find((message) => isRecord(message) && message.role === "user");
+	return isRecord(firstUser) ? textOf(firstUser.content) : "";
 }
 
 function versionSuffix(messageText: string): string {
@@ -106,7 +103,7 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const payload = event.payload;
-		if (!shouldApply(ctx) || !isObject(payload)) return;
+		if (!shouldApply(ctx) || !isRecord(payload)) return;
 
 		const { system, messages } = payload as PayloadLike;
 		const blocks = Array.isArray(system) ? system : [];
