@@ -14,7 +14,7 @@
   · <a href="README.md">English</a>
 </p>
 
-<p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
+<p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.zh.gif" width="860"></p>
 
 ## 安装
 
@@ -46,23 +46,23 @@ flowchart LR
   A -- 叫停 --> H([交还给你])
 ```
 
-<p align="center"><img alt="第 1 轮未通过，代理修复后第 2 轮通过" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="780"></p>
+<p align="center"><img alt="第 1 轮未通过，代理修复后第 2 轮通过" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.zh.gif" width="780"></p>
 
 连续不过时，顾问核实发现、判断根因、给出下一步：
 
-<p align="center"><img alt="顾问卡：核实结论、根因判断、下一步方向" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-advisor.png" width="720"></p>
+<p align="center"><img alt="顾问卡：核实结论、根因判断、下一步方向" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-advisor.zh.png" width="720"></p>
 
 ## 看得见、管得住的子代理
 
 指挥官（`/fire-master`）按你定义的角色派活：每个角色有自己的模型、思考档，还有一条备用模型链，某家供应商出故障时在同一个会话里接着跑。结果先存档再投递，重载后重投。点输入框上方任一子代理，就能看它的全过程并直接跟它说话。
 
-<p align="center"><img alt="子代理全过程视图，在它自己的输入框里补一句话" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
+<p align="center"><img alt="子代理全过程视图，在它自己的输入框里补一句话" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.zh.png" width="720"></p>
 
 ## 只在要紧时开口的观察员
 
 `/fire-watch` 每回合用便宜模型评估一次，平时不出声；发现跑偏、过度工程或违背约定时，才说一句。
 
-<p align="center"><img alt="观察员指出校验比注释写的更宽" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-watcher.png" width="720"></p>
+<p align="center"><img alt="观察员指出校验比注释写的更宽" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-watcher.zh.png" width="720"></p>
 
 ## 轻
 

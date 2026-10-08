@@ -1,0 +1,25 @@
+<!-- GitHub 社交分享图：右侧是 hero 末帧（record.sh 另存的 /tmp/firecode-promo-hero*.png）从第 top 像素起的一段。
+  渲染：og.sh <末帧 png> <top> <输出 png> -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1280px;height:640px;overflow:hidden;background:#0c0a09;font-family:-apple-system,"SF Pro Display","Helvetica Neue",sans-serif}
+.bg{position:absolute;inset:0;background:url(og-bg.jpg) right bottom/cover no-repeat}
+.copy{position:absolute;left:76px;top:0;bottom:0;width:440px;display:flex;flex-direction:column;justify-content:center;gap:34px}
+.logo{height:50px;width:auto;align-self:flex-start}
+h1{color:#f5f1ec;font-size:42px;line-height:1.14;font-weight:700;letter-spacing:-0.02em}
+h1 em{font-style:normal;color:#ff8a2a}
+.cmd{font-family:"Maple Mono NF CN",ui-monospace,monospace;font-size:19px;color:#b9aea4}
+.cmd b{color:#ff7a0f;font-weight:600;margin-right:10px}
+.win{position:absolute;right:52px;top:50%;transform:translateY(-50%);width:727px;border-radius:10px;overflow:hidden;background:#171717;
+ box-shadow:0 30px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,140,60,.2)}
+.bar{height:26px;display:flex;gap:7px;align-items:center;padding-left:12px}
+.bar i{width:10px;height:10px;border-radius:50%;display:block}
+.crop{position:relative;height:279px;overflow:hidden}
+.crop img{position:absolute;left:-8.68px;top:calc(var(--top) * -0.62px);width:744px}
+</style></head><body><div class="bg"></div>
+<div class="copy"><img class="logo" src="../brand/logo-dark.svg"><h1>Parallel agents and<br><em>adversarial review</em><br>for Pi</h1><div class="cmd"><b>$</b>pi install npm:pi-firecode</div></div>
+<div class="win"><div class="bar"><i style="background:#ff5f58"></i><i style="background:#ffbd2e"></i><i style="background:#18c132"></i></div><div class="crop"><img id="shot"></div></div><script>
+const q = new URLSearchParams(location.search);
+shot.src = q.get("shot");
+shot.style.setProperty("--top", q.get("top"));
+</script></body></html>
