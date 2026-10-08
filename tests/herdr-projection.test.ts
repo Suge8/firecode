@@ -25,12 +25,12 @@ afterAll(async () => {
 	await cleanupFirecodeModules();
 });
 
-/** 假 herdr socket：记录请求；failFirst 让第一次请求回错误。 */
-async function herdrStub(failFirst = false) {
+/** 假 herdr socket：记录请求；failures 让前 N 次请求回错误。 */
+async function herdrStub(failures = 0) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-herdr-"));
 	const path = join(directory, "herdr.sock");
 	const requests: Array<{ method: string; params: any }> = [];
-	let failuresLeft = failFirst ? 1 : 0;
+	let failuresLeft = failures;
 	const server = net.createServer((socket) => {
 		socket.on("data", (chunk) => {
 			for (const line of chunk.toString().split("\n").filter(Boolean)) {
@@ -205,11 +205,24 @@ test("身份：改名、换模型各自重报，同一身份不重发", async ()
 
 test("送达失败重试一次；其后的事件继续补发", async () => {
 	idle = true;
-	const herdr = await herdrStub(true);
+	const herdr = await herdrStub(1);
 	const pi = await register(herdr.path);
 	await pi.fire("session_start", {}, context("x"));
 	await pi.settled();
 	expect(trace(herdr.requests)).toEqual(["idle", "idle", "report_metadata"]);
+});
+
+test("连续两次送达失败后停手；下一个事件继续补发", async () => {
+	idle = true;
+	const herdr = await herdrStub(2);
+	const pi = await register(herdr.path);
+	const ctx = context("x");
+	await pi.fire("session_start", {}, ctx);
+	await pi.settled();
+	expect(trace(herdr.requests)).toEqual(["idle", "idle"]);
+	await pi.fire("session_info_changed", {}, context("改名"));
+	await pi.settled();
+	expect(trace(herdr.requests)).toEqual(["idle", "idle", "idle", "report_metadata"]);
 });
 
 test("quit 清身份并 release；reload/new/resume/fork 不 release", async () => {

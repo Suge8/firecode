@@ -32,11 +32,11 @@ Claude 只解析当前接口的 `limits[]`，`session`、`weekly_all` 与 Fable 
 
 **安装前提：必须卸载 herdr 官方 Pi 集成**（`herdr integration uninstall pi`），也不要在 herdr 设置面板里点 install——会装回来。
 herdr 每个 pane 只有一个 hook authority，官方 source（`herdr:pi`）在位时其它 source 的状态上报被静默丢弃，
-两个写者并存时 FireCode 的上报全部失效；FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
+两个写者并存时 FireCode 的上报全部失效；状态标签（`state_labels.working`）与上述行为按 herdr 0.9.3 核实；FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
 
 投影内容见文件头注释，状态 working 的来源与审查为何不报 blocked 也在那里；`seq` 用时间戳型，身份与状态共用一个单调计数；
 自定义 source 拿不到官方会话恢复，所以每次状态上报附 `resume_argv`（`pi --session <会话文件>`，路径含撇号时 herdr 拒收，不附）。
-发送队列只保留最新意图，失败重试一次，其后由下一事件补发。`tokens.session` 把会话名供给侧边栏行布局；`tokens.session` 把会话名供给侧边栏行布局（herdr 侧边栏只消费自定义 token，用户 herdr 配置的 pi 行布局引用 `$session`）。
+发送队列只保留最新意图，失败重试一次，其后由下一事件补发。`tokens.session` 把会话名供给侧边栏行布局（herdr 侧边栏只消费自定义 token，用户 herdr 配置的 pi 行布局引用 `$session`）。
 
 workspace、pane label 与 tab label 都归 herdr、用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane
 共享状态，而 herdr 没有条件 rename/CAS 与清除自定义名的接口，先检查再 rename 无法消除 split/move 竞态。
