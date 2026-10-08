@@ -99,6 +99,8 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	});
 }
 
+/** 折叠态每组最多列几条中间回复首句。 */
+const REPLY_LINES = 3;
 const ACTIVITY_TEXT = { thinking: "思考中", replying: "回复中" } as const satisfies Record<AssistantActivity, string>;
 
 type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures" | "earlier"> & { round?: Round };
@@ -233,8 +235,6 @@ export type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded"
 export interface ProjectionEnv {
 	ui: ProjectionUI;
 	clock: TurnClock;
-	/** 折叠态每轮最多显示几条中间回复首句。 */
-	replyLines: number;
 	toggleRow: (row: ToolRow) => void;
 	/** 相对全局档位被点击翻转过的键：该轮的人类用户消息，或被点开的机器消息本身；全局档位变化时清空。 */
 	isOpen: (key: object) => boolean;
@@ -357,7 +357,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 
 /**
  * 折叠态按时间顺序：先是第一条补话之前的中间回复，之后每条补话（人类原话，竖条全文）后面跟它那一段的中间回复；
- * 每组各自只列最近 replyLines 条首句，更早的在组内折成“+N 条”。最后接段尾回复全文。
+ * 每组各自只列最近 REPLY_LINES 条首句，更早的在组内折成“+N 条”。最后接段尾回复全文。
  */
 function foldedReplies(
 	segment: readonly Component[],
@@ -376,12 +376,12 @@ function foldedReplies(
 			if (text) groups[groups.length - 1].replies.push(firstSentence(text));
 		}
 	}
-	const listing = hasSummary && env.replyLines > 0;
+	const listing = hasSummary;
 	for (const { message, replies } of groups) {
 		// 前后留白与开轮的用户消息一致：上方隔一行，竖条消息自带上下内边距。
 		if (message) out.push(new Spacer(1), new UserBar(message));
 		if (!listing || !replies.length) continue;
-		const shown = replies.slice(-env.replyLines);
+		const shown = replies.slice(-REPLY_LINES);
 		// 与宿主正文同一左边距（1 列）。
 		out.push(new Spacer(1));
 		if (replies.length > shown.length) out.push(new Line(` ${theme.fg("dim", `+${replies.length - shown.length} 条`)}`));

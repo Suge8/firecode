@@ -14,7 +14,6 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { watchBusy } from "../busy.js";
-import { loadConfig } from "../config.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { LABEL, toolTarget } from "./actions.js";
@@ -160,7 +159,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
-		dispose = installGroupPatch(ctx.ui, { replyLines: loadConfig().config.tools.replyLines, clock });
+		dispose = installGroupPatch(ctx.ui, { clock });
 		ctx.ui.setToolsExpanded(false);
 	});
 	pi.on("session_shutdown", () => {

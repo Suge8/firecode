@@ -12,8 +12,8 @@ afterEach(async () => {
 
 const FLAME = "[\u2800-\u28ff]";
 
-async function scene(options: { withMaster?: boolean; replyLines?: number; scroll?: boolean } = {}) {
-	const { withMaster = false, replyLines = 3 } = options;
+async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
+	const { withMaster = false } = options;
 	const [host, tui, module, toolsModule, clockModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
 		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"), loadFirecodeModule("tools/turn-clock.ts"),
@@ -61,7 +61,7 @@ async function scene(options: { withMaster?: boolean; replyLines?: number; scrol
 	const lines = (width = 100) => chat.render(width).map(stripVTControlCharacters);
 	const click = (y: number, width = 100) => chat.handleMouse({ type: "click", button: "left", x: 5, y, width, height: chat.render(width).length, shift: false, alt: false, ctrl: false });
 	const originalRender = chat.render;
-	dispose = module.installGroupPatch(ui, { replyLines, clock });
+	dispose = module.installGroupPatch(ui, { clock });
 	const setNow = (value: number) => { now = value; };
 	/** 宿主在歇下时把轮记录作为 CustomEntry 加进聊天树：Container(Spacer, 渲染器组件)，这里只模拟宿主的壳。 */
 	const settle = (elapsed: number, outcome = "complete", at = now, tps?: number) => {
@@ -231,7 +231,7 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	dispose = undefined;
 	expect(Container.prototype.addChild).toBe(addChild);
 	const module = await loadFirecodeModule("tools/grouping.ts");
-	const options = { replyLines: 3, clock: s.clock };
+	const options = { clock: s.clock };
 	const oldDispose = module.installGroupPatch(s.ui, options);
 	dispose = module.installGroupPatch(s.ui, options);
 	oldDispose();
@@ -581,11 +581,8 @@ test("一轮里先被 Esc 中断、又跑了一段（如 /fire-review）：不�
 	expect(s.chat.render(100).join("\n")).toContain(s.ui.theme.fg("warning", "中断过 1 次"));
 });
 
-test.each([
-	[0, ["全文收尾"]],
-	[3, ["+2 条", "第 3 步。", "第 4 步。", "第 5 步。", "全文收尾"]],
-])("replyLines=%i：折叠态中间回复取最近几条首句，更早的折成 +N 条，最后一条回复全文", async (replyLines, expected) => {
-	const s = await scene({ replyLines });
+test("折叠态中间回复取最近 3 条首句，更早的折成 +N 条，最后一条回复全文", async () => {
+	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	for (let step = 1; step <= 5; step++) {
 		assistant(s, [{ type: "text", text: `第 ${step} 步。细节${step}` }, { type: "toolCall", id: `c${step}`, name: "read", arguments: {} }], "toolUse");
@@ -595,7 +592,7 @@ test.each([
 
 	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
 	expect(lines.filter((line: string) => line.includes("开工"))).toHaveLength(1);
-	expect(lines.slice(lines.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(expected);
+	expect(lines.slice(lines.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(["+2 条", "第 3 步。", "第 4 步。", "第 5 步。", "全文收尾"]);
 	expect(lines.join("\n")).not.toContain("细节");
 });
 
@@ -1256,7 +1253,7 @@ test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一�
 });
 
 test("折叠态按时间顺序：每条补话之后跟它那一段的中间回复首句，“+N 条”在各自段内，补话之间不空出多余的行", async () => {
-	const s = await scene({ replyLines: 2 });
+	const s = await scene();
 	const interim = (text: string, id: string) => {
 		assistant(s, [{ type: "text", text }, { type: "toolCall", id, name: "read", arguments: {} }], "toolUse");
 		s.complete(s.tool("read", { path: `${id}.ts` }));
@@ -1268,6 +1265,7 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 	interim("回复丙。", "c");
 	interim("回复丁。", "d");
 	interim("回复戊。", "e");
+	interim("回复庚。", "g");
 	hostUser(s, "补话二");
 	interim("回复己。", "f");
 	assistant(s, [{ type: "text", text: "最终回复。" }]);
@@ -1277,7 +1275,7 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 	const all = s.lines().map((line: string) => line.trimEnd());
 	expect(all.filter((line: string) => line.replace(/▌/u, "").trim()).map((line: string) => line.trim())).toEqual([
 		"▌ 原问题", "✓ 5.0s", "回复甲。", "回复乙。",
-		"▌ 补话一", "+1 条", "回复丁。", "回复戊。",
+		"▌ 补话一", "+1 条", "回复丁。", "回复戊。", "回复庚。",
 		"▌ 补话二", "回复己。",
 		"最终回复。",
 	]);
