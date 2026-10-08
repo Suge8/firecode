@@ -1400,6 +1400,30 @@ test("review 命令未启动时明确失败结算并保留审查义务", async (
 	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
 });
 
+// 实际案例：配置里残留 review.language 被判未知字段，Worker 里没有 UI，拒绝原因曾无处可读，指挥官只看到“审查未启动”。
+test("review 命令因配置问题拒绝启动时，拒绝原因原样回到指挥官", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: { ...TEST_REVIEW_CONFIG, language: "zh" } } });
+	faux.setResponses([fauxAssistantMessage("实现完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({
+		action: "start", worker: "refused", prompt: "实现", role: "工程师", review: true,
+	});
+	await delivered;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "refused" });
+	await Promise.race([
+		delivered,
+		new Promise<never>((_, reject) => setTimeout(() => reject(new Error("拒绝原因未回传")), 500)),
+	]);
+	const content = harness.messages.at(-1).message.content as string;
+	expect(titleOf(content)).toBe("refused 审查未完成");
+	expect(content).toContain("未知字段 review.language");
+	expect(content).not.toContain("审查未启动");
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle", reviewNeeded: true, disposition: "pending" });
+});
+
 const CLOCK = Date.UTC(2030, 0, 1);
 const at = (seconds: number) => setSystemTime(new Date(CLOCK + seconds * 1_000));
 const elapsedTail = (content: string) => content.split("\n").at(-2);
@@ -1649,6 +1673,8 @@ async function setup(activate = true, options: {
 	interruptResumeMs?: number;
 	review?: boolean;
 	mockReview?: boolean;
+	/** 子会话里装真实的 review，用这份顶层配置（含 review 节）加载：复现真实配置问题下的命令入口。 */
+	workerReview?: Record<string, unknown>;
 	reviewProgressOnly?: boolean;
 	/** mock 审查停在 reviewing 相并唤起一个修复回合：复现审查期间 Worker 自己落定的现场。 */
 	reviewFixTurn?: boolean;
@@ -1696,6 +1722,11 @@ async function setup(activate = true, options: {
 			fixTurn: options.reviewFixTurn === true,
 			timeout: options.reviewTimeout === true,
 		}));
+	if (options.workerReview) {
+		const configJsonc = JSON.stringify({ features: await featuresOnly("review"), ...options.workerReview });
+		await writeFile(join(extensions, "real-review.ts"),
+			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi); }`);
+	}
 	if (options.shutdownProbe)
 		await writeFile(join(extensions, "shutdown-probe.ts"), shutdownProbeExtension(join(directory, "shutdown.log")));
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
