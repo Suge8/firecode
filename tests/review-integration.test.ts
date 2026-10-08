@@ -154,8 +154,8 @@ async function loadSingleFailReview() {
 
 const OCCUPIED = { name: "herdr:blocked", data: { active: true, label: "对抗审查进行中", progress: expect.any(Function) } };
 const RELEASED = { name: "herdr:blocked", data: { active: false } };
-const reviewConfig = (overrides: Record<string, unknown> = {}) =>
-	JSON.stringify({ review: { ...TEST_REVIEW_CONFIG, ...overrides } });
+const reviewConfig = (overrides: Record<string, unknown> = {}, top: Record<string, unknown> = {}) =>
+	JSON.stringify({ ...top, review: { ...TEST_REVIEW_CONFIG, ...overrides } });
 
 describe("registerReview wiring", () => {
 	test("holds Herdr occupancy exactly once until user cancellation", async () => {
@@ -578,7 +578,7 @@ describe("registerReview wiring", () => {
 
 	test("review accepts focus text and rejects flags in the configured language", async () => {
 		const module = (await loadFirecodeModule("review/index.js", {
-			configJsonc: reviewConfig({ language: "en" }),
+			configJsonc: reviewConfig({}, { language: "en" }),
 		})) as { registerReview: (pi: unknown) => ReviewHandle };
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
