@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - The first main-session launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file) and uses it right away; adjust models and restart when ready.
 
+### Changed
+
+- README rewritten around the review loop, sub-agent view and watcher, with a delegation-size comparison; install is now a single command.
+
 ## [1.1.0] - 2026-10-08
 
 ### Changed
