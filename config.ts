@@ -74,7 +74,6 @@ export const FEATURES = [
 	"statusbar",
 	"tools",
 	"presets",
-	"rename",
 	"stats",
 	"claudeSub",
 	"openaiNative",

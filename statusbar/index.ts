@@ -16,10 +16,10 @@ import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../bus
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
-import { RENAME_REQUEST_CHANNEL } from "../session/rename.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
+import { promptRename } from "./rename.js";
 
 /** 展示标题的上限（列）：实际宽度由下边框布局按终端宽度逐级裁。 */
 const TITLE_MAX_WIDTH = 60;
@@ -245,7 +245,7 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 		});
 		ctx.ui.setEditorComponent((tui, theme, keybindings) =>
 			new ShellEditor(tui, theme, keybindings, shell, () => shell.bottom(ctx, pi.getThinkingLevel()),
-				() => pi.events.emit(RENAME_REQUEST_CHANNEL, ctx)));
+				() => void promptRename(pi, ctx)));
 	});
 	pi.on("thinking_level_select", () => shell.requestRender());
 	pi.on("model_select", () => shell.requestRender());

@@ -7,7 +7,6 @@
 		"statusbar": true,
 		"tools": true,
 		"presets": true,
-		"rename": true,
 		"stats": true,
 		"claudeSub": true,
 		"openaiNative": true,

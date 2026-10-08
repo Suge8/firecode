@@ -1,10 +1,10 @@
 # FireCode
 
-pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设与重命名、Claude 订阅适配、`/fire-review`
+pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、`/fire-review`
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有十条：statusbar 的输入框收到宿主改名键（`app.session.rename`）时在 `session/rename.ts` 定义的频道发布改名请求，rename 订阅后弹输入框，Master 只读调 `review/outcome.ts`，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
+状态，关掉任何一个不影响其余；跨模块接缝只有九条：Master 只读调 `review/outcome.ts`，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
 `master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度（频道名与 payload 只在 `review/occupancy.ts` 定义），轮记录器、statusbar 与 tools 经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有），statusbar 的落定态经 `tools/round.ts` 的 `latestTurnRecord` 读轮记录（与摘要行同一合成规则），Master 的“本次运行”耗时与子代理视图经 `roundFromEntry` 读子代理会话里的轮记录。
 
 ## 模块
@@ -12,9 +12,9 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
 | `header.ts` | 会话启动横幅 | |
-| `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
+| `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏；也接宿主改名键改会话名 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 思考与工具的过程组/过程列表、轮记录（整段耗时与终态的持久化事后记录）、默认四工具渲染与单工具正文 | [tools/AGENTS.md](tools/AGENTS.md) |
-| `session/` | 预设、重命名、用量查询、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
+| `session/` | 预设、用量查询、herdr 身份投影 | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
@@ -55,10 +55,11 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 快捷键冲突：宿主对扩展用 `registerShortcut` 注册的键，与*全部*内置键位（含只在会话列表等选择器里生效的）逐键比对，不分上下文，
 撞上任何一个都在启动时弹 “Extension issues”；撞到编辑器全局保留键则扩展直接被跳过，其余则扩展先于内置处理。
 所以默认键必须避开宿主全部默认键位（`tests/config-seam.test.ts` 守），改名这类宿主已有键位的动作不注册快捷键，
-而是挂宿主的编辑器动作（见 `statusbar/index.ts` 的 `ShellEditor`）。`review`、`master` 与 `watcher` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
+而是挂宿主的编辑器动作（见 `statusbar/index.ts` 的 `ShellEditor`）。
+`review`、`master` 与 `watcher` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
 真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定（文件级与 features 问题阻断三节），消费端不再自己筛
 问题；关闭的功能那一节的问题不进 session_start 全局警告。
-子会话只注册与界面无关的功能：横幅、工具渲染、预设、重命名与用量命令只属于交互主会话。
+子会话只注册与界面无关的功能：横幅、工具渲染、预设与用量命令只属于交互主会话。
 
 ## 测试
 
