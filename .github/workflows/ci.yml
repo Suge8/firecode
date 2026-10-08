@@ -34,6 +34,7 @@ jobs:
         run: |
           git clone --depth 1 --branch "$PI_VERSION" https://github.com/earendil-works/pi "$RUNNER_TEMP/pi"
           npm ci --ignore-scripts --prefix "$RUNNER_TEMP/pi"
+          npm run hydrate:model-data --prefix "$RUNNER_TEMP/pi"
           echo "PI_PACKAGES_DIR=$RUNNER_TEMP/pi/packages" >> "$GITHUB_ENV"
           ln -s "$RUNNER_TEMP/pi" .pi-mono
 
