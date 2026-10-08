@@ -1,16 +1,16 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
 afterEach(cleanupFirecodeModules);
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
-	const { default: registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null });
+	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null }) as any;
 	const fake = fakePi();
 
-	(registerFirecode as (pi: unknown) => void)(fake.pi);
+	registerFirecode(fake.pi, "worker");
 
 	expect([...fake.commands.keys()]).toEqual([]);
 	expect([...fake.shortcuts.keys()]).toEqual([]);
@@ -149,4 +149,102 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 	};
 	expect(await warningsFor(false)).toEqual([]);
 	expect(await warningsFor(true)).not.toEqual([]);
+});
+
+// 每个用例用不同的 extraFiles 拿独立的临时 Agent 目录：播种会写盘，不能和共用「无配置」副本的用例互相污染。
+let seedCase = 0;
+async function seedHarness(options: { configJsonc: string | null; role?: string; hasUI?: boolean; beforeRegister?: (configPath: string) => Promise<void> }) {
+	const loadOptions = { configJsonc: options.configJsonc, extraFiles: { ["seed-case-" + ++seedCase]: "" } };
+	const { registerFirecode } = await loadFirecodeModule("index.ts", loadOptions) as any;
+	const { CONFIG_PATH } = await loadFirecodeModule("config.ts", loadOptions) as { CONFIG_PATH: string };
+	await options.beforeRegister?.(CONFIG_PATH);
+	const fake = fakePi({ registerProvider() {} });
+	registerFirecode(fake.pi, options.role ?? "main");
+	const notices: [string, string][] = [];
+	const sessionStart = () => fake.fire("session_start", {}, {
+		mode: "tui",
+		hasUI: options.hasUI ?? true,
+		cwd: "/tmp",
+		ui: new Proxy({ notify: (message: string, level: string) => notices.push([level, message]) }, { get: (target, key) => (target as any)[key] ?? (() => {}) }),
+		sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => "test-session" },
+	});
+	return { CONFIG_PATH, fake, notices, sessionStart };
+}
+
+test("扩展加载时配置缺失：主会话写入随包模板，本次会话即按新配置生效，提示只出现一次", async () => {
+	const { CONFIG_PATH, fake, notices, sessionStart } = await seedHarness({ configJsonc: null });
+
+	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
+	expect([...fake.commands.keys()]).toContain("rename");
+	await sessionStart();
+	await sessionStart();
+
+	expect(notices).toEqual([["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"]]);
+});
+
+test("无界面的主会话也写盘，但不提示", async () => {
+	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null, hasUI: false });
+
+	await sessionStart();
+
+	expect(await Bun.file(CONFIG_PATH).exists()).toBe(true);
+	expect(notices).toEqual([]);
+});
+
+test("配置文件已存在（含内容有问题）时绝不覆盖", async () => {
+	const broken = JSON.stringify({ features: await featuresOnly(), bogus: 1 });
+	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: broken });
+
+	await sessionStart();
+
+	const text = notices.map(([, message]) => message).join("\n");
+	expect(await readFile(CONFIG_PATH, "utf8")).toBe(broken);
+	expect(text).toContain("未知配置节 bogus");
+	expect(text).not.toContain("已生成配置");
+});
+
+test("子会话不写盘", async () => {
+	const { CONFIG_PATH, sessionStart } = await seedHarness({ configJsonc: null, role: "worker" });
+
+	await sessionStart();
+
+	expect(await Bun.file(CONFIG_PATH).exists()).toBe(false);
+});
+
+test("写入失败明确报错，不静默", async () => {
+	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({
+		configJsonc: null,
+		beforeRegister: async (configPath) => {
+			const configDir = dirname(configPath);
+			await rm(configDir, { recursive: true });
+			await writeFile(configDir, "挡路的文件");
+		},
+	});
+
+	await sessionStart();
+
+	const errors = notices.filter(([level]) => level === "error");
+	expect(errors).toHaveLength(1);
+	expect(errors[0][1]).toContain("无法生成配置：" + CONFIG_PATH);
+});
+
+test("无界面的主会话写入失败也明确报错（stderr），不静默", async () => {
+	const stderr = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const { CONFIG_PATH, sessionStart } = await seedHarness({
+			configJsonc: null,
+			hasUI: false,
+			beforeRegister: async (configPath) => {
+				const configDir = dirname(configPath);
+				await rm(configDir, { recursive: true });
+				await writeFile(configDir, "挡路的文件");
+			},
+		});
+
+		await sessionStart();
+
+		expect(stderr.mock.calls.map(([message]) => String(message)).join("\n")).toContain("无法生成配置：" + CONFIG_PATH);
+	} finally {
+		stderr.mockRestore();
+	}
 });
