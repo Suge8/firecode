@@ -55,7 +55,7 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 
 /** 解析审查者文本输出：首行严格 PASS/FAIL + 证据锚点闸门。 */
 export function parseReviewOutput(text: string): ParseOutcome {
-	const trimmed = stripApplyInstruction(text);
+	const trimmed = text.trim();
 	if (!trimmed) return invalidFormat(msg.reviewer.empty);
 	const [firstLine = "", ...rest] = trimmed.split(/\r?\n/);
 	const verdict = verdictOf(firstLine);
@@ -272,44 +272,4 @@ function firstIssue(body: string) {
 
 function clean(text: string) {
 	return text.replace(/`([^`]+)`/gu, "$1").trim();
-}
-
-/** 去掉模型可能夹带的"应用反馈"指令尾巴（防执行模型把修复指令回传给审查者）。 */
-function stripApplyInstruction(text: string) {
-	return removeWhitespaceInsensitive(
-		removeWhitespaceInsensitive(text, APPLY_INSTRUCTION_ZH),
-		APPLY_INSTRUCTION_EN,
-	)
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-}
-
-const APPLY_INSTRUCTION_ZH =
-	"将审查反馈视为待核实假设，而非事实；先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决再结束，避免无关重构、抽象、依赖或风格改动；反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。";
-const APPLY_INSTRUCTION_EN =
-	"Treat the review feedback as hypotheses to verify, not facts; verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms, fixing other occurrences of the same root cause too, and verify end-to-end that issues are truly resolved before finishing; avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints).";
-
-function removeWhitespaceInsensitive(text: string, needle: string) {
-	let result = "";
-	let index = 0;
-	while (index < text.length) {
-		const matchEnd = whitespaceInsensitiveMatchEnd(text, needle, index);
-		if (matchEnd === undefined) {
-			result += text[index];
-			index += 1;
-			continue;
-		}
-		index = matchEnd;
-	}
-	return result;
-}
-
-function whitespaceInsensitiveMatchEnd(text: string, needle: string, start: number) {
-	let textIndex = start;
-	for (const char of needle) {
-		while (textIndex < text.length && /\s/.test(text[textIndex])) textIndex += 1;
-		if (text[textIndex] !== char) return undefined;
-		textIndex += 1;
-	}
-	return textIndex;
 }
