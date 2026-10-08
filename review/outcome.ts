@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { CHECKPOINT_TYPE, isValidCheckpoint } from "./checkpoint.js";
+import { msg } from "./messages.js";
 import type { ReviewState } from "./state.js";
 
 export type ReviewOutcome =
@@ -17,7 +18,7 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 		content = readFileSync(sessionPath, "utf8");
 	} catch (error) {
 		if (isMissingFile(error)) return { status: "none" };
-		return { status: "error", message: `无法读取 session 文件：${errorMessage(error)}` };
+		return { status: "error", message: msg.failure.cannotReadSession(errorMessage(error)) };
 	}
 
 	let latest: ReviewState | undefined;
@@ -30,12 +31,12 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 		try {
 			entry = JSON.parse(line);
 		} catch {
-			damage ??= `session 第 ${index + 1} 行不是有效 JSON`;
+			damage ??= msg.failure.badJsonLine(index + 1);
 			continue;
 		}
 		if (!isCheckpointEntry(entry)) continue;
 		if (isValidCheckpoint(entry.data)) latest = entry.data as ReviewState;
-		else damage ??= "fire-review checkpoint 格式无效";
+		else damage ??= msg.failure.badCheckpoint;
 	}
 	if (!latest) return damage ? { status: "error", message: damage } : { status: "none" };
 	return outcomeOf(latest);

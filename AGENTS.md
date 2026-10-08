@@ -4,7 +4,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有九条：Master 只读调 `review/outcome.ts`，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
+状态，关掉任何一个不影响其余；跨模块接缝只有十条：`tools/machine.ts` 的审查卡预览读 `review/messages.ts` 的字段名（与生产端同源，两种语言都认），Master 只读调 `review/outcome.ts`，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
 `master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度（频道名与 payload 只在 `review/occupancy.ts` 定义），轮记录器、statusbar、tools 与 herdr 投影（`session/herdr-projection.ts`）经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有），statusbar 的落定态经 `tools/round.ts` 的 `latestTurnRecord` 读轮记录（与摘要行同一合成规则），Master 的“本次运行”耗时与子代理视图经 `roundFromEntry` 读子代理会话里的轮记录。
 
 ## 模块
@@ -49,6 +49,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 
 - 每个目录一个 `messages.ts`：`export const msg = defineMessages({ zh: {...}, en: {...} })`，用 `msg.分组.键`；带参数的文案写成函数。en 与 zh 的键、嵌套、函数参数不一致是类型错误。根目录的 `messages.ts` 另放机器消息（信封）里生产端与折叠界面共用的词汇（`envelope`），两侧必须读它，不各写一份。
 - 提示词按语言分文件 `<name>.zh.md` / `<name>.en.md`，用 `i18n.ts` 的 `readPrompt(new URL("./prompts/", import.meta.url), name)` 读；英文版是等价翻译，改一边必须同步另一边。
+- 生产端与解析端共用的词汇只有一份：信封分节词在根 `messages.ts` 的 `envelope`（解析端只读当前语言），审查输出契约与结果卡的字段名在 `review/messages.ts` 的 `terms`（解析端两种语言都认，理由见 [review/AGENTS.md](review/AGENTS.md)）。
 - 不进文案表的：代码标识符、协议字段名、模型原子等配置值、`active: … / all: …` 这类纯技术输出、上游子包 `provider/openai-native/src` 里已是英文的诊断。
 - 测试把 `LC_ALL` 固定为 zh（`tests/loader.ts`），断言默认中文；英文行为在 `tests/i18n.test.ts` 用 `language: "en"` 的配置验证。
 
@@ -58,7 +59,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 `extensions/firecode/config.jsonc`；用户侧安装见 README。文件不存在时，主会话在扩展加载时（`registerFirecode`，先于 `loadConfig`）把随包模板 `config.example.jsonc` 原样写过去（`config-file.ts` 的 `seedConfig`，构建把模板复制进 `dist` 以便打包后定位），本次会话即按新文件生效；不区分 TUI/print/rpc，提示“已生成配置…重启生效”留到有 UI 的 `session_start` 显示一次。已存在的文件（含内容有问题）绝不覆盖，子会话不写盘，写入失败明确报错。改完本机运行配置后，把其中属于推荐配置的部分
 同步进 `config.example.jsonc`，个人化内容（自定义 instructions、私人扩展名）留在本机。
 
-顶层 `language` 是唯一语言设置，不再有 `review.language`（旧写法按未知字段报错）；`ReviewConfig.language` 是从顶层派生的只读值。
+顶层 `language` 是唯一语言设置，不再有 `review.language`（旧写法按未知字段报错）。
 
 配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`，解析在 `config.ts` 的 `parseModelAtom`
 一处收口；旧的分字段与两段式写法一律报配置问题。

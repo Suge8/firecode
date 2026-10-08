@@ -1,5 +1,6 @@
 /** 审查者：进程内 memory 会话 + PASS/FAIL 输出契约解析。 */
-import type { Language, ThinkingLevelValue } from "../config.js";
+import type { ThinkingLevelValue } from "../config.js";
+import { msg, termPattern } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult, ReviewerStatus } from "./state.js";
 import type { ReviewSessionRunner } from "./session.js";
@@ -16,7 +17,6 @@ export interface RunReviewerOptions {
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
-	language: Language;
 	signal?: AbortSignal;
 	runSession: ReviewSessionRunner;
 }
@@ -41,8 +41,8 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 	});
 	const parsed =
 		result.kind === "output"
-			? parseReviewOutput(result.text, options.language)
-			: processFailure(result, options.language);
+			? parseReviewOutput(result.text)
+			: processFailure(result);
 	return {
 		index: options.index,
 		model: options.config.model,
@@ -54,76 +54,49 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 }
 
 /** 解析审查者文本输出：首行严格 PASS/FAIL + 证据锚点闸门。 */
-export function parseReviewOutput(text: string, language: Language): ParseOutcome {
+export function parseReviewOutput(text: string): ParseOutcome {
 	const trimmed = stripApplyInstruction(text);
-	if (!trimmed) return invalidFormat("(empty)", language);
+	if (!trimmed) return invalidFormat(msg.reviewer.empty);
 	const [firstLine = "", ...rest] = trimmed.split(/\r?\n/);
 	const verdict = verdictOf(firstLine);
 	if (verdict === "PASS") {
 		const body = rest.join("\n").trim();
 		const issue = passIssue(body);
-		if (issue) return contractViolation(issue, language);
+		if (issue) return contractViolation(issue);
 		const summary = firstSummary(body);
 		// passIssue 只保证证据行前有行，那行可能是建议区标题；没有真摘要就是契约违规，
 		// 不能让 undefined 流进多模型汇总把循环撞死。
-		if (!summary) return contractViolation("PASS 缺少摘要行（证据行前必须有一行极简摘要）", language);
+		if (!summary) return contractViolation(msg.reviewer.passNoSummary);
 		return { status: "passed", summary, details: body };
 	}
 	if (verdict === "FAIL") {
 		const body = rest.join("\n").trim();
-		const issue = failIssue(body, language);
-		if (issue) return contractViolation(issue, language);
-		return { status: "failed", summary: firstIssue(body, language), details: body };
+		const issue = failIssue(body);
+		if (issue) return contractViolation(issue);
+		return { status: "failed", summary: firstIssue(body), details: body };
 	}
-	return invalidFormat(firstLine.trim() || "(empty)", language);
+	return invalidFormat(firstLine.trim() || msg.reviewer.empty);
 }
 
 function processFailure(
-	result:
-		| { kind: "timeout" }
-		| { kind: "aborted" }
-		| { kind: "error"; message: string }
-		| { kind: "empty" },
-	language: Language,
+	result: { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; message: string } | { kind: "empty" },
 ): ParseOutcome {
-	if (result.kind === "aborted")
-		return { status: "error", summary: "", details: "" };
-	if (result.kind === "timeout")
-		return { status: "error", summary: "", details: systemError(language, "timeout") };
-	if (result.kind === "error")
-		return {
-			status: "error",
-			summary: "",
-			details: `${systemError(language, "start")}${result.message}`,
-		};
-	return { status: "error", summary: "", details: systemError(language, "empty") };
+	const details =
+		result.kind === "aborted" ? ""
+		: result.kind === "timeout" ? msg.reviewer.timeout
+		: result.kind === "error" ? msg.reviewer.sessionFailed(result.message)
+		: msg.reviewer.emptyOutput;
+	return { status: "error", summary: "", details };
 }
 
 /** 首行判定失败（既不是 PASS 也不是 FAIL）。 */
-function invalidFormat(actual: string, language: Language): ParseOutcome {
-	const prefix =
-		language === "en"
-			? `first line must be PASS or FAIL; actual: `
-			: `第一行必须是 PASS 或 FAIL；实际是：`;
-	return contractViolation(prefix + tail(actual), language);
+function invalidFormat(actual: string): ParseOutcome {
+	return contractViolation(msg.reviewer.invalidFirstLine(tail(actual)));
 }
 
 /** 输出契约违例：该票作废记为基础设施错误，不拖垮整轮。 */
-function contractViolation(issue: string, language: Language): ParseOutcome {
-	const prefix =
-		language === "en" ? "review output format invalid: " : "审查输出格式无效：";
-	return { status: "error", summary: "", details: prefix + issue };
-}
-
-function systemError(language: Language, kind: "timeout" | "start" | "empty") {
-	if (language === "en") {
-		if (kind === "timeout") return "review session timed out before returning valid output. ";
-		if (kind === "start") return "review session failed. ";
-		return "review output is empty: no check result. ";
-	}
-	if (kind === "timeout") return "审查会话超时，未在时限内返回有效输出。";
-	if (kind === "start") return "审查会话失败。";
-	return "审查输出为空：无审查结论。";
+function contractViolation(issue: string): ParseOutcome {
+	return { status: "error", summary: "", details: msg.reviewer.formatInvalid(issue) };
 }
 
 function tail(text: string) {
@@ -144,50 +117,64 @@ export function verdictOf(line: string): "PASS" | "FAIL" | undefined {
 	return normalized === "PASS" || normalized === "FAIL" ? normalized : undefined;
 }
 
-const EVIDENCE_LINE = /^(?:[-*]\s*)?(?:证据：|Evidence:)/u;
-const FILE_SEGMENT = /(?:文件|files)\s*=\s*([^;；]*)/iu;
-const COMMAND_SEGMENT = /(?:命令|commands)\s*=\s*([^;；]*)/iu;
+// 字段名两种语言都认（见 messages.ts 的 terms）：会话历史可能跨语言，模型也可能不照提示词的语言写。
+const EVIDENCE_LINE = new RegExp(`^(?:[-*]\\s*)?${termPattern((terms) => terms.field.evidence)}[:：]`, "u");
+const FILE_SEGMENT = new RegExp(`${termPattern((terms) => terms.anchor.files)}\\s*=\\s*([^;；]*)`, "iu");
+const COMMAND_SEGMENT = new RegExp(`${termPattern((terms) => terms.anchor.commands)}\\s*=\\s*([^;；]*)`, "iu");
 const FILE_ANCHOR = /[\w@./-]*\w\.[a-zA-Z]\w{0,5}\b/u;
-const FINDING_ISSUE = /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(.*)$/u;
 // 不能用 \b 收尾：中文不是\w，「发现 1」里「现」与空格之间不构成词边界。
-const FINDING_HEADING = /^#{1,6}\s*(?:发现|Finding)/u;
+const FINDING_HEADING = new RegExp(`^#{1,6}\\s*${termPattern((terms) => terms.finding)}`, "u");
+const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
+const SUGGESTIONS_HEADING_SPLIT = new RegExp(SUGGESTIONS_HEADING.source, "imu");
+
+/** 列表项「**字段名**：值」的行首；value 为空时只匹配到冒号。字段名容忍可选粗体包裹。 */
+const bulletField = (label: string, value = "") =>
+	new RegExp(`^[-*+]\\s*(?:\\*\\*)?${label}(?:\\*\\*)?\\s*[:：]\\s*${value}`, "iu");
+
+const FINDING_ISSUE = bulletField(termPattern((terms) => terms.field.issue), "(.*)$");
 
 /**
  * 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约。
  * 只校验字段存在且非空，不校验取值（如严重程度写“高危”不应被判非法）。
+ * extra 是旧版提示词用过的措辞：滚动开放清单里可能混有旧格式发现的复述。
  */
-// 字段标签容忍可选粗体包裹与新旧两套措辞：滚动开放清单里可能混有旧格式发现的复述。
 const FINDING_FIELDS = [
-	{
-		key: "severity",
-		zh: "严重程度",
-		en: "Severity",
-		// 提示词规定阻塞发现只有高/中；低严重度必须进建议区，不得驱动修复循环。
-		pattern: /^[-*+]\s*(?:\*\*)?(?:严重程度|Severity)(?:\*\*)?\s*[:：]\s*(?:高|中|High|Medium)\s*$/iu,
-	},
-	{ key: "issue", zh: "问题", en: "Issue", pattern: /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(\S.*)$/u },
-	{
-		key: "evidence",
-		zh: "证据",
-		en: "Evidence",
-		pattern: /^[-*+]\s*(?:\*\*)?(?:证据|Evidence)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
-	},
+	{ key: "issue", label: termPattern((terms) => terms.field.issue) },
+	{ key: "evidence", label: termPattern((terms) => terms.field.evidence) },
 	{
 		key: "contract",
-		zh: "违反的约定与期望行为",
-		en: "Violated agreement & expected behavior",
-		pattern:
-			/^[-*+]\s*(?:\*\*)?(?:违反的(?:约定与期望(?:行为)?|契约(?:或期望行为)?)|Violated agreement(?: & expected behavior)?|Contract(?: or expected behavior)? violated)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
+		label: termPattern(
+			(terms) => terms.field.contract,
+			"违反的约定与期望",
+			"违反的契约或期望行为",
+			"违反的契约",
+			"Violated agreement",
+			"Contract or expected behavior violated",
+			"Contract violated",
+		),
 	},
 	{
 		key: "commands",
-		zh: "验证命令",
-		en: "Verification command",
-		pattern:
-			/^[-*+]\s*(?:\*\*)?(?:(?:需要运行的)?验证命令|Verification commands?(?: to run)?)(?:\*\*)?\s*[:：]\s*(\S.*)$/u,
+		label: termPattern(
+			(terms) => terms.field.commands,
+			"需要运行的验证命令",
+			"Verification commands",
+			"Verification command to run",
+			"Verification commands to run",
+		),
 	},
 ] as const;
-const SUGGESTIONS_HEADING = /^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/iu;
+type FindingField = (typeof FINDING_FIELDS)[number];
+const SEVERITY_LABEL = termPattern((terms) => terms.field.severity);
+/** 提示词规定阻塞发现只有高/中；低严重度必须进建议区，不得驱动修复循环。 */
+const SEVERITY_LINE = bulletField(
+	SEVERITY_LABEL,
+	`(?:${termPattern((terms) => terms.high)}|${termPattern((terms) => terms.medium)})\\s*$`,
+);
+const FIELD_START = new RegExp(
+	`^[-*+]\\s*(?:\\*\\*)?(?:${[SEVERITY_LABEL, ...FINDING_FIELDS.map((field) => field.label)].join("|")})`,
+	"iu",
+);
 
 /** PASS 证据锚点闸门：摘要行在前，首个证据行必须同时含文件段（带扩展名）与命令段。 */
 function passIssue(body: string): string | undefined {
@@ -196,11 +183,11 @@ function passIssue(body: string): string | undefined {
 		.map((line) => line.trim())
 		.filter(Boolean);
 	const evidenceIndex = lines.findIndex((line) => EVIDENCE_LINE.test(line));
-	if (evidenceIndex === -1) return "PASS 缺少证据锚点行（证据：文件=…；命令=…）";
-	if (evidenceIndex === 0) return "PASS 缺少摘要行（证据行前必须有一行极简摘要）";
+	if (evidenceIndex === -1) return msg.reviewer.passNoEvidence;
+	if (evidenceIndex === 0) return msg.reviewer.passNoSummary;
 	const line = lines[evidenceIndex];
-	if (!hasFileSegment(line)) return "PASS 证据行缺少文件段（文件=至少一个带扩展名的路径）";
-	if (!hasCommandSegment(line)) return "PASS 证据行缺少命令段（命令=实际运行的命令）";
+	if (!hasFileSegment(line)) return msg.reviewer.passNoFiles;
+	if (!hasCommandSegment(line)) return msg.reviewer.passNoCommands;
 	return undefined;
 }
 
@@ -208,70 +195,45 @@ function passIssue(body: string): string | undefined {
  * FAIL 发现闸门：至少一条带「问题」的发现，且不能全落在「建议（非阻塞）」区。
  * 空 FAIL 或一段散文都不能驱动执行模型改代码——格式非法的票一律作废为基础设施错误。
  */
-function failIssue(body: string, language: Language): string | undefined {
-	const noFinding =
-		language === "en"
-			? "FAIL has no blocking finding: a `## Finding` section is required"
-			: "FAIL 缺少阻塞发现：需要一个「## 发现」小节";
-	if (!body) return noFinding;
+function failIssue(body: string): string | undefined {
+	if (!body) return msg.reviewer.failNoFinding;
 	const blocking = (body.split(SUGGESTIONS_HEADING_SPLIT)[0] ?? "")
 		.split(/\r?\n/)
 		.map((line) => line.trim());
 	const starts = blocking
 		.map((line, index) => (FINDING_HEADING.test(line) ? index : -1))
 		.filter((index) => index >= 0);
-	if (starts.length === 0) return noFinding;
+	if (starts.length === 0) return msg.reviewer.failNoFinding;
 	// 每条发现都必须满足完整契约；同票混入非法发现整票作废。
 	// 契约完整才能驱动自动修复：半成品票据无法核实，也无法验收。
 	for (const [order, start] of starts.entries()) {
 		const end = starts[order + 1] ?? blocking.length;
 		const section = blocking.slice(start, end);
-		const missing = FINDING_FIELDS.filter(
-			(field) => !sectionHasField(section, field),
-		);
-		if (missing.length > 0)
-			return missingFieldsMessage(order + 1, missing, language);
+		const missing = [
+			...(section.some((line) => SEVERITY_LINE.test(line)) ? [] : [msg.terms.field.severity]),
+			...FINDING_FIELDS.filter((field) => !sectionHasField(section, field)).map((field) => msg.terms.field[field.key]),
+		];
+		if (missing.length > 0) return msg.reviewer.missingFields(order + 1, missing);
 	}
 	return undefined;
 }
 
-function sectionHasField(section: readonly string[], field: (typeof FINDING_FIELDS)[number]): boolean {
+function sectionHasField(section: readonly string[], field: FindingField): boolean {
+	const full = bulletField(field.label, "(\\S.*)$");
+	const tag = bulletField(field.label);
 	for (let i = 0; i < section.length; i += 1) {
 		const line = section[i] ?? "";
-		if (field.pattern.test(line)) return true;
-		if (field.key === "severity") continue;
-		const tagSource = field.pattern.source.replace(/\s*\(\\S\.\*\)\$/u, "\\s*");
-		const tagPattern = new RegExp(tagSource, "iu");
-		if (tagPattern.test(line)) {
-			const inline = line.replace(tagPattern, "").trim();
-			if (inline) return true;
-			for (let j = i + 1; j < section.length; j += 1) {
-				const nextLine = (section[j] ?? "").trim();
-				if (/^[-*+]\s*(?:\*\*)?(?:严重程度|Severity|问题|Issue|证据|Evidence|违反|Violated|Contract|验证|Verification)/iu.test(nextLine) || /^#{1,6}\s+/u.test(nextLine)) {
-					break;
-				}
-				if (nextLine) return true;
-			}
+		if (full.test(line)) return true;
+		if (!tag.test(line)) continue;
+		// 字段名独占一行时，值在其后的行里（直到下一个字段或标题）。
+		for (let j = i + 1; j < section.length; j += 1) {
+			const nextLine = (section[j] ?? "").trim();
+			if (FIELD_START.test(nextLine) || /^#{1,6}\s+/u.test(nextLine)) break;
+			if (nextLine) return true;
 		}
 	}
 	return false;
 }
-
-function missingFieldsMessage(
-	index: number,
-	missing: readonly (typeof FINDING_FIELDS)[number][],
-	language: Language,
-) {
-	const names = missing
-		.map((field) => (language === "en" ? field.en : field.zh))
-		.join(language === "en" ? ", " : "、");
-	return language === "en"
-		? `FAIL finding ${index} is missing required fields: ${names}`
-		: `FAIL 第 ${index} 条发现缺少必填字段：${names}`;
-}
-
-const SUGGESTIONS_HEADING_SPLIT =
-	/^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/imu;
 
 function hasFileSegment(line: string) {
 	const segment = FILE_SEGMENT.exec(line)?.[1];
@@ -291,7 +253,7 @@ function firstSummary(body: string) {
 }
 
 /** 发现一句话问题（FAIL 卡片回顾用）：取第一条「- 问题:」行（支持同行及换行）。 */
-function firstIssue(body: string, language: Language) {
+function firstIssue(body: string) {
 	const lines = body.split(/\r?\n/).map((line) => line.trim());
 	for (let i = 0; i < lines.length; i += 1) {
 		const line = lines[i] ?? "";
@@ -305,7 +267,7 @@ function firstIssue(body: string, language: Language) {
 			}
 		}
 	}
-	return language === "en" ? "Review failed with findings." : "审查未通过，存在发现。";
+	return msg.reviewer.failFallbackSummary;
 }
 
 function clean(text: string) {

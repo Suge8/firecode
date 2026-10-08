@@ -876,7 +876,7 @@ test("↳ 行：标题按信封原样显示，成败色由信封决定，审查�
 	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
 	// 与 review 生产端发卡一致：信封正文加卡片 details。
 	const reviewCard = (card: unknown) => {
-		const built = buildCard(card, "zh");
+		const built = buildCard(card);
 		s.chat.addChild(new s.host.CustomMessageComponent({
 			role: "custom", customType: "firecode-review-card", content: wrapEnvelope("firecode_review", built.content), details: built.details, display: true, timestamp: 0,
 		}));

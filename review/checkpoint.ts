@@ -10,6 +10,7 @@
  *   上一次写入值提供，出现不是自己写的 Run ID 才算冲突（CheckpointConflictError）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { msg } from "./messages.js";
 import type {
 	ActiveCheck,
 	ActiveReviewer,
@@ -33,7 +34,7 @@ export interface CheckpointStamp {
 
 export class CheckpointConflictError extends Error {
 	constructor() {
-		super("fire-review checkpoint Run ID 已失效");
+		super(msg.failure.staleRunId);
 		this.name = "CheckpointConflictError";
 	}
 }
@@ -341,7 +342,7 @@ function appendCheckpoint(
 	seq: number,
 ): CheckpointStamp {
 	const data = { ...toCheckpoint(state), seq };
-	if (!isValidCheckpoint(data)) throw new Error("fire-review checkpoint 状态非法");
+	if (!isValidCheckpoint(data)) throw new Error(msg.failure.illegalCheckpoint);
 	pi.appendEntry(CHECKPOINT_TYPE, data);
 	return { runId: state.runId, seq };
 }

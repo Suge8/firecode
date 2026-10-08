@@ -1,9 +1,8 @@
 /** FireCode 配置：只读 Pi Agent 目录下的 `extensions/firecode/config.jsonc`。 */
 import { type ConfigFile, readConfigFile } from "./config-file.js";
-import { LANGUAGE, type Language, parseLanguage } from "./i18n.js";
+import { parseLanguage } from "./i18n.js";
 import { msg } from "./messages.js";
 
-export type { Language };
 export type ThinkingLevelValue =
 	| "off"
 	| "minimal"
@@ -42,8 +41,6 @@ export interface ReviewConfig {
 	timeoutMinutes: number;
 	/** 审查者只读工具白名单。 */
 	tools: string[];
-	/** 取自顶层 language，不是 review 节的字段。 */
-	language: Language;
 }
 
 export interface MasterRole extends ModelAtom {
@@ -369,7 +366,6 @@ export function parseReviewConfig(raw: Record<string, unknown>, problems: string
 		advisorAfterFailures: reviewInt(raw.advisorAfterFailures, "review.advisorAfterFailures", 2, 1, 5, problems),
 		timeoutMinutes: reviewInt(raw.timeoutMinutes, "review.timeoutMinutes", 20, 1, 60, problems),
 		tools: reviewTools(raw.tools, problems),
-		language: LANGUAGE,
 	};
 }
 

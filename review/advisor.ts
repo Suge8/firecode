@@ -1,5 +1,5 @@
 /** 顾问仲裁：连续 N 轮失败后经独立进程内会话返回三选一裁决。 */
-import type { Language } from "../config.js";
+import { msg } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { AdvisorResult, AdvisorVerdict } from "./state.js";
 import type { ReviewSessionRunner } from "./session.js";
@@ -9,7 +9,6 @@ export interface RunAdvisorOptions {
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
-	language: Language;
 	signal?: AbortSignal;
 	runSession: ReviewSessionRunner;
 }
@@ -25,31 +24,26 @@ export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorRes
 		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
 	});
-	if (result.kind !== "output") throw new Error(advisorProcessError(result, options.language));
-	return parseAdvisorOutput(result.text, options.language);
+	if (result.kind !== "output") throw new Error(advisorProcessError(result));
+	return parseAdvisorOutput(result.text);
 }
 
 const VERDICTS = new Set<AdvisorVerdict>(["continue", "stop", "narrow"]);
 
 function advisorProcessError(
 	result: Exclude<Awaited<ReturnType<ReviewSessionRunner>>, { kind: "output" }>,
-	language: Language,
 ): string {
-	const prefix = language === "en" ? "advisor session unavailable" : "顾问会话不可用";
-	if (result.kind === "aborted") return `${prefix}: aborted`;
-	if (result.kind === "timeout") return `${prefix}: timeout`;
-	if (result.kind === "empty") return `${prefix}: empty output`;
-	return `${prefix}: ${result.message}`;
+	if (result.kind === "aborted") return msg.advisor.unavailable("aborted");
+	if (result.kind === "timeout") return msg.advisor.unavailable("timeout");
+	if (result.kind === "empty") return msg.advisor.unavailable("empty output");
+	return msg.advisor.unavailable(result.message);
 }
 
 /** 首行应为裸裁决词；容忍模型前言，在前几个非空行内识别裁决行，
  * 其余行（含前言）并入 advice；完全识别不出才回落 continue。 */
 const VERDICT_SCAN_LINES = 8;
 
-export function parseAdvisorOutput(
-	text: string,
-	language: Language,
-): AdvisorResult {
+export function parseAdvisorOutput(text: string): AdvisorResult {
 	const lines = unwrapCodeFence(text.trim().split(/\r?\n/));
 	const firstLine = lines.find((line) => line.trim()) ?? "";
 	let verdict: AdvisorVerdict | undefined;
@@ -74,15 +68,12 @@ export function parseAdvisorOutput(
 		const sample = firstLine.slice(0, 80);
 		return {
 			verdict: "continue",
-			advice:
-				language === "en"
-					? `Advisor output was not parseable (first line: ${sample}); continuing with the current findings.`
-					: `顾问输出无法解析（首行：${sample}），按继续处理当前发现。`,
+			advice: msg.advisor.unparseable(sample),
 		};
 	}
 	return {
 		verdict,
-		advice: advice || (language === "en" ? "(no advice)" : "（无建议）"),
+		advice: advice || msg.advisor.noAdvice,
 	};
 }
 

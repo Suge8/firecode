@@ -16,7 +16,8 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type Language, type ReviewConfig, type Section } from "../config.js";
+import { loadConfig, type ReviewConfig, type Section } from "../config.js";
+import { readPrompt } from "../i18n.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
@@ -30,7 +31,8 @@ import {
 import { buildEvidence } from "./evidence.js";
 import { hideReviewTitle, lockEditor, showReviewTitle } from "./ui.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
-import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
+import { msg } from "./messages.js";
+import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
@@ -51,6 +53,7 @@ export const FEEDBACK_TYPE = "firecode-review-feedback";
 export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
 const FEEDBACK_START_TIMEOUT_MS = 2_000;
+const PROMPTS = new URL("./prompts/", import.meta.url);
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
 function overallTimeoutMs(config: ReviewConfig) {
 	return Math.max(
@@ -141,7 +144,7 @@ export function registerReview(
 		return handle;
 	}
 	pi.registerCommand("fire-review", {
-		description: "对抗性审查：审这个会话到目前为止做完的事",
+		description: msg.command.description,
 		handler: (args, ctx) => handleCommand(rt, args, ctx),
 	});
 	pi.on("session_start", (_event, ctx) => handleSessionStart(rt, ctx));
@@ -179,7 +182,7 @@ function settleUnavailableCheckpoint(
 		});
 	} catch (error) {
 		if (ctx.hasUI)
-			ctx.ui.notify(`fire-review 无法收口旧 checkpoint：${errorText(error)}`, "error");
+			ctx.ui.notify(msg.notify.cannotSealOld(errorText(error)), "error");
 	}
 }
 
@@ -213,12 +216,7 @@ function notifyEffectFailure(rt: ReviewRuntime, error: unknown) {
 	const active = rt.controller;
 	if (!active?.ctx.hasUI) return;
 	const message = error instanceof Error ? error.message : String(error);
-	active.ctx.ui.notify(
-		active.config.language === "en"
-			? `fire-review step failed: ${message}`
-			: `fire-review 步骤失败：${message}`,
-		"warning",
-	);
+	active.ctx.ui.notify(msg.notify.stepFailed(message), "warning");
 }
 
 /** 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。 */
@@ -231,7 +229,6 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 		maxRounds: config.maxRounds,
 		advisorAfterFailures: config.advisorAfterFailures,
 		advisorModel: config.advisor.model,
-		language: config.language,
 		reviewers: config.reviewers.map((item) => ({
 			model: item.model,
 			thinking: item.thinking,
@@ -248,15 +245,10 @@ async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionCont
 	}
 	const config = loaded.config;
 	if (rt.controller && isActive(rt.controller.state)) {
-		if (ctx.hasUI) ctx.ui.notify(
-			config.language === "en"
-				? "A review is already running."
-				: "已有审查在进行中。",
-			"info",
-		);
+		if (ctx.hasUI) ctx.ui.notify(msg.command.alreadyRunning, "info");
 		return;
 	}
-	const command = parseCommand(args, config.language);
+	const command = parseCommand(args);
 	if ("error" in command) {
 		if (ctx.hasUI) ctx.ui.notify(command.error, "error");
 		return;
@@ -426,7 +418,7 @@ function startAction(
 			if (rt.controller !== active || active.actionController?.signal.aborted) return;
 			await dispatch(rt, {
 				type: "INFRASTRUCTURE_ERROR",
-				details: sessionErrorText(kind, active.config.language, error),
+				details: sessionErrorText(kind, error),
 			});
 		})
 		.finally(() => {
@@ -516,17 +508,14 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 			active.actionController?.abort();
 			if (active.ctx.hasUI) active.ctx.ui.notify(message, level);
 		};
-		const en = active.config.language === "en";
 		if (error instanceof CheckpointConflictError) {
 			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
-			halt(en ? "fire-review checkpoint conflict; review stopped." : "fire-review checkpoint 冲突，已停止审查。", "warning");
+			halt(msg.notify.checkpointConflict, "warning");
 			void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 			return false;
 		}
 		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
-		halt(en
-			? `fire-review checkpoint write failed; review stopped: ${errorText(error)}`
-			: `fire-review checkpoint 写入失败，已停止审查：${errorText(error)}`, "error");
+		halt(msg.notify.checkpointWriteFailed(errorText(error)), "error");
 		clearUi(active);
 		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
 		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
@@ -549,12 +538,7 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 		clearFeedbackStartTimer(active);
 		rt.controller = undefined;
 		if (!sealed && active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc."
-					: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
-				"warning",
-			);
+			active.ctx.ui.notify(msg.notify.cannotSeal, "warning");
 		return false;
 	}
 }
@@ -579,7 +563,7 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 		// 占用信号只对齐展示；订阅方故障不能改变审查状态机或会话生命周期。
 		try {
 			if (active.ctx.hasUI)
-				active.ctx.ui.notify(`fire-review 无法同步占用状态：${errorText(error)}`, "warning");
+				active.ctx.ui.notify(msg.notify.occupancyFailed(errorText(error)), "warning");
 		} catch {
 			// 通知本身同样只是展示，不能反向打断审查。
 		}
@@ -591,7 +575,7 @@ function syncUi(rt: ReviewRuntime): void {
 	const active = rt.controller;
 	if (!active) return;
 	if (!isActive(active.state) || !active.ctx.hasUI) return clearUi(active);
-	showReviewTitle(active.ctx, active.state.round, active.config.language);
+	showReviewTitle(active.ctx, active.state.round);
 	// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
 	if (!canCancelWithKey(rt)) return releaseEditor(active);
 	active.unlockEditor ??= lockEditor(active.ctx, () => cancelByUser(rt));
@@ -679,10 +663,9 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 	if (!state.active) return;
 	const currentActive = state.active;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	const evidence = buildEvidence(sessionEntries(rt), config.language, { sessionFile: active.ctx.sessionManager.getSessionFile() });
-	const prompt = buildReviewPrompt(readPrompt("review", config.language), {
-		language: config.language,
-		scope: scopeText(config.language),
+	const evidence = buildEvidence(sessionEntries(rt), { sessionFile: active.ctx.sessionManager.getSessionFile() });
+	const prompt = buildReviewPrompt(readPrompt(PROMPTS, "review"), {
+		scope: msg.command.scope,
 		focus: state.focus,
 		evidence: evidence.text,
 		history: state.history,
@@ -697,7 +680,6 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 					config: reviewerModelConfig(reviewer, config),
 					prompt,
 					cwd: active.ctx.cwd,
-					language: config.language,
 					signal: actionSignal,
 					runSession: rt.runSession,
 				});
@@ -714,7 +696,7 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 						thinking: reviewer.thinking,
 						status: "error",
 						summary: "",
-						details: sessionErrorText("reviewer", active.config.language, error),
+						details: sessionErrorText("reviewer", error),
 					},
 				});
 			}
@@ -729,8 +711,7 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 	if (!state.pending) return;
 	const pending = state.pending;
 	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	const prompt = buildAdvisorPrompt(readPrompt("advisor", config.language), {
-		language: config.language,
+	const prompt = buildAdvisorPrompt(readPrompt(PROMPTS, "advisor"), {
 		focus: state.focus,
 		details: pending.details,
 		history: state.history,
@@ -741,7 +722,6 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 			config: reviewerModelConfig(config.advisor, config),
 			prompt,
 			cwd: active.ctx.cwd,
-			language: config.language,
 			signal: actionSignal,
 			runSession: rt.runSession,
 		});
@@ -751,23 +731,20 @@ async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
 		if (actionSignal.aborted) return;
 		await dispatch(rt, {
 			type: "INFRASTRUCTURE_ERROR",
-			details: sessionErrorText("advisor", active.config.language, error),
+			details: sessionErrorText("advisor", error),
 		});
 	}
 }
 
-function sessionErrorText(kind: "reviewer" | "advisor", language: Language, error: unknown) {
-	const message = error instanceof Error ? error.message : String(error);
-	if (kind === "reviewer")
-		return language === "en" ? `reviewer session error: ${message}` : `审查会话异常：${message}`;
-	return language === "en" ? `advisor session error: ${message}` : `顾问会话异常：${message}`;
+function sessionErrorText(kind: "reviewer" | "advisor", error: unknown) {
+	const reason = errorText(error);
+	return kind === "reviewer" ? msg.failure.reviewerSession(reason) : msg.failure.advisorSession(reason);
 }
 
 function deliverFeedbackNow(rt: ReviewRuntime, details: string, advisor: AdvisorResult | null) {
 	const active = rt.controller;
 	if (!active) return;
 	const feedback = buildFixFeedback({
-		language: active.config.language,
 		details,
 		advisor,
 	});
@@ -781,12 +758,7 @@ function deliverFeedbackNow(rt: ReviewRuntime, details: string, advisor: Advisor
 		) return;
 		active.feedbackStartTimer = undefined;
 		if (active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? "fire-review feedback did not start a repair turn; review stopped."
-					: "fire-review 修复反馈未能启动回合，审查已停止。",
-				"error",
-			);
+			active.ctx.ui.notify(msg.notify.feedbackNotStarted, "error");
 		active.signal.abort();
 		void dispatch(rt, { type: "CANCEL", reason: "user" });
 	}, FEEDBACK_START_TIMEOUT_MS);
@@ -812,7 +784,6 @@ function deliverSummaryNow(rt: ReviewRuntime, state: ReviewState): void {
 		? last?.advisor?.advice ?? last?.details ?? ""
 		: last?.details ?? "";
 	const prompt = buildSummaryPrompt({
-		language: active.config.language,
 		kind: state.summary.kind,
 		rounds: state.history.length,
 		material,
@@ -827,12 +798,7 @@ function deliverSummaryNow(rt: ReviewRuntime, state: ReviewState): void {
 		active.feedbackStartTimer = undefined;
 		// 总结是尽力而非必须：未能启动回合就静默收尾，裁决与结果卡已落地。
 		if (active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? "fire-review summary turn did not start; finishing without it."
-					: "fire-review 总结回合未能启动，已直接收尾。",
-				"warning",
-			);
+			active.ctx.ui.notify(msg.notify.summaryNotStarted, "warning");
 		void dispatch(rt, { type: "SUMMARY_SETTLED" });
 	}, FEEDBACK_START_TIMEOUT_MS);
 	active.feedbackStartTimer.unref?.();
@@ -854,12 +820,7 @@ function sendCard(rt: ReviewRuntime, card: CardData) {
 	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
 	if (card.kind === "cancel") {
 		if (card.reason === "user" && active.ctx.hasUI)
-			active.ctx.ui.notify(
-				active.config.language === "en"
-					? "Review cancelled\nStopped by user"
-					: "审查已取消\n已按你的操作停止",
-				"info",
-			);
+			active.ctx.ui.notify(msg.notify.cancelled, "info");
 		return;
 	}
 	// 宿主在 streaming 时会把无 options 的 sendMessage 当 steer 塞进当前模型回合。
@@ -885,7 +846,7 @@ function flushPendingCards(rt: ReviewRuntime): void {
 }
 
 function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): void {
-	const built = buildCard(card, active.config.language);
+	const built = buildCard(card);
 	rt.pi.sendMessage({
 		customType: CARD_TYPE,
 		content: wrapEnvelope("firecode_review", built.content),
@@ -894,11 +855,9 @@ function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): voi
 	});
 }
 
-function parseCommand(args: string, language: Language): { focus: string } | { error: string } {
+function parseCommand(args: string): { focus: string } | { error: string } {
 	const input = args.trim();
-	return input.startsWith("--")
-		? { error: language === "en" ? "Invalid fire-review arguments." : "fire-review 参数无效" }
-		: { focus: input };
+	return input.startsWith("--") ? { error: msg.command.invalidArgs } : { focus: input };
 }
 
 /** 会话分支 entries（供证据组装）；本插件的卡与反馈消息不参与证据，避免自指。 */
@@ -914,12 +873,6 @@ function sessionEntries(rt: ReviewRuntime) {
 			(entry.customType !== CARD_TYPE && entry.customType !== FEEDBACK_TYPE &&
 				entry.customType !== SUMMARY_REQUEST_TYPE),
 	);
-}
-
-function scopeText(language: Language) {
-	return language === "en"
-		? "Delivery quality of the current task in this conversation. The first user message is the original-request anchor; later user messages may override, narrow, or correct it."
-		: "当前会话当前任务的交付质量。首条用户消息是原始需求锚点；后续用户消息可能覆盖、缩小或修正，以后者为准。";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -9,8 +9,8 @@
  * 无结果的调用不标——把压缩/中止场景的真实编辑误标未完成，会反向把归因弱化成假 PASS。
  * toolResult 正文仍跳过（输出体积大且非一手证据——审查者应自行重跑验证命令）。
  */
-import type { Language } from "../config.js";
 import { textOf } from "../format.js";
+import { msg } from "./messages.js";
 
 export const DEFAULT_EVIDENCE_TOKENS = 24_000;
 /** 单条消息渲染上限，防单条超长消息撑爆预算。 */
@@ -23,7 +23,6 @@ export interface Evidence {
 }
 
 interface Render {
-	language: Language;
 	/** 会话文件：截断标记据此告诉审查者完整原文在哪里。内存会话没有。 */
 	sessionFile?: string;
 	failedCalls: ReadonlySet<string>;
@@ -31,10 +30,9 @@ interface Render {
 
 export function buildEvidence(
 	entries: readonly unknown[],
-	language: Language,
 	{ budgetTokens = DEFAULT_EVIDENCE_TOKENS, sessionFile }: { budgetTokens?: number; sessionFile?: string } = {},
 ): Evidence {
-	const render: Render = { language, ...(sessionFile ? { sessionFile } : {}), failedCalls: collectFailedCalls(entries) };
+	const render: Render = { ...(sessionFile ? { sessionFile } : {}), failedCalls: collectFailedCalls(entries) };
 	const blocks = entries.flatMap((entry) => renderEntry(entry, render));
 	if (blocks.length === 0) return { text: "", omitted: 0 };
 	// 锚点必须是首条用户消息（原始需求）：它之前可能排着其他扩展的可显示消息，
@@ -62,14 +60,8 @@ export function buildEvidence(
 	const text =
 		recent.length === 0
 			? anchor.text
-			: `${anchor.text}\n\n${omitted > 0 ? gapLabel(omitted, language) : ""}${recent.join("\n\n")}`;
+			: `${anchor.text}\n\n${omitted > 0 ? `${msg.evidence.gap(omitted)}\n\n` : ""}${recent.join("\n\n")}`;
 	return { text, omitted };
-}
-
-function gapLabel(omitted: number, language: Language) {
-	return language === "en"
-		? `[${omitted} intermediate message(s) omitted under the evidence budget]\n\n`
-		: `[证据预算省略了 ${omitted} 条中间消息]\n\n`;
 }
 
 type EvidenceBlock = { text: string; role?: "user" };
@@ -87,7 +79,6 @@ function collectFailedCalls(entries: readonly unknown[]): ReadonlySet<string> {
 }
 
 function renderEntry(entry: unknown, render: Render): EvidenceBlock[] {
-	const { language } = render;
 	if (!isRecord(entry)) return [];
 	switch (entry.type) {
 		case "message": {
@@ -96,49 +87,29 @@ function renderEntry(entry: unknown, render: Render): EvidenceBlock[] {
 			if (message.role === "user")
 				return [
 					{
-						text: `## ${userLabel(language)}\n${clip(textOf(message.content), render)}`,
+						text: `## ${msg.evidence.user}\n${clip(textOf(message.content), render)}`,
 						role: "user" as const,
 					},
 				];
 			if (message.role === "assistant")
-				return [{ text: `## ${assistantLabel(language)}\n${assistantBody(message.content, render)}` }];
+				return [{ text: `## ${msg.evidence.assistant}\n${assistantBody(message.content, render)}` }];
 			return [];
 		}
 		case "custom_message": {
 			if (entry.display !== true) return [];
-			return [{ text: `## ${customLabel(language, String(entry.customType ?? ""))}\n${clip(textOf(entry.content), render)}` }];
+			return [{ text: `## ${msg.evidence.custom(String(entry.customType ?? ""))}\n${clip(textOf(entry.content), render)}` }];
 		}
 		case "compaction":
 			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${summaryLabel(language)}\n${clip(entry.summary, render)}` }]
+				? [{ text: `## ${msg.evidence.compaction}\n${clip(entry.summary, render)}` }]
 				: [];
 		case "branch_summary":
 			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${branchSummaryLabel(language)}\n${clip(entry.summary, render)}` }]
+				? [{ text: `## ${msg.evidence.branchSummary}\n${clip(entry.summary, render)}` }]
 				: [];
 		default:
 			return [];
 	}
-}
-
-function userLabel(language: Language) {
-	return language === "en" ? "User" : "用户";
-}
-
-function assistantLabel(language: Language) {
-	return language === "en" ? "Assistant" : "助手";
-}
-
-function customLabel(language: Language, customType: string) {
-	return language === "en" ? `Message (${customType})` : `消息（${customType}）`;
-}
-
-function summaryLabel(language: Language) {
-	return language === "en" ? "History summary (compacted)" : "历史摘要（已压缩）";
-}
-
-function branchSummaryLabel(language: Language) {
-	return language === "en" ? "Branch summary" : "分支摘要";
 }
 
 /** assistant 正文 = 文本段 + 工具调用轨迹；纯工具回合也因此留下编辑记录。 */
@@ -154,7 +125,7 @@ function assistantBody(content: unknown, render: Render): string {
 }
 
 function toolCallLine(part: Record<string, unknown> | undefined, render: Render): string {
-	const { language, failedCalls } = render;
+	const { failedCalls } = render;
 	if (part?.type !== "toolCall" || typeof part.name !== "string" || !part.name) return "";
 	const args = asRecord(part.arguments);
 	const target =
@@ -164,24 +135,17 @@ function toolCallLine(part: Record<string, unknown> | undefined, render: Render)
 				? args.command
 				: "";
 	const failed =
-		typeof part.id === "string" && failedCalls.has(part.id)
-			? language === "en"
-				? " (failed)"
-				: "（失败）"
-			: "";
+		typeof part.id === "string" && failedCalls.has(part.id) ? msg.evidence.failedCall : "";
 	return `${`[${part.name}] ${clipLine(target, render)}`.trimEnd()}${failed}`;
 }
 
 /** 单行轨迹上限：防超长 bash 命令撑大证据块；路径不受影响。 */
 const TOOL_LINE_MAX_CHARS = 200;
 
-function clipLine(text: string, { language, sessionFile }: Render) {
+function clipLine(text: string, { sessionFile }: Render) {
 	const single = text.replace(/\s+/gu, " ").trim();
 	if (single.length <= TOOL_LINE_MAX_CHARS) return single;
-	const where = sessionFile ?? (language === "en" ? "the session file" : "会话文件");
-	const note = language === "en"
-		? `…[truncated, ${single.length} chars; full original in ${where}]`
-		: `…[截断，原文 ${single.length} 字，完整原文在 ${where}]`;
+	const note = msg.evidence.lineTruncated(single.length, sessionFile ?? msg.evidence.sessionFile);
 	return `${single.slice(0, TOOL_LINE_MAX_CHARS)}${note}`;
 }
 
@@ -189,12 +153,9 @@ function clipLine(text: string, { language, sessionFile }: Render) {
  * 截断处必须写明是证据组装的截断：裸省略号会被审查者当成回复本身没写完（长交付物曾因此连判 FAIL）。
  * 完整原文在会话文件里，审查者能用 read 自行核对。
  */
-function clip(text: string, { language, sessionFile }: Render) {
+function clip(text: string, { sessionFile }: Render) {
 	if (text.length <= MESSAGE_MAX_CHARS) return text.trim();
-	const where = sessionFile ?? (language === "en" ? "the session file" : "会话文件");
-	const note = language === "en"
-		? `[evidence truncated: this message has ${text.length} characters, only the first ${MESSAGE_MAX_CHARS} are shown; the full original is in ${where} — read it if you need to verify]`
-		: `[证据截断：本条消息原文 ${text.length} 字，此处只给出前 ${MESSAGE_MAX_CHARS} 字；完整原文在 ${where}，需要核对时用 read 查看]`;
+	const note = msg.evidence.messageTruncated(text.length, MESSAGE_MAX_CHARS, sessionFile ?? msg.evidence.sessionFile);
 	return `${text.slice(0, MESSAGE_MAX_CHARS).trim()}\n${note}`;
 }
 

@@ -7,11 +7,12 @@
 | `presets.ts` | 预设切换：模型原子、工具集、附加指令；生效中的预设名以 `preset` 状态键发布（accent 色名字，不带图标），输入框下边框显示；只有改了工具集或附加指令（边框看不见的改动）的预设才发布，只改模型与思考档的不发布 |
 | `herdr-projection.ts` | 会话在 herdr 里的投影：agent 副标题与 `$session` token、working/idle 状态、恢复命令、退出 release |
 | `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
+| `messages.ts` | 本目录全部用户可见文案（预设、额度、统计、herdr 侧边栏标签），机制见根 AGENTS.md「文案」 |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 
 预设状态在每次变化时写进当前分支（清除记 null），重开会话或切分支按该分支最后一条记录判定：
 宿主恢复的模型仍是预设的才生效，否则预设失效、清掉名字与指令并记入会话；切到另一个预设不算失效。
-`/preset （无）` 与选择器里的“（无）”同为清除。调 Pi 接口前才把模型原子的 provider 与模型名拆开。
+`/preset` 带清除项文案（`messages.ts` 的 `presets.clearItem`，中文“（无）”、英文“(none)”）与选择器里的清除项同为清除。调 Pi 接口前才把模型原子的 provider 与模型名拆开。
 
 ## quota
 

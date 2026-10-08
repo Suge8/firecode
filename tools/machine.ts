@@ -3,6 +3,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type EnvelopeTag, parseEnvelopes } from "../deliver.js";
 import { clip, firstSentence } from "../format.js";
 import { msg } from "../messages.js";
+import { termPattern } from "../review/messages.js";
 import { CHAT_GUTTER } from "./line.js";
 
 export interface MachineEntry {
@@ -27,11 +28,17 @@ const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$
 const RUN_TIME = new RegExp(`^${escape(msg.envelope.elapsed + msg.envelope.thisRun)} (\\S+)`, "mu");
 /** 审查卡生产端（review/card.ts）在 details.tone 里声明的失败色。 */
 const ALARM_TONES = new Set(["warning", "error"]);
-/** 审查卡正文里的发现标题（“## 发现 1：…”）与原因行（“原因：…”）。 */
-const FINDING = /^#{1,6}\s*(?:发现|Finding)\s*[^：:]*[：:]\s*(.+)$/mu;
-const REASON = /^(?:原因|Reason)[：:]\s*(.+)$/mu;
-/** 审查卡里不是结论的行：模型分节、模型清单、卡点、分隔线与用时脚注。 */
-const REVIEW_NOISE = /^(?:\*\*(?:模型|Model)[ ·].*\*\*|(?:模型|Models)[：:].*|(?:卡点|Blocker)[：:].*|---|(?:用时|Elapsed)[：:].*)$/u;
+/**
+ * 审查卡正文里的发现标题（“## 发现 1：…”）与原因行（“原因：…”），以及不是结论的行：模型分节、模型清单、卡点、分隔线与用时脚注。
+ * 字段名取自 review/messages.ts 的 terms（生产端同源），两种语言都认：会话历史可能跨语言，
+ * 只认当前语言会让切换语言前的旧卡片预览退化成第一句非结论正文。
+ */
+const FINDING = new RegExp(`^#{1,6}\\s*${termPattern((terms) => terms.finding)}\\s*[^：:]*[：:]\\s*(.+)$`, "mu");
+const REASON = new RegExp(`^${termPattern((terms) => terms.reason)}[：:]\\s*(.+)$`, "mu");
+const REVIEW_NOISE = new RegExp(
+	`^(?:\\*\\*${termPattern((terms) => terms.model)}[ ·].*\\*\\*|${termPattern((terms) => terms.models)}[：:].*|${termPattern((terms) => terms.blocker)}[：:].*|---|${termPattern((terms) => terms.elapsed)}[：:].*)$`,
+	"u",
+);
 
 /** review/state.ts 多审查者通过汇总的一行：“• 模型短名：结论”。 */
 const MODEL_BULLET = /^•\s*[^\s：:]+[：:]\s*/u;

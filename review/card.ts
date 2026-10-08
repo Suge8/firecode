@@ -10,9 +10,9 @@
  */
 import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type { Language } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import { formatDuration } from "../format.js";
+import { msg, REDUNDANT_VERDICT_LINES, termPattern } from "./messages.js";
 import type { CardData, StopReason } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
@@ -150,149 +150,112 @@ function plainPart(part: unknown): string {
 
 // ---- 卡构建：content 给 LLM（纯文本事实），details 给渲染（本地化成品行）----
 
-export function buildCard(card: CardData, language: Language): BuiltCard {
+export function buildCard(card: CardData): BuiltCard {
 	switch (card.kind) {
 		case "start":
-			return started(card, language);
+			return started(card);
 		case "pass":
-			return passed(card, language);
+			return passed(card);
 		case "fail":
-			return failed(card, language);
+			return failed(card);
 		case "stop":
-			return stopped(card, language);
+			return stopped(card);
 		case "cancel":
-			return cancelled(card, language);
+			return cancelled(card);
 		case "timeout":
-			return timedOut(card, language);
+			return timedOut(card);
 		case "error":
-			return errored(card, language);
+			return errored(card);
 		case "advisor":
-			return advisorCard(card, language);
+			return advisorCard(card);
 	}
 }
 
 // "queued" 仍留在 CARD_KINDS：旧会话的排队卡 reload 时要能继续按卡渲染，只是不再新发。
 
-function started(card: Extract<CardData, { kind: "start" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Review started" : "审查开始";
-	const lines = [
-		language === "en"
-			? `Models: ${card.models.map(shortModel).join(", ")}`
-			: `模型：${card.models.map(shortModel).join("、")}`,
-	];
-	return spec("start", title, lines, "neutral");
+function started(card: Extract<CardData, { kind: "start" }>): BuiltCard {
+	return spec("start", msg.card.started, [msg.card.startedModels(card.models.map(shortModel))], "neutral");
 }
 
 function shortModel(model: string) {
 	return model.split("/").at(-1) || model;
 }
 
-function passed(card: Extract<CardData, { kind: "pass" }>, language: Language): BuiltCard {
-	const title = qualityTitle(card.round, language === "en" ? "Review passed" : "审查通过", language);
+function passed(card: Extract<CardData, { kind: "pass" }>): BuiltCard {
+	const title = qualityTitle(card.round, msg.card.passed);
 	const lines = withFooter(formatReviewResultLines(card.summary), [
-		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1, language),
+		elapsedLine(card.elapsedMs, card.totalElapsedMs, card.round > 1),
 	]);
 	return spec("pass", title, lines, "success");
 }
 
-function failed(card: Extract<CardData, { kind: "fail" }>, language: Language): BuiltCard {
-	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
+function failed(card: Extract<CardData, { kind: "fail" }>): BuiltCard {
+	const title = qualityTitle(card.round, msg.card.failed);
 	const footer = [
-		...(card.advisor?.advice
-			? [language === "en" ? "Advisor note" : "顾问建议", ...adviceLines(card.advisor.advice)]
-			: []),
-		...(card.elapsedMs === undefined
-			? []
-			: [elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)]),
+		...(card.advisor?.advice ? [msg.card.advisorNote, ...adviceLines(card.advisor.advice)] : []),
+		...(card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, card.totalElapsedMs, false)]),
 	];
-	return spec(
-		"fail",
-		title,
-		withFooter(formatReviewResultLines(card.details), footer),
-		"warning",
-	);
+	return spec("fail", title, withFooter(formatReviewResultLines(card.details), footer), "warning");
 }
 
-function stopped(card: Extract<CardData, { kind: "stop" }>, language: Language): BuiltCard {
-	const footer = card.elapsedMs === undefined
-		? []
-		: [elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)];
+function stopped(card: Extract<CardData, { kind: "stop" }>): BuiltCard {
+	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, card.totalElapsedMs, false)];
 	if (card.reason === "advisor") {
-		const title = qualityTitle(
-			card.round,
-			language === "en" ? "Review stopped by advisor" : "审查已由顾问终止",
-			language,
-		);
-		const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
+		const title = qualityTitle(card.round, msg.card.stoppedByAdvisor);
+		const body = [advisorModelLine(card.advisorModel), "", ...adviceLines(card.advisor.advice)];
 		return spec("stop", title, withFooter(body, footer), "warning");
 	}
-	const title = qualityTitle(card.round, language === "en" ? "Review failed" : "审查未通过", language);
-	const body = formatReviewResultLines(card.details || stopReason(card.reason, language));
+	const title = qualityTitle(card.round, msg.card.failed);
+	const body = formatReviewResultLines(card.details || stopReason(card.reason));
 	return spec("stop", title, withFooter(body, footer), "warning");
 }
 
-function cancelled(card: Extract<CardData, { kind: "cancel" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Review cancelled" : "审查已取消";
-	return spec("cancel", title, [reasonText(card.reason, language)], "neutral");
+function cancelled(card: Extract<CardData, { kind: "cancel" }>): BuiltCard {
+	return spec("cancel", msg.card.cancelled, [reasonText(card.reason)], "neutral");
 }
 
-function timedOut(_card: Extract<CardData, { kind: "timeout" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Review incomplete" : "审查未完成";
-	const lines = [
-		language === "en" ? "Blocker: review timed out" : "卡点：审查超时",
-		language === "en" ? "Reason: overall time limit exceeded" : "原因：超过总体时限",
-	];
-	return spec("timeout", title, lines, "warning");
+function timedOut(_card: Extract<CardData, { kind: "timeout" }>): BuiltCard {
+	return spec("timeout", msg.card.incomplete, [msg.card.timeoutBlocker, msg.card.timeoutReason], "warning");
 }
 
 /** 终止原因的展示文案（reducer 只出枚举，这里本地化）。 */
-function reasonText(reason: StopReason, language: Language) {
-	if (reason === "user")
-		return language === "en" ? "Stopped by user" : "已按你的操作停止";
-	if (reason === "shutdown")
-		return language === "en" ? "Stopped when the session closed" : "会话关闭时停止";
-	return language === "en" ? "Stopped" : "已停止";
+function reasonText(reason: StopReason) {
+	if (reason === "user") return msg.card.stoppedBy.user;
+	if (reason === "shutdown") return msg.card.stoppedBy.shutdown;
+	return msg.card.stoppedBy.other;
 }
 
-function stopReason(reason: StopReason, language: Language) {
-	if (reason === "advisor")
-		return language === "en" ? "Advisor recommends stopping" : "顾问建议停止";
-	if (reason === "max_rounds")
-		return language === "en" ? "Maximum review rounds reached" : "已达到最大审查轮数";
-	return reasonText(reason, language);
+function stopReason(reason: StopReason) {
+	if (reason === "advisor") return msg.card.stopReason.advisor;
+	if (reason === "max_rounds") return msg.card.stopReason.maxRounds;
+	return reasonText(reason);
 }
 
-function errored(card: Extract<CardData, { kind: "error" }>, language: Language): BuiltCard {
-	const title = language === "en" ? "Review incomplete" : "审查未完成";
+function errored(card: Extract<CardData, { kind: "error" }>): BuiltCard {
 	const lines = [
-		language === "en" ? "Blocker: review did not complete" : "卡点：审查未完成",
-		language === "en" ? `Reason: ${card.message}` : `原因：${card.message}`,
-		...(card.elapsedMs === undefined
-			? []
-			: ["", elapsedLine(card.elapsedMs, card.totalElapsedMs, false, language)]),
+		msg.card.errorBlocker,
+		msg.card.errorReason(card.message),
+		...(card.elapsedMs === undefined ? [] : ["", elapsedLine(card.elapsedMs, card.totalElapsedMs, false)]),
 	];
-	return spec("error", title, lines, "warning");
+	return spec("error", msg.card.incomplete, lines, "warning");
 }
 
 /** 顾问卡与审查结果卡同构：裁决进标题，正文用粗体模型分节行开头。 */
-function advisorCard(card: Extract<CardData, { kind: "advisor" }>, language: Language): BuiltCard {
-	const decision = decisionText(card.advisor.verdict, language);
-	const title = language === "en" ? `Advisor guidance · ${decision}` : `顾问指引 · ${decision}`;
-	const body = [advisorModelLine(card.advisorModel, language), "", ...adviceLines(card.advisor.advice)];
-	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false, language)];
+function advisorCard(card: Extract<CardData, { kind: "advisor" }>): BuiltCard {
+	const title = msg.card.advisorGuidance(decisionText(card.advisor.verdict));
+	const body = [advisorModelLine(card.advisorModel), "", ...adviceLines(card.advisor.advice)];
+	const footer = card.elapsedMs === undefined ? [] : [elapsedLine(card.elapsedMs, undefined, false)];
 	return spec("advisor", title, withFooter(body, footer), "neutral");
 }
 
 /** 裁决词→人话文案的唯一映射：卡标题与审查活动行共用，防两处文案漂移。 */
-export function decisionText(verdict: "continue" | "narrow" | "stop", language: Language) {
-	return language === "en"
-		? { continue: "Continue fixing", narrow: "Narrow scope", stop: "Stop fixing" }[verdict]
-		: { continue: "继续修复", narrow: "收窄范围", stop: "停止修复" }[verdict];
+export function decisionText(verdict: "continue" | "narrow" | "stop") {
+	return msg.card.decision[verdict];
 }
 
 /** 与审查结果卡的「**模型 N · xxx**」分节行同款式。 */
-function advisorModelLine(model: string, language: Language) {
-	return `**${language === "en" ? "Model" : "模型"} · ${shortModel(model)}**`;
+function advisorModelLine(model: string) {
+	return msg.card.modelLine(shortModel(model));
 }
 
 /** 顾问建议排版：粗体段标题前补空行——Markdown 把单换行折进同段，不补行三段会糊成一块。 */
@@ -306,9 +269,8 @@ function adviceLines(advice: string) {
 	return output;
 }
 
-function qualityTitle(round: number, title: string, language: Language) {
-	if (round <= 1) return title;
-	return language === "en" ? `Round ${round} ${title}` : `第 ${round} 轮${title}`;
+function qualityTitle(round: number, title: string) {
+	return round <= 1 ? title : msg.card.round(round, title);
 }
 
 function withFooter(lines: string[], footer: string[]) {
@@ -316,17 +278,13 @@ function withFooter(lines: string[], footer: string[]) {
 	return [...lines, ...(lines.length > 0 ? ["", "---", ""] : []), ...footer];
 }
 
-function elapsedLine(
-	ms: number,
-	totalMs: number | undefined,
-	showTotal: boolean,
-	language: Language,
-) {
-	const elapsed = showTotal && totalMs !== undefined
-		? `${formatDuration(ms)} / ${language === "en" ? "total" : "总"} ${formatDuration(totalMs)}`
-		: formatDuration(ms);
-	return language === "en" ? `Elapsed: ${elapsed}` : `用时：${elapsed}`;
+function elapsedLine(ms: number, totalMs: number | undefined, showTotal: boolean) {
+	return msg.card.elapsed(formatDuration(ms), showTotal && totalMs !== undefined ? formatDuration(totalMs) : undefined);
 }
+
+/** 模型分节行（“模型 1 · xxx”）与证据行的识别：字段名两种语言都认。 */
+const MODEL_SECTION = new RegExp(String.raw`^${termPattern((terms) => terms.model)}\s+\d+\s+·\s+`, "iu");
+const EVIDENCE_LABEL = new RegExp(String.raw`^[-*+]?\s*(?:\*\*)?${termPattern((terms) => terms.field.evidence)}(?:\*\*)?\s*[:：]`, "u");
 
 function formatReviewResultLines(review: string) {
 	const lines = review.split(/\r?\n/u);
@@ -334,7 +292,7 @@ function formatReviewResultLines(review: string) {
 	const preface: string[] = [];
 	let current: { title: string; body: string[] } | undefined;
 	for (const line of lines) {
-		if (/^(?:模型|Model)\s+\d+\s+·\s+/iu.test(line.trim())) {
+		if (MODEL_SECTION.test(line.trim())) {
 			if (current) sections.push(current);
 			current = { title: line.trim(), body: [] };
 		} else if (current) current.body.push(line);
@@ -358,13 +316,13 @@ function normalizedReviewLines(review: string) {
 	const lines = review
 		.split(/\r?\n/u)
 		.map((line) => line.trimEnd())
-		.filter((line) => !REDUNDANT_REVIEW_LINES.has(line.trim()));
+		.filter((line) => !REDUNDANT_VERDICT_LINES.has(line.trim()));
 	const output: string[] = [];
 	for (const line of lines) {
 		if (line.trim() === "" && (output.length === 0 || output.at(-1) === "")) continue;
 		// 证据/验证命令是取证区：与上面的结论区空一行分隔，密集长行不再糊成一片。
 		if (
-			/^[-*+]?\s*(?:\*\*)?(?:证据|Evidence)(?:\*\*)?\s*[:：]/u.test(line.trim()) &&
+			EVIDENCE_LABEL.test(line.trim()) &&
 			output.length > 0 &&
 			output.at(-1) !== ""
 		) output.push("");
@@ -373,17 +331,6 @@ function normalizedReviewLines(review: string) {
 	while (output.at(-1) === "") output.pop();
 	return output;
 }
-
-const REDUNDANT_REVIEW_LINES = new Set([
-	"PASS",
-	"FAIL",
-	"通过",
-	"未通过",
-	"审查通过",
-	"审查未通过",
-	"Review passed",
-	"Review failed",
-]);
 
 function spec(
 	kind: CardData["kind"],
