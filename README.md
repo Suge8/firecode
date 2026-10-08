@@ -35,11 +35,17 @@ Restart Pi (1.1.0 or newer). The template is the maintainer's full setup — swa
 
 **Review that closes the loop.** `/fire-review` runs several models in parallel against your change. Any FAIL goes straight back to the agent to fix, the next round only re-checks what was flagged, an advisor model steps in after repeated failures to continue, narrow, or stop, and a hard round limit keeps it bounded. Progress is checkpointed into the session, so a reload resumes the review instead of losing it.
 
+<p align="center"><img alt="A /fire-review result card" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-review.png" width="720"></p>
+
 **Sub-agents that don't get lost.** The commander (`/fire-master`) hands work to role-based sub-agents — each role picks its own model and thinking level, plus a fallback chain that takes over in the same session when a provider fails. Results are written to the session before delivery and re-delivered after a reload. Every sub-agent is listed above the input box; click one to read its full transcript and talk to it directly.
+
+<p align="center"><img alt="Three sub-agents running above the input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-subagents.png" width="720"></p>
 
 **Light by design.** Delegation is two tools whose definitions total 926 characters. Sub-agents run in-process as Pi SDK sessions — no daemons, no orphans when Pi exits. The npm package is a single 121 kB bundle.
 
 **A calm terminal.** Status lives in the input box border. Each request folds into one summary line — duration, speed, the last few interim replies — followed by the final answer. Click a summary or press `Ctrl+O` for every tool call.
+
+<p align="center"><img alt="A finished request folded into one summary line" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-fold.png" width="720"></p>
 
 ## How it compares
 

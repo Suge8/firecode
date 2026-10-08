@@ -35,11 +35,17 @@ curl -fsSL https://unpkg.com/pi-firecode/config.example.jsonc -o "$agent_dir/ext
 
 **审查会自己闭环。** `/fire-review` 让多个模型并行审查你的改动。有 FAIL 就把问题直接交回给代理修，下一轮只复查上一轮指出的问题；连续不过时由顾问模型裁决是继续、收窄还是叫停；轮数有硬上限。进度写进会话，重载后接着审，不会丢。
 
+<p align="center"><img alt="/fire-review 审查结果卡" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-review.png" width="720"></p>
+
 **子代理不会丢。** 指挥官（`/fire-master`）按角色派活：每个角色有自己的模型和思考档，还有一条备用模型链，某家供应商出故障时在同一个会话里接着跑。结果先写进会话再投递，重载后重投。每个子代理都列在输入框上方，点一下就能看它的全过程，并直接跟它说话。
+
+<p align="center"><img alt="输入框上方三个子代理在跑" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-subagents.png" width="720"></p>
 
 **轻。** 委派只有两个工具，工具定义合计 926 字符。子代理是进程内的 Pi 会话，没有后台进程，Pi 退出不留孤儿。npm 包是一个 121 kB 的单文件。
 
 **终端里安静。** 状态嵌在输入框边框里。每次请求折成一行摘要（耗时、均速、最近几条中间回复），下面是最终回复；点摘要或按 `Ctrl+O` 看全部工具调用。
+
+<p align="center"><img alt="一次请求折成一行摘要" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-fold.png" width="720"></p>
 
 ## 和同类工具对比
 
