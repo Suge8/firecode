@@ -60,8 +60,10 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {
-		if (seeding && ctx.hasUI) {
-			ctx.ui.notify(seeding.message, seeding.level);
+		if (seeding) {
+			// 无界面（print 等）时成功提示无处可显示，但失败必须到 stderr，不能静默。
+			if (ctx.hasUI) ctx.ui.notify(seeding.message, seeding.level);
+			else if (seeding.level === "error") console.error(seeding.message);
 			seeding = undefined;
 		}
 		if (problems.length) ctx.ui.notify(`FireCode 配置有问题：${problems.join("；")}`, "warning");
