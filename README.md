@@ -1,60 +1,90 @@
-# FireCode
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Suge8/firecode/main/design/brand/logo-dark.svg">
+    <img alt="firecode" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/brand/logo-light.svg" height="72">
+  </picture>
+</p>
 
-FireCode 是一个 Pi 扩展包：把会话状态嵌进输入框边框、把每轮过程折叠成一行摘要，并提供对抗审查、多子代理指挥与观察员。各功能独立开关，关掉任一个不影响其余。
+<p align="center">
+  Multi-agent orchestration and adversarial code review for <a href="https://pi.dev">Pi</a> — light, persistent, and calm in the terminal.
+</p>
 
-```text
-─ ⣾⣿⣷ 处理中 1m3s · ⠹ 审查 第2轮 1/3 · 1 阻断 ──────────── 观察员 指挥官 ─
- 输入区
-─ 优化插件状态栏和工具展示 ───────────── gpt-6-astra/medium Fast · 42.3%/200k ─
-```
+<p align="center">
+  <a href="https://www.npmjs.com/package/pi-firecode"><img alt="npm" src="https://img.shields.io/npm/v/pi-firecode?color=FF7A0F"></a>
+  <a href="https://github.com/Suge8/firecode/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Suge8/firecode/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  · <a href="README.zh-CN.md">中文</a>
+</p>
 
-## 安装
+<p align="center">
+  <img alt="FireCode dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860">
+</p>
+
+## Quick start
 
 ```bash
 pi install npm:pi-firecode
-```
-
-需要 Pi 1.1.0 及以上，升级用 `pi update`。扩展拥有与 Pi 相同的本机权限，安装前请审阅源码。
-
-## 配置
-
-配置不随包生效。把推荐模板复制到 Pi Agent 目录，再重启 Pi：
-
-```bash
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 mkdir -p "$agent_dir/extensions/firecode"
 curl -fsSL https://unpkg.com/pi-firecode/config.example.jsonc -o "$agent_dir/extensions/firecode/config.jsonc"
 ```
 
-- 模板里的模型一律写成 `"provider/model/thinking"`，换成你已登录的模型。
-- 审查、指挥官、观察员会真实调用配置里的模型；某一节配错时该功能拒绝启动并提示，不会改用默认模型。
-- 会额外花钱的：观察员每回合调用一次模型（模板里默认不自动开启）；OpenAI 加速档按供应商规则加价。
-- 没有配置文件时，可选功能全部关闭，并在会话启动时提示。
+Restart Pi (1.1.0 or newer). The template is the maintainer's full setup — swap every `"provider/model/thinking"` atom for models you are logged in to. Upgrade later with `pi update`.
 
-## 功能
+## Why FireCode
 
-| 功能 | 入口 | 做什么 |
+**Review that closes the loop.** `/fire-review` runs several models in parallel against your change. Any FAIL goes straight back to the agent to fix, the next round only re-checks what was flagged, an advisor model steps in after repeated failures to continue, narrow, or stop, and a hard round limit keeps it bounded. Progress is checkpointed into the session, so a reload resumes the review instead of losing it.
+
+<p align="center"><img alt="A /fire-review result card" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-review.png" width="720"></p>
+
+**Sub-agents that don't get lost.** The commander (`/fire-master`) hands work to role-based sub-agents — each role picks its own model and thinking level, plus a fallback chain that takes over in the same session when a provider fails. Results are written to the session before delivery and re-delivered after a reload. Every sub-agent is listed above the input box; click one to read its full transcript and talk to it directly.
+
+<p align="center"><img alt="Three sub-agents running above the input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-subagents.png" width="720"></p>
+
+**Light by design.** Delegation is two tools whose definitions total 926 characters. Sub-agents run in-process as Pi SDK sessions — no daemons, no orphans when Pi exits. The npm package is a single 121 kB bundle.
+
+**A calm terminal.** Status lives in the input box border. Each request folds into one summary line — duration, speed, the last few interim replies — followed by the final answer. Click a summary or press `Ctrl+O` for every tool call.
+
+<p align="center"><img alt="A finished request folded into one summary line" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-fold.png" width="720"></p>
+
+## How it compares
+
+Checked against public docs and source in October 2026.
+
+| | FireCode | Claude Code | Codex CLI | omp | pi-subagents |
+| --- | --- | --- | --- | --- | --- |
+| Review → fix → re-review loop | Multi-model, advisor, round limit | One pass (`--fix` applies once) | Single reviewer, no fixes | Parallel reviewers, no fix loop | Prompt template, up to 3 rounds |
+| Fallback model chain for sub-agents | Yes | Yes | Not found | Yes | No |
+| Sub-agent results after a reload | Persisted and re-delivered | Transcripts persist | Resumable, best-effort delivery | Revivable, undelivered results dropped | Background runs keep going |
+| Read and steer each sub-agent | Yes | Yes | Yes | Yes | Yes |
+| Delegation tool definitions | 926 chars | — | — | 3,140 chars | — |
+
+## Features
+
+| Feature | Entry | What it does |
 | --- | --- | --- |
-| 输入框状态 | 自动 | 上边框显示进行状态、计时与审查进度，下边框显示会话标题、模型、思考档与上下文占用 |
-| 过程折叠 | 自动；点摘要或 `Ctrl+O` 展开 | 每次输入折成一轮：一行摘要（耗时、均速）、最近 3 条中间回复的首句、最终回复全文 |
-| 预设 | `/preset`、预设里配的快捷键 | 一键切换模型、思考档、工具集与附加指令 |
-| 对抗审查 | `/fire-review` | 多个模型并行审查改动；没过自动修复再审，连续失败请顾问模型裁决 |
-| 指挥官 | `/fire-master`（新会话默认开启） | 按角色表把工作派给子代理并行执行；输入框上方列出子代理，点一行看它的全过程并可直接补话 |
-| 观察员 | `/fire-watch` | 每回合结束后用便宜模型评估新增内容，跑偏或过度工程时插话 |
-| 用量 | `/quota`、`/tokens` | 查 Claude、Codex 订阅剩余额度；统计本地会话的 token 与成本 |
-| 会话名 | `/rename`、`Ctrl+R` | 改当前会话名 |
-| OpenAI 请求层 | `Ctrl+F` 切加速档 | 回答详略、加速档、可选的 OpenAI 原生上下文压缩 |
-| Claude 订阅适配 | 自动 | 请求带 Claude Code 归因；令牌换发导致的 401 自动重试一次 |
+| Commander | `/fire-master` (on by default) | Delegates to role-based sub-agents in parallel; live list above the input box |
+| Adversarial review | `/fire-review` | Multi-model review with automatic fix rounds and advisor arbitration |
+| Watcher | `/fire-watch` | A cheap model checks each turn and speaks up only when the work drifts |
+| Input-box status | automatic | Progress, timer, review rounds, title, model and context usage in the border |
+| Turn folding | automatic, `Ctrl+O` | One summary line per request, full detail on demand |
+| Presets | `/preset`, your key bindings | Switch model, thinking level, tools and extra instructions together |
+| Usage | `/quota`, `/tokens` | Claude and Codex subscription quota; local token and cost totals |
+| Claude subscription | automatic | Claude Code attribution; retries once on a 401 caused by token rotation |
+| OpenAI request layer | `Ctrl+F` | Verbosity, Fast mode, optional native context compaction |
 
-在配置的 `features` 里写 `false` 即可关闭对应功能，比如 `"features": { "watcher": false }`。
+Turn any feature off with `"features": { "<name>": false }` in the config. The UI text is in Chinese.
 
-## 开发
+## Development
 
-需要 [Bun](https://bun.sh/) 和一份 pi-mono 源码：开发版 `pi` 在 `PATH` 中时测试会自动定位它，否则把 `PI_PACKAGES_DIR` 设为 pi-mono 的 `packages/` 目录。
+Needs [Bun](https://bun.sh/) and a pi-mono checkout — see [CONTRIBUTING](.github/CONTRIBUTING.md).
 
 ```bash
-bun test   # 测试
-pi -e .    # 在本地仓库直接试用
+bun test
+bun run typecheck
+bun run build && pi -e .
 ```
 
-模块边界、状态机约束与术语见 `AGENTS.md`、各模块的 `AGENTS.md` 与 `WORDS.md`。
+Architecture, invariants and terms live in `AGENTS.md`, the per-module `AGENTS.md` files and `WORDS.md`.
+
+MIT © Suge8
