@@ -49,9 +49,9 @@ const ALL_TERMS: readonly Terms[] = [zhTerms, enTerms];
 
 const escapeRegExp = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
-/** 某个字段名在所有语言里的写法（外加调用方给的旧措辞）合成的正则片段。 */
-export function termPattern(pick: (terms: Terms) => string, ...extra: string[]): string {
-	return `(?:${[...ALL_TERMS.map(pick), ...extra].map(escapeRegExp).join("|")})`;
+/** 某个字段名在所有语言里的写法合成的正则片段。 */
+export function termPattern(pick: (terms: Terms) => string): string {
+	return `(?:${ALL_TERMS.map(pick).map(escapeRegExp).join("|")})`;
 }
 
 /** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题。 */

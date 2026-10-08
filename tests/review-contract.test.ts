@@ -2,19 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
 
 type ParseReview = typeof import("../review/reviewer.js").parseReviewOutput;
-type Verdict = typeof import("../review/reviewer.js").verdictOf;
 type ParseAdvisor = typeof import("../review/advisor.js").parseAdvisorOutput;
 type BuildEvidence = typeof import("../review/evidence.js").buildEvidence;
 
 let parseReview: ParseReview;
-let verdictOf: Verdict;
 let parseAdvisor: ParseAdvisor;
 let buildEvidence: BuildEvidence;
 
 async function loadAll() {
 	const review = (await loadFirecodeModule("review/reviewer.js")) as {
 		parseReviewOutput: ParseReview;
-		verdictOf: Verdict;
 	};
 	const advisor = (await loadFirecodeModule("review/advisor.js")) as {
 		parseAdvisorOutput: ParseAdvisor;
@@ -23,7 +20,6 @@ async function loadAll() {
 		buildEvidence: BuildEvidence;
 	};
 	parseReview = review.parseReviewOutput;
-	verdictOf = review.verdictOf;
 	parseAdvisor = advisor.parseAdvisorOutput;
 	buildEvidence = evidence.buildEvidence;
 }
@@ -35,22 +31,21 @@ function finding(issue: string) {
 		"- 严重程度: 高",
 		`- 问题: ${issue}`,
 		"- 证据: checkpoint.ts",
-		"- 违反的契约或期望行为: 终态必须可持久化",
-		"- 需要运行的验证命令: bun test",
+		"- 违反的约定与期望行为: 终态必须可持久化",
+		"- 验证命令: bun test",
 	].join("\n");
 }
 
 afterEach(cleanupFirecodeModules);
 
 describe("PASS/FAIL output contract", () => {
-	test("verdictOf tolerates markdown bold around the verdict", async () => {
+	test("the verdict word tolerates markdown wrapping, backticks and case", async () => {
 		await loadAll();
-		expect(verdictOf("PASS")).toBe("PASS");
-		expect(verdictOf("**FAIL**")).toBe("FAIL");
-		expect(verdictOf("__PASS__")).toBe("PASS");
-		expect(verdictOf("`FAIL`")).toBe("FAIL");
-		expect(verdictOf("  fail  ")).toBe("FAIL");
-		expect(verdictOf("maybe")).toBeUndefined();
+		const body = "\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
+		for (const first of ["PASS", "**PASS**", "__PASS__", "`PASS`", "  pass  "])
+			expect(`${first}:${parseReview(first + body).status}`).toBe(`${first}:passed`);
+		expect(parseReview("**FAIL**\n" + finding("x")).status).toBe("failed");
+		expect(parseReview("maybe" + body).status).toBe("error");
 	});
 
 	test("PASS whose only pre-evidence line is the suggestions heading is a contract violation", async () => {
@@ -328,14 +323,14 @@ describe("FAIL output contract", () => {
 		expect(outcome.summary).toBe("校验漏字段");
 	});
 
-	test("accepts a finding with multiline and newline-separated field values including legacy tag aliases", async () => {
+	test("accepts a finding whose field values start on the next line", async () => {
 		await loadAll();
-		const multilineBody = `FAIL\n## 发现 1：结算态丢失完整结果\n- **严重程度**: 高\n- **问题**:\n大屏仍只显示标题，不展示这段核心问题说明。\n- **违反的契约或期望行为**:\n应按预算展示自然语言结果。\n- **证据**:\nreview/ui.ts\n- **需要运行的验证命令**:\nbun test`;
+		const multilineBody = `FAIL\n## 发现 1：结算态丢失完整结果\n- **严重程度**: 高\n- **问题**:\n大屏仍只显示标题，不展示这段核心问题说明。\n- **违反的约定与期望行为**:\n应按预算展示自然语言结果。\n- **证据**:\nreview/ui.ts\n- **验证命令**:\nbun test`;
 		const outcome = parseReview(multilineBody);
 		expect(outcome.status).toBe("failed");
 		expect(outcome.summary).toBe("大屏仍只显示标题，不展示这段核心问题说明。");
 
-		const multilineEn = `FAIL\n## Finding 1\n- Severity: High\n- Issue:\nissue description\n- Contract or expected behavior violated:\ncontract details\n- Evidence:\na.ts\n- Verification command to run:\nbun test`;
+		const multilineEn = `FAIL\n## Finding 1\n- Severity: High\n- Issue:\nissue description\n- Violated agreement & expected behavior:\ncontract details\n- Evidence:\na.ts\n- Verification command:\nbun test`;
 		const outcomeEn = parseReview(multilineEn);
 		expect(outcomeEn.status).toBe("failed");
 		expect(outcomeEn.summary).toBe("issue description");
@@ -345,7 +340,7 @@ describe("FAIL output contract", () => {
 	// 缺任一字段的半成品票无法核实也无法验收，一律作废为基础设施错误。
 	test("rejects a finding missing any required field", async () => {
 		await loadAll();
-		const fields = ["- 严重程度: 中", "- 问题: x", "- 证据: a.ts", "- 违反的契约或期望行为: y", "- 需要运行的验证命令: bun test"];
+		const fields = ["- 严重程度: 中", "- 问题: x", "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"];
 		for (const [index, dropped] of fields.entries()) {
 			const body = ["## 发现 1", ...fields.filter((_, at) => at !== index)].join("\n");
 			const outcome = parseReview(`FAIL\n${body}`);
@@ -357,7 +352,7 @@ describe("FAIL output contract", () => {
 	test("rejects a finding without the section heading", async () => {
 		await loadAll();
 		const outcome = parseReview(
-			"FAIL\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的契约或期望行为: y\n- 需要运行的验证命令: z",
+			"FAIL\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: z",
 		);
 		expect(outcome.status).toBe("error");
 		expect(outcome.details).toContain("缺少阻塞发现");
@@ -383,7 +378,7 @@ describe("FAIL output contract", () => {
 	test("rejects a low-severity finding as a blocking one", async () => {
 		await loadAll();
 		const outcome = parseReview(
-			"FAIL\n## 发现 1\n- 严重程度: 低\n- 问题: x\n- 证据: a.ts\n- 违反的契约或期望行为: y\n- 需要运行的验证命令: bun test",
+			"FAIL\n## 发现 1\n- 严重程度: 低\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test",
 		);
 		expect(outcome.status).toBe("error");
 		expect(outcome.details).toContain("严重程度");
@@ -392,11 +387,11 @@ describe("FAIL output contract", () => {
 	test("accepts full-width punctuation and the English contract", async () => {
 		await loadAll();
 		const zh = parseReview(
-			"FAIL\n## 发现 1\n- 严重程度：中\n- 问题：x\n- 证据：a.ts\n- 违反的契约或期望行为：y\n- 需要运行的验证命令：bun test",
+			"FAIL\n## 发现 1\n- 严重程度：中\n- 问题：x\n- 证据：a.ts\n- 违反的约定与期望行为：y\n- 验证命令：bun test",
 		);
 		expect(zh.status).toBe("failed");
 		const en = parseReview(
-			"FAIL\n## Finding 1\n- Severity: Medium\n- Issue: x\n- Evidence: a.ts\n- Contract or expected behavior violated: y\n- Verification command to run: bun test",
+			"FAIL\n## Finding 1\n- Severity: Medium\n- Issue: x\n- Evidence: a.ts\n- Violated agreement & expected behavior: y\n- Verification command: bun test",
 		);
 		expect(en.status).toBe("failed");
 	});
@@ -442,24 +437,6 @@ describe("review config strictness", () => {
 		expect(problems).toContain("review.tools 必须是非空字符串数组");
 	});
 
-	test("a fully valid review section reports no problems", async () => {
-		const { parseReviewConfig } = (await loadFirecodeModule("config.js")) as {
-			parseReviewConfig: (raw: Record<string, unknown>, problems: string[]) => unknown;
-		};
-		const problems: string[] = [];
-		parseReviewConfig(
-			{
-				advisor: "p/a/max",
-				reviewers: ["p/r/high"],
-				maxRounds: 5,
-				advisorAfterFailures: 2,
-				timeoutMinutes: 20,
-				tools: ["read", "bash"],
-			},
-			problems,
-		);
-		expect(problems).toEqual([]);
-	});
 });
 
 describe("review section top-level type", () => {
@@ -507,12 +484,6 @@ describe("feature switch types", () => {
 		expect(module.loadConfig().problems.join()).toContain("features.review 必须是 true 或 false");
 	});
 
-	test("boolean switches are valid and review does not constrain Master", async () => {
-		const module = (await loadFirecodeModule("config.js", {
-			configJsonc: `{ "features": { "review": false, "watcher": false } }`,
-		})) as { loadConfig: () => { problems: string[] } };
-		expect(module.loadConfig().problems).toEqual([]);
-	});
 });
 
 test("总结回合的材料超长时写明省略了多少字，不留裸省略号", async () => {

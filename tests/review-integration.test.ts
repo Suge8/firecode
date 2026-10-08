@@ -154,8 +154,8 @@ const FAIL_VERDICT = [
 	"- 严重程度: 中",
 	"- 问题: x",
 	"- 证据: a.ts",
-	"- 违反的契约或期望行为: y",
-	"- 需要运行的验证命令: bun test",
+	"- 违反的约定与期望行为: y",
+	"- 验证命令: bun test",
 ].join("\n");
 
 async function loadSingleFailReview() {
