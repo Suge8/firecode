@@ -112,7 +112,7 @@ test("用户 esc 中断过的现场照常投递，投递选项不变", async () 
 test("fire-review 活跃期零评估，结束后合并补上", async () => {
 	const harness = await setup();
 	advise("两个回合一起看到的");
-	harness.pi.events.emit("herdr:blocked", { active: true });
+	harness.pi.events.emit("firecode:review", { active: true });
 	await harness.turnEnd(2, "审查中的改动");
 	await harness.turnEnd(3, "又一个回合");
 	await Bun.sleep(20);
@@ -120,7 +120,7 @@ test("fire-review 活跃期零评估，结束后合并补上", async () => {
 	expect(harness.messages).toEqual([]);
 
 	const delivered = harness.next();
-	harness.pi.events.emit("herdr:blocked", { active: false });
+	harness.pi.events.emit("firecode:review", { active: false });
 	await delivered;
 	expect(faux.getPendingResponseCount()).toBe(0);
 	expect(harness.notes()).toEqual([{ note: "两个回合一起看到的", turnIndex: 3 }]);
