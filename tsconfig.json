@@ -1,156 +1,31 @@
 {
+	"extends": "./.pi-mono/tsconfig.json",
 	"compilerOptions": {
-		"target": "ES2024",
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
-		"lib": [
-			"ES2024"
-		],
-		"strict": true,
-		"noEmit": true,
-		"verbatimModuleSyntax": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"allowImportingTsExtensions": true,
-		"resolveJsonModule": true,
-		"types": [
-			"node"
-		],
+		"erasableSyntaxOnly": false,
+		"declaration": false,
+		"declarationMap": false,
+		"sourceMap": false,
+		"inlineSources": false,
 		"typeRoots": [
 			"./.pi-mono/node_modules/@types"
-		],
-		"paths": {
-			"@earendil-works/chord": [
-				"./.pi-mono/packages/chord/src/index.ts"
-			],
-			"@earendil-works/chord/bundler": [
-				"./.pi-mono/packages/chord/src/bundler.ts"
-			],
-			"@earendil-works/chord/context": [
-				"./.pi-mono/packages/chord/src/context/index.ts"
-			],
-			"@earendil-works/chord/delta": [
-				"./.pi-mono/packages/chord/src/delta/index.ts"
-			],
-			"@earendil-works/chord/node": [
-				"./.pi-mono/packages/chord/src/node.ts"
-			],
-			"@earendil-works/pi-telemetry": [
-				"./.pi-mono/packages/telemetry/src/index.ts"
-			],
-			"@earendil-works/pi-telemetry/testing": [
-				"./.pi-mono/packages/telemetry/src/testing/index.ts"
-			],
-			"@earendil-works/pi-codemode": [
-				"./.pi-mono/packages/codemode/src/index.ts"
-			],
-			"@earendil-works/pi-codemode/declarations": [
-				"./.pi-mono/packages/codemode/src/declarations.ts"
-			],
-			"@earendil-works/pi-codemode/source": [
-				"./.pi-mono/packages/codemode/src/source.ts"
-			],
-			"@earendil-works/pi-codemode/worker": [
-				"./.pi-mono/packages/codemode/src/runtime/worker.ts"
-			],
-			"@earendil-works/pi-mcp": [
-				"./.pi-mono/packages/mcp/src/index.ts"
-			],
-			"@earendil-works/pi-mcp/oauth": [
-				"./.pi-mono/packages/mcp/src/oauth/index.ts"
-			],
-			"@earendil-works/pi-mcp/testing": [
-				"./.pi-mono/packages/mcp/src/testing/index.ts"
-			],
-			"@earendil-works/pi-ai": [
-				"./.pi-mono/packages/ai/src/index.ts"
-			],
-			"@earendil-works/pi-ai/oauth": [
-				"./.pi-mono/packages/ai/src/oauth.ts"
-			],
-			"@earendil-works/pi-ai/*": [
-				"./.pi-mono/packages/ai/src/*.ts",
-				"./.pi-mono/packages/ai/src/providers/*.ts"
-			],
-			"@earendil-works/pi-ai/dist/*": [
-				"./.pi-mono/packages/ai/src/*"
-			],
-			"@earendil-works/pi-durable": [
-				"./.pi-mono/packages/durable/src/index.ts"
-			],
-			"@earendil-works/pi-durable/testing": [
-				"./.pi-mono/packages/durable/src/testing/index.ts"
-			],
-			"@earendil-works/pi-durable/*": [
-				"./.pi-mono/packages/durable/src/*.ts",
-				"./.pi-mono/packages/durable/src/*/index.ts",
-				"./.pi-mono/packages/durable/src/*"
-			],
-			"@earendil-works/pi-env": [
-				"./.pi-mono/packages/env/src/index.ts"
-			],
-			"@earendil-works/pi-agent-core": [
-				"./.pi-mono/packages/agent/src/index.ts"
-			],
-			"@earendil-works/pi-coding-agent": [
-				"./.pi-mono/packages/coding-agent/src/index.ts"
-			],
-			"@earendil-works/pi-coding-agent/experimental/plugin": [
-				"./.pi-mono/packages/coding-agent/src/experimental/plugin.ts"
-			],
-			"@earendil-works/pi-coding-agent/hooks": [
-				"./.pi-mono/packages/coding-agent/src/core/hooks/index.ts"
-			],
-			"@earendil-works/pi-coding-agent/*": [
-				"./.pi-mono/packages/coding-agent/src/*"
-			],
-			"@earendil-works/pi-protocol": [
-				"./.pi-mono/packages/protocol/src/index.ts"
-			],
-			"@earendil-works/pi-protocol/*": [
-				"./.pi-mono/packages/protocol/src/*"
-			],
-			"@earendil-works/pi-client": [
-				"./.pi-mono/packages/client/src/index.ts"
-			],
-			"@earendil-works/pi-client/unix": [
-				"./.pi-mono/packages/client/src/unix.ts"
-			],
-			"@earendil-works/pi-client/*": [
-				"./.pi-mono/packages/client/src/*"
-			],
-			"@earendil-works/pi-server": [
-				"./.pi-mono/packages/server/src/index.ts"
-			],
-			"@earendil-works/pi-server/unix": [
-				"./.pi-mono/packages/server/src/transports/unix/index.ts"
-			],
-			"@earendil-works/pi-server/*": [
-				"./.pi-mono/packages/server/src/*"
-			],
-			"typebox": [
-				"./.pi-mono/node_modules/typebox"
-			],
-			"@earendil-works/pi-tui": [
-				"./.pi-mono/packages/tui/src/index.ts"
-			],
-			"@earendil-works/pi-tui/*": [
-				"./.pi-mono/packages/tui/src/*"
-			]
-		}
+		]
 	},
+	"files": [
+		".pi-mono/packages/coding-agent/src/utils/highlight-js.d.ts"
+	],
 	"include": [
 		"**/*.ts"
 	],
 	"exclude": [
 		"node_modules",
 		".pi-mono",
+		"dist",
+		"scripts",
 		"tests",
 		"evals",
 		"**/*.test.ts",
 		"provider/openai-native/test"
-	],
-	"files": [
-		".pi-mono/packages/coding-agent/src/utils/highlight-js.d.ts"
 	]
 }

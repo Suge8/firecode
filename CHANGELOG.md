@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Native Responses compaction no longer serializes mid-conversation system messages as tool results; they are skipped because the system prompt travels in `instructions`.
+- Native Responses compaction no longer serializes mid-conversation system messages as tool results. It now follows pi-ai's Responses conversion: dropped for models that fold them into the leading prompt, sent in place as a developer/system item for models that accept them.
 
 ## [1.0.0] - 2026-10-08
 

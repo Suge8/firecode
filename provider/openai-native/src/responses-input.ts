@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { renderSystemMessageUpdate } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type {
 	Api,
@@ -92,6 +93,15 @@ function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+function instructionRole(model: Model<Api>): "developer" | "system" {
+	const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
+	return model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
+}
+
+function supportsMidConvoSystemMessages(model: Model<Api>): boolean {
+	return (model.compat as { supportsMidConvoSystemMessages?: boolean } | undefined)?.supportsMidConvoSystemMessages === true;
+}
+
 export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 	model: Model<TApi>;
 	messages: AgentMessage[];
@@ -114,13 +124,25 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 
 	if (options.includeInstructionsInInput && options.instructions) {
 		input.push({
-			role: model.reasoning ? "developer" : "system",
+			role: instructionRole(model),
 			content: sanitizeSurrogates(options.instructions),
 		});
 	}
 
 	let messageIndex = 0;
-	for (const message of transformedMessages) {
+	for (const [sourceIndex, message] of transformedMessages.entries()) {
+		if (message.role === "system") {
+			// 与宿主 convertResponsesMessages 一致：首条系统消息就是 instructions（已单独携带）；
+			// 模型不支持中途系统消息时宿主把它们折进首条提示，输入里没有对应项；支持时原位发出更新文本。
+			// 宿主随之发出的 toolsAdded（additional_tools / tool_search）这里不复现：重放比对不一致时整体放弃，不会错发。
+			if (sourceIndex > 0 && supportsMidConvoSystemMessages(model)) {
+				const text = renderSystemMessageUpdate(message);
+				if (text.length > 0) input.push({ role: instructionRole(model), content: sanitizeSurrogates(text) });
+				messageIndex++;
+			}
+			continue;
+		}
+
 		if (message.role === "user") {
 			const item = serializeUserMessage(message, model);
 			if (item) {
@@ -138,9 +160,6 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 			messageIndex++;
 			continue;
 		}
-
-		// 系统提示经 instructions 单独携带；对话中途的系统消息不是 Responses 输入项。
-		if (message.role === "system") continue;
 
 		input.push(serializeToolResultMessage(message, model));
 		messageIndex++;

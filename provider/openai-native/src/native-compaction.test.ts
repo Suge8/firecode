@@ -79,6 +79,9 @@ let serializerImportCounter = 0;
 let timestampCounter = 0;
 
 function registerPiCodingAgentMock(): void {
+	mock.module("@earendil-works/pi-ai", () => ({
+		renderSystemMessageUpdate: (message: { content: string }) => message.content,
+	}));
 	mock.module("@earendil-works/pi-coding-agent", () => ({
 		buildSessionContext: (entries: Array<{ type: string; message?: Record<string, unknown> }>) => ({
 			messages: entries.flatMap((entry) => (entry.type === "message" && entry.message ? [entry.message] : [])),
