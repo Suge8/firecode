@@ -9,6 +9,7 @@ import type {
 import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details";
 import type { ResponsesRequestPayload } from "./native-runtime";
 import {
+	hasAnchoredToolAdditions,
 	serializeMessagesToResponsesInput,
 	type ResponsesInputContentItem,
 	type ResponsesInputItem,
@@ -21,16 +22,12 @@ export type NativeReplayFailureReason =
 	| "unsupported-instructions"
 	| "invalid-compacted-window"
 	| "unexpected-compaction-after-boundary"
+	| "unsupported-tool-additions"
 	| "expected-pi-replay-mismatch";
 
 export type NativeReplayResult =
 	| { ok: true; payload: ResponsesRequestPayload }
 	| { ok: false; reason: NativeReplayFailureReason };
-
-type FreshPreamble = {
-	leadingInput: ResponsesInputMessageItem[];
-	trailingInput: ResponsesInputMessageItem[];
-};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -157,29 +154,15 @@ function createCompactionSummary(entry: NativeCompactionEntry): AgentMessage {
 	} as AgentMessage;
 }
 
-function extractFreshPreamble(payload: ResponsesRequestPayload): FreshPreamble | undefined {
+function extractLeadingPromptInput(payload: ResponsesRequestPayload): ResponsesInputMessageItem[] | undefined {
 	if (payload.instructions !== undefined && typeof payload.instructions !== "string") {
 		return undefined;
 	}
-
-	let leadingBoundary = 0;
-	while (leadingBoundary < payload.input.length && isPromptEnvelopeItem(payload.input[leadingBoundary])) {
-		leadingBoundary += 1;
+	let boundary = 0;
+	while (boundary < payload.input.length && isPromptEnvelopeItem(payload.input[boundary])) {
+		boundary += 1;
 	}
-	let trailingBoundary = payload.input.length;
-	while (trailingBoundary > leadingBoundary && isPromptEnvelopeItem(payload.input[trailingBoundary - 1])) {
-		trailingBoundary -= 1;
-	}
-	for (let index = leadingBoundary; index < trailingBoundary; index++) {
-		if (isPromptEnvelopeItem(payload.input[index])) {
-			return undefined;
-		}
-	}
-
-	return {
-		leadingInput: payload.input.slice(0, leadingBoundary).map((item) => cloneInputMessage(item as ResponsesInputMessageItem)),
-		trailingInput: payload.input.slice(trailingBoundary).map((item) => cloneInputMessage(item as ResponsesInputMessageItem)),
-	};
+	return payload.input.slice(0, boundary).map((item) => cloneInputMessage(item as ResponsesInputMessageItem));
 }
 
 export function serializeLiveTailToResponsesInput<TApi extends Api>(args: {
@@ -206,8 +189,8 @@ export function rewriteNativeResponsesPayload<TApi extends Api>(args: {
 		return { ok: false, reason: "first-kept-entry-not-found" };
 	}
 
-	const preamble = extractFreshPreamble(args.payload);
-	if (!preamble) {
+	const leadingInput = extractLeadingPromptInput(args.payload);
+	if (!leadingInput) {
 		return { ok: false, reason: "unsupported-instructions" };
 	}
 	if (args.branchEntries.slice(boundaryIndex + 1).some((entry) => entry.type === "compaction")) {
@@ -219,25 +202,34 @@ export function rewriteNativeResponsesPayload<TApi extends Api>(args: {
 		return { ok: false, reason: "invalid-compacted-window" };
 	}
 
-	const preCompactionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
-	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
-	const compactionSummaryInput = serializeMessagesToResponsesInput(args.model, [createCompactionSummary(args.compactionEntry)]);
-	const preCompactionInput = serializeMessagesToResponsesInput(args.model, collectReplayMessages(preCompactionEntries));
-	const postCompactionInput = serializeMessagesToResponsesInput(args.model, collectReplayMessages(postCompactionEntries));
-	const expectedInput = [
-		...preamble.leadingInput,
-		...compactionSummaryInput,
-		...preCompactionInput,
-		...postCompactionInput,
-		...preamble.trailingInput,
+	// 宿主的上下文是 [压缩时的系统消息, 摘要, 保留窗口里的非系统消息, 压缩之后的全部消息]（buildContextEntries），
+	// 序列化必须在这一个序列里做：中途系统消息的位置、序号和工具新增都依赖整段上下文。
+	const systemMessage = args.compactionEntry.systemMessage;
+	const keptEntries = args.branchEntries
+		.slice(firstKeptEntryIndex, boundaryIndex)
+		.filter((entry) => !(entry.type === "message" && entry.message.role === "system"));
+	const throughKept = [
+		...(systemMessage ? [systemMessage as AgentMessage] : []),
+		createCompactionSummary(args.compactionEntry),
+		...collectReplayMessages(keptEntries),
 	];
-	if (!areEquivalentValues(args.payload.input, expectedInput)) {
+	const throughTail = [...throughKept, ...collectReplayMessages(args.branchEntries.slice(boundaryIndex + 1))];
+	const options = { leadingSystemMessage: systemMessage !== undefined };
+	if (hasAnchoredToolAdditions(args.model, throughTail, options)) {
+		return { ok: false, reason: "unsupported-tool-additions" };
+	}
+	const keptInput = serializeMessagesToResponsesInput(args.model, throughKept, options);
+	const bodyInput = serializeMessagesToResponsesInput(args.model, throughTail, options);
+
+	// 请求末尾可能还有提供方追加的提示；其余部分必须逐项等于宿主重放。
+	const bodyEnd = leadingInput.length + bodyInput.length;
+	const trailingInput = args.payload.input.slice(bodyEnd);
+	const bodyMatches = areEquivalentValues(args.payload.input.slice(0, bodyEnd), [...leadingInput, ...bodyInput]);
+	if (!bodyMatches || !trailingInput.every(isPromptEnvelopeItem)) {
 		return { ok: false, reason: "expected-pi-replay-mismatch" };
 	}
 
-	const tailStart = preamble.leadingInput.length + compactionSummaryInput.length + preCompactionInput.length;
-	const tailEnd = args.payload.input.length - preamble.trailingInput.length;
-	const tail = cloneResponsesInput(args.payload.input.slice(tailStart, tailEnd));
+	const tail = cloneResponsesInput(args.payload.input.slice(leadingInput.length + keptInput.length, bodyEnd));
 	if (!tail) {
 		return { ok: false, reason: "expected-pi-replay-mismatch" };
 	}
@@ -246,8 +238,7 @@ export function rewriteNativeResponsesPayload<TApi extends Api>(args: {
 		ok: true,
 		payload: {
 			...args.payload,
-			input: [...preamble.leadingInput, ...compactedWindow, ...tail, ...preamble.trailingInput],
+			input: [...leadingInput, ...compactedWindow, ...tail, ...trailingInput.map((item) => cloneInputMessage(item))],
 		},
 	};
 }
-

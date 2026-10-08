@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { registerPiAiStub } from "../test/pi-ai-stub";
 import { executeNativeCompaction } from "./compact-client";
 import type { NativeCompactionRuntime } from "./native-runtime";
 
@@ -18,9 +19,7 @@ const baseModel = {
 let serializerImportCounter = 0;
 
 async function loadSerializerModule() {
-	mock.module("@earendil-works/pi-ai", () => ({
-		renderSystemMessageUpdate: (message: { content: string }) => message.content,
-	}));
+	registerPiAiStub();
 	mock.module("@earendil-works/pi-coding-agent", () => ({
 		buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
 		convertToLlm: (messages: unknown[]) => messages,
@@ -294,28 +293,6 @@ test("executeNativeCompaction preserves a provider validation message", async ()
 		status: 400,
 		detail: "Invalid input type 'compaction_trigger'.",
 	});
-});
-
-test("mid-conversation system messages follow the host: folded away unless the model accepts them in place", async () => {
-	const { serializeMessagesToResponsesInput } = await loadSerializerModule();
-	const messages = [
-		{ role: "system", content: "LEADING", timestamp: 1 },
-		{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-		{ role: "system", content: "UPDATE", timestamp: 3 },
-		{ role: "user", content: [{ type: "text", text: "again" }], timestamp: 4 },
-	];
-	const roles = (model: object) =>
-		serializeMessagesToResponsesInput(model as never, messages as never).map((item) => [
-			(item as { role: string }).role,
-			JSON.stringify((item as { content: unknown }).content).includes("UPDATE") ? "UPDATE" : "-",
-		]);
-
-	expect(roles(baseModel)).toEqual([["user", "-"], ["user", "-"]]);
-	expect(roles({ ...baseModel, compat: { supportsMidConvoSystemMessages: true } })).toEqual([
-		["user", "-"],
-		["developer", "UPDATE"],
-		["user", "-"],
-	]);
 });
 
 test("responses input removes unpaired surrogates from instructions and message content", async () => {

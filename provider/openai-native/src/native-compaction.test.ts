@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { registerPiAiStub } from "../test/pi-ai-stub";
 import { NATIVE_COMPACTION_SUMMARY, createNativeCompactionDetails } from "./native-details";
 import type { OpenAINativeSettings } from "./config";
 
@@ -79,9 +80,7 @@ let serializerImportCounter = 0;
 let timestampCounter = 0;
 
 function registerPiCodingAgentMock(): void {
-	mock.module("@earendil-works/pi-ai", () => ({
-		renderSystemMessageUpdate: (message: { content: string }) => message.content,
-	}));
+	registerPiAiStub();
 	mock.module("@earendil-works/pi-coding-agent", () => ({
 		buildSessionContext: (entries: Array<{ type: string; message?: Record<string, unknown> }>) => ({
 			messages: entries.flatMap((entry) => (entry.type === "message" && entry.message ? [entry.message] : [])),
