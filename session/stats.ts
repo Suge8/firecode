@@ -8,6 +8,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, Container, Markdown, Text, matchesKey } from "@earendil-works/pi-tui";
 
+import { msg } from "./messages.js";
 import { registerQuota } from "./quota.js";
 
 const DEFAULT_DAYS = 30;
@@ -192,12 +193,7 @@ function collect(days: number): Report {
 
 const number = (value: number): string => new Intl.NumberFormat("en-US").format(Math.round(value));
 
-const compactTokens = (value: number): string => {
-	const rounded = Math.round(value);
-	if (rounded >= 100_000_000) return `${(rounded / 100_000_000).toFixed(1)}亿`;
-	if (rounded >= 10_000) return `${(rounded / 10_000).toFixed(1)}万`;
-	return number(rounded);
-};
+const compactTokens = (value: number): string => msg.stats.compact(Math.round(value), number(value));
 
 const cost = (value: number): string => `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 
@@ -219,34 +215,32 @@ const totalsCells = (totals: Totals): string[] => [
 ];
 
 function buildMarkdown(report: Report): string {
-	const range =
-		report.days === 0
-			? "全部"
-			: `最近 ${report.days} 天（${dateTime(report.from as number)} ~ ${dateTime(report.to)}）`;
-	const headers = ["输入", "输出", "缓存读", "缓存写", "总 Token", "成本"];
+	const { column } = msg.stats;
+	const range = report.days === 0 ? msg.stats.range(0, "", "") : msg.stats.range(report.days, dateTime(report.from as number), dateTime(report.to));
+	const headers = [column.input, column.output, column.cacheRead, column.cacheWrite, column.tokens, column.cost];
 	const aligns = headers.map(() => "---:");
 	const lines = [
-		"# Token 用量",
+		msg.stats.title,
 		"",
-		`- 范围：${range}`,
-		`- 会话：命中 ${number(report.matched)} / 扫描 ${number(report.scanned)} 个文件`,
-		`- 请求：${number(report.overall.requests)} 次，合计 ${cost(report.overall.cost)}`,
+		msg.stats.rangeLine(range),
+		msg.stats.sessionsLine(number(report.matched), number(report.scanned)),
+		msg.stats.requestsLine(number(report.overall.requests), cost(report.overall.cost)),
 		"",
 		row(headers),
 		row(aligns),
 		row(totalsCells(report.overall)),
 		"",
-		"## 按模型",
+		msg.stats.byModel,
 		"",
 	];
 
 	const models = [...report.byModel.entries()].sort((left, right) => right[1].tokens - left[1].tokens);
 	if (models.length === 0) {
-		lines.push("该范围内没有用量记录。");
+		lines.push(msg.stats.empty);
 		return lines.join("\n");
 	}
 
-	lines.push(row(["模型", "请求", ...headers]));
+	lines.push(row([column.model, column.requests, ...headers]));
 	lines.push(row(["---", "---:", ...aligns]));
 	for (const [key, totals] of models) {
 		lines.push(row([`\`${key}\``, number(totals.requests), ...totalsCells(totals)]));
@@ -265,7 +259,7 @@ async function show(markdown: string, ctx: ExtensionCommandContext): Promise<voi
 		const border = new DynamicBorder((text: string) => theme.fg("accent", text));
 		container.addChild(border);
 		container.addChild(new Markdown(markdown, 1, 1, getMarkdownTheme()));
-		container.addChild(new Text(theme.fg("dim", "Enter / Esc 关闭"), 1, 0));
+		container.addChild(new Text(theme.fg("dim", msg.stats.close), 1, 0));
 		container.addChild(border);
 
 		return {
@@ -289,15 +283,15 @@ function parseDays(args: string | undefined): number {
 }
 
 const dayCompletions: AutocompleteItem[] = [
-	{ value: "7", label: "7", description: "最近 7 天" },
-	{ value: "30", label: "30", description: "最近 30 天（默认）" },
-	{ value: "0", label: "0", description: "全部历史" },
+	{ value: "7", label: "7", description: msg.stats.completion.week },
+	{ value: "30", label: "30", description: msg.stats.completion.month },
+	{ value: "0", label: "0", description: msg.stats.completion.all },
 ];
 
 export function registerStats(pi: ExtensionAPI): void {
 	registerQuota(pi);
 	pi.registerCommand("tokens", {
-		description: "统计会话 token 与成本，参数为天数：默认 30，0 表示全部",
+		description: msg.stats.commandDescription,
 		getArgumentCompletions: (prefix: string) => {
 			const matches = dayCompletions.filter((item) => item.value.startsWith(prefix.trim()));
 			return matches.length > 0 ? matches : null;
@@ -305,7 +299,7 @@ export function registerStats(pi: ExtensionAPI): void {
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			const days = parseDays(args);
 			if (ctx.hasUI) {
-				ctx.ui.notify(`统计中（${days === 0 ? "全部历史" : `最近 ${days} 天`}）…`, "info");
+				ctx.ui.notify(msg.stats.counting(days), "info");
 			}
 			await show(buildMarkdown(collect(days)), ctx);
 		},

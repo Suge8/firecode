@@ -11,6 +11,11 @@
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 import type { ModelAtom } from "../config.js";
+import { msg, termPattern } from "./messages.js";
+
+// 字段名两种语言都认，见 messages.ts 的 terms。
+const SUGGESTIONS_HEADING = new RegExp(`^##\\s*${termPattern((terms) => terms.suggestions)}`, "iu");
+const ISSUE_LINE = new RegExp(`^[-*+]\\s*(?:\\*\\*)?${termPattern((terms) => terms.field.issue)}(?:\\*\\*)?\\s*[:：]\\s*(.+)$`, "iu");
 
 export type Phase =
 	| "idle"
@@ -124,7 +129,6 @@ export interface ReviewLimits {
 	advisorModel: string;
 	/** 本轮审查者（model/thinking），beginRound 时填入 active。 */
 	reviewers: ModelAtom[];
-	language?: "zh" | "en";
 }
 
 export type ReviewEvent =
@@ -404,14 +408,11 @@ function settleRound(
 	limits: ReviewLimits,
 	now: number,
 ): ReduceResult {
-	const { result, displayDetails, feedbackDetails, archiveDetails, summary } = aggregate(
-		settled,
-		limits.language ?? "zh",
-	);
+	const { result, displayDetails, feedbackDetails, archiveDetails, summary } = aggregate(settled);
 	const base = { ...state, active: null, updatedAt: now };
 	const totalElapsedMs = Math.max(0, now - state.startedAt);
 	const passSummary = result === "passed"
-		? appendClosedFindings(summary, state.history, active.round, limits.language ?? "zh")
+		? appendClosedFindings(summary, state.history, active.round)
 		: summary;
 	if (result === "passed" || result === "error") {
 		const round = roundRecord(active.round, result, archiveDetails, settled, undefined, state.roundStartedAt, now);
@@ -705,10 +706,7 @@ function beginRound(
 }
 
 /** 展示保留每个模型分节；修复反馈只携带 FAIL 票，归档保留全部原文。 */
-function aggregate(
-	reviewers: ReviewerResult[],
-	language: "zh" | "en",
-): {
+function aggregate(reviewers: ReviewerResult[]): {
 	result: "passed" | "failed" | "error";
 	displayDetails: string;
 	feedbackDetails: string;
@@ -717,7 +715,7 @@ function aggregate(
 } {
 	const verdicts = reviewers.filter((item) => item.status === "passed" || item.status === "failed");
 	const absent = reviewers.filter((item) => item.status === "error");
-	const archiveDetails = aggregateDetails(reviewers, language);
+	const archiveDetails = aggregateDetails(reviewers);
 	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里点名，不阻止形成质量结论；
 	// 全员缺席才是基础设施不可用。否则一个供应商额度耗尽就会让整条审查通道停摆。
 	if (verdicts.length === 0)
@@ -727,7 +725,7 @@ function aggregate(
 		return {
 			result: "failed",
 			displayDetails: archiveDetails,
-			feedbackDetails: aggregateDetails(failed, language),
+			feedbackDetails: aggregateDetails(failed),
 			archiveDetails,
 			summary: "",
 		};
@@ -736,33 +734,29 @@ function aggregate(
 		displayDetails: archiveDetails,
 		feedbackDetails: "",
 		archiveDetails,
-		summary: aggregatePassSummary(verdicts, absent, language),
+		summary: aggregatePassSummary(verdicts, absent),
 	};
 }
 
-function aggregateDetails(reviewers: ReviewerResult[], language: "zh" | "en"): string {
+function aggregateDetails(reviewers: ReviewerResult[]): string {
 	return reviewers
-		.map((item) => `${modelLabel(item, language)}\n${item.details.trim()}`)
+		.map((item) => `${modelLabel(item)}\n${item.details.trim()}`)
 		.join("\n\n");
 }
 
-function aggregatePassSummary(passed: ReviewerResult[], absent: ReviewerResult[], language: "zh" | "en") {
-	const en = language === "en";
-	const fallback = en ? "Review passed." : "审查通过。";
+function aggregatePassSummary(passed: ReviewerResult[], absent: ReviewerResult[]) {
+	const fallback = msg.summary.passedFallback;
 	const lines = passed.length === 1
 		? [passBody(passed[0]?.summary ?? "") || fallback]
-		: passed.map((item) => `• ${shortModel(item.model)}${en ? ": " : "："}${passBody(item.summary) || fallback}`);
+		: passed.map((item) => msg.summary.modelBullet(shortModel(item.model), passBody(item.summary) || fallback));
 	if (absent.length > 0)
-		lines.push(
-			(en ? "No verdict from " : "未形成裁决：")
-				+ absent.map((item) => `${shortModel(item.model)}${en ? ` (${firstLine(item.details)})` : `（${firstLine(item.details)}）`}`).join(en ? ", " : "、"),
-		);
+		lines.push(msg.summary.absent(absent.map((item) => ({ model: shortModel(item.model), reason: firstLine(item.details) }))));
 	const suggestions = [...new Set(passed.flatMap((item) => splitSuggestions(item.details).suggestions))];
 	if (suggestions.length === 0) return lines.join("\n");
 	return [
 		...lines,
 		"",
-		en ? "## Suggestions (non-blocking)" : "## 建议（非阻塞）",
+		`## ${msg.terms.suggestions}`,
 		...suggestions.map((item) => `- ${item}`),
 	].join("\n");
 }
@@ -773,7 +767,7 @@ function firstLine(text: string) {
 
 function splitSuggestions(summary: string) {
 	const lines = summary.split(/\r?\n/u);
-	const index = lines.findIndex((line) => /^##\s*(?:建议（非阻塞）|Suggestions \(non-blocking\))/iu.test(line.trim()));
+	const index = lines.findIndex((line) => SUGGESTIONS_HEADING.test(line.trim()));
 	if (index < 0) return { body: summary, suggestions: [] as string[] };
 	return {
 		body: lines.slice(0, index).join("\n"),
@@ -793,14 +787,13 @@ function appendClosedFindings(
 	summary: string,
 	history: ReviewRound[],
 	beforeRound: number,
-	language: "zh" | "en",
 ) {
 	const seen = new Set<string>();
 	const findings: { round: number; issue: string }[] = [];
 	for (const round of history) {
 		if (round.round >= beforeRound || round.result !== "failed") continue;
 		for (const line of round.details.split(/\r?\n/u)) {
-			const match = /^[-*+]\s*(?:\*\*)?(?:问题|Issue)(?:\*\*)?\s*[:：]\s*(.+)$/iu.exec(line.trim());
+			const match = ISSUE_LINE.exec(line.trim());
 			const issue = match?.[1]?.replace(/`([^`]+)`/gu, "$1").trim();
 			if (!issue) continue;
 			const key = issue.replace(/\s+/gu, "");
@@ -811,22 +804,13 @@ function appendClosedFindings(
 	}
 	if (findings.length === 0) return summary;
 	const shown = findings.slice(0, 6);
-	const recap = [
-		language === "en" ? "**Issues closed in this check**:" : "**本次收口的问题**：",
-		...shown.map((finding) =>
-			`• ${finding.issue}${language === "en" ? ` (Round ${finding.round})` : `（第 ${finding.round} 轮）`}`,
-		),
-	];
-	if (findings.length > shown.length)
-		recap.push(language === "en"
-			? `…and ${findings.length - shown.length} more; see the review report`
-			: `…另有 ${findings.length - shown.length} 项，详见审查报告`);
+	const recap = [msg.summary.closedHeading, ...shown.map((finding) => msg.summary.closedItem(finding.issue, finding.round))];
+	if (findings.length > shown.length) recap.push(msg.summary.closedMore(findings.length - shown.length));
 	return `${summary}\n\n${recap.join("\n")}`;
 }
 
-function modelLabel(item: ReviewerResult, language: "zh" | "en") {
-	const model = item.model.split("/").at(-1) || item.model;
-	return `${language === "en" ? "Model" : "模型"} ${item.index + 1} · ${model}`;
+function modelLabel(item: ReviewerResult) {
+	return msg.summary.modelSection(item.index + 1, shortModel(item.model));
 }
 
 function resolveRoundRecord(

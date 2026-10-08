@@ -12,8 +12,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { type Preset, loadConfig } from "../config.js";
+import { msg } from "./messages.js";
 
-const CLEAR_ITEM = "（无）";
+const CLEAR_ITEM = msg.presets.clearItem;
 const STATE_ENTRY = "preset-state";
 const INSTRUCTIONS_PREVIEW_CHARS = 30;
 const SELECTOR_MAX_ROWS = 10;
@@ -62,7 +63,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	let applying = false;
 
 	pi.registerFlag("preset", {
-		description: "要启用的预设名",
+		description: msg.presets.flagDescription,
 		type: "string",
 	});
 
@@ -79,7 +80,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		);
 
 	const noPresetsHint = (ctx: ExtensionContext) =>
-		ctx.ui.notify("未定义任何预设。在 firecode/config.jsonc 的 presets 里添加。", "warning");
+		ctx.ui.notify(msg.presets.noneDefined, "warning");
 
 	/** 预设状态写进当前分支（与宿主的模型记录同一棵树），null 表示没有预设；重开会话按它恢复。 */
 	function setActive(name: string | undefined, ctx: ExtensionContext): void {
@@ -96,7 +97,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		const valid = preset.tools.filter((tool) => known.has(tool));
 		const unknown = preset.tools.filter((tool) => !known.has(tool));
 		if (unknown.length)
-			ctx.ui.notify(`预设「${name}」含未知工具：${unknown.join("、")}`, "warning");
+			ctx.ui.notify(msg.presets.unknownTools(name, unknown), "warning");
 		if (valid.length) pi.setActiveTools(valid);
 	}
 
@@ -109,13 +110,13 @@ export function registerPresets(pi: ExtensionAPI): void {
 		applying = true;
 		const failure = await applyModel(preset, ctx).finally(() => { applying = false; });
 		if (failure) {
-			ctx.ui.notify(`预设「${name}」未切换：${failure}`, "warning");
+			ctx.ui.notify(msg.presets.notSwitched(name, failure), "warning");
 			return;
 		}
 		originalState = snapshot;
 		applyTools(name, preset, ctx);
 		setActive(name, ctx);
-		ctx.ui.notify(`已切换预设「${name}」`, "info");
+		ctx.ui.notify(msg.presets.switched(name), "info");
 	}
 
 	/** 返回失败原因；成功或预设不管模型时为 undefined。 */
@@ -123,8 +124,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 		if (!preset.model) return undefined;
 		const [provider, id] = splitModel(preset.model.model);
 		const model = ctx.modelRegistry.find(provider, id);
-		if (!model) return `找不到模型 ${preset.model.model}`;
-		if (!(await pi.setModel(model))) return `模型 ${preset.model.model} 没有可用凭据`;
+		if (!model) return msg.presets.modelNotFound(preset.model.model);
+		if (!(await pi.setModel(model))) return msg.presets.modelNoCredentials(preset.model.model);
 		pi.setThinkingLevel(preset.model.thinking);
 		return undefined;
 	}
@@ -134,7 +135,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		if (!activeName || !activePreset || holds(activePreset, ctx.model)) return;
 		const name = activeName;
 		setActive(undefined, ctx);
-		ctx.ui.notify(`模型已不是预设「${name}」的，预设已失效`, "info");
+		ctx.ui.notify(msg.presets.diverged(name), "info");
 	}
 
 	async function activate(name: string, ctx: ExtensionContext): Promise<void> {
@@ -151,7 +152,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			pi.setThinkingLevel(original.thinkingLevel);
 			pi.setActiveTools(original.tools);
 		}
-		ctx.ui.notify("预设已清除，恢复默认", "info");
+		ctx.ui.notify(msg.presets.cleared, "info");
 	}
 
 	async function showSelector(ctx: ExtensionContext): Promise<void> {
@@ -163,19 +164,19 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 		const items: SelectItem[] = names.map((name) => ({
 			value: name,
-			label: name === activeName ? `${name}（当前）` : name,
+			label: name === activeName ? msg.presets.current(name) : name,
 			description: describe(presets[name]),
 		}));
 		items.push({
 			value: CLEAR_ITEM,
 			label: CLEAR_ITEM,
-			description: "清除当前预设，恢复默认",
+			description: msg.presets.clearDescription,
 		});
 
 		const choice = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 			const container = new Container();
 			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-			container.addChild(new Text(theme.fg("accent", theme.bold("选择预设"))));
+			container.addChild(new Text(theme.fg("accent", theme.bold(msg.presets.selectTitle))));
 
 			const selectList = new SelectList(items, Math.min(items.length, SELECTOR_MAX_ROWS), {
 				selectedPrefix: (text) => theme.fg("accent", text),
@@ -187,7 +188,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 			selectList.onSelect = (item) => done(item.value);
 			selectList.onCancel = () => done(null);
 			container.addChild(selectList);
-			container.addChild(new Text(theme.fg("dim", "↑↓ 选择 • enter 确认 • esc 取消")));
+			container.addChild(new Text(theme.fg("dim", msg.presets.selectHint)));
 			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 
 			return {
@@ -210,13 +211,13 @@ export function registerPresets(pi: ExtensionAPI): void {
 	for (const [name, preset] of Object.entries(configured)) {
 		if (!preset.key) continue;
 		pi.registerShortcut(preset.key as never, {
-			description: `启用预设「${name}」`,
+			description: msg.presets.shortcutDescription(name),
 			handler: (ctx) => activate(name, ctx),
 		});
 	}
 
 	pi.registerCommand("preset", {
-		description: "切换预设",
+		description: msg.presets.commandDescription,
 		handler: async (args, ctx) => {
 			const name = args?.trim();
 			if (!name) {
@@ -229,8 +230,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 				return;
 			}
 			if (!presets[name]) {
-				const available = Object.keys(presets).join(", ") || "(none defined)";
-				ctx.ui.notify(`未知预设「${name}」，可用：${available}`, "error");
+				const available = Object.keys(presets).join(", ") || msg.presets.noneAvailable;
+				ctx.ui.notify(msg.presets.unknown(name, available), "error");
 				return;
 			}
 			await activate(name, ctx);
@@ -271,8 +272,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 			if (presets[flag]) {
 				await applyPreset(flag, presets[flag], ctx);
 			} else {
-				const available = Object.keys(presets).join(", ") || "(none defined)";
-				ctx.ui.notify(`未知预设「${flag}」，可用：${available}`, "warning");
+				const available = Object.keys(presets).join(", ") || msg.presets.noneAvailable;
+				ctx.ui.notify(msg.presets.unknown(flag, available), "warning");
 			}
 		} else restore(ctx);
 		updateStatus(ctx);
@@ -289,7 +290,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		const preset = presets[name];
 		if (!preset || !holds(preset, ctx.model)) {
 			setActive(undefined, ctx);
-			ctx.ui.notify(preset ? `模型已不是预设「${name}」的，预设已失效` : `预设「${name}」已不在配置里，已清除`, "info");
+			ctx.ui.notify(preset ? msg.presets.diverged(name) : msg.presets.gone(name), "info");
 			return;
 		}
 		activeName = name;

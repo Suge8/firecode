@@ -64,6 +64,9 @@ function makeSessionManager() {
 
 type MockSessionManager = ReturnType<typeof makeSessionManager>;
 
+const checkpoints = (sessionManager: MockSessionManager) =>
+	sessionManager.entries.filter((entry) => (entry as { customType?: string }).customType === "firecode-review-checkpoint");
+
 function makeCtx(sessionManager: MockSessionManager, busy = false) {
 	let idle = !busy;
 	const statuses: (string | undefined)[] = [];
@@ -114,13 +117,17 @@ function reviewer(index: number, status: ReviewerResult["status"], details: stri
 	return { index, model: `m${index}`, thinking: "high", status, summary: "s", details };
 }
 
-async function loadReviewWithVerdict(verdict: string, maxRounds?: number) {
+async function loadReviewWithVerdict(
+	verdict: string,
+	maxRounds?: number,
+	{ top = {}, onSession }: { top?: Record<string, unknown>; onSession?: (options: { prompt: { system: string } }) => void } = {},
+) {
 	const script = join(tmpdir(), `fake-review-${Date.now()}-${Math.random()}`);
 	const review = (await loadFirecodeModule("review/index.js", {
 		configJsonc: reviewConfig({
 			reviewers: ["p/one/low"],
 			...(maxRounds === undefined ? {} : { maxRounds }),
-		}),
+		}, top),
 	})) as { registerReview: (pi: unknown, enabled?: boolean, broken?: boolean, dependencies?: unknown) => void };
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
 		readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
@@ -133,7 +140,10 @@ async function loadReviewWithVerdict(verdict: string, maxRounds?: number) {
 		...outcome,
 		script,
 		registerReview: (pi: unknown) => review.registerReview(pi, true, false, {
-			runSession: async () => ({ kind: "output", text: verdict }),
+			runSession: async (options: { prompt: { system: string } }) => {
+				onSession?.(options);
+				return { kind: "output", text: verdict };
+			},
 		}),
 	};
 }
@@ -225,6 +235,38 @@ describe("registerReview wiring", () => {
 		}
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		await rm(script, { force: true });
+	}, 20_000);
+
+	test("language en: the reviewer gets the English policy; the result card, summary prompt and notices are English", async () => {
+		const verdict = "PASS\nVerification exited 0.\nEvidence: files=a.ts; commands=bun test";
+		const systems: string[] = [];
+		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(verdict, undefined, {
+			top: { language: "en" },
+			onSession: (options) => systems.push(options.prompt.system),
+		});
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		const command = registered.commands.get("fire-review") as {
+			handler: (args: string, ctx: unknown) => Promise<void>;
+		};
+		await command.handler("", ctx);
+		for (let wait = 0; wait < 200; wait += 1) {
+			if (readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start") break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(systems[0]).toContain("You are an independent adversarial reviewer");
+		const sent = registered.sent as { customType?: string; content?: string }[];
+		const card = sent.filter((message) => message.customType === "firecode-review-card").map((message) => message.content).join("\n");
+		expect(card).toContain("Models: one");
+		expect(card).toContain("Review passed");
+		expect(card).toContain("Elapsed:");
+		const summary = sent.find((message) => message.customType === "firecode-review-summary")?.content ?? "";
+		expect(summary).toContain("The adversarial review passed after 1 round(s)");
+		expect(`${card}${summary}`).not.toMatch(/[\u3400-\u9fff]/u);
 		await rm(script, { force: true });
 	}, 20_000);
 
@@ -762,7 +804,7 @@ describe("review config is rejected at every entry point", () => {
 			};
 			await command.handler("", ctx);
 			expect(notices.join()).toContain("配置有问题");
-			expect(sessionManager.entries).toHaveLength(0);
+			expect(checkpoints(sessionManager)).toHaveLength(0);
 		}
 	});
 
@@ -780,7 +822,7 @@ describe("review config is rejected at every entry point", () => {
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
 		// 没有写入任何 checkpoint，等于没有启动审查
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("an unknown review field also blocks the command", async () => {
@@ -793,7 +835,7 @@ describe("review config is rejected at every entry point", () => {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("an unparsable config file also blocks the command", async () => {
@@ -809,7 +851,8 @@ describe("review config is rejected at every entry point", () => {
 		};
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(sessionManager.entries).toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("recovery from an active checkpoint refuses without sealing recoverable state", async () => {
@@ -1115,7 +1158,7 @@ describe("the loop survives failing side effects", () => {
 		await flush();
 		expect(notices.join()).toContain("写入失败");
 		// 没有落盘，也没有把审查推进下去
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 
 		// 失败必须连内存态一起释放：否则幽灵审查只是从磁盘搬进内存，
 		// 后续命令永远被「已有审查在进行中」挡住且无处取消。

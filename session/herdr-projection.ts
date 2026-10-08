@@ -15,11 +15,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type BusyView, watchBusy } from "../busy.js";
 import { formatModelName } from "../format.js";
 import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
+import { msg } from "./messages.js";
 
 const SOURCE = "firecode";
 const AGENT = "pi";
-const REVIEW_LABEL = "对抗审查进行中";
-const WORKERS_LABEL = "子代理进行中";
 const RETRY_TIMEOUT_MS = 1_500;
 /** herdr 拒收含撇号或控制字符的恢复命令参数。 */
 const UNSAFE_ARGUMENT = /['\u0000-\u001f\u007f]/;
@@ -58,8 +57,8 @@ function resumeOf(ctx: ExtensionContext): string[] | undefined {
 }
 
 function labelOf(view: BusyView): string | undefined {
-	if (view.review) return REVIEW_LABEL;
-	return !view.agentRunning && view.inFlight > 0 ? WORKERS_LABEL : undefined;
+	if (view.review) return msg.herdr.review;
+	return !view.agentRunning && view.inFlight > 0 ? msg.herdr.workers : undefined;
 }
 
 /** 返回 settled：等当前发送循环排空，只供测试。 */

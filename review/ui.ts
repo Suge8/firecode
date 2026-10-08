@@ -11,8 +11,8 @@ import {
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
-import type { Language } from "../config.js";
 import { clip } from "../format.js";
+import { msg } from "./messages.js";
 
 let reviewTitleActive = false;
 
@@ -58,13 +58,13 @@ class ReviewEditor extends CustomEditor {
 		const lines = this.frame.render(width);
 		if (lines.length < 2) return lines;
 		const keys = this.keys.getKeys("app.interrupt").join("/").replaceAll("escape", "esc") || "esc";
-		const hint = clip(`  审查进行中 · ${keys} 取消`, width, "end", "");
+		const hint = clip(msg.ui.editorHint(keys), width, "end", "");
 		return [lines[0], `\x1b[2m${hint}\x1b[22m`, lines[lines.length - 1]];
 	}
 }
 
 /** 审查期间终端标题写明“审查中 R轮次 · 会话名”，结束后还原。 */
-export function showReviewTitle(ctx: ExtensionContext, round: number, language: Language) {
+export function showReviewTitle(ctx: ExtensionContext, round: number) {
 	if (!ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
 	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };
 	const rawName = manager.getSessionName?.();
@@ -72,9 +72,8 @@ export function showReviewTitle(ctx: ExtensionContext, round: number, language: 
 	const who = typeof rawName === "string" && rawName
 		? rawName
 		: typeof rawCwd === "string" ? basename(rawCwd) : "";
-	const label = language === "en" ? "Reviewing" : "审查中";
 	reviewTitleActive = true;
-	ctx.ui.setTitle(`${label}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
+	ctx.ui.setTitle(`${msg.ui.reviewing}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
 }
 
 export function hideReviewTitle(ctx: ExtensionContext) {
