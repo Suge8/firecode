@@ -92,13 +92,11 @@ export type Feature = (typeof FEATURES)[number];
 
 export const DEFAULT_KEYS = {
 	rename: "ctrl+r",
-	cyclePreset: "ctrl+shift+u",
 	fast: "ctrl+f",
 } as const;
 
 export type FireCodeKeys = {
 	rename: string;
-	cyclePreset: string;
 	fast: string;
 };
 
@@ -208,7 +206,6 @@ function checkFeatures(features: Record<string, unknown>, problems: string[]): v
 function checkKeys(keys: FireCodeKeys, presets: Record<string, Preset>, problems: string[]): void {
 	const owners = new Map<string, string>([
 		[keys.rename, "keys.rename"],
-		[keys.cyclePreset, "keys.cyclePreset"],
 		[keys.fast, "keys.fast"],
 	]);
 	const declared = Object.entries(keys);
@@ -248,11 +245,10 @@ export function loadConfig(): LoadedConfig {
 
 	const problems = [...blocking];
 	const rawKeys = asRecord(raw.keys);
+	rejectUnknownKeys(rawKeys, Object.keys(DEFAULT_KEYS), "keys", problems);
 	const presets = parsePresets(raw.presets, problems);
 	const keys: FireCodeKeys = {
 		rename: typeof rawKeys.rename === "string" ? rawKeys.rename : DEFAULT_KEYS.rename,
-		cyclePreset:
-			typeof rawKeys.cyclePreset === "string" ? rawKeys.cyclePreset : DEFAULT_KEYS.cyclePreset,
 		fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_KEYS.fast,
 	};
 	checkKeys(keys, presets, problems);
