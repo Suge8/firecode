@@ -64,6 +64,9 @@ function makeSessionManager() {
 
 type MockSessionManager = ReturnType<typeof makeSessionManager>;
 
+const checkpoints = (sessionManager: MockSessionManager) =>
+	sessionManager.entries.filter((entry) => (entry as { customType?: string }).customType === "firecode-review-checkpoint");
+
 function makeCtx(sessionManager: MockSessionManager, busy = false) {
 	let idle = !busy;
 	const statuses: (string | undefined)[] = [];
@@ -801,7 +804,7 @@ describe("review config is rejected at every entry point", () => {
 			};
 			await command.handler("", ctx);
 			expect(notices.join()).toContain("配置有问题");
-			expect(sessionManager.entries).toHaveLength(0);
+			expect(checkpoints(sessionManager)).toHaveLength(0);
 		}
 	});
 
@@ -819,7 +822,7 @@ describe("review config is rejected at every entry point", () => {
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
 		// 没有写入任何 checkpoint，等于没有启动审查
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("an unknown review field also blocks the command", async () => {
@@ -832,7 +835,7 @@ describe("review config is rejected at every entry point", () => {
 			handler: (args: string, ctx: unknown) => Promise<void>;
 		};
 		await command.handler("", ctx);
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("an unparsable config file also blocks the command", async () => {
@@ -848,7 +851,8 @@ describe("review config is rejected at every entry point", () => {
 		};
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(sessionManager.entries).toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
 
 	test("recovery from an active checkpoint refuses without sealing recoverable state", async () => {
@@ -1154,7 +1158,7 @@ describe("the loop survives failing side effects", () => {
 		await flush();
 		expect(notices.join()).toContain("写入失败");
 		// 没有落盘，也没有把审查推进下去
-		expect(sessionManager.entries).toHaveLength(0);
+		expect(checkpoints(sessionManager)).toHaveLength(0);
 
 		// 失败必须连内存态一起释放：否则幽灵审查只是从磁盘搬进内存，
 		// 后续命令永远被「已有审查在进行中」挡住且无处取消。
