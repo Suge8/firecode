@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
 
 test("单行裁剪保留字素、完整颜色与链接控制序列，不重置外层背景", async () => {
 	const { clip } = await loadFirecodeModule("format.ts") as any;

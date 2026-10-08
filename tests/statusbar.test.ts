@@ -1,8 +1,8 @@
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { contextColor } from "../theme.js";
 import { fakePi } from "./fake-pi.ts";
-import { PI_TUI_URL, cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { PI_TUI_URL, loadFirecodeModule } from "./loader.ts";
 
 const FLAME3 = "[\u2800-\u28ff]{3}";
 
@@ -22,8 +22,6 @@ async function recordRounds(pi: any, branch: unknown[]) {
 		pi.events.emit(ROUND_RECORDED);
 	} });
 }
-
-afterEach(cleanupFirecodeModules);
 
 interface MountOptions {
 	moduleOptions?: Parameters<typeof loadFirecodeModule>[1];

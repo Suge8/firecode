@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, featuresOnly, loadFirecodeModule } from "./loader.ts";
+import { expect, test } from "bun:test";
+import { featuresOnly, loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 /** 按会话角色注册整个 FireCode，跑一个回合，返回写进会话的轮记录。 */
 async function recordedRounds(role: "main" | "worker", features: string[]) {
@@ -19,7 +17,6 @@ async function recordedRounds(role: "main" | "worker", features: string[]) {
 
 test("轮记录在每个会话里由同一段代码写：主会话与子代理会话都写，且每段只写一条", async () => {
 	expect(await recordedRounds("main", ["tools"])).toEqual([{ elapsed: expect.any(Number), outcome: "complete" }]);
-	await cleanupFirecodeModules();
 	expect(await recordedRounds("worker", ["tools", "master"])).toEqual([{ elapsed: expect.any(Number), outcome: "complete" }]);
 });
 

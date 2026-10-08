@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
+import { loadFirecodeModule, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 const { createAgentSession, ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 const { fauxProvider, fauxAssistantMessage } = await import(PI_AI_URL) as any;
@@ -17,7 +17,6 @@ afterEach(async () => {
 	for (const bridge of bridges.splice(0)) delete (globalThis as any)[Symbol.for(bridge)];
 	if (directory) await rm(directory, { recursive: true, force: true });
 	directory = undefined;
-	await cleanupFirecodeModules();
 });
 
 type Credential = { type: "oauth"; access: string; refresh: string; expires: number } | { type: "api_key"; key: string };

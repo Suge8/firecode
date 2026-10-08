@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, featuresOnly, loadFirecodeModule } from "./loader.ts";
+import { expect, test } from "bun:test";
+import { featuresOnly, loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 /** 宿主 read 截断时追加在正文末尾的提示（pi core/tools/read.ts 的三种写法）。 */
 const TRUNCATED = [
@@ -28,6 +26,5 @@ test("写入内容带 read 截断提示时拒绝：主会话与子代理会话�
 		for (const content of TRUNCATED)
 			expect(await write(content)).toEqual({ block: true, reason: expect.stringContaining("read 截断") });
 		expect(await write("export const a = 1;\n")).toBeUndefined();
-		await cleanupFirecodeModules();
 	}
 });

@@ -1,7 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { expect, test } from "bun:test";
+import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
 

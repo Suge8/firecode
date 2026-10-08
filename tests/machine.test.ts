@@ -1,8 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { loadFirecodeModule, PI_TUI_URL } from "./loader.ts";
 
 const theme = { fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[22m` };
 

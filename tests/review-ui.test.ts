@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { describe, expect, test } from "bun:test";
+import { loadFirecodeModule } from "./loader.ts";
 
 describe("review editor lock", () => {
 	const tui = { requestRender: () => {}, terminal: { rows: 40 } };

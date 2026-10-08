@@ -1,13 +1,11 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_PACKAGES } from "./loader.ts";
+import { FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_PACKAGES } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 test("missing runtime config disables optional behavior and warns on each session_start", async () => {
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null }) as any;
@@ -139,7 +137,6 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 		(registerFirecode as (pi: unknown) => void)(fake.pi);
 		const warnings: string[] = [];
 		await fake.fire("session_start", {}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
-		await cleanupFirecodeModules();
 		return warnings.filter((message) => message.includes("master.roles"));
 	};
 	expect(await warningsFor(false)).toEqual([]);

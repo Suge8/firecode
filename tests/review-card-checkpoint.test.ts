@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
+import { describe, expect, test } from "bun:test";
+import { loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
 
 type BuildCard = typeof import("../review/card.js").buildCard;
 type BuildPrompt = typeof import("../review/prompt.js").buildReviewPrompt;
@@ -35,8 +35,6 @@ async function loadAll() {
 	buildAdvisorPrompt = prompt.buildAdvisorPrompt;
 	buildFixFeedback = prompt.buildFixFeedback;
 }
-
-afterEach(cleanupFirecodeModules);
 
 describe("result card payload", () => {
 	test("every card kind produces schema-valid details and non-empty plain content", async () => {

@@ -6,7 +6,6 @@ import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import {
-	cleanupFirecodeModules,
 	featuresOnly,
 	firecodeModulePath,
 	loadFirecodeModule,
@@ -39,7 +38,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	await cleanupFirecodeModules();
 });
 
 test("新会话默认激活 subagents", async () => {

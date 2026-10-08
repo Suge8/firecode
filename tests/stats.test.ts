@@ -1,11 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
-
-afterEach(cleanupFirecodeModules);
 
 const usage = { input: 10, output: 20, cost: { total: 0.3 } };
 const now = new Date().toISOString();

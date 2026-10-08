@@ -1,12 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
+import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 let disposeGroups: (() => void) | undefined;
 afterEach(async () => {
 	disposeGroups?.();
 	disposeGroups = undefined;
-	await cleanupFirecodeModules();
 });
 
 const ROWS = 40;

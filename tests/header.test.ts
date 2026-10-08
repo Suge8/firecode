@@ -1,5 +1,5 @@
-import { afterAll, afterEach, expect, jest, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_TUI_URL } from "./loader.js";
+import { afterEach, expect, jest, test } from "bun:test";
+import { loadFirecodeModule, PI_TUI_URL } from "./loader.js";
 import { fakePi } from "./fake-pi.ts";
 
 type Header = { render(width: number): string[]; dispose?(): void };
@@ -8,8 +8,6 @@ type Factory = (tui: { requestRender(): void }, theme: unknown) => Header;
 const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth(text: string): number };
 
 afterEach(() => jest.useRealTimers());
-afterAll(cleanupFirecodeModules);
-
 /** 经真实注册入口拿到横幅：session_start 时宿主收到的组件，以及它请求重绘的次数。 */
 async function mountHeader(cwd = "/tmp/project") {
 	const { registerHeader } = await loadFirecodeModule("header.ts") as { registerHeader(pi: unknown): void };

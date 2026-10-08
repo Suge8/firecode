@@ -1,7 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { expect, test } from "bun:test";
+import { loadFirecodeModule } from "./loader.ts";
 
 async function envelope() {
 	return await loadFirecodeModule("deliver.ts") as {

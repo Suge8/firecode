@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { ReviewLimits, ReviewState, ReviewerResult } from "../review/state.js";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { loadFirecodeModule } from "./loader.ts";
 
 type Reduce = typeof import("../review/state.js").reduce;
 type InitialState = typeof import("../review/state.js").initialState;
@@ -67,8 +67,6 @@ async function loadState() {
 	reduce = module.reduce;
 	initialState = module.initialState;
 }
-
-afterEach(cleanupFirecodeModules);
 
 describe("fire-review reducer", () => {
 	test("START queues silently; ADVANCE opens round 1 with the start card and reviewers", async () => {

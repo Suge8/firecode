@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
+import { FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 
 type ReadReviewOutcome = typeof import("../review/outcome.js").readReviewOutcome;
 
@@ -14,8 +14,6 @@ async function loadReader(): Promise<ReadReviewOutcome> {
 	};
 	return module.readReviewOutcome;
 }
-
-afterEach(cleanupFirecodeModules);
 
 describe("review outcome reader", () => {
 	test("reads pass from the latest checkpoint", async () => {

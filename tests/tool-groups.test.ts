@@ -1,13 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { fakePi } from "./fake-pi.ts";
-import { cleanupFirecodeModules, loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
+import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 let dispose: (() => void) | undefined;
 afterEach(async () => {
 	dispose?.();
 	dispose = undefined;
-	await cleanupFirecodeModules();
 });
 
 const FLAME = "[\u2800-\u28ff]";

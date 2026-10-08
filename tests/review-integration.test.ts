@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerResult } from "../review/state.js";
 import { fakePi } from "./fake-pi.ts";
-import { cleanupFirecodeModules, loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
 type ReviewHandle = ReturnType<RegisterReview>;
@@ -46,8 +46,6 @@ async function loadAll() {
 	CheckpointConflictErrorCtor = checkpoint.CheckpointConflictError;
 	initialState = state.initialState;
 }
-
-afterEach(cleanupFirecodeModules);
 
 function makeSessionManager() {
 	const entries: unknown[] = [];

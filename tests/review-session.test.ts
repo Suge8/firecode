@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
-
-afterEach(cleanupFirecodeModules);
+import { describe, expect, test } from "bun:test";
+import { loadFirecodeModule } from "./loader.ts";
 
 type Event = Record<string, unknown>;
 

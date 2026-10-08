@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import {
-	cleanupFirecodeModules,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
@@ -28,7 +27,6 @@ afterEach(async () => {
 	directory = undefined;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	await cleanupFirecodeModules();
 });
 
 test("建议卡收起只显示正文首行，展开显示完整建议", async () => {

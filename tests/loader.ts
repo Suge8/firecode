@@ -166,9 +166,6 @@ async function prepareCopy(
 	return directory;
 }
 
-/** 副本按配置共享、进程退出才删；保留这个钩子让各用例的 afterEach 写法不变。 */
-export async function cleanupFirecodeModules(): Promise<void> {}
-
 /** 注册入口测试只开启指定功能，其余开关从运行配置的唯一功能清单派生。 */
 export async function featuresOnly(...enabled: string[]): Promise<Record<string, boolean>> {
 	const { FEATURES } = await loadFirecodeModule("config.ts") as { FEATURES: readonly string[] };

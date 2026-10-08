@@ -3,7 +3,7 @@ import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.js";
+import { loadFirecodeModule } from "./loader.js";
 import { fakePi } from "./fake-pi.ts";
 
 type Module = {
@@ -22,7 +22,6 @@ afterEach(async () => {
 
 afterAll(async () => {
 	cached = undefined;
-	await cleanupFirecodeModules();
 });
 
 /** 假 herdr socket：记录请求；failures 让前 N 次请求回错误。 */

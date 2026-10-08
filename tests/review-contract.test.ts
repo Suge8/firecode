@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanupFirecodeModules, loadFirecodeModule } from "./loader.ts";
+import { describe, expect, test } from "bun:test";
+import { loadFirecodeModule } from "./loader.ts";
 
 type ParseReview = typeof import("../review/reviewer.js").parseReviewOutput;
 type ParseAdvisor = typeof import("../review/advisor.js").parseAdvisorOutput;
@@ -35,8 +35,6 @@ function finding(issue: string) {
 		"- 验证命令: bun test",
 	].join("\n");
 }
-
-afterEach(cleanupFirecodeModules);
 
 describe("PASS/FAIL output contract", () => {
 	test("the verdict word tolerates markdown wrapping, backticks and case", async () => {
