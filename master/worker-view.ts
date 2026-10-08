@@ -44,7 +44,7 @@ const TAIL: { text?: string; drop: number }[] = [
 const NOTICE_MS = 3_000;
 
 /** 视图要的全部外部事实与动作：由 Master 运行时提供，测试替身同形。 */
-export interface WorkerViewSource {
+interface WorkerViewSource {
 	/** 活动列表的同一份事实：启动序名单与上横线的行状态都从它来。 */
 	facts(): ActivityFacts;
 	worker(name: string): WorkerRef | undefined;
@@ -81,7 +81,7 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 	if (!drafts) runtimeDrafts.set(active, drafts = new Map());
 	return {
 		facts: () => active.activityFacts(),
-		worker: (name) => active.store.state.workers.find((worker) => worker.name === name),
+		worker: (name) => active.store.find(name),
 		session: (worker) => active.setup.pool.getSession(worker.sessionPath),
 		onSession: (listener) => active.onWorkerSession(listener),
 		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),

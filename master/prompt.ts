@@ -3,7 +3,7 @@ import { msg } from "./messages.js";
 
 const PROMPTS_DIR = new URL("./prompts/", import.meta.url);
 
-export type MasterPromptKind = "master" | "worker";
+type MasterPromptKind = "master" | "worker";
 
 export function readMasterPrompt(kind: MasterPromptKind): string {
 	let prompt: string;

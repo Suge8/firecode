@@ -13,7 +13,7 @@ import {
 } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
 import { preallocateWorkerSession } from "./spawn.js";
-import { requireWorker, THINKING_LEVELS, type WorkerRef } from "./state.js";
+import { THINKING_LEVELS, WORKER_NAME, type WorkerRef } from "./state.js";
 
 export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const;
 export type Action = (typeof ACTIONS)[number];
@@ -27,7 +27,7 @@ const MAX_IN_FLIGHT = 15;
 export const ACTION_HANDLERS: Record<Action, Handler> = { start, send, interrupt, review, tail, ack, kill };
 
 async function kill(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	// 同步段内删档案与运行时事实，迟到的异步写回据此全部作废；随后等 session_shutdown 收口释放热会话。
 	active.remove(target.name);
 	await active.setup.pool.dispose(target.sessionPath);
@@ -35,18 +35,18 @@ async function kill(active: MasterRuntime, params: Params): Promise<ToolResult> 
 }
 
 async function tail(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	return { content: [{ type: "text", text: await readWorkerTrace(target) }], details: undefined };
 }
 
 /** 动作名按模型先验取：曾叫 hold，被读成“暂停”而假成功。名字治误读，非 idle 报错治假成功。 */
 async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
 	if (target.disposition) {
 		const { disposition: _disposition, ...rest } = target;
-		active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
+		active.store.upsert(rest);
 	}
 	// ack 发落失败与被中断的行；完成的留在“✓ N 个已完成”里直到 kill。
 	const live = active.live.get(target.name);
@@ -57,7 +57,7 @@ async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 
 async function review(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	if (active.setup.reviewGate) throw new Error(active.setup.reviewGate);
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	const live = active.liveOf(target.name);
 	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
 	live.transitioning = true;
@@ -77,7 +77,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 }
 
 async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
 	const session = active.setup.pool.getSession(target.sessionPath);
 	if (!session) throw new Error(msg.action.sessionReleased(target.name));
@@ -98,7 +98,7 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 async function send(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const { reviewGate, pool, roster } = active.setup;
 	if (params.review === true && reviewGate) throw new Error(reviewGate);
-	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
+	const target = targetOf(active, params);
 	const live = active.liveOf(target.name);
 	if (live.transitioning) throw new Error(msg.action.switching(target.name));
 	const requestedRole = optionalString(params.role);
@@ -184,9 +184,9 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	const name = params.worker.trim();
 	validateWorkerName(name);
 	const starting = [...active.live].flatMap(([candidate, live]) => (live.starting ? [candidate] : []));
-	if (active.store.state.workers.some((worker) => worker.name === name) || starting.includes(name))
+	if (active.store.find(name) || starting.includes(name))
 		throw new Error(msg.action.exists(name));
-	const inFlight = active.store.state.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing");
+	const inFlight = active.store.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing");
 	if (inFlight.length + starting.length >= MAX_IN_FLIGHT)
 		throw new Error(msg.action.limit(MAX_IN_FLIGHT, [...inFlight.map((worker) => worker.name), ...starting]));
 	const prompt = requiredString(params.prompt, "prompt");
@@ -212,7 +212,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 			launch,
 			...(params.review === true ? { reviewNeeded: true } : {}),
 		};
-		active.store.dispatch({ type: "UPSERT_WORKER", worker });
+		active.store.upsert(worker);
 		live.starting = undefined;
 		active.beginRun(name);
 		const session = await spawnWorker(active, worker, false);
@@ -251,6 +251,10 @@ function toolResult(value: unknown): ToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
 }
 
+function targetOf(active: MasterRuntime, params: Params): WorkerRef {
+	return active.store.require(requiredString(params.worker, "worker"));
+}
+
 function requiredString(value: unknown, field: string): string {
 	if (typeof value !== "string" || !value.trim()) throw new Error(msg.action.empty(field));
 	return value.trim();
@@ -271,7 +275,7 @@ function resolveRole(roles: MasterRole[], role: string): MasterRole {
 }
 
 function validateWorkerName(name: string): void {
-	if (!/^[a-z][a-z0-9_-]{0,31}$/u.test(name)) throw new Error(msg.action.badName);
+	if (!WORKER_NAME.test(name)) throw new Error(msg.action.badName);
 }
 
 function validateDelegationText(prompt: string): void {

@@ -16,15 +16,15 @@ import { msg } from "./messages.js";
 import { withSubsessionRole, type SubsessionRole } from "./role.js";
 import type { WorkerThinking } from "./state.js";
 
-export const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
+const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
 /** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
 const BUILTIN_CODEMODE: InlineExtension = { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true };
 
-export type SessionPersistence =
+type SessionPersistence =
 	| { type: "memory" }
 	| { type: "file"; sessionPath: string; resume?: boolean };
 
-export interface SpawnSessionOptions {
+interface SpawnSessionOptions {
 	cwd: string;
 	model: Model<any>;
 	role: SubsessionRole;
@@ -40,9 +40,8 @@ export interface SpawnSessionOptions {
 	isolated?: boolean;
 }
 
-export interface SpawnedSession {
+interface SpawnedSession {
 	readonly session: AgentSession;
-	readonly sessionPath?: string;
 	prompt(text: string): Promise<void>;
 	/** 先让会话内扩展按宿主契约收口（session_shutdown），再释放；resolve 即收口完成。 */
 	dispose(): Promise<void>;
@@ -60,7 +59,7 @@ interface HeldSession {
 const WRITERS_KEY = Symbol.for("firecode.session-writers");
 const SESSION_WRITERS = ((globalThis as Record<symbol, unknown>)[WRITERS_KEY] ??= new Set<string>()) as Set<string>;
 
-export interface PoolEnvironment {
+interface PoolEnvironment {
 	agentDir?: string;
 	modelRuntime?: ModelRuntime;
 	idleTimeoutMs?: number;
@@ -144,7 +143,6 @@ export class InProcessSessionPool {
 		this.held.set(key, held);
 		return {
 			session: created,
-			sessionPath,
 			prompt: (text) => created.prompt(text),
 			dispose: () => this.release(held),
 		};

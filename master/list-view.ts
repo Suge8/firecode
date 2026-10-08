@@ -24,7 +24,10 @@ export function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	return parts;
 }
 
-export type CompactWorker = ReturnType<typeof compactWorker>;
+type CompactWorker = ReturnType<typeof compactWorker>;
+type WorkerAction = NonNullable<ReturnType<typeof currentWorkerAction>>;
+/** 池快照加上只给界面看的当前动作（模型正文不含）。 */
+export type ListedWorker = CompactWorker & { currentAction?: WorkerAction };
 
 /** 给模型的池快照：只有档案事实。 */
 export function compactWorker(worker: WorkerRef) {
@@ -57,73 +60,57 @@ export function currentWorkerAction(worker: CompactWorker, live: WorkerLive | un
 	return current ? { kind: "tool" as const, ...current } : undefined;
 }
 
+function actionParts(action: WorkerAction | undefined): Part[] {
+	if (action?.kind === "tool")
+		return [{ text: ` · ${action.tool} · ${msg.list.running(formatDuration(Math.max(0, Date.now() - action.startedAt)))}`, color: "accent" }];
+	if (action?.kind === "idle")
+		return [{
+			text: action.since ? ` · ${msg.list.settledAgo(formatDuration(Date.now() - action.since))}` : ` · ${msg.list.settled}`,
+			color: "muted",
+		}];
+	if (action?.kind === "review")
+		return [{ text: ` · ${msg.list.reviewRound(action.round, action.settled, action.total)}`, color: "accent" }];
+	return [];
+}
+
 export function expandedWorkerList(
-	workers: unknown[],
+	workers: ListedWorker[],
 	theme: ExtensionContext["ui"]["theme"],
 	context: Parameters<typeof renderSubagentsResult>[3],
 ) {
 	return {
 		invalidate() {},
 		render(width: number): string[] {
-			return ["", ...workers.flatMap((value) => {
-				const worker = value as Record<string, unknown>;
-				const action = worker.currentAction as {
-					kind?: string;
-					tool?: string;
-					startedAt?: number;
-					since?: number;
-					round?: number;
-					settled?: number;
-					total?: number;
-				} | undefined;
-				const actionParts: Part[] = action?.kind === "tool" && action.tool && action.startedAt
-					? [{
-						text: ` · ${action.tool} · ${msg.list.running(formatDuration(Math.max(0, Date.now() - action.startedAt)))}`,
-						color: "accent",
-					}]
-					: action?.kind === "idle"
-						? [{
-							text: action.since ? ` · ${msg.list.settledAgo(formatDuration(Date.now() - action.since))}` : ` · ${msg.list.settled}`,
-							color: "muted",
-						}]
-						: action?.kind === "review"
-							? [{ text: ` · ${msg.list.reviewRound(action.round!, action.settled!, action.total!)}`, color: "accent" }]
-							: [];
-				return new ToolLine({
-					label: String(worker.name),
-					value: [
-						{ text: roleStatusText(worker), color: "accent" },
-						...actionParts,
-						{ text: ` · ${String(worker.model).split("/").pop()}/${String(worker.thinking)}`, color: "muted" },
-					],
-					clip: "end",
-					theme,
-					ctx: { ...context, state: {}, expanded: false },
-				}).render(width);
-			})];
+			return ["", ...workers.flatMap((worker) => new ToolLine({
+				label: worker.name,
+				value: [
+					{ text: roleStatusText(worker), color: "accent" },
+					...actionParts(worker.currentAction),
+					{ text: ` · ${worker.model.split("/").pop()}/${worker.thinking}`, color: "muted" },
+				],
+				clip: "end",
+				theme,
+				ctx: { ...context, state: {}, expanded: false },
+			}).render(width))];
 		},
 	};
 }
 
-export function listMeta(workers: unknown[]): Part[] {
+export function listMeta(workers: ListedWorker[]): Part[] {
 	if (!workers.length) return [{ text: ` — ${msg.list.poolEmpty}`, color: "muted" }];
-	const summary = workers.map((value) => {
-		const worker = value as Record<string, unknown>;
-		return `${String(worker.name)} ${roleStatusText(worker)}`;
-	}).join(" · ");
+	const summary = workers.map((worker) => `${worker.name} ${roleStatusText(worker)}`).join(" · ");
 	return [{ text: ` — ${msg.list.pool(workers.length, summary)}`, color: "muted" }];
 }
 
-export function statusText(workers: WorkerRef[]): string {
+export function statusText(workers: readonly WorkerRef[]): string {
 	return workers.length
 		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
 		: msg.list.noWorkers;
 }
 
-/** 角色为主的状态投影：「工程师·工作」；档案缺角色时退到纯状态词。 */
-function roleStatusText(worker: { role?: unknown; status?: unknown }): string {
-	const status = STATUS_WORD[worker.status as WorkerStatus] ?? String(worker.status);
-	return worker.role ? `${String(worker.role)}·${status}` : status;
+/** 角色为主的状态投影：「工程师·工作」。 */
+function roleStatusText(worker: Pick<WorkerRef, "role" | "status">): string {
+	return `${worker.role}·${STATUS_WORD[worker.status]}`;
 }
 
 function optionalText(value: unknown): string | undefined {
