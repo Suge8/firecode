@@ -1561,42 +1561,28 @@ test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () =>
 });
 
 test("显式 observer 角色不注册 Master 工具面", async () => {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("master"),
 			review: TEST_REVIEW_CONFIG,
 			master: { roles: { 工程师: TEST_ROLES.工程师 }, workerExcludeExtensions: [], autoActivate: true },
 		}),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown) => withSubsessionRole("observer", async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi);
+	registerFirecode(fake.pi, "observer");
 	expect(fake.commands.has("fire-master")).toBe(false);
 	expect(fake.tools.has("subagents")).toBe(false);
 	expect(fake.handlers.has("tool_call")).toBe(true);
 });
 
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("header", "tools", "presets", "stats"),
 		}),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown) => withSubsessionRole("worker", async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi);
+	registerFirecode(fake.pi, "worker");
 	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
