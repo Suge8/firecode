@@ -34,7 +34,7 @@ pi install npm:pi-firecode
 - **核心很轻。** 子代理只有两个小工具，审查和观察员一个工具都不加。
 - **视觉负担低。** 中间过程全部折叠，你只看结果；工具细节想看再展开。
 
-## 会修问题的审查
+## 更强的全自动审查交付
 
 改完代码执行 `/fire-review`。几个不同家的模型审查代理实际做的事：改了哪些文件、会话里说了什么，还会自己跑测试取证。挑出的问题直接打回给代理修，下一轮再查；反复修不好时，由顾问模型决定继续、收窄范围还是停下。
 
@@ -46,10 +46,11 @@ pi install npm:pi-firecode
 | --- | --- | --- | --- |
 | **FireCode** | 多家模型 | 自动修 | 查到通过为止 |
 | Qwen Code `/review` | 最多 16 个代理，同一个模型 | `--fix` 修一次 | 不查 |
+| Open Code Review（阿里） | 同一个模型，逐文件审 | 不修，你修完自己标记 | 不查 |
 | PR-Agent / Qodo | 分工代理，同一个模型 | 手动触发 | 不查 |
 | multi-model-review（Pi） | 多家模型 | 不修 | 不查 |
 
-## 看得见的子代理
+## 清晰的子代理状态
 
 每个子代理都列在输入框上方，点一下就能看它的完整过程，并直接跟它说话。
 
@@ -70,7 +71,7 @@ pi install npm:pi-firecode
 
 `/fire-watch` 便宜模型帮你盯着，跑偏才开口 · `/preset` 一键切换模型、思考档和工具 · `/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档
 
-用 Claude 订阅的话，FireCode 会给请求补上 Claude Code 归因，登录令牌轮换时自动重试一次。
+用 Claude 订阅的话，登录令牌刚好轮换导致的请求失败会自动重试一次，不会打断当前回合。
 
 不想要哪个功能，在 `~/.pi/agent/extensions/firecode/config.jsonc` 里写 `"features": { "<名字>": false }` 关掉。
 

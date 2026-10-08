@@ -34,7 +34,7 @@ I used to stack a dozen Pi extensions. Now this is the only one I keep.
 - **A light core.** Two small sub-agent tools. Review and the watcher add none.
 - **Nothing to read unless you want to.** Every step in between folds away. You see the answer; tool output opens on demand.
 
-## Review that fixes, not just flags
+## Fully automatic review, all the way to a passing fix
 
 Run `/fire-review` after a change. Different model families review what the agent actually did — the files, the session, the tests they run themselves. Anything they flag goes straight back to the agent to fix, and the next round checks it again. If a fix keeps failing, an advisor model decides whether to push on, narrow the scope or stop.
 
@@ -46,10 +46,11 @@ Most open-source reviewers hand you a report and stop there:
 | --- | --- | --- | --- |
 | **FireCode** | Several model families | Yes, automatically | Yes, until it passes |
 | Qwen Code `/review` | Up to 16 agents, one model | Once, with `--fix` | No |
+| Open Code Review (Alibaba) | One model, file by file | No, you fix and mark | No |
 | PR-Agent / Qodo | Specialist agents, one model | On request | No |
 | multi-model-review (Pi) | Several model families | No | No |
 
-## Sub-agents you can see
+## Clear sub-agent status
 
 Every sub-agent sits above the input box. Click one to read its whole run and talk to it directly.
 
@@ -70,7 +71,7 @@ Sub-agent tools added to every request (tool definitions sent to the model, meas
 
 `/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI Fast mode
 
-On a Claude subscription, FireCode adds Claude Code attribution to requests and retries once when your login token rotates.
+On a Claude subscription, a request that fails because your login token just rotated is retried once instead of breaking the turn.
 
 Turn anything off with `"features": { "<name>": false }` in `~/.pi/agent/extensions/firecode/config.jsonc`.
 
