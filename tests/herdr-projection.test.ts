@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,6 +100,28 @@ test("session_start 首报：先报状态与恢复命令，再报身份；不动
 		clear_state_labels: true,
 	});
 	expect(herdr.requests[1].params.seq).toBeGreaterThan(herdr.requests[0].params.seq);
+});
+
+test("同一 pane 里后启动的 pi 推高了 seq 水位：本进程之后的上报仍高过它，不被 herdr 当过期丢弃", async () => {
+	idle = true;
+	const herdr = await herdrStub();
+	const pi = await register(herdr.path);
+	await pi.fire("session_start", {}, context("x"));
+	await pi.settled();
+	// 一分钟后在本 pane 里启动的另一个 pi（如嵌套启动）按它自己的启动时刻起算 seq，herdr 记下的水位随之抬高。
+	const otherStartedAt = Date.now() + 60_000;
+	const watermark = otherStartedAt * 1000 + 1000;
+	setSystemTime(new Date(otherStartedAt + 1_000));
+	try {
+		idle = false;
+		await pi.fire("agent_start", {}, context("x"));
+		await pi.settled();
+	} finally {
+		setSystemTime();
+		idle = true;
+	}
+	expect(trace(herdr.requests).at(-1)).toBe("working");
+	expect(herdr.requests.at(-1)!.params.seq).toBeGreaterThan(watermark);
 });
 
 test("会话文件路径含撇号（herdr 会拒收）或没有会话文件时不附恢复命令", async () => {

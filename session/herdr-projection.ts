@@ -23,9 +23,13 @@ const RETRY_TIMEOUT_MS = 1_500;
 /** herdr 拒收含撇号或控制字符的恢复命令参数。 */
 const UNSAFE_ARGUMENT = /['\u0000-\u001f\u007f]/;
 
-/** herdr 按 seq 丢弃过期上报，同一 source 的 seq 必须单调递增；身份与状态共用一个计数。 */
-let seq = Date.now() * 1000;
-const nextSeq = () => (seq += 1);
+/**
+ * herdr 按 seq 丢弃过期上报，水位按 pane + source 记、进程退出也不清：同一 pane 里先后跑过的 firecode
+ * （如嵌套启动的 pi）共用这一个水位。seq 取每次上报时的微秒级墙钟并保证本进程内单调，后启动进程留下的
+ * 高水位因此只压住它启动前的那一刻，不会永久吞掉本进程之后的上报。身份与状态共用一个计数。
+ */
+let seq = 0;
+const nextSeq = () => (seq = Math.max(seq + 1, Date.now() * 1000));
 
 interface Projection {
 	title: string;
