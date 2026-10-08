@@ -30,15 +30,24 @@ I used to stack a dozen Pi extensions. Now this is the only one I keep.
 
 - **Works out of the box.** One install. Sensible defaults, English or Chinese UI.
 - **Sub-agents you actually control.** Run them in parallel, give each role its own model, fall back automatically when a provider fails, and open any of them to watch or redirect it.
-- **Review that fixes things.** Several models check every change. Anything they flag goes back to the agent, gets fixed and checked again.
-- **Barely touches your context.** Delegation adds just two small tools to every request.
-- **Looks good.** Status lives in the input border and each request folds into a single line.
+- **Review that doesn't stop at a report.** Several different models check the work, and every problem goes back to the agent until it's fixed.
+- **A light core.** Two small sub-agent tools. Review and the watcher add none.
+- **Nothing to read unless you want to.** Every step in between folds away. You see the answer; tool output opens on demand.
 
-## Review that fixes things
+## Review that fixes, not just flags
 
-Run `/fire-review` after a change. If a reviewer finds a bug, the agent fixes it and the next round checks only that. When a fix keeps failing, an advisor model steps in.
+Run `/fire-review` after a change. Different model families review what the agent actually did — the files, the session, the tests they run themselves. Anything they flag goes straight back to the agent to fix, and the next round checks it again. If a fix keeps failing, an advisor model decides whether to push on, narrow the scope or stop.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
+
+Most open-source reviewers hand you a report and stop there:
+
+| | Reviewers | Fixes what it finds | Re-checks the fix |
+| --- | --- | --- | --- |
+| **FireCode** | Several model families | Yes, automatically | Yes, until it passes |
+| Qwen Code `/review` | Up to 16 agents, one model | Once, with `--fix` | No |
+| PR-Agent / Qodo | Specialist agents, one model | On request | No |
+| multi-model-review (Pi) | Several model families | No | No |
 
 ## Sub-agents you can see
 
@@ -46,11 +55,11 @@ Every sub-agent sits above the input box. Click one to read its whole run and ta
 
 <p align="center"><img alt="A sub-agent's full run with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
 
-## Small on purpose
+## A light core
 
-What delegation costs on every request (tool definitions sent to the model, measured October 2026):
+Sub-agent tools added to every request (tool definitions sent to the model, measured October 2026). Review and the watcher run in their own sessions and add nothing.
 
-| | Tools | Characters |
+| | Sub-agent tools | Characters |
 | --- | --- | --- |
 | **FireCode** | 2 | **926** |
 | omp | 2 | 3,140 |
@@ -60,6 +69,8 @@ What delegation costs on every request (tool definitions sent to the model, meas
 ## Also in the box
 
 `/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI Fast mode
+
+On a Claude subscription, FireCode adds Claude Code attribution to requests and retries once when your login token rotates.
 
 Turn anything off with `"features": { "<name>": false }` in `~/.pi/agent/extensions/firecode/config.jsonc`.
 
