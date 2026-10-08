@@ -20,7 +20,7 @@ async function harness() {
 		set idle(value: boolean) { idle = value; },
 		/** 宿主当前回合的中断信号（用户 Esc 等）。 */
 		set aborted(value: boolean) { aborted = value; },
-		review: (active: boolean) => fake.pi.events.emit("herdr:blocked", active ? { active, label: "审查", progress: () => undefined } : { active }),
+		review: (active: boolean) => fake.pi.events.emit("firecode:review", active ? { active, progress: () => undefined } : { active }),
 		get settled() { return settled; },
 		get result() { return result; },
 		get view() { return view; },

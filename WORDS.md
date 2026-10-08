@@ -34,6 +34,7 @@
 - **修复回合**（Repair）→ checkpoint `repair`；指单个回合，多轮整体叫修复循环；避免：返工
 - **总结回合**（Summary Turn）→ checkpoint `summary`；避免：收尾报告、总结卡（卡指结果卡）
 - **占用信号**（Occupancy）→ `review/occupancy.ts`；避免：审查状态
+- **herdr 投影**（Herdr Projection）→ `session/herdr-projection.ts`；会话在 herdr 里的身份、状态与恢复命令；避免：herdr 集成（那是 herdr 官方的 Pi 扩展，必须卸载）、显示投影
 
 ## 终端展示
 

@@ -65,13 +65,9 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 ## 占用信号
 
-审查活跃期双通道：进程内 `herdr:blocked` 频道（定义见 `occupancy.ts`）驱动 herdr 集成的 blocked 状态（集成只转发状态，message
-会被 herdr 丢弃）；标签本体经 `herdr-client.ts` 直接以 `pane.report_metadata` 的 `state_labels.blocked`
-投递（source `firecode-review`，实测唯一能同时到达 Master 判定与侧边栏 state_text 的通道）。
-
-标签是租约：持有期带 TTL 定时续约（herdr 无“进程退出即清 metadata”接口，crash 残留靠 TTL 自愈，续约
-兼作投递失败重试）；终态、取消、退出时清除，清除失败重试一次后由 TTL 兜底，reload 恢复时重新持有；
-该显示信号失败不影响审查。
+审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见 `occupancy.ts`），review 是唯一发布者，不接触 herdr。
+`busy.ts` 把它算进“会话进行中”，herdr 投影据此报 working 并带“对抗审查进行中”标签（不报 blocked：审查期间不需要用户决定任何事，
+blocked 会触发需要关注的通知）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障不影响审查。
 
 ## 契约与配置
 

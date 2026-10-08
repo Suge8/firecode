@@ -56,7 +56,7 @@ Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派
 
 ## 在飞数发布
 
-Master 是在飞子代理数与通用 `herdr:working` 的唯一发布者（定义见 `outbox.ts`、`busy.ts` 头注释）；herdr 的 pi 集成文件由 herdr 仓库维护，FireCode 只负责发布。
+Master 是在飞子代理数的唯一发布者（定义见 `outbox.ts`、`busy.ts` 头注释）；herdr 侧边栏的 working 由 `session/herdr-projection.ts` 经 `watchBusy` 读这个数得出，Master 不接触 herdr。
 
 ## 投递与义务
 
