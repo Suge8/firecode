@@ -28,6 +28,8 @@ test("npm pack ships only the build output and user-facing files", async () => {
 	expect(entries.filter((entry) => !packed.includes(entry))).toEqual([]);
 	const prompts = PROMPT_DIRS.flatMap((dir) => readdirSync(join(FIRECODE_DIR, dir)).map((name) => `dist/${dir}/${name}`));
 	expect(prompts.filter((path) => !packed.includes(path))).toEqual([]);
+	// 首次启动播种模板：打包后 config.ts 在 dist 里按自身位置找模板。
+	expect(packed).toContain("dist/config.example.jsonc");
 });
 
 test("bundle leaves only Node built-ins and host packages to be resolved at load time", async () => {

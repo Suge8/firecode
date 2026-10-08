@@ -3,7 +3,7 @@
  * Claude 订阅适配、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type Feature, loadConfig } from "./config.js";
+import { CONFIG_PATH, type Feature, loadConfig, seedConfig } from "./config.js";
 import { registerHeader } from "./header.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
@@ -38,6 +38,7 @@ const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "rename"
 type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
 
 export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
+	let seeding = seedForMainSession(role);
 	const { config, problems, featuresBroken } = loadConfig();
 	const subsession = role !== "main";
 	const reviewEnabled = config.features.review !== false;
@@ -57,10 +58,31 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
 	registerReview(pi, reviewEnabled, featuresBroken);
 
-	if (problems.length === 0) return;
+	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {
-		ctx.ui.notify(`FireCode 配置有问题：${problems.join("；")}`, "warning");
+		if (seeding) {
+			// 无界面（print 等）时成功提示无处可显示，但失败必须到 stderr，不能静默。
+			if (ctx.hasUI) ctx.ui.notify(seeding.message, seeding.level);
+			else if (seeding.level === "error") console.error(seeding.message);
+			seeding = undefined;
+		}
+		if (problems.length) ctx.ui.notify(`FireCode 配置有问题：${problems.join("；")}`, "warning");
 	});
+}
+
+type SeedNotice = { message: string; level: "info" | "error" };
+
+/** 主会话加载时补默认配置，必须先于 loadConfig；子会话不写盘。提示留到 session_start 有 UI 时显示。 */
+function seedForMainSession(role: FirecodeSessionRole): SeedNotice | undefined {
+	if (role !== "main") return undefined;
+	try {
+		return seedConfig()
+			? { message: `已生成配置：${CONFIG_PATH}，按需修改模型后重启生效`, level: "info" }
+			: undefined;
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		return { message: `无法生成配置：${CONFIG_PATH}（${reason}）`, level: "error" };
+	}
 }
 
 export default function firecode(pi: ExtensionAPI): void {
