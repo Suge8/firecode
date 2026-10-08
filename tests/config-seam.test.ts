@@ -92,11 +92,12 @@ test("Master 角色对象严格解析原子与 fallback", async () => {
 	expect(legacyProblems).toEqual(["未知字段 master.models"]);
 });
 
-test("已删除的配置项不被静默忽略：keys.rename 与 keys.cyclePreset 报未知字段，tools 节报未知配置节", async () => {
+test("已删除的配置项不被静默忽略：features.rename、keys.rename 与 keys.cyclePreset 报未知字段，tools 节报未知配置节", async () => {
 	const { loadConfig } = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({ keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" }, tools: { replyLines: 3 } }),
+		configJsonc: JSON.stringify({ features: { rename: true }, keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" }, tools: { replyLines: 3 } }),
 	});
 	const { problems } = (loadConfig as () => { problems: string[] })();
+	expect(problems.some((problem) => problem.startsWith("未知开关 features.rename"))).toBeTrue();
 	expect(problems).toContain("未知字段 keys.rename");
 	expect(problems).toContain("未知字段 keys.cyclePreset");
 	expect(problems).toContain("未知配置节 tools");

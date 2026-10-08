@@ -424,14 +424,16 @@ test("落定态在事件时算一次：歇下后反复重绘（按键）不再�
 	expect(shell.top()).toMatch(/^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u);
 });
 
-test("输入框里按宿主的改名键（app.session.rename）发布改名请求，其它键不发布", async () => {
-	const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
-	const { RENAME_REQUEST_CHANNEL } = await loadFirecodeModule("session/rename.ts") as any;
+/** 外壳编辑器的宿主替身：改名键是 \x12，输入框按 answers 依次应答。 */
+function renameHost(answers: Array<string | undefined>, initialName?: string) {
 	let editor: any;
+	let sessionName = initialName;
+	const prompts: unknown[][] = [];
+	const notices: string[] = [];
 	const theme = { fg: (_color: string, text: string) => text };
 	const ctx = {
 		isIdle: () => true,
-		sessionManager: { getSessionName: () => undefined, getBranch: () => [] },
+		sessionManager: { getSessionName: () => sessionName, getBranch: () => [] },
 		ui: {
 			setWorkingVisible() {},
 			setFooter(factory: any) { factory?.({ requestRender() {} }, theme, { getExtensionStatuses: () => new Map() }); },
@@ -439,16 +441,52 @@ test("输入框里按宿主的改名键（app.session.rename）发布改名请�
 				const renameKey = { matches: (data: string, action: string) => action === "app.session.rename" && data === "\x12" };
 				editor = factory?.({ requestRender() {}, terminal: { rows: 40 } }, { borderColor: (text: string) => text, selectList: {} }, renameKey);
 			},
+			input: async (...args: unknown[]) => { prompts.push(args); return answers.shift(); },
+			notify: (message: string) => notices.push(message),
 		},
 	};
-	const fake = fakePi();
-	registerStatusBar(fake.pi);
-	const requests: unknown[] = [];
-	fake.pi.events.on(RENAME_REQUEST_CHANNEL, (data: unknown) => requests.push(data));
-	fake.fire("session_start", {}, ctx);
+	const fake = fakePi({ getSessionName: () => sessionName, setSessionName: (name: string) => { sessionName = name; } });
+	return {
+		fake, ctx, prompts, notices,
+		name: () => sessionName,
+		start: async () => {
+			const { registerStatusBar } = await loadFirecodeModule("statusbar/index.ts") as any;
+			registerStatusBar(fake.pi);
+			fake.fire("session_start", {}, ctx);
+		},
+		press: async (data: string) => { editor.handleInput(data); await new Promise((resolve) => setTimeout(resolve, 0)); },
+	};
+}
 
-	editor.handleInput("\x12");
-	editor.handleInput("a");
+test("输入框里按宿主的改名键（app.session.rename）弹输入框（预填当前名字）改会话名，名字去掉控制字符", async () => {
+	const host = renameHost(["  new\u200b name\n"], "old");
+	await host.start();
 
-	expect(requests).toEqual([ctx]);
+	await host.press("\x12");
+
+	expect(host.prompts[0]?.[1]).toBe("old");
+	expect(host.name()).toBe("new name");
+	expect(host.notices).toEqual(["会话已改名：new name"]);
+});
+
+test("改名取消或留空不改会话名；其它键不弹输入框", async () => {
+	const host = renameHost([undefined, "   "], "old");
+	await host.start();
+
+	await host.press("a");
+	expect(host.prompts).toEqual([]);
+	await host.press("\x12");
+	await host.press("\x12");
+
+	expect(host.prompts).toHaveLength(2);
+	expect(host.name()).toBe("old");
+	expect(host.notices).toEqual([]);
+});
+
+test("不注册 /rename 命令，也不自占快捷键：键位归宿主的 app.session.rename", async () => {
+	const host = renameHost([]);
+	await host.start();
+
+	expect([...host.fake.commands.keys()]).toEqual([]);
+	expect([...host.fake.shortcuts.keys()]).toEqual([]);
 });

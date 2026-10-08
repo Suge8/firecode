@@ -1586,7 +1586,7 @@ test("显式 observer 角色不注册 Master 工具面", async () => {
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
 	const harness = await loadFirecodeModule("role-harness.js", {
 		configJsonc: JSON.stringify({
-			features: await featuresOnly("header", "tools", "presets", "rename", "stats"),
+			features: await featuresOnly("header", "tools", "presets", "stats"),
 		}),
 		extraFiles: {
 			"role-harness.ts": [

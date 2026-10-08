@@ -54,7 +54,6 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 		statusbar: true,
 		tools: true,
 		presets: true,
-		rename: true,
 		stats: true,
 		claudeSub: false,
 		openaiNative: false,
