@@ -38,6 +38,10 @@ jobs:
           echo "PI_PACKAGES_DIR=$RUNNER_TEMP/pi/packages" >> "$GITHUB_ENV"
           ln -s "$RUNNER_TEMP/pi" .pi-mono
 
+      # pi-smoke 用例会真实启动 pi 可执行文件。
+      - name: Install pi CLI
+        run: npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION#v}"
+
       - name: Typecheck
         run: .pi-mono/node_modules/.bin/tsc --noEmit
 
