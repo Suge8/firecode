@@ -32,7 +32,7 @@ export interface MasterSetup {
 	sessionSince(): number | undefined;
 }
 
-export interface CurrentTool {
+interface CurrentTool {
 	tool: string;
 	args: unknown;
 	startedAt: number;

@@ -24,7 +24,7 @@ export function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	return parts;
 }
 
-export type CompactWorker = ReturnType<typeof compactWorker>;
+type CompactWorker = ReturnType<typeof compactWorker>;
 
 /** 给模型的池快照：只有档案事实。 */
 export function compactWorker(worker: WorkerRef) {

@@ -44,7 +44,7 @@ const TAIL: { text?: string; drop: number }[] = [
 const NOTICE_MS = 3_000;
 
 /** 视图要的全部外部事实与动作：由 Master 运行时提供，测试替身同形。 */
-export interface WorkerViewSource {
+interface WorkerViewSource {
 	/** 活动列表的同一份事实：启动序名单与上横线的行状态都从它来。 */
 	facts(): ActivityFacts;
 	worker(name: string): WorkerRef | undefined;

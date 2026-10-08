@@ -16,7 +16,7 @@ const EVENT_RETRY_MS = 5_000;
 /** 指挥官空闲时，从第一条结果入队起最多等这么久就唤醒，即使结果还在陆续到达。 */
 const WAKE_MAX_MS = 6_000;
 
-export interface PendingMasterEvent {
+interface PendingMasterEvent {
 	id: string;
 	content: string;
 	worker?: string;
