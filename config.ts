@@ -1,16 +1,11 @@
 /** FireCode 配置：只读 Pi Agent 目录下的 `extensions/firecode/config.jsonc`。 */
 import { type ConfigFile, readConfigFile } from "./config-file.js";
 import { parseLanguage } from "./i18n.js";
+import { isRecord } from "./jsonc.js";
 import { msg } from "./messages.js";
 
-export type ThinkingLevelValue =
-	| "off"
-	| "minimal"
-	| "low"
-	| "medium"
-	| "high"
-	| "xhigh"
-	| "max";
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevelValue = (typeof THINKING_LEVELS)[number];
 
 /**
  * 模型原子：配置里一律写作 "provider/model/thinking"，解析后拆成运行时模型 id 与思考档。
@@ -87,7 +82,7 @@ const SECTIONS = ["language", "features", "keys", "openai", "presets", "review",
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
  * （tests/config-seam.test.ts 守这条）。ctrl+shift+s：宿主默认键位里没有，s 取 speed；单个 ctrl+字母已被宿主占满。
  */
-export const DEFAULT_KEYS = {
+const DEFAULT_KEYS = {
 	fast: "ctrl+shift+s",
 } as const;
 
@@ -135,14 +130,8 @@ function readFile({ raw, fault }: ConfigFile, problems: string[]): Record<string
 	}
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: {};
+	return isRecord(value) ? value : {};
 }
 
 /** 嵌套对象也做键白名单：拼写错误必须报出来，不能静默回退默认值。 */
@@ -211,7 +200,7 @@ export function loadConfig(): LoadedConfig {
 	const raw = readFile(readConfigFile(), blocking);
 	// features 省略表示沿用默认全开；只要显式写了，就必须是对象。
 	// 非对象不能回退成 {}，因为 {} 在入口语义里正是「全部启用」。
-	const featuresBroken = raw.features !== undefined && !isPlainObject(raw.features);
+	const featuresBroken = raw.features !== undefined && !isRecord(raw.features);
 	if (featuresBroken) blocking.push(msg.config.featuresNotObject);
 	const features: Partial<Record<Feature, boolean>> = featuresBroken
 		? Object.fromEntries(FEATURES.map((feature) => [feature, false]))
@@ -238,7 +227,7 @@ export function loadConfig(): LoadedConfig {
 		incomplete: (config: T) => string | undefined,
 	): { config: T; verdict: Section<T> } => {
 		const own: string[] = [];
-		if (raw[name] !== undefined && !isPlainObject(raw[name])) own.push(msg.config.mustBeObject(name));
+		if (raw[name] !== undefined && !isRecord(raw[name])) own.push(msg.config.mustBeObject(name));
 		const config = parse(asRecord(raw[name]), own);
 		if (features[name] !== false) problems.push(...own);
 		const reasons = [...blocking, ...own];
@@ -265,15 +254,6 @@ export function loadConfig(): LoadedConfig {
 
 // ---- 模型原子 ----
 
-const THINKING_LEVELS = new Set<ThinkingLevelValue>([
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-]);
 const FALLBACK_THINKING: ThinkingLevelValue = "medium";
 
 /**
@@ -282,7 +262,7 @@ const FALLBACK_THINKING: ThinkingLevelValue = "medium";
  * 每个字段只报一条问题，且必带目标形状——两段式旧写法会同时踩中两项校验，逐项报错说不出该改成什么。
  * 旧的分字段与两段式写法一律拒绝、不做兼容：兼容层会把三种写法固化成三套事实源。
  */
-export function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
+function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
 	const shape = msg.config.modelAtomShape(field);
 	if (typeof value !== "string" || !value) {
 		problems.push(shape);
@@ -292,7 +272,7 @@ export function parseModelAtom(value: unknown, field: string, problems: string[]
 	const model = slash > 0 ? value.slice(0, slash) : "";
 	const thinking = slash > 0 ? value.slice(slash + 1) : value;
 	const providerSlash = model.indexOf("/");
-	const valid = THINKING_LEVELS.has(thinking as ThinkingLevelValue);
+	const valid = (THINKING_LEVELS as readonly string[]).includes(thinking);
 	const faults: string[] = [];
 	if (providerSlash <= 0 || providerSlash === model.length - 1)
 		faults.push(msg.config.modelSegment(model || value));
@@ -307,7 +287,7 @@ const PRESET_KEYS = ["model", "tools", "instructions", "key"] as const;
 
 function parsePresets(value: unknown, problems: string[]): Record<string, Preset> {
 	if (value === undefined) return {};
-	if (!isPlainObject(value)) {
+	if (!isRecord(value)) {
 		problems.push(msg.config.mustBeObject("presets"));
 		return {};
 	}
@@ -318,7 +298,7 @@ function parsePresets(value: unknown, problems: string[]): Record<string, Preset
 
 /** preset 只在写了 model 时切模型；其余字段与模型原子互不依赖。 */
 function parsePreset(value: unknown, field: string, problems: string[]): Preset {
-	if (!isPlainObject(value)) {
+	if (!isRecord(value)) {
 		problems.push(msg.config.mustBeObject(field));
 		return {};
 	}
@@ -407,21 +387,18 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 
 // ---- master 节 ----
 
-/** 导出供测试：与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
-export function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
+/** 与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
+function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
 	for (const key of Object.keys(raw))
 		if (key !== "roles" && key !== "workerExcludeExtensions" && key !== "autoActivate")
 			problems.push(msg.config.unknownField(`master.${key}`));
 	const exclusions = stringArray(raw.workerExcludeExtensions, "master.workerExcludeExtensions", problems);
 	const autoActivate = booleanValue(raw.autoActivate, "master.autoActivate", true, problems);
-	if (raw.roles === undefined)
-		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
-	if (!isPlainObject(raw.roles) || Object.keys(raw.roles).length === 0) {
-		problems.push(msg.config.masterRoles);
-		return { roles: [], workerExcludeExtensions: exclusions, autoActivate };
-	}
-	const roles = Object.entries(raw.roles).map(([role, value]) =>
-		masterRole(value, `master.roles.${role}`, role, problems));
+	const table = raw.roles;
+	if (table !== undefined && (!isRecord(table) || Object.keys(table).length === 0)) problems.push(msg.config.masterRoles);
+	const roles = isRecord(table)
+		? Object.entries(table).map(([role, value]) => masterRole(value, `master.roles.${role}`, role, problems))
+		: [];
 	return { roles, workerExcludeExtensions: exclusions, autoActivate };
 }
 
@@ -429,8 +406,7 @@ function masterRole(value: unknown, field: string, role: string, problems: strin
 	const record = asRecord(value);
 	rejectUnknownKeys(record, ["model", "use", "fallback"], field, problems);
 	const atom = parseModelAtom(record.model, `${field}.model`, problems);
-	const use = typeof record.use === "string" && record.use ? record.use : "";
-	if (!use) problems.push(msg.config.mustBeString(`${field}.use`));
+	const use = stringValue(record.use, `${field}.use`, problems) ?? "";
 	const fallback = masterFallback(record.fallback, `${field}.fallback`, problems);
 	return { role, ...atom, use, fallback };
 }
@@ -449,8 +425,8 @@ function masterFallback(value: unknown, field: string, problems: string[]): Mode
 const WATCHER_KEYS = ["enabled", "model", "context"] as const;
 const WATCHER_CONTEXTS = new Set<WatcherContext>(["minimal", "full"]);
 
-/** 导出供测试：model 必填（含思考档），enabled 默认 true、context 默认 minimal。 */
-export function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
+/** model 必填（含思考档），enabled 默认 true、context 默认 minimal。 */
+function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
 	rejectUnknownKeys(raw, WATCHER_KEYS, "watcher", problems);
 	const enabled = booleanValue(raw.enabled, "watcher.enabled", true, problems);
 	// 模型原子必填：缺失或写错时留空模型并记录问题，观察员据此拒绝启动。

@@ -15,7 +15,7 @@ import { textOf } from "./format.js";
  * 机器消息的信封是唯一事实源：模型上下文里的来源标记、卡片与折叠界面的识别都从这里来。
  * 一条消息可含多个信封（并发落定的事件各占一个）；整条文本恰好由信封构成才算机器消息。
  */
-export const ENVELOPE_TAGS = ["firecode_master_event", "firecode_watcher", "firecode_review"] as const;
+const ENVELOPE_TAGS = ["firecode_master_event", "firecode_watcher", "firecode_review"] as const;
 export type EnvelopeTag = (typeof ENVELOPE_TAGS)[number];
 
 export interface ParsedEnvelope {

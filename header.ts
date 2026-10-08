@@ -6,9 +6,8 @@
  */
 import { homedir } from "node:os";
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { flame, HEAT_COLORS, mix, onFrame, paint, type Rgb } from "./flame.js";
+import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { clamp, easeOut as ease, flame, HEAT_COLORS, mix, onFrame, paint, type Rgb } from "./flame.js";
 import { clip } from "./format.js";
 
 const WORD = "firecode";
@@ -27,9 +26,6 @@ const RULE: Rgb = [60, 57, 53];
 /** 单行档副标题至少留这么宽才显示（省略号加几个字），右侧横线至少留这么长。 */
 const TINY_SUBTITLE_MIN = 8;
 const TINY_RULE_MIN = 3;
-
-const clamp = (value: number) => Math.min(1, Math.max(0, value));
-const ease = (k: number) => 1 - (1 - clamp(k)) ** 3;
 
 /** 像素画：每个终端格承载上下两个方形像素。 */
 type Pixel = Rgb | undefined;

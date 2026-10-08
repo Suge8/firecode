@@ -5,7 +5,6 @@ const ELLIPSIS = "…";
 const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g;
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** 压平换行与连续空白，用于把任意文本塞进单行 UI。 */
 /** 消息 content 里的正文：字符串原样；块数组只取 text 块，按行拼接。全插件只此一处。 */
 export function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -18,6 +17,7 @@ export function textOf(content: unknown): string {
 		.join("\n");
 }
 
+/** 压平换行与连续空白，用于把任意文本塞进单行 UI。 */
 export function oneLine(value = ""): string {
 	return value
 		.replace(/[\r\n\t]+/g, " ")
