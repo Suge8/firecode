@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. The header, input-box shell, tool rows, providers, the watcher and Master (activity list, Worker view, events, tool descriptions and both prompts), review (cards, prompts, notices, validation errors) and the session commands (\`/preset\`, \`/quota\`, \`/tokens\`, herdr sidebar labels) are bilingual too. Review output parsing and review-card previews keep accepting both languages' field names, so sessions that cross a language switch still resume cleanly.
+- English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. The header, input-box shell, tool rows, providers, the watcher and Master (activity list, Worker view, events, tool descriptions and both prompts), review (cards, prompts, notices, validation errors) and the session commands (`/preset`, `/quota`, `/tokens`, herdr sidebar labels) are bilingual too. Review output parsing and review-card previews keep accepting both languages' field names, so sessions that cross a language switch still resume cleanly.
 - The first main-session launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file) and uses it right away; adjust models and restart when ready.
 
 ### Changed
