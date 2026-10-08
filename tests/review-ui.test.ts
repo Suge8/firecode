@@ -10,13 +10,14 @@ describe("review editor lock", () => {
 	};
 
 	async function lock(previous?: unknown, bindings = keys) {
-		const ui = await loadFirecodeModule("review/ui.js") as any;
+		const { ReviewUi } = await loadFirecodeModule("review/ui.js") as any;
 		const installed: unknown[] = [];
 		const ctx = { ui: { getEditorComponent: () => previous, setEditorComponent: (next: unknown) => installed.push(next) } };
 		const cancelled: string[] = [];
-		const unlock = ui.lockEditor(ctx, () => cancelled.push("cancel"));
+		const ui = new ReviewUi();
+		ui.show(ctx, 1, true, () => cancelled.push("cancel"));
 		const editor = (installed[0] as any)(tui, theme, bindings);
-		return { editor, unlock, installed, cancelled };
+		return { editor, unlock: () => ui.clear(ctx), installed, cancelled };
 	}
 
 	test("输入不进缓冲区，esc 立即取消", async () => {

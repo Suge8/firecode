@@ -37,15 +37,13 @@ async function runner() {
 	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => createReviewSessionRunner(pool)(options) };
 }
 
+const config = { model: "provider/model", thinking: "high", tools: ["read", "bash", "write", "edit"], timeoutMs: 1_000 };
 const base = (pool: unknown) => ({
 	pool,
 	role: "reviewer",
-	model: "provider/model",
-	thinking: "high",
-	tools: ["read", "bash", "write", "edit"],
+	config,
 	prompt: { system: "policy", user: "evidence" },
 	cwd: process.cwd(),
-	timeoutMs: 1_000,
 });
 
 describe("review in-process session", () => {
@@ -107,6 +105,6 @@ describe("review in-process session", () => {
 	test("deadline expiry returns timeout without waiting for the session to settle", async () => {
 		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
 		const { runReviewSession } = await runner();
-		expect(await runReviewSession({ ...base(runtime.pool), timeoutMs: 5 })).toEqual({ kind: "timeout" });
+		expect(await runReviewSession({ ...base(runtime.pool), config: { ...config, timeoutMs: 5 } })).toEqual({ kind: "timeout" });
 	});
 });

@@ -2,10 +2,9 @@
 import { msg } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { AdvisorResult, AdvisorVerdict } from "./state.js";
-import type { ReviewSessionRunner } from "./session.js";
-import type { ReviewModelConfig } from "./reviewer.js";
+import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
 
-export interface RunAdvisorOptions {
+interface RunAdvisorOptions {
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
@@ -16,28 +15,17 @@ export interface RunAdvisorOptions {
 export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorResult> {
 	const result = await options.runSession({
 		role: "advisor",
-		model: options.config.model,
-		thinking: options.config.thinking,
-		tools: options.config.tools,
+		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
-		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
 	});
-	if (result.kind !== "output") throw new Error(advisorProcessError(result));
+	if (result.kind !== "output")
+		throw new Error(msg.advisor.unavailable(result.kind === "error" ? result.message : result.kind));
 	return parseAdvisorOutput(result.text);
 }
 
 const VERDICTS = new Set<AdvisorVerdict>(["continue", "stop", "narrow"]);
-
-function advisorProcessError(
-	result: Exclude<Awaited<ReturnType<ReviewSessionRunner>>, { kind: "output" }>,
-): string {
-	if (result.kind === "aborted") return msg.advisor.unavailable("aborted");
-	if (result.kind === "timeout") return msg.advisor.unavailable("timeout");
-	if (result.kind === "empty") return msg.advisor.unavailable("empty output");
-	return msg.advisor.unavailable(result.message);
-}
 
 /** 首行应为裸裁决词；容忍模型前言，在前几个非空行内识别裁决行，
  * 其余行（含前言）并入 advice；完全识别不出才回落 continue。 */

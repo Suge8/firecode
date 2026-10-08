@@ -14,8 +14,6 @@ import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { clip } from "../format.js";
 import { msg } from "./messages.js";
 
-let reviewTitleActive = false;
-
 /**
  * 审查等模型结论时（排队/审查中/顾问仲裁）接管编辑器：禁止输入，esc/Ctrl+C 随时取消。
  * 返回解锁函数，还原成锁定前的编辑器工厂（可能是别的扩展设置的自定义编辑器）。
@@ -24,7 +22,7 @@ let reviewTitleActive = false;
  * 字面量比较会漏。这里统一走 keybindings 匹配。
  * awaiting_fix 相不接管——那时是执行模型在改代码，用户应能正常输入与中断。
  */
-export function lockEditor(ctx: ExtensionContext, cancel: () => void): () => void {
+function lockEditor(ctx: ExtensionContext, cancel: () => void): () => void {
 	if (ctx.hasUI === false || typeof ctx.ui.setEditorComponent !== "function") return () => {};
 	const previous = ctx.ui.getEditorComponent();
 	ctx.ui.setEditorComponent((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => {
@@ -63,26 +61,51 @@ class ReviewEditor extends CustomEditor {
 	}
 }
 
-/** 审查期间终端标题写明“审查中 R轮次 · 会话名”，结束后还原。 */
-export function showReviewTitle(ctx: ExtensionContext, round: number) {
-	if (!ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
-	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };
-	const rawName = manager.getSessionName?.();
-	const rawCwd = manager.getCwd?.();
-	const who = typeof rawName === "string" && rawName
-		? rawName
-		: typeof rawCwd === "string" ? basename(rawCwd) : "";
-	reviewTitleActive = true;
-	ctx.ui.setTitle(`${msg.ui.reviewing}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
+/** 一场审查的界面接管：终端标题与只读编辑器，各自记着要还原的东西。 */
+export class ReviewUi {
+	private unlockEditor: (() => void) | undefined;
+	private titleShown = false;
+
+	/** 标题始终写明审查轮次；canCancel 为真（等模型结论）时才接管编辑器，修复/总结相把输入交还用户。 */
+	show(ctx: ExtensionContext, round: number, canCancel: boolean, cancel: () => void): void {
+		this.showTitle(ctx, round);
+		if (!canCancel) return this.releaseEditor();
+		this.unlockEditor ??= lockEditor(ctx, cancel);
+	}
+
+	clear(ctx: ExtensionContext): void {
+		if (this.titleShown && canSetTitle(ctx)) ctx.ui.setTitle(restoredTitle(ctx));
+		this.titleShown = false;
+		this.releaseEditor();
+	}
+
+	private showTitle(ctx: ExtensionContext, round: number): void {
+		if (!canSetTitle(ctx)) return;
+		const { name, dir } = identity(ctx);
+		const who = name || dir;
+		this.titleShown = true;
+		ctx.ui.setTitle(`${msg.ui.reviewing}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
+	}
+
+	private releaseEditor(): void {
+		this.unlockEditor?.();
+		this.unlockEditor = undefined;
+	}
 }
 
-export function hideReviewTitle(ctx: ExtensionContext) {
-	if (!reviewTitleActive || !ctx.hasUI || typeof ctx.ui.setTitle !== "function") return;
-	reviewTitleActive = false;
+function canSetTitle(ctx: ExtensionContext): boolean {
+	return ctx.hasUI && typeof ctx.ui.setTitle === "function";
+}
+
+function identity(ctx: ExtensionContext): { name: string | undefined; dir: string } {
 	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };
-	const rawName = manager.getSessionName?.();
-	const rawCwd = manager.getCwd?.();
-	const name = typeof rawName === "string" && rawName ? rawName : undefined;
-	const dir = typeof rawCwd === "string" ? basename(rawCwd) : "";
-	ctx.ui.setTitle(name ? `π - ${name} - ${dir}` : `π - ${dir}`);
+	const name = manager.getSessionName?.();
+	const cwd = manager.getCwd?.();
+	return { name: typeof name === "string" && name ? name : undefined, dir: typeof cwd === "string" ? basename(cwd) : "" };
+}
+
+/** 与宿主默认终端标题同一写法。 */
+function restoredTitle(ctx: ExtensionContext): string {
+	const { name, dir } = identity(ctx);
+	return name ? `π - ${name} - ${dir}` : `π - ${dir}`;
 }

@@ -1,18 +1,10 @@
 /** 审查者：进程内 memory 会话 + PASS/FAIL 输出契约解析。 */
-import type { ThinkingLevelValue } from "../config.js";
 import { msg, termPattern } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult, ReviewerStatus } from "./state.js";
-import type { ReviewSessionRunner } from "./session.js";
+import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
 
-export interface ReviewModelConfig {
-	model: string;
-	thinking: ThinkingLevelValue;
-	tools: string[];
-	timeoutMs: number;
-}
-
-export interface RunReviewerOptions {
+interface RunReviewerOptions {
 	index: number;
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
@@ -21,7 +13,7 @@ export interface RunReviewerOptions {
 	runSession: ReviewSessionRunner;
 }
 
-export type ParseOutcome = {
+type ParseOutcome = {
 	status: Exclude<ReviewerStatus, "running">;
 	summary: string;
 	details: string;
@@ -31,12 +23,9 @@ export type ParseOutcome = {
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const result = await options.runSession({
 		role: "reviewer",
-		model: options.config.model,
-		thinking: options.config.thinking,
-		tools: options.config.tools,
+		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
-		timeoutMs: options.config.timeoutMs,
 		signal: options.signal,
 	});
 	const parsed =
