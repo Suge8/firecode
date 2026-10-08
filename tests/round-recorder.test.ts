@@ -6,20 +6,11 @@ afterEach(cleanupFirecodeModules);
 
 /** 按会话角色注册整个 FireCode，跑一个回合，返回写进会话的轮记录。 */
 async function recordedRounds(role: "main" | "worker", features: string[]) {
-	const harness = await loadFirecodeModule("role-harness.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({ features: await featuresOnly(...features) }),
-		extraFiles: {
-			"role-harness.ts": [
-				'import firecode from "./index.js";',
-				'import { withSubsessionRole } from "./master/role.js";',
-				'export const register = (pi: unknown, role: string) => role === "main"',
-				'	? Promise.resolve(firecode(pi as never))',
-				'	: withSubsessionRole(role as never, async () => firecode(pi as never));',
-			].join("\n"),
-		},
-	}) as { register: (pi: unknown, role: string) => Promise<void> };
+	}) as { registerFirecode(pi: unknown, role: string): void };
 	const fake = fakePi();
-	await harness.register(fake.pi, role);
+	registerFirecode(fake.pi, role);
 	const ctx = { isIdle: () => true, signal: { aborted: false }, hasUI: false, mode: "print" };
 	for (const name of ["agent_start", "agent_end", "agent_settled"])
 		await fake.fire(name, { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
