@@ -221,7 +221,13 @@ function entryShell(marker: Component): Container {
 	return shell;
 }
 
-const ABORTED_TEXT = "Operation aborted";
+/** 被中断或出错的助手消息，其未完成工具行的错误正文。 */
+function failureResult(message: AssistantMessage) {
+	const text = message.stopReason === "aborted" ? "Operation aborted" : message.errorMessage || "Error";
+	return { content: [{ type: "text" as const, text }], isError: true };
+}
+
+const failed = (message: AssistantMessage) => message.stopReason === "aborted" || message.stopReason === "error";
 
 /**
  * 宿主把会话消息与运行事件变成聊天组件的逻辑（interactive-mode 的 addMessageToChat、renderSessionItems 与事件分支）是私有的；
@@ -250,8 +256,7 @@ export class ChatMirror {
 			for (const call of message.content) {
 				if (call.type !== "toolCall") continue;
 				const row = this.toolRow(call.name, call.id, call.arguments);
-				if (message.stopReason === "aborted" || message.stopReason === "error")
-					row.updateResult({ content: [{ type: "text", text: message.stopReason === "aborted" ? ABORTED_TEXT : message.errorMessage || "Error" }], isError: true });
+				if (failed(message)) row.updateResult(failureResult(message));
 				else this.pending.set(call.id, row);
 			}
 			return;
@@ -268,19 +273,13 @@ export class ChatMirror {
 	handle(event: AgentSessionEvent): boolean {
 		switch (event.type) {
 			case "message_start":
-				if (event.message.role === "assistant") {
-					this.streaming = this.assistant(event.message, true);
-					this.chat.addChild(this.streaming);
-				} else this.add(event.message);
+				if (event.message.role === "assistant") this.stream(event.message);
+				else this.add(event.message);
 				return true;
 			case "message_update":
 				if (event.message.role !== "assistant") return false;
 				// 回合中途打开视图时错过了这条消息的 message_start：在第一次更新时补建。
-				if (!this.streaming) {
-					this.streaming = this.assistant(event.message, true);
-					this.chat.addChild(this.streaming);
-				}
-				this.streaming.updateContent(event.message, true);
+				(this.streaming ?? this.stream(event.message)).updateContent(event.message, true);
 				for (const call of event.message.content) {
 					if (call.type !== "toolCall") continue;
 					const row = this.pending.get(call.id);
@@ -291,9 +290,8 @@ export class ChatMirror {
 			case "message_end":
 				if (!this.streaming || event.message.role !== "assistant") return false;
 				this.streaming.updateContent(event.message, false);
-				if (event.message.stopReason === "aborted" || event.message.stopReason === "error") {
-					const text = event.message.stopReason === "aborted" ? ABORTED_TEXT : event.message.errorMessage || "Error";
-					for (const row of this.pending.values()) row.updateResult({ content: [{ type: "text", text }], isError: true });
+				if (failed(event.message)) {
+					for (const row of this.pending.values()) row.updateResult(failureResult(event.message));
 					this.pending.clear();
 				} else for (const row of this.pending.values()) row.setArgsComplete();
 				this.streaming = undefined;
@@ -352,6 +350,12 @@ export class ChatMirror {
 		if (!text) return;
 		if (this.chat.children.length) this.chat.addChild(new Spacer(1));
 		this.chat.addChild(new UserMessageComponent(text, getMarkdownTheme()));
+	}
+
+	private stream(message: AssistantMessage): AssistantMessageComponent {
+		this.streaming = this.assistant(message, true);
+		this.chat.addChild(this.streaming);
+		return this.streaming;
 	}
 
 	private assistant(message: AssistantMessage, streaming = false): AssistantMessageComponent {
