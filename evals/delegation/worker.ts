@@ -21,7 +21,7 @@ const audit = (scope: string) => "审计这个仓库的 " + scope + "：找真�
 // bash 的 ${...} 与模板字符串冲突，脚本按行拼。
 const E2E = [
 	"#!/bin/bash",
-	"cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet bark-push herdr-label compaction)",
+	"cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet quota-query herdr-label compaction)",
 	"failed=()",
 	'for c in ${cases[@]}; do',
 	'	echo "[e2e] $c ..."; sleep 12',
@@ -78,7 +78,7 @@ function setupAgent(): void {
 	mkdirSync(join(agent, "extensions/firecode"), { recursive: true });
 	for (const file of ["auth.json", "settings.json", "models.json", "models-store.json", "SYSTEM.md", "bin"])
 		if (existsSync(join(USER_AGENT_DIR, file))) symlinkSync(join(USER_AGENT_DIR, file), join(agent, file));
-	const off = Object.fromEntries(["header", "statusbar", "tools", "presets", "rename", "stats", "openaiNative", "bark", "review", "master", "watcher"].map((k) => [k, false]));
+	const off = Object.fromEntries(["header", "statusbar", "tools", "presets", "rename", "stats", "openaiNative", "review", "master", "watcher"].map((k) => [k, false]));
 	writeFileSync(join(agent, "extensions/firecode/config.jsonc"), JSON.stringify({ features: { ...off, claudeSub: true } }));
 	writeFileSync(join(agent, "extensions/firecode/index.ts"), 'export { default } from "./source/index.ts";\n');
 	symlinkSync(REPO, join(agent, "extensions/firecode/source"));

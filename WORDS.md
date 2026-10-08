@@ -18,7 +18,6 @@
 - **发落**（Disposition）→ 档案 `disposition`；指挥官对落定类事件的 send / review / kill / ack；避免：确认、处置
 - **审查义务**（Review Obligation）→ `review:true`、档案 `reviewNeeded`；避免：自动审查、审查触发器
 - **会话进行中** / **歇下**（Session Busy）→ `busy.ts`；指挥官回合结束不等于歇下；避免：完成、空闲
-- **待拍板**（Awaiting Decision）→ `session/bark.ts`；不是子代理状态；避免：阻塞、等待决策
 - **待命**（Ack）→ `ack` 动作；避免：挂起、暂停、hold
 - **中断**（Interruption）→ 档案 `interruptedAt`；不是执行失败；避免：执行失败、abort
 - **自动续跑**（Auto-resume）→ “待续跑”提醒；插件只提醒，续派仍由指挥官发；避免：自动重发、心跳

@@ -10,7 +10,7 @@ export const T9_TRUTH_FILE = join(FIXTURES, "t9-truth.json");
 
 const E2E = `#!/bin/bash
 # 端到端套件：12 个场景串行，每个约 75 秒，全套约 15 分钟。
-cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet bark-push herdr-label compaction)
+cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet quota-query herdr-label compaction)
 failed=()
 for c in \${cases[@]}; do
 	echo "[e2e] $c ..."

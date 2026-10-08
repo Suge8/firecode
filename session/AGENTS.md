@@ -1,6 +1,6 @@
 # session：会话层功能
 
-预设、改名、统计、Bark 通知、herdr 身份投影。`features.stats` 控制 `/tokens` 与 `/quota`，其余功能各自独立。
+预设、改名、统计、herdr 身份投影。`features.stats` 控制 `/tokens` 与 `/quota`，其余功能各自独立。
 
 | 文件 | 职责 |
 | --- | --- |
@@ -9,7 +9,6 @@
 | `herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
-| `bark.ts` | 会话歇下时推 iPhone Bark 通知（规则见文件头注释） |
 
 预设状态在每次变化时写进当前分支（清除记 null），重开会话或切分支按该分支最后一条记录判定：
 宿主恢复的模型仍是预设的才生效，否则预设失效、清掉名字与指令并记入会话；切到另一个预设不算失效。

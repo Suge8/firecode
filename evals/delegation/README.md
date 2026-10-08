@@ -40,7 +40,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 - **fixture** 按需生成在 `$EVAL_DIR/fixtures`，固定取提交 `b0fb416`（t7 缺陷清单与 T9 真值都绑定这份代码，不随 HEAD 漂移）。`base` 另加一个睡 15 分钟的 `scripts/e2e.sh`（t4 用）；`t9` 去掉全部测试、重建为单提交（无历史可查）、植入 14 处逻辑缺陷，真值与行号写到 `fixtures/t9-truth.json`。每次运行拿一份独立副本。
 - **decide** 用探针扩展 `probe.ts` 记录所有工具调用（含 codemode 脚本内的嵌套调用），`subagents start` 只记录、拦截不执行，所以不会真起 Worker，也不花 Worker 的钱。亲手的操作真实执行在副本里。
 - **run** 用 `pi --mode rpc` 发一条请求，等到主会话出现 `firecode-round`（主会话与全部 Worker 都歇下）。花费取主会话 + 全部 Worker 会话记录里的 usage。结束时按父子关系杀掉整棵进程树（pi 的 bash 工具把命令放进自己的进程组，只杀 pi 的组会留下孤儿）。
-- 环境里去掉 `HERDR_*`，避免回写你的 herdr pane；不加载 cuepad-bridge、herdr-agent-state，不读 bark-key。
+- 环境里去掉 `HERDR_*`，避免回写你的 herdr pane；不加载 cuepad-bridge、herdr-agent-state。
 
 ## 任务
 
