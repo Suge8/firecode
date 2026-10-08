@@ -12,7 +12,7 @@
 import { textOf } from "../format.js";
 import { msg } from "./messages.js";
 
-export const DEFAULT_EVIDENCE_TOKENS = 24_000;
+const DEFAULT_EVIDENCE_TOKENS = 24_000;
 /** 单条消息渲染上限，防单条超长消息撑爆预算。 */
 const MESSAGE_MAX_CHARS = 3_000;
 
@@ -100,13 +100,11 @@ function renderEntry(entry: unknown, render: Render): EvidenceBlock[] {
 			return [{ text: `## ${msg.evidence.custom(String(entry.customType ?? ""))}\n${clip(textOf(entry.content), render)}` }];
 		}
 		case "compaction":
-			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${msg.evidence.compaction}\n${clip(entry.summary, render)}` }]
-				: [];
-		case "branch_summary":
-			return typeof entry.summary === "string" && entry.summary
-				? [{ text: `## ${msg.evidence.branchSummary}\n${clip(entry.summary, render)}` }]
-				: [];
+		case "branch_summary": {
+			if (typeof entry.summary !== "string" || !entry.summary) return [];
+			const label = entry.type === "compaction" ? msg.evidence.compaction : msg.evidence.branchSummary;
+			return [{ text: `## ${label}\n${clip(entry.summary, render)}` }];
+		}
 		default:
 			return [];
 	}
@@ -163,7 +161,7 @@ function clip(text: string, { sessionFile }: Render) {
  * 粗略 token 估计：CJK 每字 1 token，其余按 4 字符/token。
  * 用于预算裁剪的相对量级，不追求精确。
  */
-export function estimateTokens(text: string): number {
+function estimateTokens(text: string): number {
 	let cjk = 0;
 	let other = 0;
 	for (const char of text) {

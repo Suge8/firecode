@@ -5,7 +5,7 @@ import { wrapEnvelope } from "../deliver.js";
 import { msg } from "./messages.js";
 import type { AdvisorResult, ReviewState, SummaryKind } from "./state.js";
 
-export interface ReviewPromptInput {
+interface ReviewPromptInput {
 	scope: string;
 	focus: string;
 	evidence: string;
@@ -53,7 +53,7 @@ function priorRoundsSection(history: ReviewState["history"], round: number): str
 	return `${msg.prompt.priorHeader}\n${body}`;
 }
 
-export interface AdvisorPromptInput {
+interface AdvisorPromptInput {
 	focus: string;
 	details: string;
 	history: ReviewState["history"];
@@ -70,7 +70,7 @@ export function buildAdvisorPrompt(template: string, input: AdvisorPromptInput):
 	return promptLayers(template, parts.join("\n\n"));
 }
 
-export interface FixFeedbackInput {
+interface FixFeedbackInput {
 	details: string;
 	advisor: AdvisorResult | null;
 }
@@ -89,14 +89,12 @@ export function buildFixFeedback(input: FixFeedbackInput): string {
 /** 总结提示携带的终态材料上限：模型已经历过修复轮，材料只补它没见过的终态结论。 */
 const SUMMARY_MATERIAL_LIMIT = 4_000;
 
-export interface SummaryPromptInput {
+interface SummaryPromptInput {
 	kind: SummaryKind;
 	rounds: number;
 	/** 终态材料：通过=末轮审查结论；max_rounds=末轮发现；advisor_stop=顾问裁决。 */
 	material: string;
 }
-
-const SUMMARY_KEYS = { passed: "passed", max_rounds: "maxRounds", advisor_stop: "advisorStop" } as const;
 
 /** 质量裁决终态后投给执行模型的总结回合提示：人话收尾，带反循环禁令。 */
 export function buildSummaryPrompt(input: SummaryPromptInput): string {
@@ -104,8 +102,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
 	const material = omitted > 0
 		? `${input.material.slice(0, SUMMARY_MATERIAL_LIMIT)}\n${msg.prompt.materialTruncated(omitted)}`
 		: input.material;
-	const key = SUMMARY_KEYS[input.kind];
-	const body = msg.prompt.summaryInstruction[key](input.rounds);
-	const content = material.trim() ? `${body}\n\n${msg.prompt.materialLabel[key]}\n${material}` : body;
+	const body = msg.prompt.summaryInstruction[input.kind](input.rounds);
+	const content = material.trim() ? `${body}\n\n${msg.prompt.materialLabel[input.kind]}\n${material}` : body;
 	return wrapEnvelope("firecode_review", content);
 }

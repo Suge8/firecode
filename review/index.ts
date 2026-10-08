@@ -3,7 +3,7 @@
  *
  * 职责分界：
  * - 领域状态只活在纯 reducer（state.ts）里，所有迁移经 reduce() 计算；
- *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、审查活动行），
+ *   本文件是唯一执行器，只做副作用（起审查会话、投递反馈、发卡、持久化、占用信号、界面接管），
  *   会话结果一律回灌成事件交给 reducer。
  * - 运行时状态按会话隔离：pi 在同一进程内对同一 cwd 复用扩展模块实例，主会话与每个
  *   Worker 子会话共用本文件；`registerReview(pi)` 各自持有一份 ReviewRuntime，模块级不留
@@ -12,11 +12,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { wrapEnvelope } from "../deliver.js";
-import {
-	type ExtensionAPI,
-	type ExtensionContext,
+import type {
+	AgentEndEvent,
+	ExtensionAPI,
+	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, type ReviewConfig, type Section } from "../config.js";
+import { loadConfig, type ModelAtom, type ReviewConfig, type Section } from "../config.js";
 import { readPrompt } from "../i18n.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
@@ -30,15 +31,14 @@ import {
 	writeCheckpoint,
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
-import { hideReviewTitle, lockEditor, showReviewTitle } from "./ui.js";
+import { ReviewUi } from "./ui.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
-import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
-import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
+import { runReviewer } from "./reviewer.js";
+import { createReviewSessionRunner, type ReviewModelConfig, type ReviewSessionRunner } from "./session.js";
 import {
-	type AdvisorResult,
 	type CardData,
 	type Phase,
 	type ReviewEffect,
@@ -49,11 +49,11 @@ import {
 	reduce,
 } from "./state.js";
 
-export const FEEDBACK_TYPE = "firecode-review-feedback";
+const FEEDBACK_TYPE = "firecode-review-feedback";
 /** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
-export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
+const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
-const FEEDBACK_START_TIMEOUT_MS = 2_000;
+const FOLLOW_UP_START_TIMEOUT_MS = 2_000;
 const PROMPTS = new URL("./prompts/", import.meta.url);
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
 function overallTimeoutMs(config: ReviewConfig) {
@@ -63,16 +63,9 @@ function overallTimeoutMs(config: ReviewConfig) {
 	);
 }
 
+/** 审查生命周期内：总结回合也算——占用标签持有到总结完成，Master 才不会在结果卡与总结之间的窗口提前结算、漏掉总结回复。 */
 function isActive(state: ReviewState) {
-	return (
-		state.phase === "queued" ||
-		state.phase === "reviewing" ||
-		state.phase === "needs_fix" ||
-		state.phase === "awaiting_fix" ||
-		// 总结回合仍属审查生命周期：占用标签持有到总结完成，Master 才不会在
-		// 结果卡与总结之间的窗口提前结算、漏掉总结回复。
-		state.phase === "summarizing"
-	);
+	return state.phase !== "idle" && state.phase !== "settled";
 }
 
 interface Controller {
@@ -85,15 +78,14 @@ interface Controller {
 	persistedStamp: CheckpointStamp | null | undefined;
 	/** streaming 时 sendMessage 会变成 steer；展示卡必须等 settled 后再发。 */
 	pendingCards: CardData[];
+	ui: ReviewUi;
 	/** 本运行时已启动的阶段；reload 后新 controller 会重启被中断的审查会话。 */
 	runningAction?: string;
 	/** 当前审查者/顾问任务；执行模型 agent_start 必须 await 它退出后才能继续。 */
 	actionPromise?: Promise<void>;
 	actionController?: AbortController;
-	/** 反馈 sendMessage 已调用，等待 agent_start 回执。 */
-	feedbackStartTimer?: ReturnType<typeof setTimeout>;
-	/** 审查接管了编辑器（禁输入 + esc 取消）时的解锁函数，还原成接管前的编辑器。 */
-	unlockEditor?: () => void;
+	/** 修复反馈/总结提示已 sendMessage，等待 agent_start 回执。 */
+	startTimer?: ReturnType<typeof setTimeout>;
 	/** 占用频道的 true/false 必须由同一 controller 配对，订阅方按最近一条取值。 */
 	occupancyHeld?: boolean;
 }
@@ -160,30 +152,26 @@ export function registerReview(
 	return handle;
 }
 
+/** 追加一条已封存的终态 checkpoint（活动态清空），写不进去时抛错。 */
+function sealCheckpoint(pi: ExtensionAPI, state: ReviewState): void {
+	beginCheckpoint(pi, {
+		...state,
+		phase: "settled",
+		active: null,
+		pending: null,
+		repair: null,
+		summary: null,
+		updatedAt: Date.now(),
+	});
+}
+
 function settleDisabledCheckpoint(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const checkpoint = readCheckpoint(ctx);
 	if (!checkpoint || !isActive(checkpoint)) return;
-	settleUnavailableCheckpoint(pi, ctx, checkpoint);
-}
-
-function settleUnavailableCheckpoint(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	checkpoint: ReviewState,
-): void {
 	try {
-		beginCheckpoint(pi, ctx, {
-			...checkpoint,
-			phase: "settled",
-			active: null,
-			pending: null,
-			repair: null,
-			summary: null,
-			updatedAt: Date.now(),
-		});
+		sealCheckpoint(pi, checkpoint);
 	} catch (error) {
-		if (ctx.hasUI)
-			ctx.ui.notify(msg.notify.cannotSealOld(errorText(error)), "error");
+		if (ctx.hasUI) ctx.ui.notify(msg.notify.cannotSealOld(errorText(error)), "error");
 	}
 }
 
@@ -199,25 +187,24 @@ function dispatch(rt: ReviewRuntime, event: ReviewEvent): Promise<void> {
 			// 持久化失败不能当成功继续：否则会拿不一致的状态去起会话、投反馈，
 			// 重启后又从旧 checkpoint 恢复，重现幽灵审查与重复反馈。
 			if (!persist(rt, state)) return;
-			if (!isActive(state)) clearWatchdog(rt);
+			if (!isActive(state)) clearWatchdog(active);
 			syncOccupancy(rt, active);
-			syncUi(rt);
+			syncUi(rt, active);
 		}
 		await runEffects(rt, effects);
 	});
 	// 队列一旦 rejected 就再也不会执行后续迁移（连 esc 取消也会失效）：
 	// 副作用异常只能到此为止，不得杀死状态机。
-	rt.queue = run.catch((error) => {
-		notifyEffectFailure(rt, error);
-	});
+	rt.queue = run.catch((error) => notifyEffectFailure(rt, error));
 	return rt.queue;
 }
 
+function notify(active: Controller, message: string, level: "info" | "warning" | "error"): void {
+	if (active.ctx.hasUI) active.ctx.ui.notify(message, level);
+}
+
 function notifyEffectFailure(rt: ReviewRuntime, error: unknown) {
-	const active = rt.controller;
-	if (!active?.ctx.hasUI) return;
-	const message = error instanceof Error ? error.message : String(error);
-	active.ctx.ui.notify(msg.notify.stepFailed(message), "warning");
+	if (rt.controller) notify(rt.controller, msg.notify.stepFailed(errorText(error)), "warning");
 }
 
 /** 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。 */
@@ -237,30 +224,30 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 	};
 }
 
+function newController(ctx: ExtensionContext, config: ReviewConfig, state: ReviewState, stamp: CheckpointStamp | null): Controller {
+	return {
+		ctx,
+		config,
+		state,
+		signal: new AbortController(),
+		watchdog: undefined,
+		persistedStamp: stamp,
+		pendingCards: [],
+		ui: new ReviewUi(),
+	};
+}
+
 async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionContext) {
 	// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 	const loaded = loadReviewConfig();
 	if ("error" in loaded) return refuse(rt, ctx, loaded.error, "error");
-	const config = loaded.config;
 	if (rt.controller && isActive(rt.controller.state)) return refuse(rt, ctx, msg.command.alreadyRunning, "info");
-	const command = parseCommand(args);
-	if ("error" in command) return refuse(rt, ctx, command.error, "error");
-	rt.controller = {
-		ctx,
-		config,
-		state: initialState(randomUUID()),
-		signal: new AbortController(),
-		watchdog: undefined,
-		persistedStamp: null,
-		pendingCards: [],
-	};
+	const input = args.trim();
+	if (input.startsWith("--")) return refuse(rt, ctx, msg.command.invalidArgs, "error");
+	rt.controller = newController(ctx, loaded.config, initialState(randomUUID()), null);
 	armWatchdog(rt);
-	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier.
-	void dispatch(rt, {
-		type: "START",
-		focus: command.focus,
-		busy: true,
-	});
+	// 命令入口也只提出推进请求；真正开审统一经过下一 event-loop 的 idle barrier。
+	void dispatch(rt, { type: "START", focus: input });
 }
 
 /** 拒绝启动：有 UI 时通知，无论有无 UI 都记录——Worker 里没有 UI，Master 靠这条记录读到原因。 */
@@ -275,24 +262,14 @@ function refuse(rt: ReviewRuntime, ctx: ExtensionContext, message: string, level
 function handleSessionStart(rt: ReviewRuntime, ctx: ExtensionContext): Promise<void> | void {
 	const checkpoint = readCheckpoint(ctx);
 	if (!checkpoint || !isActive(checkpoint)) return;
+	// 配置问题的告警由入口统一聚合；这里保留活动 checkpoint，修好后继续恢复。
 	const loaded = loadReviewConfig();
-	if ("error" in loaded) {
-		// session_start 的配置告警由入口统一聚合；这里只保留活动 checkpoint，修好后继续。
-		return;
-	}
-	const config = loaded.config;
-	rt.controller = {
-		ctx,
-		config,
-		state: checkpoint,
-		signal: new AbortController(),
-		watchdog: undefined,
-		persistedStamp: readStamp(ctx),
-		pendingCards: [],
-	};
+	if ("error" in loaded) return;
+	const active = newController(ctx, loaded.config, checkpoint, readStamp(ctx));
+	rt.controller = active;
 	armWatchdog(rt);
-	syncOccupancy(rt, rt.controller);
-	syncUi(rt);
+	syncOccupancy(rt, active);
+	syncUi(rt, active);
 	// 恢复只更新持久状态并提出推进请求；绝不在 session_start handler 内起任何工作。
 	return dispatch(rt, { type: "RECOVER" });
 }
@@ -300,19 +277,14 @@ function handleSessionStart(rt: ReviewRuntime, ctx: ExtensionContext): Promise<v
 async function handleAgentStart(rt: ReviewRuntime): Promise<void> {
 	const active = rt.controller;
 	if (!active) return;
-	if (
-		active.state.phase === "awaiting_fix" &&
-		active.state.repair?.status === "awaiting_start"
-	) {
-		clearFeedbackStartTimer(active);
+	const { state } = active;
+	if (state.phase === "awaiting_fix" && state.repair?.status === "awaiting_start") {
+		clearStartTimer(active);
 		await dispatch(rt, { type: "REPAIR_STARTED" });
 		return;
 	}
-	if (
-		active.state.phase === "summarizing" &&
-		active.state.summary?.status === "awaiting_start"
-	) {
-		clearFeedbackStartTimer(active);
+	if (state.phase === "summarizing" && state.summary?.status === "awaiting_start") {
+		clearStartTimer(active);
 		await dispatch(rt, { type: "SUMMARY_STARTED" });
 		return;
 	}
@@ -326,20 +298,15 @@ async function handleAgentStart(rt: ReviewRuntime): Promise<void> {
 	active.actionPromise = undefined;
 }
 
-function handleAgentEnd(rt: ReviewRuntime, event: { messages: readonly unknown[] }): Promise<void> | void {
+function handleAgentEnd(rt: ReviewRuntime, event: AgentEndEvent): Promise<void> | void {
 	const active = rt.controller;
 	if (!active) return;
 	// 总结回合任何结局都收尾：裁决已落地，总结失败/中断不重试不升级。
 	if (active.state.phase === "summarizing" && active.state.summary?.status === "running")
 		return dispatch(rt, { type: "SUMMARY_SETTLED" });
-	if (
-		active.state.phase !== "awaiting_fix" ||
-		active.state.repair?.status !== "running"
-	) return;
-	const assistant = [...event.messages]
-		.reverse()
-		.find((message) => isRecord(message) && message.role === "assistant");
-	if (isRecord(assistant) && assistant.stopReason !== "error" && assistant.stopReason !== "aborted")
+	if (active.state.phase !== "awaiting_fix" || active.state.repair?.status !== "running") return;
+	const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
+	if (assistant && assistant.stopReason !== "error" && assistant.stopReason !== "aborted")
 		return dispatch(rt, { type: "REPAIR_COMPLETED" });
 	active.signal.abort();
 	return dispatch(rt, { type: "CANCEL", reason: "user" });
@@ -348,8 +315,7 @@ function handleAgentEnd(rt: ReviewRuntime, event: { messages: readonly unknown[]
 function requestAdvance(rt: ReviewRuntime, ctx: ExtensionContext): void {
 	const active = rt.controller;
 	if (!active) return;
-	const runId = active.state.runId;
-	void advanceWhenIdle(rt, ctx, runId).catch((error) => {
+	void advanceWhenIdle(rt, ctx, active.state.runId).catch((error) => {
 		notifyEffectFailure(rt, error);
 		if (rt.controller !== active) return;
 		active.signal.abort();
@@ -370,35 +336,27 @@ async function advanceWhenIdle(rt: ReviewRuntime, ctx: ExtensionContext, runId: 
 	active.ctx = ctx;
 	flushPendingCards(rt);
 	const { state } = active;
-	if (state.phase === "queued") {
-		await dispatch(rt, { type: "ADVANCE" });
-		return;
+	switch (state.phase) {
+		case "queued":
+			return dispatch(rt, { type: "ADVANCE" });
+		case "reviewing":
+			return startAction(rt, active, `review:${state.round}`, "reviewer", (signal) => startReviewers(rt, active, signal));
+		case "needs_fix":
+			return startAction(rt, active, `advisor:${state.round}`, "advisor", (signal) => consultAdvisor(rt, active, signal));
+		case "summarizing":
+			if (state.summary?.status !== "pending") return;
+			await dispatch(rt, { type: "SUMMARY_DISPATCHED" });
+			if (rt.controller === active && active.state.phase === "summarizing" && active.state.summary?.status === "awaiting_start")
+				deliverSummary(rt, active, active.state);
+			return;
+		case "awaiting_fix":
+			if (state.repair?.status === "completed") return dispatch(rt, { type: "ADVANCE" });
+			if (state.repair?.status !== "pending") return;
+			await dispatch(rt, { type: "FEEDBACK_DISPATCHED" });
+			if (rt.controller === active && active.state.repair?.status === "awaiting_start")
+				deliverFeedback(rt, active, active.state.repair);
+			return;
 	}
-	if (state.phase === "reviewing") {
-		startAction(rt, active, `review:${state.round}`, "reviewer", () => startReviewers(rt));
-		return;
-	}
-	if (state.phase === "needs_fix") {
-		startAction(rt, active, `advisor:${state.round}`, "advisor", () => consultAdvisor(rt));
-		return;
-	}
-	if (state.phase === "summarizing") {
-		if (state.summary?.status !== "pending") return;
-		await dispatch(rt, { type: "SUMMARY_DISPATCHED" });
-		const current = rt.controller?.state;
-		if (rt.controller === active && current?.phase === "summarizing" && current.summary?.status === "awaiting_start")
-			deliverSummaryNow(rt, current);
-		return;
-	}
-	if (state.phase !== "awaiting_fix" || !state.repair) return;
-	if (state.repair.status === "pending") {
-		await dispatch(rt, { type: "FEEDBACK_DISPATCHED" });
-		const repair = rt.controller?.state.repair;
-		if (rt.controller === active && repair?.status === "awaiting_start")
-			deliverFeedbackNow(rt, repair.details, repair.advisor);
-		return;
-	}
-	if (state.repair.status === "completed") await dispatch(rt, { type: "ADVANCE" });
 }
 
 function startAction(
@@ -406,18 +364,16 @@ function startAction(
 	active: Controller,
 	key: string,
 	kind: "reviewer" | "advisor",
-	run: () => Promise<void>,
+	run: (signal: AbortSignal) => Promise<void>,
 ): void {
 	if (active.runningAction === key) return;
 	active.runningAction = key;
-	active.actionController = new AbortController();
-	const action = run()
+	const controller = new AbortController();
+	active.actionController = controller;
+	const action = run(controller.signal)
 		.catch(async (error) => {
-			if (rt.controller !== active || active.actionController?.signal.aborted) return;
-			await dispatch(rt, {
-				type: "INFRASTRUCTURE_ERROR",
-				details: sessionErrorText(kind, error),
-			});
+			if (rt.controller !== active || controller.signal.aborted) return;
+			await dispatch(rt, { type: "INFRASTRUCTURE_ERROR", details: sessionErrorText(kind, error) });
 		})
 		.finally(() => {
 			if (active.actionPromise !== action) return;
@@ -442,13 +398,13 @@ async function handleShutdown(
 	// 无论何种终止都先取消并等待当前审查会话；旧动作不得泄漏到新运行时。
 	active.signal.abort();
 	active.actionController?.abort();
-	clearWatchdog(rt);
-	clearFeedbackStartTimer(active);
+	clearWatchdog(active);
+	clearStartTimer(active);
 	await active.actionPromise;
-	if (active.ctx !== ctx) active.ctx = ctx;
+	active.ctx = ctx;
 	if (reason === "quit") await dispatch(rt, { type: "CANCEL", reason: "shutdown" });
 	else {
-		clearUi(active);
+		active.ui.clear(active.ctx);
 		await rt.queue;
 	}
 	if (rt.controller === active) rt.controller = undefined;
@@ -457,7 +413,7 @@ async function handleShutdown(
 function armWatchdog(rt: ReviewRuntime) {
 	const active = rt.controller;
 	if (!active) return;
-	clearWatchdog(rt);
+	clearWatchdog(active);
 	const elapsed = active.state.startedAt ? Math.max(0, Date.now() - active.state.startedAt) : 0;
 	const remaining = Math.max(0, overallTimeoutMs(active.config) - elapsed);
 	if (remaining === 0) {
@@ -469,18 +425,18 @@ function armWatchdog(rt: ReviewRuntime) {
 		if (rt.controller !== active || !isActive(active.state)) return;
 		active.signal.abort();
 		active.actionController?.abort();
-		dispatch(rt, { type: "TIMEOUT" });
+		void dispatch(rt, { type: "TIMEOUT" });
 	}, remaining);
 	active.watchdog.unref?.();
 }
 
-function clearWatchdog(rt: ReviewRuntime) {
-	if (rt.controller?.watchdog) clearTimeout(rt.controller.watchdog);
+function clearWatchdog(active: Controller) {
+	if (active.watchdog) clearTimeout(active.watchdog);
 }
 
-function clearFeedbackStartTimer(active: Controller): void {
-	if (active.feedbackStartTimer) clearTimeout(active.feedbackStartTimer);
-	active.feedbackStartTimer = undefined;
+function clearStartTimer(active: Controller): void {
+	if (active.startTimer) clearTimeout(active.startTimer);
+	active.startTimer = undefined;
 }
 
 // ---- 持久化 ----
@@ -494,51 +450,44 @@ function persist(rt: ReviewRuntime, state: ReviewState): boolean {
 	try {
 		active.persistedStamp =
 			persisted === null
-				? beginCheckpoint(rt.pi, active.ctx, state)
+				? beginCheckpoint(rt.pi, state)
 				: writeCheckpoint(rt.pi, active.ctx, state, persisted);
 		return true;
 	} catch (error) {
-		// 冲突与写入失败共用的收口：停写、释放占用、中止在途动作并告知。
-		const halt = (message: string, level: "warning" | "error") => {
-			setOccupancy(rt, active, false);
-			active.persistedStamp = undefined;
-			active.signal.abort();
-			active.actionController?.abort();
-			if (active.ctx.hasUI) active.ctx.ui.notify(message, level);
-		};
-		if (error instanceof CheckpointConflictError) {
-			// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
-			halt(msg.notify.checkpointConflict, "warning");
-			void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
-			return false;
-		}
-		// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
-		halt(msg.notify.checkpointWriteFailed(errorText(error)), "error");
-		clearUi(active);
-		// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
-		// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
-		let sealed = true;
-		try {
-			beginCheckpoint(rt.pi, active.ctx, {
-				...state,
-				phase: "settled",
-				active: null,
-				pending: null,
-				repair: null,
-				summary: null,
-			});
-		} catch {
-			sealed = false;
-		}
-		// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
-		// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
-		clearWatchdog(rt);
-		clearFeedbackStartTimer(active);
-		rt.controller = undefined;
-		if (!sealed && active.ctx.hasUI)
-			active.ctx.ui.notify(msg.notify.cannotSeal, "warning");
+		haltOnPersistFailure(rt, active, state, error);
 		return false;
 	}
+}
+
+/** 冲突与写入失败共用的收口：停写、释放占用、中止在途动作并告知。 */
+function haltOnPersistFailure(rt: ReviewRuntime, active: Controller, state: ReviewState, error: unknown): void {
+	setOccupancy(rt, active, false);
+	active.persistedStamp = undefined;
+	active.signal.abort();
+	active.actionController?.abort();
+	if (error instanceof CheckpointConflictError) {
+		// 持久化里出现不是本 controller 写的 Run ID：并发冲突，停止审查。
+		notify(active, msg.notify.checkpointConflict, "warning");
+		void dispatch(rt, { type: "CANCEL", reason: "shutdown" });
+		return;
+	}
+	// 普通写入失败（如会话落盘异常）：停掉本场审查，不带着不一致状态继续跑。
+	notify(active, msg.notify.checkpointWriteFailed(errorText(error)), "error");
+	active.ui.clear(active.ctx);
+	// 磁盘上可能还留着上一条活动 checkpoint，重启会把它恢复成幽灵审查：
+	// 尽力补写一条终态。写不进去时不假装成功，在通知里告知用户。
+	let sealed = true;
+	try {
+		sealCheckpoint(rt.pi, state);
+	} catch {
+		sealed = false;
+	}
+	// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
+	// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
+	clearWatchdog(active);
+	clearStartTimer(active);
+	rt.controller = undefined;
+	if (!sealed) notify(active, msg.notify.cannotSeal, "warning");
 }
 
 function errorText(error: unknown) {
@@ -558,35 +507,20 @@ function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): voi
 			: { active: false };
 		rt.pi.events.emit(OCCUPANCY_CHANNEL, payload);
 	} catch (error) {
-		// 占用信号只对齐展示；订阅方故障不能改变审查状态机或会话生命周期。
+		// 占用信号只对齐展示；订阅方故障不能改变审查状态机或会话生命周期，通知本身也一样。
 		try {
-			if (active.ctx.hasUI)
-				active.ctx.ui.notify(msg.notify.occupancyFailed(errorText(error)), "warning");
-		} catch {
-			// 通知本身同样只是展示，不能反向打断审查。
-		}
+			notify(active, msg.notify.occupancyFailed(errorText(error)), "warning");
+		} catch {}
 	}
 }
 
 /** UI 投影：终端标题 + esc 接管，全部从当前状态派生；审查进度经占用频道由输入框外壳显示。 */
-function syncUi(rt: ReviewRuntime): void {
-	const active = rt.controller;
-	if (!active) return;
-	if (!isActive(active.state) || !active.ctx.hasUI) return clearUi(active);
-	showReviewTitle(active.ctx, active.state.round);
-	// 只在等模型结论时接管编辑器；awaiting_fix 相把输入交还用户。
-	if (!canCancelWithKey(rt)) return releaseEditor(active);
-	active.unlockEditor ??= lockEditor(active.ctx, () => cancelByUser(rt));
-}
-
-function clearUi(active: Controller) {
-	hideReviewTitle(active.ctx);
-	releaseEditor(active);
-}
-
-function releaseEditor(active: Controller) {
-	active.unlockEditor?.();
-	active.unlockEditor = undefined;
+function syncUi(rt: ReviewRuntime, active: Controller): void {
+	if (!isActive(active.state) || !active.ctx.hasUI) return active.ui.clear(active.ctx);
+	const { phase, round } = active.state;
+	// 只在等模型结论时接管编辑器；awaiting_fix 与 summarizing 相把输入交还用户。
+	const canCancel = phase === "queued" || phase === "reviewing" || phase === "needs_fix";
+	active.ui.show(active.ctx, round, canCancel, () => cancelByUser(rt));
 }
 
 const STAGE: Partial<Record<Phase, ReviewStage>> = {
@@ -596,23 +530,18 @@ const STAGE: Partial<Record<Phase, ReviewStage>> = {
 /** 审查进度只读 reducer 的当前状态；只有审查相的票数可数。 */
 function reviewProgress(rt: ReviewRuntime): ReviewProgress | undefined {
 	const state = rt.controller?.state;
-	const stage = state && isActive(state) ? STAGE[state.phase] : undefined;
+	const stage = state && STAGE[state.phase];
 	if (!state || !stage) return undefined;
 	const reviewers = stage === "reviewing" ? state.active?.reviewers ?? [] : [];
 	const count = (status: string) => reviewers.filter((reviewer) => reviewer.status === status).length;
 	return { stage, round: state.round, passed: count("passed"), blocked: count("failed"), total: reviewers.length };
 }
 
-function canCancelWithKey(rt: ReviewRuntime) {
-	const phase = rt.controller?.state.phase;
-	return phase === "queued" || phase === "reviewing" || phase === "needs_fix";
-}
-
 function cancelByUser(rt: ReviewRuntime) {
 	const active = rt.controller;
 	if (!active) return;
 	if (active.state.phase === "needs_fix") {
-		// pi-flow 语义：顾问阶段的 Esc 只跳过本次咨询，不取消整场审查。
+		// 顾问阶段的 Esc 只跳过本次咨询，不取消整场审查。
 		active.actionController?.abort();
 		void (active.actionPromise ?? Promise.resolve()).then(() =>
 			dispatch(rt, { type: "ADVISOR_SKIPPED" }),
@@ -626,42 +555,36 @@ function cancelByUser(rt: ReviewRuntime) {
 
 // ---- 副作用执行器 ----
 
-/** reducer 只发卡或请求推进；所有会启动工作的动作统一经过 idle barrier。 */
+/** reducer 只发卡、通知或请求推进；所有会启动工作的动作统一经过 idle barrier。 */
 async function runEffects(rt: ReviewRuntime, effects: ReviewEffect[]) {
 	for (const effect of effects) {
 		const active = rt.controller;
 		if (!active) return;
-		if (effect.kind === "advance") {
-			requestAdvance(rt, active.ctx);
-			continue;
-		}
-		try {
-			sendCard(rt, effect.card);
-		} catch (error) {
-			notifyEffectFailure(rt, error);
-		}
+		if (effect.kind === "advance") requestAdvance(rt, active.ctx);
+		else if (effect.kind === "notify_cancelled") notify(active, msg.notify.cancelled, "info");
+		else
+			try {
+				sendCard(rt, active, effect.card);
+			} catch (error) {
+				notifyEffectFailure(rt, error);
+			}
 	}
 }
 
-
-function reviewerModelConfig(model: ReviewConfig["advisor"], config: ReviewConfig): ReviewModelConfig {
+function modelConfig(atom: ModelAtom, config: ReviewConfig): ReviewModelConfig {
 	return {
-		model: model.model,
-		thinking: model.thinking,
+		model: atom.model,
+		thinking: atom.thinking,
 		tools: config.tools,
 		timeoutMs: config.timeoutMinutes * 60_000,
 	};
 }
 
 /** 开审那一刻取会话分支快照构造 prompt，所有审查者共用同一 prompt。 */
-async function startReviewers(rt: ReviewRuntime): Promise<void> {
-	const active = rt.controller;
-	if (!active) return;
+async function startReviewers(rt: ReviewRuntime, active: Controller, signal: AbortSignal): Promise<void> {
 	const { state, config } = active;
 	if (!state.active) return;
-	const currentActive = state.active;
-	const actionSignal = active.actionController?.signal ?? active.signal.signal;
-	const evidence = buildEvidence(sessionEntries(rt), { sessionFile: active.ctx.sessionManager.getSessionFile() });
+	const evidence = buildEvidence(sessionEntries(active), { sessionFile: active.ctx.sessionManager.getSessionFile() });
 	const prompt = buildReviewPrompt(readPrompt(PROMPTS, "review"), {
 		scope: msg.command.scope,
 		focus: state.focus,
@@ -669,22 +592,22 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 		history: state.history,
 		round: state.round,
 	});
-	const tasks = currentActive.reviewers
+	const tasks = state.active.reviewers
 		.filter((reviewer) => reviewer.status === "running")
 		.map(async (reviewer) => {
 			try {
 				const result = await runReviewer({
 					index: reviewer.index,
-					config: reviewerModelConfig(reviewer, config),
+					config: modelConfig(reviewer, config),
 					prompt,
 					cwd: active.ctx.cwd,
-					signal: actionSignal,
+					signal,
 					runSession: rt.runSession,
 				});
-				if (!actionSignal.aborted)
+				if (!signal.aborted)
 					await dispatch(rt, { type: "REVIEWER_SETTLED", index: result.index, result });
 			} catch (error) {
-				if (actionSignal.aborted) return;
+				if (signal.aborted) return;
 				await dispatch(rt, {
 					type: "REVIEWER_SETTLED",
 					index: reviewer.index,
@@ -702,35 +625,27 @@ async function startReviewers(rt: ReviewRuntime): Promise<void> {
 	await Promise.all(tasks);
 }
 
-async function consultAdvisor(rt: ReviewRuntime): Promise<void> {
-	const active = rt.controller;
-	if (!active) return;
+async function consultAdvisor(rt: ReviewRuntime, active: Controller, signal: AbortSignal): Promise<void> {
 	const { state, config } = active;
 	if (!state.pending) return;
-	const pending = state.pending;
-	const actionSignal = active.actionController?.signal ?? active.signal.signal;
 	const prompt = buildAdvisorPrompt(readPrompt(PROMPTS, "advisor"), {
 		focus: state.focus,
-		details: pending.details,
+		details: state.pending.details,
 		history: state.history,
-		round: pending.round,
+		round: state.pending.round,
 	});
 	try {
 		const result = await runAdvisor({
-			config: reviewerModelConfig(config.advisor, config),
+			config: modelConfig(config.advisor, config),
 			prompt,
 			cwd: active.ctx.cwd,
-			signal: actionSignal,
+			signal,
 			runSession: rt.runSession,
 		});
-		if (!actionSignal.aborted)
-			await dispatch(rt, { type: "ADVISOR_SETTLED", result });
+		if (!signal.aborted) await dispatch(rt, { type: "ADVISOR_SETTLED", result });
 	} catch (error) {
-		if (actionSignal.aborted) return;
-		await dispatch(rt, {
-			type: "INFRASTRUCTURE_ERROR",
-			details: sessionErrorText("advisor", error),
-		});
+		if (signal.aborted) return;
+		await dispatch(rt, { type: "INFRASTRUCTURE_ERROR", details: sessionErrorText("advisor", error) });
 	}
 }
 
@@ -739,111 +654,89 @@ function sessionErrorText(kind: "reviewer" | "advisor", error: unknown) {
 	return kind === "reviewer" ? msg.failure.reviewerSession(reason) : msg.failure.advisorSession(reason);
 }
 
-function deliverFeedbackNow(rt: ReviewRuntime, details: string, advisor: AdvisorResult | null) {
-	const active = rt.controller;
-	if (!active) return;
-	const feedback = buildFixFeedback({
-		details,
-		advisor,
-	});
-	clearFeedbackStartTimer(active);
-	// API 返回 void，真实异步失败不会进 try/catch；持久化状态等待 agent_start 回执。
-	active.feedbackStartTimer = setTimeout(() => {
-		if (
-			rt.controller !== active ||
-			active.state.phase !== "awaiting_fix" ||
-			active.state.repair?.status !== "awaiting_start"
-		) return;
-		active.feedbackStartTimer = undefined;
-		if (active.ctx.hasUI)
-			active.ctx.ui.notify(msg.notify.feedbackNotStarted, "error");
-		active.signal.abort();
-		void dispatch(rt, { type: "CANCEL", reason: "user" });
-	}, FEEDBACK_START_TIMEOUT_MS);
-	active.feedbackStartTimer.unref?.();
-	// display:false 的消息进 LLM 上下文但不渲染；triggerTurn 让执行模型开始修复回合。
+/**
+ * 修复反馈与总结提示共用的投递：display:false 的消息进 LLM 上下文但不渲染，triggerTurn 让执行模型开回合；
+ * sendMessage 返回 void，真实异步失败不会进 try/catch，所以持久化状态等 agent_start 回执，超时即视为没启动。
+ */
+function sendFollowUp(
+	rt: ReviewRuntime,
+	active: Controller,
+	customType: string,
+	content: string,
+	handlers: { stillAwaiting: (state: ReviewState) => boolean; onNotStarted: () => void; onSendError: (error: unknown) => void },
+): void {
+	clearStartTimer(active);
+	active.startTimer = setTimeout(() => {
+		if (rt.controller !== active || !handlers.stillAwaiting(active.state)) return;
+		active.startTimer = undefined;
+		handlers.onNotStarted();
+	}, FOLLOW_UP_START_TIMEOUT_MS);
+	active.startTimer.unref?.();
 	try {
-		rt.pi.sendMessage(
-			{ customType: FEEDBACK_TYPE, content: feedback, display: false },
-			{ deliverAs: "followUp", triggerTurn: true },
-		);
+		rt.pi.sendMessage({ customType, content, display: false }, { deliverAs: "followUp", triggerTurn: true });
 	} catch (error) {
-		clearFeedbackStartTimer(active);
-		throw error;
+		clearStartTimer(active);
+		handlers.onSendError(error);
 	}
 }
 
-/** 总结提示投递：与修复反馈同一套 agent_start 回执机制；失败不升级，静默收尾。 */
-function deliverSummaryNow(rt: ReviewRuntime, state: ReviewState): void {
-	const active = rt.controller;
-	if (!active || !state.summary) return;
+function deliverFeedback(rt: ReviewRuntime, active: Controller, repair: NonNullable<ReviewState["repair"]>): void {
+	sendFollowUp(rt, active, FEEDBACK_TYPE, buildFixFeedback(repair), {
+		stillAwaiting: (state) => state.phase === "awaiting_fix" && state.repair?.status === "awaiting_start",
+		onNotStarted: () => {
+			notify(active, msg.notify.feedbackNotStarted, "error");
+			active.signal.abort();
+			void dispatch(rt, { type: "CANCEL", reason: "user" });
+		},
+		// 同步失败交给 requestAdvance 的收口：通知、中止、取消。
+		onSendError: (error) => { throw error; },
+	});
+}
+
+/** 总结是尽力而非必须：投递失败或没能启动回合都静默收尾，裁决与结果卡已落地。 */
+function deliverSummary(rt: ReviewRuntime, active: Controller, state: ReviewState): void {
+	if (!state.summary) return;
 	const last = state.history.at(-1);
 	const material = state.summary.kind === "advisor_stop"
 		? last?.advisor?.advice ?? last?.details ?? ""
 		: last?.details ?? "";
-	const prompt = buildSummaryPrompt({
-		kind: state.summary.kind,
-		rounds: state.history.length,
-		material,
+	const prompt = buildSummaryPrompt({ kind: state.summary.kind, rounds: state.history.length, material });
+	sendFollowUp(rt, active, SUMMARY_REQUEST_TYPE, prompt, {
+		stillAwaiting: (current) => current.phase === "summarizing" && current.summary?.status === "awaiting_start",
+		onNotStarted: () => {
+			notify(active, msg.notify.summaryNotStarted, "warning");
+			void dispatch(rt, { type: "SUMMARY_SETTLED" });
+		},
+		onSendError: (error) => {
+			notifyEffectFailure(rt, error);
+			void dispatch(rt, { type: "SUMMARY_SETTLED" });
+		},
 	});
-	clearFeedbackStartTimer(active);
-	active.feedbackStartTimer = setTimeout(() => {
-		if (
-			rt.controller !== active ||
-			active.state.phase !== "summarizing" ||
-			active.state.summary?.status !== "awaiting_start"
-		) return;
-		active.feedbackStartTimer = undefined;
-		// 总结是尽力而非必须：未能启动回合就静默收尾，裁决与结果卡已落地。
-		if (active.ctx.hasUI)
-			active.ctx.ui.notify(msg.notify.summaryNotStarted, "warning");
-		void dispatch(rt, { type: "SUMMARY_SETTLED" });
-	}, FEEDBACK_START_TIMEOUT_MS);
-	active.feedbackStartTimer.unref?.();
-	try {
-		rt.pi.sendMessage(
-			{ customType: SUMMARY_REQUEST_TYPE, content: prompt, display: false },
-			{ deliverAs: "followUp", triggerTurn: true },
-		);
-	} catch (error) {
-		clearFeedbackStartTimer(active);
-		notifyEffectFailure(rt, error);
-		void dispatch(rt, { type: "SUMMARY_SETTLED" });
-	}
 }
 
-function sendCard(rt: ReviewRuntime, card: CardData) {
-	const active = rt.controller;
-	if (!active) return;
-	// pi-flow 的用户取消是即时临时通知，不进会话；shutdown 静默收口。
-	if (card.kind === "cancel") {
-		if (card.reason === "user" && active.ctx.hasUI)
-			active.ctx.ui.notify(msg.notify.cancelled, "info");
-		return;
-	}
+function sendCard(rt: ReviewRuntime, active: Controller, card: CardData) {
 	// 宿主在 streaming 时会把无 options 的 sendMessage 当 steer 塞进当前模型回合。
 	// 卡片只是 UI 投影，绝不能因此唤醒或打断执行模型。
 	if (!active.ctx.isIdle()) {
 		active.pendingCards.push(card);
 		return;
 	}
-	sendCardNow(rt, active, card);
+	sendCardNow(rt, card);
 }
 
 function flushPendingCards(rt: ReviewRuntime): void {
 	const active = rt.controller;
 	if (!active || !active.ctx.isIdle() || active.pendingCards.length === 0) return;
-	const cards = active.pendingCards.splice(0);
-	for (const card of cards) {
+	for (const card of active.pendingCards.splice(0)) {
 		try {
-			sendCardNow(rt, active, card);
+			sendCardNow(rt, card);
 		} catch (error) {
 			notifyEffectFailure(rt, error);
 		}
 	}
 }
 
-function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): void {
+function sendCardNow(rt: ReviewRuntime, card: CardData): void {
 	const built = buildCard(card);
 	rt.pi.sendMessage({
 		customType: CARD_TYPE,
@@ -853,27 +746,10 @@ function sendCardNow(rt: ReviewRuntime, active: Controller, card: CardData): voi
 	});
 }
 
-function parseCommand(args: string): { focus: string } | { error: string } {
-	const input = args.trim();
-	return input.startsWith("--") ? { error: msg.command.invalidArgs } : { focus: input };
-}
-
 /** 会话分支 entries（供证据组装）；本插件的卡与反馈消息不参与证据，避免自指。 */
-function sessionEntries(rt: ReviewRuntime) {
-	const manager = rt.controller?.ctx.sessionManager as
-		| { getBranch?: () => unknown[] }
-		| undefined;
-	const entries = manager?.getBranch?.() ?? [];
-	return entries.filter(
-		(entry) =>
-			!isRecord(entry) ||
-			entry.type !== "custom_message" ||
-			(entry.customType !== CARD_TYPE && entry.customType !== FEEDBACK_TYPE &&
-				entry.customType !== SUMMARY_REQUEST_TYPE),
-	);
+function sessionEntries(active: Controller) {
+	const own = new Set([CARD_TYPE, FEEDBACK_TYPE, SUMMARY_REQUEST_TYPE]);
+	return active.ctx.sessionManager
+		.getBranch()
+		.filter((entry) => entry.type !== "custom_message" || !own.has(entry.customType));
 }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-

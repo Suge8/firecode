@@ -11,47 +11,51 @@ export type ReviewSessionResult =
 	| { kind: "aborted" }
 	| { kind: "error"; message: string };
 
-export interface ReviewSessionOptions {
-	pool: InProcessSessionPool;
-	role: "reviewer" | "advisor";
+export interface ReviewModelConfig {
 	model: string;
 	thinking: ThinkingLevelValue;
 	tools: string[];
+	timeoutMs: number;
+}
+
+export interface ReviewSessionRequest {
+	role: "reviewer" | "advisor";
+	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
-	timeoutMs: number;
 	signal?: AbortSignal;
 }
 
-export type ReviewSessionRunner = (
-	options: Omit<ReviewSessionOptions, "pool">,
-) => Promise<ReviewSessionResult>;
+export type ReviewSessionRunner = (request: ReviewSessionRequest) => Promise<ReviewSessionResult>;
 
 export function createReviewSessionRunner(pool: InProcessSessionPool): ReviewSessionRunner {
-	return (options) => runReviewSession({ ...options, pool });
+	return (request) => runReviewSession(pool, request);
 }
 
-async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSessionResult> {
-	if (options.signal?.aborted) return { kind: "aborted" };
+async function runReviewSession(
+	pool: InProcessSessionPool,
+	{ role, config, prompt, cwd, signal }: ReviewSessionRequest,
+): Promise<ReviewSessionResult> {
+	if (signal?.aborted) return { kind: "aborted" };
 	let spawned: Awaited<ReturnType<InProcessSessionPool["spawn"]>>;
 	try {
-		spawned = await options.pool.spawn({
-			cwd: options.cwd,
-			role: options.role,
-			model: await options.pool.resolveModel(options.model),
-			thinking: options.thinking,
-			tools: [...new Set(options.tools)].filter((tool) => tool !== "write" && tool !== "edit"),
-			systemPrompt: { mode: "replace", text: clean(options.prompt.system) },
+		spawned = await pool.spawn({
+			cwd,
+			role,
+			model: await pool.resolveModel(config.model),
+			thinking: config.thinking,
+			tools: [...new Set(config.tools)].filter((tool) => tool !== "write" && tool !== "edit"),
+			systemPrompt: { mode: "replace", text: clean(prompt.system) },
 			contextFiles: false,
 			persistence: { type: "memory" },
 			isolated: true,
 		});
 	} catch (error) {
-		return options.signal?.aborted
+		return signal?.aborted
 			? { kind: "aborted" }
 			: { kind: "error", message: errorText(error) };
 	}
-	if (options.signal?.aborted) {
+	if (signal?.aborted) {
 		await spawned.dispose();
 		return { kind: "aborted" };
 	}
@@ -71,10 +75,10 @@ async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSe
 	let wake!: () => void;
 	const interruption = new Promise<void>((resolve) => { wake = resolve; });
 	const onAbort = () => { interrupted = "aborted"; wake(); };
-	options.signal?.addEventListener("abort", onAbort, { once: true });
-	const timeout = setTimeout(() => { interrupted = "timeout"; wake(); }, options.timeoutMs);
+	signal?.addEventListener("abort", onAbort, { once: true });
+	const timeout = setTimeout(() => { interrupted = "timeout"; wake(); }, config.timeoutMs);
 	try {
-		const run = spawned.prompt(clean(options.prompt.user)).catch((error) => {
+		const run = spawned.prompt(clean(prompt.user)).catch((error) => {
 			finalError = errorText(error);
 		});
 		await Promise.race([run, interruption]);
@@ -84,7 +88,7 @@ async function runReviewSession(options: ReviewSessionOptions): Promise<ReviewSe
 		return finalText?.trim() ? { kind: "output", text: finalText } : { kind: "empty" };
 	} finally {
 		clearTimeout(timeout);
-		options.signal?.removeEventListener("abort", onAbort);
+		signal?.removeEventListener("abort", onAbort);
 		unsubscribe();
 		await spawned.dispose();
 	}

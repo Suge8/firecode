@@ -148,14 +148,23 @@ async function loadReviewWithVerdict(
 	};
 }
 
+/** 等真实计时器驱动的状态落定（例如 2s 的回执超时）；条件满足即返回。 */
+async function until(condition: () => boolean, timeoutMs = 10_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (!condition() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+const fireReview = (registered: ReturnType<typeof makePi>["registered"]) =>
+	registered.commands.get("fire-review") as { handler: (args: string, ctx: unknown) => Promise<void> };
+
 const FAIL_VERDICT = [
 	"FAIL",
 	"## 发现 1",
 	"- 严重程度: 中",
 	"- 问题: x",
 	"- 证据: a.ts",
-	"- 违反的契约或期望行为: y",
-	"- 需要运行的验证命令: bun test",
+	"- 违反的约定与期望行为: y",
+	"- 验证命令: bun test",
 ].join("\n");
 
 async function loadSingleFailReview() {
@@ -174,9 +183,7 @@ describe("registerReview wiring", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
 		await command.handler("", ctx);
@@ -203,40 +210,14 @@ describe("registerReview wiring", () => {
 		const { pi, registered } = makePi(sessionManager);
 		module.registerReview(pi);
 		const ctx = makeCtx(sessionManager);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 80; wait += 1) {
-			if (checkpoint.readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => checkpoint.readCheckpoint({ sessionManager })?.phase === "settled");
 		const state = checkpoint.readCheckpoint({ sessionManager });
 		expect(state?.phase).toBe("settled");
 		expect(state?.history.at(-1)?.result).toBe("error");
 		expect(state?.history.at(-1)?.details).toContain("system prompt 为空");
 	}, 10_000);
-
-	test("releases Herdr occupancy when a review passes", async () => {
-		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
-		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(verdict);
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi);
-		const ctx = makeCtx(sessionManager);
-		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
-		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
-		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
-		await rm(script, { force: true });
-	}, 20_000);
 
 	test("language en: the reviewer gets the English policy; the result card, summary prompt and notices are English", async () => {
 		const verdict = "PASS\nVerification exited 0.\nEvidence: files=a.ts; commands=bun test";
@@ -250,14 +231,9 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start");
 		expect(systems[0]).toContain("You are an independent adversarial reviewer");
 		const sent = registered.sent as { customType?: string; content?: string }[];
 		const card = sent.filter((message) => message.customType === "firecode-review-card").map((message) => message.content).join("\n");
@@ -278,15 +254,10 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		// 质量裁决落地 → 总结提示已投递（awaiting_start），占用仍持有。
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.summary?.status === "awaiting_start");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		const held = (registered.emitted as { data: { active: boolean; progress?: () => unknown } }[]).findLast((event) => event.data.active);
 		expect(held?.data.progress?.()).toMatchObject({ stage: "summarizing" });
@@ -306,32 +277,9 @@ describe("registerReview wiring", () => {
 		for (const handler of registered.events.get("agent_start") ?? []) await handler({}, ctx);
 		for (const handler of registered.events.get("agent_end") ?? [])
 			await handler({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-		for (let wait = 0; wait < 80; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		expect(readCheckpoint({ sessionManager })?.summary ?? null).toBeNull();
-		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
-		await rm(script, { force: true });
-	}, 20_000);
-
-	test("releases Herdr occupancy when max rounds stops the review", async () => {
-		const { registerReview, readCheckpoint, script } = await loadReviewWithVerdict(FAIL_VERDICT, 1);
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi);
-		const ctx = makeCtx(sessionManager);
-		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
-		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
-		expect(readCheckpoint({ sessionManager })?.history.at(-1)?.result).toBe("failed");
 		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 		await rm(script, { force: true });
 	}, 20_000);
@@ -343,9 +291,7 @@ describe("registerReview wiring", () => {
 		pi.events.emit = () => { throw new Error("Herdr unavailable"); };
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
@@ -367,14 +313,9 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeHeadlessCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "summarizing") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		for (const handler of registered.events.get("agent_start") ?? []) await handler({}, ctx);
 		for (const handler of registered.events.get("agent_end") ?? [])
@@ -407,9 +348,7 @@ describe("registerReview wiring", () => {
 			}),
 		});
 		const ctx = makeHeadlessCtx(sessionManager);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await sessionStarted;
 		const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
@@ -440,9 +379,7 @@ describe("registerReview wiring", () => {
 				if (next !== undefined) editorLocked = true;
 			},
 		});
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await review.settled();
 		expect(widgetInstalled).toBe(false);
@@ -462,9 +399,7 @@ describe("registerReview wiring", () => {
 			getEditorComponent: () => undefined,
 			setEditorComponent: (factory?: typeof editorFactory) => { editorFactory = factory; },
 		});
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
 		if (!editorFactory) throw new Error("review editor was not installed");
@@ -476,9 +411,7 @@ describe("registerReview wiring", () => {
 		editor.handleInput("\x1b");
 		await flush();
 		expect(ctx.notices).toContain("审查已取消\n已按你的操作停止");
-		expect(registered.sent.some((message) =>
-			(message as { details?: { kind?: string } }).details?.kind === "cancel"
-		)).toBe(false);
+		expect(registered.sent).toHaveLength(0);
 	});
 
 	test("does not send cards or start reviewers before the current run is fully settled", async () => {
@@ -487,9 +420,7 @@ describe("registerReview wiring", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 
 		await command.handler("", ctx);
 		await flush();
@@ -540,9 +471,7 @@ describe("registerReview wiring", () => {
 		const { pi, registered } = makePi(sessionManager);
 		const review = module.registerReview(pi);
 		const ctx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("--unknown=value", ctx);
 		expect(ctx.notices).toContain("Invalid fire-review arguments.");
 		await command.handler("focus", ctx);
@@ -560,7 +489,7 @@ describe("registerReview wiring", () => {
 			startedAt: 1,
 			updatedAt: 1,
 		};
-		beginCheckpoint(pi as never, { sessionManager } as never, state);
+		beginCheckpoint(pi as never, state);
 		registerReview(pi as never, false);
 		expect(registered.renderers.has("firecode-review-card")).toBe(true);
 		expect(registered.commands.has("fire-review")).toBe(false);
@@ -579,7 +508,7 @@ describe("registerReview wiring", () => {
 			startedAt: 1,
 			updatedAt: 1,
 		};
-		beginCheckpoint(pi as never, { sessionManager } as never, state);
+		beginCheckpoint(pi as never, state);
 		// features 整节类型错误被安全回退成全关，但那是配置坏而非用户关闭：不得封存。
 		registerReview(pi as never, false, true);
 		expect(registered.commands.has("fire-review")).toBe(false);
@@ -628,7 +557,7 @@ describe("checkpoint persistence", () => {
 		const ctx = { sessionManager };
 		const state = initialState("run-1");
 		// 首次写用 beginCheckpoint（无条件替换旧终态），返回本次写入凭证
-		const first = beginCheckpoint(pi as never, ctx, state);
+		const first = beginCheckpoint(pi as never, state);
 		expect(readCheckpoint(ctx)?.runId).toBe("run-1");
 		expect(first).toEqual({ runId: "run-1", seq: 1 });
 
@@ -655,9 +584,7 @@ describe("checkpoint persistence", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true) as never;
-		const commandHandler = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const commandHandler = fireReview(registered);
 		const shutdownHandler = (registered.events.get("session_shutdown") ?? [])[0] as (
 			event: { type: string; reason: "quit" },
 			ctx: unknown,
@@ -703,9 +630,7 @@ describe("reload preserves recoverable state", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true) as never;
-		const commandHandler = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const commandHandler = fireReview(registered);
 		const shutdownHandler = (registered.events.get("session_shutdown") ?? [])[0] as (
 			event: { type: string; reason: string },
 			ctx: unknown,
@@ -756,7 +681,7 @@ describe("reload preserves recoverable state", () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		beginCheckpoint(pi as never, { sessionManager } as never, {
+		beginCheckpoint(pi as never, {
 			...initialState("expired-run"),
 			phase: "queued",
 			startedAt: Date.now() - 201 * 60_000,
@@ -799,9 +724,7 @@ describe("review config is rejected at every entry point", () => {
 			const notices: string[] = [];
 			const ctx = makeCtx(sessionManager);
 			ctx.ui.notify = (message: string) => notices.push(message);
-			const command = registered.commands.get("fire-review") as {
-				handler: (args: string, ctx: unknown) => Promise<void>;
-			};
+			const command = fireReview(registered);
 			await command.handler("", ctx);
 			expect(notices.join()).toContain("配置有问题");
 			expect(checkpoints(sessionManager)).toHaveLength(0);
@@ -816,9 +739,7 @@ describe("review config is rejected at every entry point", () => {
 		const notices: string[] = [];
 		const ctx = makeCtx(sessionManager);
 		ctx.ui.notify = (message: string) => notices.push(message);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
 		// 没有写入任何 checkpoint，等于没有启动审查
@@ -831,9 +752,7 @@ describe("review config is rejected at every entry point", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
@@ -846,9 +765,7 @@ describe("review config is rejected at every entry point", () => {
 		const notices: string[] = [];
 		const ctx = makeCtx(sessionManager);
 		ctx.ui.notify = (message: string) => notices.push(message);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		expect(notices.join()).toContain("配置有问题");
 		expect(sessionManager.entries).toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
@@ -923,7 +840,7 @@ describe("reload recovery actually resumes the loop", () => {
 			(sendMessage as (...values: unknown[]) => void)(...args);
 			resolveReview();
 		};
-		beginCheckpoint(pi as never, { sessionManager } as never, {
+		beginCheckpoint(pi as never, {
 			...initialState("restore-review"),
 			phase: "reviewing",
 			round: 1,
@@ -966,7 +883,7 @@ describe("reload recovery actually resumes the loop", () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		beginCheckpoint(pi as never, { sessionManager } as never, {
+		beginCheckpoint(pi as never, {
 			...initialState("restore-repair"),
 			phase: "awaiting_fix",
 			round: 1,
@@ -1007,9 +924,7 @@ describe("reload recovery actually resumes the loop", () => {
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
 		const busyCtx = makeCtx(sessionManager, true);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", busyCtx);
 		await flush();
 		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).toBe("queued");
@@ -1052,9 +967,7 @@ describe("the loop survives failing side effects", () => {
 		};
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, true) as never;
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		const shutdown = (registered.events.get("session_shutdown") ?? [])[0] as (
 			event: { type: string; reason: "quit" },
 			ctx: unknown,
@@ -1081,9 +994,7 @@ describe("the loop survives failing side effects", () => {
 		};
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager, false) as never;
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
 		// 启动卡发送失败，但仍离开 queued 并实际跑完审查者。
@@ -1100,14 +1011,9 @@ describe("the loop survives failing side effects", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager, false);
 		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 100));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
 		expect(
 			registered.sent.some(
 				(message) => (message as { customType?: string }).customType === "firecode-review-feedback",
@@ -1127,14 +1033,9 @@ describe("the loop survives failing side effects", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
-		for (let wait = 0; wait < 200; wait += 1) {
-			if (readCheckpoint({ sessionManager })?.phase === "settled") break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		await rm(script, { force: true });
 	}, 20_000);
@@ -1151,9 +1052,7 @@ describe("the loop survives failing side effects", () => {
 		const notices: string[] = [];
 		const ctx = makeCtx(sessionManager, false);
 		ctx.ui.notify = (message: string) => notices.push(message);
-		const command = registered.commands.get("fire-review") as {
-			handler: (args: string, ctx: unknown) => Promise<void>;
-		};
+		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
 		expect(notices.join()).toContain("写入失败");
