@@ -23,7 +23,7 @@ function isTextVerbosity(value: unknown): value is TextVerbosity {
 	return value === "low" || value === "medium" || value === "high";
 }
 
-function isOpenAIResponsesModel(model: Model<Api> | undefined): model is Model<Api> {
+function isOpenAIResponsesModel(model: Model<Api> | undefined): boolean {
 	return model !== undefined && OPENAI_RESPONSES_APIS.has(model.api);
 }
 
@@ -61,7 +61,7 @@ export function applyOpenAIOptions(
 	let nextPayload = payload;
 
 	// verbosity 只属于 OpenAI Responses；xAI Completions 没有这个字段。
-	if (isOpenAIResponsesModel(model)) {
+	if (model && isOpenAIResponsesModel(model)) {
 		const textVerbosity = resolveTextVerbosity(model, settings, verbosityOverride);
 		if (textVerbosity && (!isRecord(payload.text) || payload.text.verbosity !== textVerbosity)) {
 			nextPayload = {

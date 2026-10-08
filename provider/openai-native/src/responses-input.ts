@@ -139,6 +139,9 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 			continue;
 		}
 
+		// 系统提示经 instructions 单独携带；对话中途的系统消息不是 Responses 输入项。
+		if (message.role === "system") continue;
+
 		input.push(serializeToolResultMessage(message, model));
 		messageIndex++;
 	}

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PI_VERSION: v1.1.0
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.x
+
+      # pi-mono 放在仓库之外：测试 loader 会复制整个仓库目录。
+      - name: Fetch pi-mono
+        run: |
+          git clone --depth 1 --branch "$PI_VERSION" https://github.com/earendil-works/pi "$RUNNER_TEMP/pi"
+          npm ci --ignore-scripts --prefix "$RUNNER_TEMP/pi"
+          echo "PI_PACKAGES_DIR=$RUNNER_TEMP/pi/packages" >> "$GITHUB_ENV"
+          ln -s "$RUNNER_TEMP/pi" .pi-mono
+
+      - name: Typecheck
+        run: .pi-mono/node_modules/.bin/tsc --noEmit
+
+      - name: Test
+        run: bun test
