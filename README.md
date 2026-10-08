@@ -28,7 +28,7 @@
 
 ## Fully automatic review and delivery
 
-Run `/fire-review` after a change and walk away. Any number of models you choose review the work adversarially. Problems go back to the agent to fix, the fix is reviewed again, and nothing reaches you until it passes. If it keeps getting stuck, an advisor model decides what to do next.
+Just tell the commander what you want. On important or hard tasks it starts an adversarial review on its own: any number of models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again until it passes. What reaches you is code that meets the bar and does what you asked. If it keeps getting stuck, an advisor model decides what to do next. You can also run `/fire-review` yourself at any time.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 
