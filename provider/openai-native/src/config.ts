@@ -1,5 +1,5 @@
 import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { parseJsonc } from "../../../jsonc.js";
+import { isRecord, parseJsonc } from "../../../jsonc.js";
 
 const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
 
@@ -20,11 +20,7 @@ export type LoadedOpenAINativeSettings = {
 	warnings: string[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isTextVerbosity(value: unknown): value is TextVerbosity {
+export function isTextVerbosity(value: unknown): value is TextVerbosity {
 	return typeof value === "string" && TEXT_VERBOSITIES.includes(value as TextVerbosity);
 }
 
@@ -82,13 +78,9 @@ function replaceKeyedObject(text: string, key: string, value: unknown): string |
 	return undefined;
 }
 
-/** firecode/config.jsonc 用 `openai` 节；单测仍可用独立的 native 文件。 */
-function openaiRoot(root: Record<string, unknown>): Record<string, unknown> {
-	return isRecord(root.openai) ? root.openai : root;
-}
-
-function isFirecodeConfig(root: Record<string, unknown>): boolean {
-	return "openai" in root || "presets" in root || "keys" in root || "features" in root;
+/** 配置文件里只有 `openai` 节归本模块；缺省按全默认。 */
+function openaiSection(root: Record<string, unknown>): Record<string, unknown> {
+	return isRecord(root.openai) ? root.openai : {};
 }
 
 function parseProviderSettings(
@@ -200,20 +192,10 @@ function acquireConfigLock(lockPath: string): number {
 	return openSync(lockPath, "wx", 0o600);
 }
 
-function writeConfig(
-	configPath: string,
-	settings: OpenAINativeSettings,
-	firecodeRoot?: Record<string, unknown>,
-): void {
+function writeConfig(configPath: string, settings: OpenAINativeSettings, root: Record<string, unknown>): void {
 	const serialized = serializeSettings(settings);
-	let text: string;
-	if (firecodeRoot) {
-		const original = readFileSync(configPath, "utf8");
-		text = replaceKeyedObject(original, "openai", serialized)
-			?? `${JSON.stringify({ ...firecodeRoot, openai: serialized }, null, "\t")}\n`;
-	} else {
-		text = `${JSON.stringify(serialized, null, 2)}\n`;
-	}
+	const text = replaceKeyedObject(readFileSync(configPath, "utf8"), "openai", serialized)
+		?? `${JSON.stringify({ ...root, openai: serialized }, null, "\t")}\n`;
 	const temporaryPath = `${configPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
 		writeFileSync(temporaryPath, text, {
@@ -240,11 +222,11 @@ function withConfigLock<T>(configPath: string, action: () => T): T {
 
 export function loadOpenAINativeSettings(configPath: string): LoadedOpenAINativeSettings {
 	try {
-		return parseSettings(openaiRoot(readConfig(configPath)));
+		return parseSettings(openaiSection(readConfig(configPath)));
 	} catch (error) {
 		return {
 			settings: createDefaultSettings(),
-			warnings: [`config.json: ${error instanceof Error ? error.message : String(error)}`],
+			warnings: [`config.jsonc: ${error instanceof Error ? error.message : String(error)}`],
 		};
 	}
 }
@@ -259,7 +241,7 @@ export function togglePriority(
 
 	return withConfigLock(configPath, () => {
 		const root = readConfig(configPath);
-		const loaded = parseSettings(openaiRoot(root));
+		const loaded = parseSettings(openaiSection(root));
 		const providerSettings = loaded.settings.providers[provider] ?? {};
 		const enabled = providerSettings.priority !== true;
 		const providers = {
@@ -281,7 +263,7 @@ export function togglePriority(
 			nativeCompaction: loaded.settings.nativeCompaction,
 			providers,
 		};
-		writeConfig(configPath, settings, isFirecodeConfig(root) ? root : undefined);
+		writeConfig(configPath, settings, root);
 		return {
 			enabled,
 			loaded: { settings, warnings: loaded.warnings },
@@ -289,9 +271,3 @@ export function togglePriority(
 	});
 }
 
-export function providerSettings(
-	settings: OpenAINativeSettings,
-	provider: string | undefined,
-): OpenAIProviderSettings | undefined {
-	return provider ? settings.providers[provider] : undefined;
-}

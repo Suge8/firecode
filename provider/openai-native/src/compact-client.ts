@@ -1,4 +1,5 @@
 import type { NativeCompactionRuntime } from "./native-runtime";
+import { isRecord } from "../../../jsonc.js";
 import type { NativeCompactionRequest } from "./responses-input";
 
 const JSON_CONTENT_TYPE = "application/json";
@@ -38,10 +39,6 @@ export type NativeCompactionResult =
 			status?: number;
 			detail?: string;
 	  };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isAbortError(error: unknown): boolean {
 	return (

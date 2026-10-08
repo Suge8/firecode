@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { providerSettings, type OpenAINativeSettings, type TextVerbosity } from "./config";
+import { isTextVerbosity, type OpenAINativeSettings, type TextVerbosity } from "./config";
+import { isRecord } from "../../../jsonc.js";
 
 export const FAST_STATUS_KEY = "pi-openai-native-fast";
 
@@ -15,14 +16,6 @@ const PRIORITY_MODEL_IDS = new Set([
 	"gpt-6-luna",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isTextVerbosity(value: unknown): value is TextVerbosity {
-	return value === "low" || value === "medium" || value === "high";
-}
-
 function isOpenAIResponsesModel(model: Model<Api> | undefined): boolean {
 	return model !== undefined && OPENAI_RESPONSES_APIS.has(model.api);
 }
@@ -37,7 +30,7 @@ export function fastModeEnabled(model: Model<Api> | undefined, settings: OpenAIN
 	if (!model || !supportsFastMode(model)) {
 		return false;
 	}
-	return providerSettings(settings, model.provider)?.priority === true;
+	return settings.providers[model.provider]?.priority === true;
 }
 
 function resolveTextVerbosity(
@@ -48,7 +41,7 @@ function resolveTextVerbosity(
 	if (verbosityOverride !== undefined) {
 		return isTextVerbosity(verbosityOverride) ? verbosityOverride : undefined;
 	}
-	return providerSettings(settings, model.provider)?.textVerbosity;
+	return settings.providers[model.provider]?.textVerbosity;
 }
 
 export function applyOpenAIOptions(
@@ -57,7 +50,7 @@ export function applyOpenAIOptions(
 	settings: OpenAINativeSettings,
 	verbosityOverride: unknown,
 ): Record<string, unknown> {
-	const configuredProvider = model ? providerSettings(settings, model.provider) : undefined;
+	const configuredProvider = model ? settings.providers[model.provider] : undefined;
 	let nextPayload = payload;
 
 	// verbosity 只属于 OpenAI Responses；xAI Completions 没有这个字段。

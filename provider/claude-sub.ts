@@ -7,15 +7,12 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { textOf } from "../format.js";
 import { msg } from "./messages.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
-const DEFAULT_ENTRYPOINT = "cli";
 const BILLING_SALT = "59cf53e54c78";
 
 type TextBlock = {
@@ -70,9 +67,6 @@ function firstUserText(messages: unknown): string {
 }
 
 function versionSuffix(messageText: string): string {
-	const explicit = process.env.PI_CLAUDE_CODE_VERSION_SUFFIX;
-	if (explicit) return explicit;
-
 	const sampled = [4, 7, 20].map((index) => messageText[index] ?? "0").join("");
 	return createHash("sha256")
 		.update(`${BILLING_SALT}${sampled}${claudeCodeVersion}`)
@@ -82,24 +76,7 @@ function versionSuffix(messageText: string): string {
 
 function buildBillingHeader(messages: unknown): string {
 	const version = `${claudeCodeVersion}.${versionSuffix(firstUserText(messages))}`;
-	const entrypoint =
-		process.env.PI_CLAUDE_CODE_ENTRYPOINT ?? process.env.CLAUDE_CODE_ENTRYPOINT ?? DEFAULT_ENTRYPOINT;
-	const workload = process.env.PI_CLAUDE_CODE_WORKLOAD ?? process.env.CLAUDE_CODE_WORKLOAD;
-	const workloadPart = workload ? ` cc_workload=${workload};` : "";
-	return `${BILLING_PREFIX} cc_version=${version}; cc_entrypoint=${entrypoint}; cch=00000;${workloadPart}`;
-}
-
-function log(details: Record<string, unknown>): void {
-	const logFile = process.env.PI_CLAUDE_OAUTH_LOG_FILE;
-	if (!logFile) return;
-
-	const path = resolve(logFile);
-	try {
-		mkdirSync(dirname(path), { recursive: true });
-		appendFileSync(path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...details })}\n`, "utf8");
-	} catch {
-		// 调试日志是可选的。
-	}
+	return `${BILLING_PREFIX} cc_version=${version}; cc_entrypoint=cli; cch=00000;`;
 }
 
 function isRevokedTokenFailure(entry: SessionEntry | undefined): entry is SessionMessageEntry {
@@ -136,7 +113,6 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 		if (blocks.some((block) => isTextBlock(block) && block.text.startsWith(BILLING_PREFIX))) return;
 
 		const header: TextBlock = { type: "text", text: buildBillingHeader(messages) };
-		log({ event: "billing_header_injected", header: header.text });
 		return { ...payload, system: [header, ...blocks] };
 	});
 

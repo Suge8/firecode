@@ -1,4 +1,5 @@
 import type { CompactionEntry, CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../../../jsonc.js";
 
 export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact";
 export const NATIVE_COMPACTION_SUMMARY = "[OpenAI native compaction checkpoint]";
@@ -30,10 +31,6 @@ type NativeCompactionResolution =
 			ok: false;
 			reason: "no-compaction" | "latest-compaction-not-native" | "latest-native-compaction-mismatch";
 	  };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
