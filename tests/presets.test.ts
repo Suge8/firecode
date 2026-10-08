@@ -26,7 +26,7 @@ test("binds exactly the shortcuts declared by preset key fields", async () => {
 });
 
 const PRESET_CONFIG = JSON.stringify({
-	keys: { fast: "alt+s" },
+	keys: { fast: "ctrl+shift+s" },
 	presets: {
 		deep: { model: "test/deep/high", tools: ["read", "bash"], instructions: "深度模式指令" },
 		quick: { model: "test/quick/low", instructions: "快速模式指令" },

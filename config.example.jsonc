@@ -18,7 +18,7 @@
 	},
 
 	"keys": {
-		"fast": "alt+s"
+		"fast": "ctrl+shift+s"
 	},
 
 	// nativeCompaction uses OpenAI's native context compaction; priority pays more for faster output and is off by default.

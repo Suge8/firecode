@@ -85,7 +85,7 @@ test("toggles priority atomically in the extension config", () => {
 
 test("toggles only the openai section of a firecode config", () => {
 	const configPath = createConfig({
-		keys: { fast: "alt+s" },
+		keys: { fast: "ctrl+shift+s" },
 		presets: { sol: { model: "gpt-5.6-sol" } },
 		openai: {
 			nativeCompaction: false,
@@ -96,7 +96,7 @@ test("toggles only the openai section of a firecode config", () => {
 	const disabled = togglePriority("openai-codex", configPath);
 	expect(disabled.enabled).toBe(false);
 	expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-		keys: { fast: "alt+s" },
+		keys: { fast: "ctrl+shift+s" },
 		presets: { sol: { model: "gpt-5.6-sol" } },
 		openai: {
 			nativeCompaction: false,
@@ -111,7 +111,7 @@ test("keeps comments outside the openai section when toggling fast", () => {
 	const configPath = join(directory, "config.jsonc");
 	writeFileSync(
 		configPath,
-		`{\n\t// keep me\n\t"keys": { "fast": "alt+s" },\n\t"openai": {\n\t\t"nativeCompaction": false,\n\t\t"providers": { "openai-codex": { "priority": true } }\n\t}\n}\n`,
+		`{\n\t// keep me\n\t"keys": { "fast": "ctrl+shift+s" },\n\t"openai": {\n\t\t"nativeCompaction": false,\n\t\t"providers": { "openai-codex": { "priority": true } }\n\t}\n}\n`,
 	);
 
 	togglePriority("openai-codex", configPath);
