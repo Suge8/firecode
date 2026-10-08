@@ -5,7 +5,7 @@
 import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MasterRole } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
-import type { ReviewProgress } from "../review/outcome.js";
+import type { ReviewRoundProgress } from "../review/outcome.js";
 import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from "./activity-list.js";
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
@@ -63,7 +63,7 @@ export interface WorkerLive {
 	/** 最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
 	lastOutputAt?: number;
 	currentTools: Map<string, CurrentTool>;
-	reviewProgress?: ReviewProgress;
+	reviewProgress?: ReviewRoundProgress;
 	/** 最近一次落定的时刻：池起释放计时、列表“落定 X 前”与活动列表冻结耗时共用这一份。 */
 	idleAt?: number;
 	/** 活动列表上的落定结局；ack 清掉失败与被中断，完成留到 kill。 */

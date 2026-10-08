@@ -52,13 +52,13 @@ export function outcomeOfEntry(entry: unknown): ReviewOutcome | undefined {
 }
 
 /** 审查进行中的轮次与审查者进度；不是审查相的 checkpoint 或不是 checkpoint 都给 undefined。 */
-export interface ReviewProgress {
+export interface ReviewRoundProgress {
 	round: number;
 	settled: number;
 	total: number;
 }
 
-export function reviewProgressOf(entry: unknown): ReviewProgress | undefined {
+export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefined {
 	const active = checkpointOf(entry)?.active;
 	return active ? { round: active.round, settled: active.settledCount, total: active.reviewers.length } : undefined;
 }
