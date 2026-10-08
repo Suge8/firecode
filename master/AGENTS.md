@@ -56,7 +56,7 @@ Master 是在飞子代理数与通用 `herdr:working` 的唯一发布者（定�
 
 落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，合并窗口见 `index.ts`。事件正文末尾的“本次运行”耗时见 `outbox.ts`、`event-format.ts`；“当前任务 X”是给指挥官的时间信号——Opus 5.5 据已用时间安排并行（官方提示指南“Time signals for multiagent harnesses”），只追加在事件正文内，不触碰投递路径。
 
-**视图起的运行**：运行时表里每次运行带一个来源（`RunOrigin`），不另起状态机。用户在全过程视图里给空闲子代理补话起的运行来源为 view：指挥官没在等它，所以不计入在飞数——主会话不因它进入进行中、不产生主会话轮记录、不推 Bark；落定事件仍交给指挥官（它必须知道子代理状态变了），但经 `deliver.ts` 的 `inform` 只告知不唤醒（pending 里带 `inform`，reload 重投同样不唤醒；与唤醒事件同批时随那一批唤醒送达）。指挥官在这次运行进行中又 send 给同一子代理时来源转为 master，它从此在等；视图补进指挥官起的运行只记原话、不改来源。发落、审查义务与失败行规则不变。
+**视图起的运行**：运行时表里每次运行带一个来源（`RunOrigin`），不另起状态机。用户在全过程视图里给空闲子代理补话起的运行来源为 view：指挥官没在等它，所以不计入在飞数——主会话不因它进入进行中、不产生主会话轮记录；落定事件仍交给指挥官（它必须知道子代理状态变了），但经 `deliver.ts` 的 `inform` 只告知不唤醒（pending 里带 `inform`，reload 重投同样不唤醒；与唤醒事件同批时随那一批唤醒送达）。指挥官在这次运行进行中又 send 给同一子代理时来源转为 master，它从此在等；视图补进指挥官起的运行只记原话、不改来源。发落、审查义务与失败行规则不变。
 
 事件正文只在 `event-format.ts` 产文（标题、分节、失败口径、耗时行格式）；展示卡没有独立数据，`tools/machine.ts` 从信封正文解析标题、`错误：` 分节与“耗时：本次运行”行，改格式两侧同步，`tests/tool-groups.test.ts` 用真实产文守这条链路。给模型的指令（续派或收口、审查义务）只放在标题之后的正文；被中断的正文只在有审查义务时提审查义务；待续跑只发给会话重载打断的回合，并说明是重载打断。
 
@@ -68,7 +68,7 @@ Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.
 
 Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；使用默认四工具；指挥官会话启用了 codemode 时再加 codemode（宿主只给 CLI 主会话注入内置扩展，`spawn.ts` 为子会话自带 builtin codemode，on/only 由同一份 settings 决定；脚本里的嵌套调用照样经过 tool_call 钩子，守卫不失效）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫放行当前 checkout 与系统临时目录（交付物写在临时目录是正当用途）；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
-Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；bark 只读取持久化档案，工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
+Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
 
 ## 全过程视图
 
