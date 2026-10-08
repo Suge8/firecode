@@ -1,4 +1,4 @@
-/** 根目录模块的文案：配置问题、启动提示、写入拦截，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
+/** 根目录模块的文案：配置问题、启动提示、写入拦截，以及机器消息（信封）里生产端与折叠界面共用的词汇，以及一段回合的终态字样。 */
 import { defineMessages } from "./i18n.js";
 
 export const msg = defineMessages({
@@ -42,6 +42,7 @@ export const msg = defineMessages({
 			seedFailed: (path: string, reason: string) => `无法生成配置：${path}（${reason}）`,
 		},
 		truncatedWrite: "写入内容带 read 截断提示，说明拿的是截断后的半截文件：改文件用 edit，或分段读完整再写",
+		outcome: { aborted: "已中断", error: "请求失败" },
 		envelope: {
 			watcher: "观察员",
 			sections: { reply: "回复：", error: "错误：", finalReply: "最终回复：", advice: "顾问意见：" },
@@ -90,6 +91,7 @@ export const msg = defineMessages({
 			seedFailed: (path: string, reason: string) => `Could not generate config: ${path} (${reason})`,
 		},
 		truncatedWrite: "The content to write carries a read truncation notice, so it is a truncated half of the file: change the file with edit, or read it completely in chunks before writing",
+		outcome: { aborted: "Interrupted", error: "Request failed" },
 		envelope: {
 			watcher: "Watcher",
 			sections: { reply: "Reply:", error: "Error:", finalReply: "Final reply:", advice: "Advisor advice:" },

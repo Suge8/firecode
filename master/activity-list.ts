@@ -9,6 +9,8 @@ import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flam
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";
 import type { ReviewProgress } from "../review/outcome.js";
+import { msg as toolsMsg } from "../tools/messages.js";
+import { msg } from "./messages.js";
 import type { WorkerRef } from "./state.js";
 
 /** 本次运行的落定事实：落定时刻、结局与行上的说明。失败与被中断留到 ack 或 kill，完成留到 kill。 */
@@ -51,7 +53,7 @@ const IDLE_GLYPH = "·";
 
 /** 卡住提醒的全写法与窄屏短写法。 */
 function silentNote(minutes: number): { full: string; short: string } {
-	return { full: `${minutes} 分钟无输出`, short: `${minutes}m 无输出` };
+	return { full: msg.activity.silentFull(minutes), short: msg.activity.silentShort(minutes) };
 }
 const FAILED_MARK = paint(HEAT_COLORS.fail, "✗");
 
@@ -101,7 +103,7 @@ export function rowState(facts: ActivityFacts, index: number, now: number, theme
 	if (worker.status === "working") {
 		const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
-		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : "思考中";
+		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
 		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
 		if (silent >= STUCK_MS)
 			// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
@@ -110,17 +112,17 @@ export function rowState(facts: ActivityFacts, index: number, now: number, theme
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
-		const action = progress ? `审查第 ${progress.round} 轮 · ${progress.settled}/${progress.total} 通过` : "审查中";
+		const action = progress ? msg.activity.reviewRound(progress.round, progress.settled, progress.total) : msg.activity.reviewing;
 		return { kind: "review", row: { ...base, mark: reviewMark(phase), action, tone: "review" } };
 	}
 	const fact = facts.settled.get(path);
 	// 组名已经说了“空闲”，展开行只列谁。
 	if (!fact) return { kind: "idle", row: { ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "", settled: true } };
 	const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
-	if (fact.kind === "done") return { kind: "done", row: { ...settledRow, mark: DONE_MARK, action: fact.note ?? "已返回" } };
+	if (fact.kind === "done") return { kind: "done", row: { ...settledRow, mark: DONE_MARK, action: fact.note ?? msg.activity.returned } };
 	if (fact.kind === "interrupted")
-		return { kind: "interrupted", row: { ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: "被中断", tone: "warning" } };
-	return { kind: "failed", row: { ...settledRow, mark: FAILED_MARK, action: fact.note ?? "失败", tone: "failed" } };
+		return { kind: "interrupted", row: { ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: msg.activity.interrupted, tone: "warning" } };
+	return { kind: "failed", row: { ...settledRow, mark: FAILED_MARK, action: fact.note ?? msg.activity.failed, tone: "failed" } };
 }
 
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
@@ -148,18 +150,18 @@ function layout({ failed, interrupted, stuck, running, done, idle }: Groups, fol
 	const overflow = running.length > folding.limit;
 	if (!overflow || folding.showAllRunning) {
 		lines.push(...running.map((row) => ({ row })));
-		if (overflow) lines.push({ label: "收起", mark: idleMark, toggle: "running", names: [] });
+		if (overflow) lines.push({ label: msg.activity.collapse, mark: idleMark, toggle: "running", names: [] });
 	} else {
 		const shown = running.slice(0, folding.limit - 1);
 		const hidden = running.slice(shown.length);
-		lines.push(...shown.map((row) => ({ row })), { label: `+${hidden.length} 个在跑`, mark: idleMark, toggle: "running", names: names(hidden, false) });
+		lines.push(...shown.map((row) => ({ row })), { label: msg.activity.moreRunning(hidden.length), mark: idleMark, toggle: "running", names: names(hidden, false) });
 	}
 	if (done.length) {
-		lines.push({ label: `${done.length} 个已完成`, mark: DONE_MARK, toggle: "done", names: names(done, folding.showDone) });
+		lines.push({ label: msg.activity.done(done.length), mark: DONE_MARK, toggle: "done", names: names(done, folding.showDone) });
 		if (folding.showDone) lines.push(...done.map((row) => ({ row })));
 	}
 	if (idle.length) {
-		lines.push({ label: `${idle.length} 个空闲`, mark: idleMark, toggle: "idle", names: names(idle, folding.showIdle) });
+		lines.push({ label: msg.activity.idle(idle.length), mark: idleMark, toggle: "idle", names: names(idle, folding.showIdle) });
 		if (folding.showIdle) lines.push(...idle.map((row) => ({ row })));
 	}
 	return lines;

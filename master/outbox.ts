@@ -7,6 +7,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";
 import { roundFromEntry } from "../tools/round.js";
 import { MASTER_EVENT_TYPE, withElapsed, type MasterEvent } from "./event-format.js";
+import { msg } from "./messages.js";
 import type { MasterRuntime } from "./runtime.js";
 
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
@@ -48,7 +49,7 @@ export class Outbox {
 		try {
 			this.active.setup.pi.appendEntry(PENDING_EVENT_TYPE, event);
 		} catch (error) {
-			this.active.ctx.ui.notify(`子代理结果持久化失败，crash 时可能丢失：${String(error)}`, "warning");
+			this.active.ctx.ui.notify(msg.outbox.persistFailed(String(error)), "warning");
 		}
 		this.push(event);
 	}
@@ -128,7 +129,7 @@ export class Outbox {
 			try {
 				active.setup.pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
 			} catch (error) {
-				active.ctx.ui.notify(`子代理结果确认写入失败，reload 后可能重复投递：${String(error)}`, "warning");
+				active.ctx.ui.notify(msg.outbox.ackFailed(String(error)), "warning");
 			}
 			for (const event of batch) {
 				if (!event.worker) continue;
@@ -141,7 +142,7 @@ export class Outbox {
 			if (active.closed) return;
 			for (const event of batch) this.delivering.delete(event);
 			this.queued.unshift(...batch);
-			active.ctx.ui.notify(`子代理结果投递失败，将自动重试：${String(error)}`, "warning");
+			active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
 			this.retrying = true;
 			this.schedule(EVENT_RETRY_MS);
 		});

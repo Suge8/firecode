@@ -7,6 +7,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "./format.js";
+import { msg } from "./messages.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "./review/occupancy.js";
 
 /** 进程内事件总线：在飞子代理数变化时发布 `{ inFlight }`，激活/停用同步。 */
@@ -45,7 +46,7 @@ export interface SettledRound {
 }
 
 /** 终态字样；完成不写字。 */
-export const OUTCOME_TEXT: Record<Outcome, string> = { complete: "", aborted: "已中断", error: "请求失败" };
+export const OUTCOME_TEXT: Record<Outcome, string> = { complete: "", ...msg.outcome };
 const RATE_FORMAT = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3, useGrouping: false });
 
 /** 落定记录的展示片段（未着色）：耗时，有均速再跟一段。上边框与摘要行共用。 */

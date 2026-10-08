@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { msg } from "./messages.js";
 
 const STATE_VERSION = 9;
 
@@ -76,10 +77,7 @@ export function restoreMasterState(data: unknown): MasterState | undefined {
 
 export class LegacyMasterStateError extends Error {
 	constructor(readonly version: number) {
-		super(
-			`Master Worker Pool 状态是旧版 v${version}（当前 v${STATE_VERSION}），不再读取；`
-			+ "重新启动指挥官模式会从空池重建，旧运行时进程不会纳入新池，需要手动清理",
-		);
+		super(msg.state.legacy(version, STATE_VERSION));
 	}
 }
 
@@ -101,12 +99,12 @@ export function loadMasterState(path: string): MasterState | undefined {
 	try {
 		data = JSON.parse(raw);
 	} catch {
-		throw new Error(`Master Worker Pool 状态不是合法 JSON：${path}`);
+		throw new Error(msg.state.invalidJson(path));
 	}
 	const version = (data as { version?: unknown } | null)?.version;
 	if (typeof version === "number" && version !== STATE_VERSION && version !== 8) throw new LegacyMasterStateError(version);
 	const state = restoreMasterState(version === 8 ? migrateFromV8(data as { workers?: unknown }) : data);
-	if (!state) throw new Error(`Master Worker Pool 状态结构无效：${path}`);
+	if (!state) throw new Error(msg.state.invalidShape(path));
 	return state;
 }
 
@@ -172,7 +170,7 @@ function migrateFromV8(data: { workers?: unknown }): unknown {
 
 export function requireWorker(state: MasterState, name: string): WorkerRef {
 	const worker = state.workers.find((candidate) => candidate.name === name);
-	if (!worker) throw new Error(`子代理不存在：${name}`);
+	if (!worker) throw new Error(msg.state.missing(name));
 	return worker;
 }
 
@@ -192,10 +190,10 @@ function upsertWorker(workers: WorkerRef[], worker: WorkerRef): WorkerRef[] {
 	const index = workers.findIndex((candidate) => candidate.name === worker.name);
 	const sessionOwner = workers.find((candidate) => candidate.sessionPath === worker.sessionPath);
 	if (sessionOwner && sessionOwner.name !== worker.name)
-		throw new Error(`sessionPath 已被占用：${worker.sessionPath}`);
+		throw new Error(msg.state.pathTaken(worker.sessionPath));
 	if (index < 0) return [...workers, worker];
 	if (workers[index].sessionPath !== worker.sessionPath)
-		throw new Error(`子代理 ${worker.name} 不能更换 sessionPath`);
+		throw new Error(msg.state.pathChange(worker.name));
 	return workers.map((candidate, position) => (position === index ? worker : candidate));
 }
 

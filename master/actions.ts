@@ -7,6 +7,7 @@ import type { MasterRole } from "../config.js";
 import { textOf } from "../format.js";
 import { readReviewOutcome } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
+import { msg } from "./messages.js";
 import {
 	monitorAndSettleReview, observeWorker, openWorkerSession, resumeCheckPrompt, reviewRunId, runWorker, spawnWorker,
 } from "./run.js";
@@ -41,8 +42,8 @@ async function tail(active: MasterRuntime, params: Params): Promise<ToolResult> 
 /** 动作名按模型先验取：曾叫 hold，被读成“暂停”而假成功。名字治误读，非 idle 报错治假成功。 */
 async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-	if (target.reviewNeeded) throw new Error(`${target.name} 此票有审查义务，完成 review 后才能 ack`);
-	if (target.status !== "idle") throw new Error(`${target.name} 正在 ${target.status}，不能 ack`);
+	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
+	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
 	if (target.disposition) {
 		const { disposition: _disposition, ...rest } = target;
 		active.store.dispatch({ type: "UPSERT_WORKER", worker: rest });
@@ -58,7 +59,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 	if (active.setup.reviewGate) throw new Error(active.setup.reviewGate);
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 	const live = active.liveOf(target.name);
-	if (target.status !== "idle" || live.transitioning) throw new Error(`${target.name} 正在处理其他动作，不能 review`);
+	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
 	live.transitioning = true;
 	try {
 		const session = await openWorkerSession(active, target);
@@ -77,12 +78,12 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 
 async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
-	if (target.status !== "working") throw new Error(`${target.name} 当前是 ${target.status}，不能 interrupt`);
+	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
 	const session = active.setup.pool.getSession(target.sessionPath);
-	if (!session) throw new Error(`${target.name} 的进程内会话已释放，无法 interrupt`);
+	if (!session) throw new Error(msg.action.sessionReleased(target.name));
 	const live = active.liveOf(target.name);
 	const run = live.run;
-	if (!run) throw new Error(`${target.name} 当前没有可中断的回合`);
+	if (!run) throw new Error(msg.action.noRun(target.name));
 	live.interruptedRun = run;
 	try {
 		await session.abort();
@@ -99,7 +100,7 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 	if (params.review === true && reviewGate) throw new Error(reviewGate);
 	const target = requireWorker(active.store.state, requiredString(params.worker, "worker"));
 	const live = active.liveOf(target.name);
-	if (live.transitioning) throw new Error(`${target.name} 正在切换，稍后再 send`);
+	if (live.transitioning) throw new Error(msg.action.switching(target.name));
 	const requestedRole = optionalString(params.role);
 	const requestedThinking = optionalString(params.thinking);
 	const requestedCwd = optionalString(params.cwd);
@@ -117,8 +118,8 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
 		}
 		return result;
 	}
-	if (target.status === "working") throw new Error(`${target.name} 正在工作；切换 role/thinking/cwd 需先 interrupt`);
-	if (target.status !== "idle") throw new Error(`${target.name} 正在审查，等落定再 send`);
+	if (target.status === "working") throw new Error(msg.action.workingSwitch(target.name));
+	if (target.status !== "idle") throw new Error(msg.action.reviewingSend(target.name));
 	const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
 	const thinkingOverride = validThinking(requestedThinking);
 	live.transitioning = true;
@@ -165,11 +166,11 @@ async function send(active: MasterRuntime, params: Params): Promise<ToolResult> 
  */
 async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, review: boolean): Promise<ToolResult> {
 	const session = active.setup.pool.getSession(target.sessionPath);
-	if (!session?.isStreaming) throw new Error(`${target.name} 回合正在收尾，稍后再 send`);
+	if (!session?.isStreaming) throw new Error(msg.action.finishing(target.name));
 	await session.steer(prompt);
 	if (active.current(target).status !== "working") {
 		session.clearQueue();
-		throw new Error(`${target.name} 的回合已结束，补充说明未送达，请重新 send`);
+		throw new Error(msg.action.notDelivered(target.name));
 	}
 	if (review) active.commit(target, (latest) => ({ ...latest, reviewNeeded: true }));
 	return toolResult({ steered: true });
@@ -179,25 +180,27 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	const { reviewGate, roster } = active.setup;
 	if (params.review === true && reviewGate) throw new Error(reviewGate);
 	if (typeof params.worker !== "string" || !params.worker.trim())
-		throw new Error("start 需要 worker：给子代理起个简短任务名（如 fix-auth、repo-scan）");
+		throw new Error(msg.action.needWorker);
 	const name = params.worker.trim();
 	validateWorkerName(name);
 	const starting = [...active.live].flatMap(([candidate, live]) => (live.starting ? [candidate] : []));
 	if (active.store.state.workers.some((worker) => worker.name === name) || starting.includes(name))
-		throw new Error(`子代理已存在：${name}`);
+		throw new Error(msg.action.exists(name));
 	const inFlight = active.store.state.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing");
 	if (inFlight.length + starting.length >= MAX_IN_FLIGHT)
-		throw new Error(`Worker 并发上限 ${MAX_IN_FLIGHT}，当前在飞：${[...inFlight.map((worker) => worker.name), ...starting].join("、")}`);
+		throw new Error(msg.action.limit(MAX_IN_FLIGHT, [...inFlight.map((worker) => worker.name), ...starting]));
 	const prompt = requiredString(params.prompt, "prompt");
 	validateDelegationText(prompt);
-	const selectedRole = resolveRole(roster, requiredString(params.role, "start 必须指定 role"));
+	const requestedRole = optionalString(params.role);
+	if (!requestedRole) throw new Error(msg.action.needRole);
+	const selectedRole = resolveRole(roster, requestedRole);
 	const thinking = validThinking(optionalString(params.thinking)) ?? selectedRole.thinking;
 	const { live, launch } = active.reserve(name);
 	try {
 		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 		active.assertOpen();
 		const mainSessionPath = ctx.sessionManager.getSessionFile();
-		if (!mainSessionPath) throw new Error("主会话尚未落盘，无法创建子代理会话目录");
+		if (!mainSessionPath) throw new Error(msg.action.mainNotSaved);
 		const worker: WorkerRef = {
 			name,
 			role: selectedRole.role,
@@ -227,7 +230,7 @@ async function readWorkerTrace(worker: WorkerRef): Promise<string> {
 	try {
 		raw = await readFile(worker.sessionPath, "utf8");
 	} catch (error) {
-		throw new Error(`无法读取子代理 ${worker.name} 会话：${error instanceof Error ? error.message : String(error)}`);
+		throw new Error(msg.action.traceUnreadable(worker.name, error instanceof Error ? error.message : String(error)));
 	}
 	const lines: string[] = [];
 	for (const line of raw.split(/\r?\n/u)) {
@@ -241,7 +244,7 @@ async function readWorkerTrace(worker: WorkerRef): Promise<string> {
 			// 正在追加的尾行可暂时不完整；近况保留此前完整记录。
 		}
 	}
-	return `子代理 ${worker.name} 近况（${worker.status}）\n${lines.join("\n").slice(-4_000)}`;
+	return `${msg.action.traceHeader(worker.name, worker.status)}\n${lines.join("\n").slice(-4_000)}`;
 }
 
 function toolResult(value: unknown): ToolResult {
@@ -249,7 +252,7 @@ function toolResult(value: unknown): ToolResult {
 }
 
 function requiredString(value: unknown, field: string): string {
-	if (typeof value !== "string" || !value.trim()) throw new Error(`${field} 不能为空`);
+	if (typeof value !== "string" || !value.trim()) throw new Error(msg.action.empty(field));
 	return value.trim();
 }
 
@@ -258,7 +261,7 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function validThinking(value: string | undefined): WorkerRef["thinking"] | undefined {
-	if (value && !THINKING_LEVELS.includes(value as WorkerRef["thinking"])) throw new Error(`thinking 值无效：${value}`);
+	if (value && !THINKING_LEVELS.includes(value as WorkerRef["thinking"])) throw new Error(msg.action.badThinking(value));
 	return value as WorkerRef["thinking"] | undefined;
 }
 
@@ -268,26 +271,26 @@ function resolveRole(roles: MasterRole[], role: string): MasterRole {
 }
 
 function validateWorkerName(name: string): void {
-	if (!/^[a-z][a-z0-9_-]{0,31}$/u.test(name)) throw new Error("Worker name 必须匹配 [a-z][a-z0-9_-]{0,31}");
+	if (!/^[a-z][a-z0-9_-]{0,31}$/u.test(name)) throw new Error(msg.action.badName);
 }
 
 function validateDelegationText(prompt: string): void {
 	const text = prompt.trimStart();
-	if (/^\/skills?:/u.test(text) && !text.startsWith("/skill:tdd ")) throw new Error("委派文本只允许 /skill:tdd 技能前缀");
+	if (/^\/skills?:/u.test(text) && !text.startsWith("/skill:tdd ")) throw new Error(msg.action.delegationSkill);
 }
 
 async function resolveWorkerCwd(path: string): Promise<string> {
-	if (!isAbsolute(path)) throw new Error("cwd 必须是已存在的绝对目录");
+	if (!isAbsolute(path)) throw new Error(msg.action.cwdAbsolute);
 	try {
 		return await realpath(path);
 	} catch {
-		throw new Error(`cwd 不存在：${path}`);
+		throw new Error(msg.action.cwdMissing(path));
 	}
 }
 
 async function resolveSendCwd(worker: WorkerRef, requested: string | undefined): Promise<string | undefined> {
 	if (requested) return resolveWorkerCwd(requested);
 	if (worker.cwd && !existsSync(worker.cwd))
-		throw new Error(`${worker.name} 的 cwd 已不存在：${worker.cwd}；send 请带 cwd 指向新检出`);
+		throw new Error(msg.action.cwdGone(worker.name, worker.cwd));
 	return worker.cwd;
 }
