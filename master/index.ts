@@ -4,7 +4,7 @@
  */
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HERDR_WORKING_CHANNEL, HERDR_WORKING_LABEL, WORKERS_CHANNEL, type HerdrWorkingPayload, type WorkersPayload, watchBusy } from "../busy.js";
+import { WORKERS_CHANNEL, type WorkersPayload, watchBusy } from "../busy.js";
 import { loadConfig, type MasterRole } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS } from "./actions.js";
@@ -48,15 +48,12 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		if ("error" in prompts) throw new Error(prompts.error);
 		return prompts;
 	};
-	// 在飞子代理数的唯一发布者；herdr:working 只在 0↔正数跃迁时发布，active 按计数配对。
+	// 在飞子代理数的唯一发布者。
 	let publishedInFlight = 0;
 	const publishInFlight = (count: number, teardown = false) => {
 		if (count === publishedInFlight) return;
-		const wasBusy = publishedInFlight > 0;
 		publishedInFlight = count;
 		pi.events.emit(WORKERS_CHANNEL, { inFlight: count, ...(teardown ? { teardown: true as const } : {}) } satisfies WorkersPayload);
-		if (wasBusy !== count > 0)
-			pi.events.emit(HERDR_WORKING_CHANNEL, { active: count > 0, label: HERDR_WORKING_LABEL } satisfies HerdrWorkingPayload);
 	};
 	// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
 	let sessionSince: number | undefined;

@@ -17,7 +17,7 @@ const load = async (): Promise<Module> =>
 	(cached ??= (await loadFirecodeModule("session/herdr-projection.js")) as unknown as Module);
 
 afterEach(async () => {
-	for (const cleanup of cleanups.splice(0)) await cleanup();
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 afterAll(async () => {
@@ -196,11 +196,10 @@ test("身份：改名、换模型各自重报，同一身份不重发", async ()
 	idle = true;
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("身份-A"));
-	await pi.fire("session_info_changed", {}, context("身份-B"));
-	await pi.fire("session_info_changed", {}, context("身份-B"));
-	await pi.fire("session_info_changed", {}, context("身份-A"));
-	await pi.settled();
+	for (const name of ["身份-A", "身份-B", "身份-B", "身份-A"]) {
+		await pi.fire(name === "身份-A" && !herdr.requests.length ? "session_start" : "session_info_changed", {}, context(name));
+		await pi.settled();
+	}
 	expect(herdr.requests.filter((request) => request.method === "pane.report_metadata").map((request) => request.params.title)).toEqual(["身份-A", "身份-B", "身份-A"]);
 });
 
@@ -218,8 +217,8 @@ test("quit 清身份并 release；reload/new/resume/fork 不 release", async () 
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
 	await pi.fire("session_start", {}, context("x"));
-	await pi.fire("session_shutdown", { reason: "new" }, context("x"));
 	await pi.settled();
+	await pi.fire("session_shutdown", { reason: "new" }, context("x"));
 	expect(trace(herdr.requests)).toEqual(["idle", "report_metadata"]);
 	herdr.requests.length = 0;
 

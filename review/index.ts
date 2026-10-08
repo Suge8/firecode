@@ -17,7 +17,6 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type Language, type ReviewConfig, type Section } from "../config.js";
-import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
 import { InProcessSessionPool } from "../master/spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
@@ -30,7 +29,7 @@ import {
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { hideReviewTitle, lockEditor, showReviewTitle } from "./ui.js";
-import { OCCUPANCY_CHANNEL, OCCUPANCY_LABEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, readPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";
 import { runReviewer, type ReviewModelConfig } from "./reviewer.js";
@@ -50,12 +49,6 @@ import {
 export const FEEDBACK_TYPE = "firecode-review-feedback";
 /** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
 export const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
-const OCCUPANCY_SOURCE = "firecode-review";
-/** herdr 按 seq 丢弃过期上报；同一 source 单调递增。 */
-let occupancySeq = Date.now() * 1000;
-/** 标签租约：TTL 要容得下至少两次续约失败，否则瞬断会让 Master 误读。 */
-const OCCUPANCY_TTL_MS = 60_000;
-const OCCUPANCY_REFRESH_MS = 20_000;
 /** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
 const FEEDBACK_START_TIMEOUT_MS = 2_000;
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
@@ -97,10 +90,8 @@ interface Controller {
 	feedbackStartTimer?: ReturnType<typeof setTimeout>;
 	/** 审查接管了编辑器（禁输入 + esc 取消）时的解锁函数，还原成接管前的编辑器。 */
 	unlockEditor?: () => void;
-	/** Herdr blocked 频道采用计数语义，每个 true 必须由同一 controller 配对 false。 */
+	/** 占用频道的 true/false 必须由同一 controller 配对，订阅方按最近一条取值。 */
 	occupancyHeld?: boolean;
-	/** 占用标签租约续期计时器；释放与 shutdown 时清除。 */
-	occupancyTimer?: ReturnType<typeof setInterval>;
 }
 
 /** 一个会话的审查运行时：controller 是当前这场审查，queue 串行化它的状态迁移。 */
@@ -576,74 +567,19 @@ function syncOccupancy(rt: ReviewRuntime, active: Controller): void {
 	setOccupancy(rt, active, isActive(active.state));
 }
 
-/**
- * 标签租约：持有期带 TTL 定时续约，释放时清除失败重试一次、再失败由 TTL 到期兜底。
- * 定时续约是租约业务语义：herdr 没有“进程退出即清 metadata”的接口（源码核实），
- * crash/kill 后无 TTL 的标签永驻会让 Master 把 Worker 的真提问误判为审查占用；
- * 续约同时充当首次投递失败的重试。
- */
-function publishOccupancyLabel(rt: ReviewRuntime, active: Controller, held: boolean): void {
-	if (held) {
-		void sendOccupancyLabel();
-		if (!active.occupancyTimer) {
-			active.occupancyTimer = setInterval(() => void sendOccupancyLabel(), OCCUPANCY_REFRESH_MS);
-			active.occupancyTimer.unref?.();
-		}
-		return;
-	}
-	if (active.occupancyTimer) {
-		clearInterval(active.occupancyTimer);
-		active.occupancyTimer = undefined;
-	}
-	void clearOccupancyLabel(rt);
-}
-
-function sendOccupancyLabel(): Promise<boolean> {
-	const env = herdrPaneEnv();
-	if (!env) return Promise.resolve(false);
-	return herdrRequest(OCCUPANCY_SOURCE, "pane.report_metadata", {
-		pane_id: env.paneId,
-		source: OCCUPANCY_SOURCE,
-		state_labels: { blocked: OCCUPANCY_LABEL },
-		ttl_ms: OCCUPANCY_TTL_MS,
-		seq: (occupancySeq += 1),
-	});
-}
-
-async function clearOccupancyLabel(rt: ReviewRuntime): Promise<void> {
-	const env = herdrPaneEnv();
-	if (!env) return;
-	for (let attempt = 0; attempt < 2; attempt += 1) {
-		// 新审查已重新持有时中止重试：迟到的清除会撤掉新租约的标签。
-		if (rt.controller?.occupancyHeld) return;
-		const delivered = await herdrRequest(OCCUPANCY_SOURCE, "pane.report_metadata", {
-			pane_id: env.paneId,
-			source: OCCUPANCY_SOURCE,
-			clear_state_labels: true,
-			seq: (occupancySeq += 1),
-		});
-		if (delivered) return;
-	}
-	// 两次未送达：标签带 TTL，最迟 60s 自行过期，不会永久残留。
-}
-
 function setOccupancy(rt: ReviewRuntime, active: Controller, held: boolean): void {
 	if (Boolean(active.occupancyHeld) === held) return;
 	active.occupancyHeld = held;
-	// 标签走 metadata state_labels：herdr 会丢弃 report_agent 的 message（实测），
-	// 只有这条通道能同时到达 Master（state_labels 判定）与侧边栏（state_text token）。
-	// 频道仍要发：它驱动 herdr 集成的 blocked 状态本身。占用信号不伤审查。
-	publishOccupancyLabel(rt, active, held);
 	try {
 		const payload: OccupancyPayload = held
-			? { active: true, label: OCCUPANCY_LABEL, progress: () => reviewProgress(rt) }
+			? { active: true, progress: () => reviewProgress(rt) }
 			: { active: false };
 		rt.pi.events.emit(OCCUPANCY_CHANNEL, payload);
 	} catch (error) {
-		// 占用信号只对齐 Herdr 展示；集成故障不能改变审查状态机或会话生命周期。
+		// 占用信号只对齐展示；订阅方故障不能改变审查状态机或会话生命周期。
 		try {
 			if (active.ctx.hasUI)
-				active.ctx.ui.notify(`fire-review 无法同步 Herdr 占用状态：${errorText(error)}`, "warning");
+				active.ctx.ui.notify(`fire-review 无法同步占用状态：${errorText(error)}`, "warning");
 		} catch {
 			// 通知本身同样只是展示，不能反向打断审查。
 		}

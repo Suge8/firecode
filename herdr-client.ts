@@ -1,6 +1,6 @@
 /**
  * herdr socket 短连接客户端：单请求单连接，只有 herdr 返回 result 才算送达。
- * herdr-display（身份投影）与 review（占用 state_label）共用；herdr 之外返回未送达。
+ * 只有 session/herdr-projection.ts 使用；herdr 之外返回未送达。
  */
 import net from "node:net";
 
@@ -22,6 +22,7 @@ export function herdrRequest(
 	source: string,
 	method: string,
 	params: Record<string, unknown>,
+	timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<boolean> {
 	const env = herdrPaneEnv();
 	if (!env) return Promise.resolve(false);
@@ -35,7 +36,7 @@ export function herdrRequest(
 			socket.destroy();
 			resolve(delivered);
 		};
-		const timer = setTimeout(() => finish(false), REQUEST_TIMEOUT_MS);
+		const timer = setTimeout(() => finish(false), timeoutMs);
 		timer.unref?.();
 		socket.on("error", () => finish(false));
 		socket.on("end", () => finish(false));

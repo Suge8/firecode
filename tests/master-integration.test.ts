@@ -352,7 +352,6 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 	await harness.wake();
 	await Bun.sleep(5);
 	expect(counts()).toEqual([1, 0]);
-	expect(working()).toEqual([true, false]);
 	await harness.command("");
 });
 
