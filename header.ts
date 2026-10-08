@@ -1,8 +1,8 @@
 /**
  * 会话启动横幅：品牌 logo 的半格方块像素版（橙色火焰内嵌 >_ + 小写字标），够宽时画 logo，否则收成一行；
- * 两档都带同一行副标题（pi 版本 · 工作目录，放不下只留目录、从开头按整段省略）。字标用终端默认前景色，
- * 深浅主题都清楚。启动时火焰自下而上点燃、字标自左向右显现，约 1 秒后定格并退订动画时钟——横幅会滚出视口，
- * 定格后不再触发重绘。
+ * 两档都带同一行副标题（pi 版本 · 工作目录，放不下只留目录、从开头按整段省略）。火焰按热度自下而上
+ * 金→橙→红，字标自左向右橙→金。启动时火焰自下而上点燃、字标自左向右显现，约 1 秒后定格并退订动画时钟——
+ * 横幅会滚出视口，定格后不再触发重绘。
  */
 import { homedir } from "node:os";
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
@@ -17,6 +17,8 @@ const REVEAL_START = 0.2;
 const SETTLE_END = 1;
 const TINY_FLAME_PHASE = 0.4;
 const LOGO_GAP = 3;
+/** 火焰自上而下到这个比例为止由红过渡到橙，其下由橙过渡到金。 */
+const FLAME_RED_END = 0.45;
 /** 字标在火焰像素画里的起始行：logo 里字标约在火焰高度的中段。 */
 const WORD_TOP = 3;
 /** 副标题从这一深底色淡入成灰；终端底色不可知，取深色主题的近似底色。 */
@@ -29,9 +31,8 @@ const TINY_RULE_MIN = 3;
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 const ease = (k: number) => 1 - (1 - clamp(k)) ** 3;
 
-/** 像素画：每个终端格承载上下两个方形像素；INK 是终端默认前景色。 */
-const INK = "ink";
-type Pixel = Rgb | typeof INK | undefined;
+/** 像素画：每个终端格承载上下两个方形像素。 */
+type Pixel = Rgb | undefined;
 type Pixels = Pixel[][];
 
 /** 照 design/brand 的 logo 手绘：火焰主尖偏左、右侧副尖，>_ 镂空。 */
@@ -71,14 +72,10 @@ const LOGO_WIDTH = WORD_LEFT + WORD_ROWS[0].length;
 const LARGE_MIN_WIDTH = LOGO_WIDTH + 2;
 
 const background = (color: Rgb) => `\x1b[48;2;${color[0] | 0};${color[1] | 0};${color[2] | 0}m`;
-const ink = (pixel: Pixel, glyph: string) => (pixel === INK ? glyph : paint(pixel as Rgb, glyph));
-
 function cell(top: Pixel, bottom: Pixel): string {
-	if (!top && !bottom) return " ";
-	if (!bottom) return ink(top, "▀");
-	if (!top) return ink(bottom, "▄");
-	if (top === bottom) return ink(top, "█");
-	return top === INK ? `${background(bottom as Rgb)}▀\x1b[49m` : `${background(top)}${ink(bottom, "▄")}\x1b[49m`;
+	if (top && bottom) return `${background(bottom)}${paint(top, "▀")}\x1b[49m`;
+	if (top) return paint(top, "▀");
+	return bottom ? paint(bottom, "▄") : " ";
 }
 
 /** 每两行像素合成一行终端格，返回逐格字符串，便于按列拼接。 */
@@ -88,17 +85,27 @@ function halfBlocks(pixels: Pixels): string[][] {
 	return rows;
 }
 
-/** 火焰自下而上点燃，刚点亮的一排金色、随后冷却成品牌橙；字标逐列显现。 */
+/** 火焰的定格色：火尖红、中段橙、底部金。 */
+function flameHeat(y: number): Rgb {
+	const v = y / (FLAME.length - 1);
+	return v < FLAME_RED_END
+		? mix(HEAT_COLORS.red, HEAT_COLORS.orange, v / FLAME_RED_END)
+		: mix(HEAT_COLORS.orange, HEAT_COLORS.gold, (v - FLAME_RED_END) / (1 - FLAME_RED_END));
+}
+
+/** 火焰自下而上点燃，刚点亮的一排白热、随后冷却成定格色；字标橙→金，逐列显现。 */
 function logo(t: number): Pixels {
 	const flameLine = ease(t / IGNITE_END) * (FLAME.length + 4);
-	const wordEdge = ((t - REVEAL_START) / (SETTLE_END - REVEAL_START)) * WORD_ROWS[0].length;
+	const wordWidth = WORD_ROWS[0].length;
+	const wordEdge = ((t - REVEAL_START) / (SETTLE_END - REVEAL_START)) * wordWidth;
 	return FLAME.map((row, y) => {
 		const burnt = flameLine - (FLAME.length - y);
-		const pixels: Pixel[] = [...row].map((dot) =>
-			dot === "#" && burnt >= 0 ? mix(HEAT_COLORS.gold, HEAT_COLORS.orange, clamp(burnt / 4)) : undefined);
+		const color = mix(HEAT_COLORS.white, flameHeat(y), clamp(burnt / 4));
+		const pixels: Pixel[] = [...row].map((dot) => (dot === "#" && burnt >= 0 ? color : undefined));
 		pixels.push(...Array<Pixel>(LOGO_GAP).fill(undefined));
 		const word = WORD_ROWS[y - WORD_TOP] ?? "";
-		for (let x = 0; x < WORD_ROWS[0].length; x++) pixels.push(word[x] === "#" && x < wordEdge ? INK : undefined);
+		for (let x = 0; x < wordWidth; x++)
+			pixels.push(word[x] === "#" && x < wordEdge ? mix(HEAT_COLORS.orange, HEAT_COLORS.gold, x / wordWidth) : undefined);
 		return pixels;
 	});
 }
