@@ -41,7 +41,8 @@
 | | 审查者 | 交到你手里的是 |
 | --- | --- | --- |
 | **FireCode** | 任意多个模型对抗审查 | **修好、复审通过的代码** |
-| Qwen Code `/review` | 最多 16 个代理，同一个模型 | 问题清单；`--fix` 修一次，不复审 |
+| Claude Code `/code-review` | 多个代理，只用 Claude 模型 | 问题清单；`--fix` 可照清单直接改 |
+| Codex `/review` | 一个审查者，用当前会话的模型 | 问题清单，不改代码 |
 | Open Code Review（阿里） | 同一个模型，逐文件审 | 问题清单，要你自己修 |
 | PR-Agent / Qodo | 分工代理，同一个模型 | 评论和修改建议 |
 | multi-model-review（Pi） | 多家模型 | 一份汇总结论 |

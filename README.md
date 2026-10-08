@@ -41,7 +41,8 @@ Other reviewers hand you a list of problems. FireCode hands you code that's fixe
 | | Reviewers | What you get |
 | --- | --- | --- |
 | **FireCode** | Any number of models, reviewing adversarially | **Fixed code that passed re-review** |
-| Qwen Code `/review` | Up to 16 agents, one model | A findings list; `--fix` patches once, no re-review |
+| Claude Code `/code-review` | Several agents, Claude models only | A findings list; `--fix` applies it as-is |
+| Codex `/review` | One reviewer on your session's model | A findings list, no code changes |
 | Open Code Review (Alibaba) | One model, file by file | A findings list to fix yourself |
 | PR-Agent / Qodo | Specialist agents, one model | Comments and suggestions |
 | multi-model-review (Pi) | Several model families | One combined verdict |
