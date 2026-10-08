@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-09
+
 ### Fixed
 
 - herdr could keep showing a session as idle while it was working. Each report's sequence number came from the moment Pi started, so after another Pi had run in the same pane (for example one started inside it), herdr treated every later report as stale. Sequence numbers now follow the clock at send time.
@@ -89,7 +91,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/Suge8/firecode/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Suge8/firecode/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Suge8/firecode/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Suge8/firecode/compare/v0.8.1...v1.0.0
