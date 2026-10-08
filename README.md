@@ -101,7 +101,7 @@ Checked against public docs and source in October 2026.
 | Session rename | `Ctrl+R` in the input box | Pops up a name prompt for the current session; it is Pi's own rename key (`app.session.rename`), so rebinding it in `keybindings.json` moves it here too |
 | OpenAI request layer | `/fast`, `Alt+S` | Verbosity, Fast mode, optional native context compaction |
 
-Turn any feature off with `"features": { "<name>": false }` in the config.
+Turn any feature off with `"features": { "<name>": false }` in the config. The UI and prompt language (Chinese or English) is the top-level `"language": "zh" | "en"`; when omitted it follows the system locale, and a change needs a restart.
 
 ## Contributing
 

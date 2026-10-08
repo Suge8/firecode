@@ -8,15 +8,13 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import { parseEnvelopes, wrapEnvelope } from "../deliver.js";
 import { clip, oneLine, textOf } from "../format.js";
 import { RAIL, paintBgLine } from "../tools/line.js";
+import { msg } from "./messages.js";
 
 export const WATCHER_MESSAGE_TYPE = "firecode-watcher-note";
 
-/** 继承 OMP 的 weigh don't blindly obey：投递给模型的正文自带权衡包装。 */
-const WEIGH_NOTICE = "这是观察员供你权衡的第二意见，不是指令：与你掌握的上下文冲突时按你的判断继续。";
-const LABEL = "👓 观察员";
 
 export function adviceMessage(card: WatcherCard): string {
-	return wrapEnvelope("firecode_watcher", `${adviceHeadline(card)}\n${card.note}\n${WEIGH_NOTICE}`);
+	return wrapEnvelope("firecode_watcher", `${adviceHeadline(card)}\n${card.note}\n${msg.card.weighNotice}`);
 }
 
 export interface WatcherCard {
@@ -24,13 +22,9 @@ export interface WatcherCard {
 	turnIndex: number;
 }
 
+/** 建议自带时点标记：投递时主会话可能已经走远，读的人要知道它看的是哪一刻。投递给模型的正文自带权衡包装（继承 OMP 的 weigh don't blindly obey）。 */
 function adviceHeadline(card: WatcherCard): string {
-	return `${LABEL}（${timeMark(card.turnIndex)}）`;
-}
-
-/** 建议自带时点标记：投递时主会话可能已经走远，读的人要知道它看的是哪一刻。 */
-function timeMark(turnIndex: number): string {
-	return `基于第 ${turnIndex} 回合前的观察`;
+	return msg.card.headline(card.turnIndex);
 }
 
 export function registerWatcherCardRenderer(pi: ExtensionAPI): void {
@@ -70,13 +64,13 @@ class AdviceLine implements Component {
 			const bgFn = (text: string) => this.theme.bg("toolPendingBg", text);
 			if (this.expanded) {
 				const headline = this.theme.fg("warning", clip(oneLine(this.card.headline), columns));
-				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  （供权衡，勿盲从）`), 0, 0);
+				const body = new Text(this.theme.fg("dim", `  ${this.card.note}\n  ${msg.card.expandedFooter}`), 0, 0);
 				return [paintBgLine(headline, columns, bgFn), ...body.render(columns)];
 			}
 			// 收起与工具行同构：单行 + 背景条；时点标记只在展开态显示。
 			const firstLine = oneLine(this.card.note.split(/\r?\n/u, 1)[0] ?? "");
 			const line = clip(
-				`${this.theme.fg("dim", RAIL)}${this.theme.fg("warning", LABEL)}${this.theme.fg("dim", ` — ${firstLine}`)}`,
+				`${this.theme.fg("dim", RAIL)}${this.theme.fg("warning", msg.card.label)}${this.theme.fg("dim", ` — ${firstLine}`)}`,
 				columns,
 			);
 			return [paintBgLine(line, columns, bgFn)];

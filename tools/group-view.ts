@@ -18,6 +18,7 @@ import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
 import { customMessageOf, isEntry, isToolOutputEcho, openCard, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
+import { msg } from "./messages.js";
 import { combineRounds, type Round, roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
@@ -90,7 +91,7 @@ function noticeKind(component: Component | undefined, theme: Theme): "warning" |
 
 function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 	return new ToolLine({
-		label: row ? row.toolDefinition?.label ?? row.toolName : "思考", value: genericArgsParts(row?.args), clip: "end", theme,
+		label: row ? row.toolDefinition?.label ?? row.toolName : msg.thinking, value: genericArgsParts(row?.args), clip: "end", theme,
 		ctx: {
 			state: { ...row?.rendererState, errorText: row?.result?.isError ? resultText(row.result, true).displayText : "" },
 			cwd: row?.cwd ?? "", toolCallId: row?.toolCallId ?? "",
@@ -101,7 +102,6 @@ function compactLine(row: RowData | undefined, theme: Theme): ToolLine {
 
 /** 折叠态每组最多列几条中间回复首句。 */
 const REPLY_LINES = 3;
-const ACTIVITY_TEXT = { thinking: "思考中", replying: "回复中" } as const satisfies Record<AssistantActivity, string>;
 
 type Facts = Pick<SummaryView, "notice" | "action" | "arrival" | "failures" | "earlier"> & { round?: Round };
 
@@ -139,8 +139,8 @@ function actionOf(tool: RowData | undefined, activity: AssistantActivity | undef
 			? { word: line.actionWord, target: line.actionTarget }
 			: { word: tool.toolDefinition?.label ?? tool.toolName, target: toolTarget(tool.toolName, tool.args, tool.cwd).value.map((part) => part.text).join("").trim() };
 	}
-	if (activity) return { word: ACTIVITY_TEXT[activity] };
-	return env.clock.agentRunning ? { word: ACTIVITY_TEXT.thinking } : undefined;
+	if (activity) return { word: msg.activity[activity] };
+	return env.clock.agentRunning ? { word: msg.activity.thinking } : undefined;
 }
 
 /** 机器消息：展开态一行 ↳，点击切换完整正文（信封用户消息）或原生卡片（CustomMessage）。 */
@@ -384,7 +384,7 @@ function foldedReplies(
 		const shown = replies.slice(-REPLY_LINES);
 		// 与宿主正文同一左边距（1 列）。
 		out.push(new Spacer(1));
-		if (replies.length > shown.length) out.push(new Line(` ${theme.fg("dim", `+${replies.length - shown.length} 条`)}`));
+		if (replies.length > shown.length) out.push(new Line(` ${theme.fg("dim", msg.moreReplies(replies.length - shown.length))}`));
 		for (const text of shown) out.push(new Line(` ${theme.fg("muted", text)}`));
 	}
 	// 宿主助手正文自带前导空行，不再另垫。

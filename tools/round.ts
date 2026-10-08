@@ -7,6 +7,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { SettledRound } from "../busy.js";
 import { parseEnvelopes } from "../deliver.js";
 import { textOf } from "../format.js";
+import { msg } from "./messages.js";
 
 export const ROUND_ENTRY = "firecode-round";
 /** 轮记录写进会话之后在进程内总线上发布（无 payload）：订阅方此刻读分支一定已含这条记录，不依赖歇下边沿的订阅顺序。 */
@@ -33,8 +34,6 @@ export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<Sett
 	roundMarker({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
 
 /** 一轮里更早的非完成终态的短标记。 */
-const EARLIER_TEXT = { aborted: "中断过", error: "请求失败过" } as const;
-
 /**
  * 一轮可能有多条记录（中断后又跑了一段，如 /fire-review 或命令触发的再次进行）。合成规则不丢信息：
  * 耗时累加（用户关心这一轮总共花了多久），终态与落定时刻取最后一条（这一轮最终怎样），更早的中断/请求失败
@@ -52,7 +51,7 @@ export function combineRounds(rounds: readonly Round[]): TurnRecord | undefined 
 	const round: Round = rounds.length === 1 ? last : { elapsed, outcome: last.outcome, at: last.at };
 	const earlier = (["aborted", "error"] as const).flatMap((outcome) => {
 		const count = rounds.slice(0, -1).filter((round) => round.outcome === outcome).length;
-		return count ? [`${EARLIER_TEXT[outcome]} ${count} 次`] : [];
+		return count ? [msg.earlier[outcome](count)] : [];
 	});
 	return { round, earlier };
 }

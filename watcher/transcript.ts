@@ -5,6 +5,7 @@
 import type { TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import type { WatcherContext } from "../config.js";
 import { textOf } from "../format.js";
+import { msg } from "./messages.js";
 
 const RESULT_BUDGET = 400;
 
@@ -15,12 +16,12 @@ export function renderTurn(turn: TurnEndEvent, context: WatcherContext): string 
 		if (part.type === "text" && typeof part.text === "string" && part.text.trim())
 			lines.push(part.text.trim());
 		if (part.type === "thinking" && context === "full" && typeof part.thinking === "string")
-			lines.push(`（思考）${part.thinking.trim()}`);
+			lines.push(`${msg.transcript.thinking}${part.thinking.trim()}`);
 		if (part.type === "toolCall") lines.push(toolCallLine(part, context));
 	}
 	for (const result of turn.toolResults) {
 		const text = clipText(textOf(result.content), RESULT_BUDGET);
-		lines.push(`${result.isError ? "✗" : "→"} ${result.toolName}：${text || "（无输出）"}`);
+		lines.push(`${result.isError ? "✗" : "→"} ${result.toolName}${msg.transcript.separator}${text || msg.transcript.noOutput}`);
 	}
 	return `<turn index="${turn.turnIndex}">\n${lines.join("\n")}\n</turn>`;
 }
@@ -30,14 +31,14 @@ function toolCallLine(part: Record<string, any>, context: WatcherContext): strin
 	const summary = Object.entries(args as Record<string, unknown>)
 		.map(([key, value]) => `${key}=${clipText(argumentText(key, value, context), 200)}`)
 		.join(" ");
-	return `· ${part.name ?? "工具"} ${summary}`.trimEnd();
+	return `· ${part.name ?? msg.transcript.defaultTool} ${summary}`.trimEnd();
 }
 
 /** minimal 下 edit/write 的正文（新旧内容）只留长度：观察员判断的是动作，不是逐字 diff。 */
 function argumentText(key: string, value: unknown, context: WatcherContext): string {
 	const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
 	if (context === "full") return oneLine(text);
-	return BODY_KEYS.has(key) ? `<${text.length} 字符>` : oneLine(text);
+	return BODY_KEYS.has(key) ? msg.transcript.characters(text.length) : oneLine(text);
 }
 
 const BODY_KEYS = new Set(["content", "oldText", "newText", "old_text", "new_text", "edits"]);

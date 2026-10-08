@@ -11,12 +11,12 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { textOf } from "../format.js";
+import { msg } from "./messages.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.281";
 const DEFAULT_ENTRYPOINT = "cli";
 const BILLING_SALT = "59cf53e54c78";
-const REVOKED_TOKEN_NOTICE = "Claude 令牌刚换发，已自动重试";
 
 type TextBlock = {
 	type: "text";
@@ -145,7 +145,7 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 		const [previous, failure] = lastTwoMessages(ctx.sessionManager.getBranch());
 		// 紧挨着的上一条也是同类失败，说明这次已是自愈重试：登录真失效，交回宿主照常落定。
 		if (!isRevokedTokenFailure(failure) || isRevokedTokenFailure(previous)) return;
-		ctx.ui.notify(REVOKED_TOKEN_NOTICE, "info");
+		ctx.ui.notify(msg.tokenReissued, "info");
 		return { entries: [{ type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 	});
 }

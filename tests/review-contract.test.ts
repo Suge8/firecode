@@ -449,7 +449,6 @@ describe("review config strictness", () => {
 				advisorAfterFailures: 2,
 				timeoutMinutes: 20,
 				tools: [],
-				language: "zh",
 			},
 			problems,
 		);
@@ -469,7 +468,6 @@ describe("review config strictness", () => {
 				advisorAfterFailures: 2,
 				timeoutMinutes: 20,
 				tools: ["read", "bash"],
-				language: "zh",
 			},
 			problems,
 		);
@@ -497,7 +495,6 @@ describe("review section top-level type", () => {
 			"review.advisorAfterFailures 必须显式配置",
 			"review.timeoutMinutes 必须显式配置",
 			"review.tools 必须显式配置",
-			"review.language 必须显式配置",
 			"review.advisor 必须是“provider/model/thinking”字符串",
 			"review.reviewers 必须包含 1–5 个模型原子",
 		]);

@@ -9,6 +9,7 @@ import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
 import { OUTCOME_TEXT, roundTexts } from "../busy.js";
 import { clip } from "../format.js";
 import { CHAT_GUTTER } from "./line.js";
+import { msg } from "./messages.js";
 import type { Round } from "./round.js";
 import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
 
@@ -55,7 +56,7 @@ export class TurnSummary implements Component {
 		// 失败数与更早的中断都是不能丢的固定标记，窄屏时与它们一起保留。
 		const failures = [
 			...(view.earlier ?? []).map((text) => theme.fg("warning", text)),
-			...(view.failures ? [theme.fg("error", `${view.failures} 个子代理失败`)] : []),
+			...(view.failures ? [theme.fg("error", msg.failedWorkers(view.failures))] : []),
 		];
 		const join = (lead: string, parts: string[]) => `${lead}${parts.map((part, index) => (index === 0 && !word ? " " : sep) + part).join("")}`;
 		const noticeNeed = view.notice ? visibleWidth(sep) + 2 + Math.min(visibleWidth(view.notice), NOTICE_MIN) : 0;

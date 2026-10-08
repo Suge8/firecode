@@ -4,6 +4,7 @@ import {
 	togglePriority,
 	type OpenAINativeSettings,
 } from "./config";
+import { msg } from "../../messages.js";
 import { compactWithOpenAINative } from "./native-compaction";
 import { FAST_STATUS_KEY, fastModeEnabled, supportsFastMode } from "./options";
 import { rewriteOpenAIProviderRequest } from "./request-pipeline";
@@ -21,7 +22,7 @@ function updateFastStatus(ctx: ExtensionContext, settings: OpenAINativeSettings)
 }
 
 function notifyUnsupportedFastMode(ctx: ExtensionContext): void {
-	ctx.ui.notify("当前模型不支持加速档", "warning");
+	ctx.ui.notify(msg.fastUnsupported, "warning");
 }
 
 export default function openAINativeExtension(
@@ -46,30 +47,30 @@ export default function openAINativeExtension(
 			loadedSettings = result.loaded;
 			settings = loadedSettings.settings;
 			updateFastStatus(ctx, settings);
-			ctx.ui.notify(`加速档：${result.enabled ? "开" : "关"}`, "info");
+			ctx.ui.notify(msg.fastToggled(result.enabled), "info");
 		} catch (error) {
-			ctx.ui.notify(`加速档保存失败：${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(msg.fastSaveFailed(error instanceof Error ? error.message : String(error)), "error");
 		}
 	}
 
 	pi.registerFlag(VERBOSITY_FLAG, {
-		description: "覆盖 OpenAI 回答详略：low、medium、high",
+		description: msg.verbosityFlag,
 		type: "string",
 	});
 	pi.registerCommand("fast", {
-		description: "开关当前 OpenAI 系供应商的加速档",
+		description: msg.fastCommand,
 		handler: async (_args, ctx) => {
 			toggleFastMode(ctx);
 		},
 	});
 	pi.registerShortcut(fastShortcut as never, {
-		description: "开关加速档",
+		description: msg.fastShortcut,
 		handler: toggleFastMode,
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (loadedSettings.warnings.length > 0 && ctx.hasUI) {
-			ctx.ui.notify(`FireCode openai 配置：${loadedSettings.warnings[0]}`, "warning");
+			ctx.ui.notify(msg.configWarning(loadedSettings.warnings[0]), "warning");
 		}
 		updateFastStatus(ctx, settings);
 	});

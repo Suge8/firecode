@@ -23,10 +23,11 @@ import {
 import { stripVTControlCharacters } from "node:util";
 import { Container, ScrollView, Spacer, Text, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { RowState, ToolResult } from "./line.js";
+import { msg } from "./messages.js";
 
 export class HostShapeError extends Error {
 	constructor(where: string) {
-		super(`过程分组已停用：宿主组件形状变了（${where}），已保持原生显示；请升级 FireCode`);
+		super(msg.hostShape(where));
 	}
 }
 
@@ -157,7 +158,7 @@ export function scrollContentHeight(view: ScrollView): number {
 /** 原型补丁的安装与精确还原：只还原仍是自己装上的那一层。 */
 export function patchMethod<T extends object, K extends keyof T>(target: T, key: K, replacement: T[K]): () => void {
 	const original = target[key];
-	if (typeof original !== "function") throw new HostShapeError(`${String(key)} 不是方法`);
+	if (typeof original !== "function") throw new HostShapeError(msg.notMethod(String(key)));
 	target[key] = replacement;
 	return () => {
 		if (target[key] === replacement) target[key] = original;
