@@ -4,12 +4,13 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "../format.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
+import { msg } from "./messages.js";
 import type { WorkerLive } from "./runtime.js";
 import type { WorkerRef, WorkerStatus } from "./state.js";
 
 export const renderSubagentsResult = makeResultRenderer(false);
-const STATUS_WORD = { working: "工作", idle: "空闲", reviewing: "审查" } satisfies Record<WorkerStatus, string>;
-const ACTION_VERB: Record<string, string> = { start: "启动", list: "查看", kill: "移除", send: "发送", interrupt: "中断", review: "审查", tail: "近况", ack: "待命" };
+const STATUS_WORD: Record<WorkerStatus, string> = msg.list.status;
+const ACTION_VERB: Record<string, string> = msg.list.verb;
 
 export function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
@@ -77,16 +78,16 @@ export function expandedWorkerList(
 				} | undefined;
 				const actionParts: Part[] = action?.kind === "tool" && action.tool && action.startedAt
 					? [{
-						text: ` · ${action.tool} · 已 ${formatDuration(Math.max(0, Date.now() - action.startedAt))}`,
+						text: ` · ${action.tool} · ${msg.list.running(formatDuration(Math.max(0, Date.now() - action.startedAt)))}`,
 						color: "accent",
 					}]
 					: action?.kind === "idle"
 						? [{
-							text: action.since ? ` · 落定 ${formatDuration(Date.now() - action.since)}前` : " · 已落定",
+							text: action.since ? ` · ${msg.list.settledAgo(formatDuration(Date.now() - action.since))}` : ` · ${msg.list.settled}`,
 							color: "muted",
 						}]
 						: action?.kind === "review"
-							? [{ text: ` · 第 ${action.round} 轮 · 审查者 ${action.settled}/${action.total}`, color: "accent" }]
+							? [{ text: ` · ${msg.list.reviewRound(action.round!, action.settled!, action.total!)}`, color: "accent" }]
 							: [];
 				return new ToolLine({
 					label: String(worker.name),
@@ -105,17 +106,18 @@ export function expandedWorkerList(
 }
 
 export function listMeta(workers: unknown[]): Part[] {
-	if (!workers.length) return [{ text: " — 池 0", color: "muted" }];
-	return [{ text: ` — 池 ${workers.length}：${workers.map((value) => {
+	if (!workers.length) return [{ text: ` — ${msg.list.poolEmpty}`, color: "muted" }];
+	const summary = workers.map((value) => {
 		const worker = value as Record<string, unknown>;
 		return `${String(worker.name)} ${roleStatusText(worker)}`;
-	}).join(" · ")}`, color: "muted" }];
+	}).join(" · ");
+	return [{ text: ` — ${msg.list.pool(workers.length, summary)}`, color: "muted" }];
 }
 
 export function statusText(workers: WorkerRef[]): string {
 	return workers.length
 		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
-		: "没有子代理";
+		: msg.list.noWorkers;
 }
 
 /** 角色为主的状态投影：「工程师·工作」；档案缺角色时退到纯状态词。 */

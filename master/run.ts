@@ -8,6 +8,7 @@ import { wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, textOf } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { masterEvent, type MasterEvent } from "./event-format.js";
+import { msg } from "./messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
@@ -144,10 +145,10 @@ async function resumeWithFallback(
 	const current = active.current(identity);
 	const configuredRole = active.setup.roster.find((entry) => entry.role === current.role);
 	if (!configuredRole)
-		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n角色 ${current.role} 已不在角色表，无法 fallback`));
+		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n${msg.run.roleGone(current.role)}`));
 	const fallback = nextFallback(configuredRole, current);
 	if (!fallback)
-		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n角色 ${current.role} 的 fallback 链已用尽`));
+		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n${msg.run.fallbackExhausted(current.role)}`));
 	try {
 		const model = await active.setup.pool.resolveModel(fallback.model);
 		active.assertOpen();
@@ -160,7 +161,7 @@ async function resumeWithFallback(
 		active.outbox.enqueue(masterEvent.modelSwitched(current.name, from, to, reason), current.name);
 		await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
 	} catch (error) {
-		const failure = `${terminalFailure(terminal)}\nfallback 切换失败：${error instanceof Error ? error.message : String(error)}`;
+		const failure = `${terminalFailure(terminal)}\n${msg.run.fallbackFailed(error instanceof Error ? error.message : String(error))}`;
 		settleWorker(active, current, terminal, new Error(failure));
 	}
 }
@@ -202,7 +203,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			if (!current) return;
 			const idle: WorkerRef = { ...current, status: "idle" };
 			active.store.dispatch({ type: "UPSERT_WORKER", worker: idle });
-			active.markIdle(idle, { kind: "failed", note: "审查未完成" });
+			active.markIdle(idle, { kind: "failed", note: msg.run.reviewIncomplete });
 			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
 		},
 	);
@@ -249,7 +250,7 @@ function monitorReview(session: AgentSession, sessionPath: string, previousRunId
 				const outcome = readReviewOutcome(sessionPath);
 				const runId = reviewRunId(outcome);
 				if (outcome.status === "error") return finish(outcome);
-				if (!runId || runId === previousRunId) return fail(new Error("fire-review 审查未启动"));
+				if (!runId || runId === previousRunId) return fail(new Error(msg.run.reviewNotStarted));
 				finish(outcome);
 			},
 			fail,
@@ -259,8 +260,8 @@ function monitorReview(session: AgentSession, sessionPath: string, previousRunId
 
 /** 审查落定在活动列表上的结局：只有通过算完成，停止与未完成都是要指挥官看的失败行。 */
 function reviewOutcomeRow(outcome: ReviewOutcome): WorkerLive["outcome"] {
-	if (outcome.status === "passed") return { kind: "done", note: "审查通过" };
-	return { kind: "failed", note: outcome.status === "stopped" ? "审查停止" : "审查未完成" };
+	if (outcome.status === "passed") return { kind: "done", note: msg.run.reviewPassed };
+	return { kind: "failed", note: outcome.status === "stopped" ? msg.run.reviewStopped : msg.run.reviewIncomplete };
 }
 
 function captureWorkerTerminal(
@@ -276,16 +277,16 @@ function captureWorkerTerminal(
 }
 
 function terminalFailure(terminal: WorkerTerminal | undefined): string | undefined {
-	if (!terminal) return "回合结束但未产生 assistant 终态";
-	if (terminal.stopReason === "error") return terminal.errorMessage || "供应商返回未知错误";
-	if (terminal.stopReason === "aborted") return `回合意外中止：${terminal.errorMessage || "供应商未提供原因"}`;
-	if (!terminal.text) return "回合结束但未产生回复";
+	if (!terminal) return msg.run.noTerminal;
+	if (terminal.stopReason === "error") return terminal.errorMessage || msg.run.unknownProviderError;
+	if (terminal.stopReason === "aborted") return msg.run.aborted(terminal.errorMessage || msg.run.noReason);
+	if (!terminal.text) return msg.run.noReply;
 	return undefined;
 }
 
 function faultSummary(terminal: WorkerTerminal): string {
 	const message = terminal.errorMessage?.trim();
-	if (!message) return "供应商返回未知错误";
+	if (!message) return msg.run.unknownProviderError;
 	const [first = message] = message.split(/(?<=[.。!！?？])\s|\n/u);
 	return clip(first.trim(), FAULT_SUMMARY_WIDTH);
 }
@@ -307,9 +308,9 @@ export function modelAtomText(atom: Pick<ModelAtom, "model" | "thinking">): stri
 
 /** 首次续派前置的现场核对提示。 */
 export function resumeCheckPrompt(): string {
-	return wrapEnvelope("firecode_master_event", "上次被外部中断，先核对 git status 与现场再继续，避免重复执行已经发生的副作用。");
+	return wrapEnvelope("firecode_master_event", msg.run.resumeCheck);
 }
 
 function fallbackResumePrompt(from: string, to: string, reason: string): string {
-	return wrapEnvelope("firecode_master_event", `供应商故障，已切换 ${from}→${to}（${reason}）。沿用当前会话与原工作说明，从中断处继续，不要重复已经完成的副作用。`);
+	return wrapEnvelope("firecode_master_event", msg.run.fallbackResume(from, to, reason));
 }

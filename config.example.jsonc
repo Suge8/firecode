@@ -1,8 +1,8 @@
 {
-	// 推荐配置：功能全开。首次启动时自动写到这里，按需把模型换成你已登录的，改完重启 Pi。
-	// Watcher 新会话不自动激活，需要时 /fire-watch 翻转当前会话。
-	// 凡是指定模型的位置都写同一个模型原子："provider/model/thinking"，思考档取最后一段。
-	// 界面与给模型看的文字语言：默认跟随系统 locale（zh 开头为中文，其余英文）；要固定就取消下一行注释，可选 "zh" | "en"。
+	// Recommended config: every feature on. It is written here on first launch; swap in the models you are logged in to, then restart Pi.
+	// The watcher does not activate itself in a new session; run /fire-watch to toggle it for the current session.
+	// Everywhere a model is named, use the same model atom: "provider/model/thinking" (the last segment is the thinking level).
+	// Language of the UI and of the text shown to models: follows the system locale by default (zh* → Chinese, otherwise English); uncomment the next line to pin it, "zh" | "en".
 	// "language": "en",
 	"features": {
 		"header": true,
@@ -21,7 +21,7 @@
 		"fast": "alt+s"
 	},
 
-	// nativeCompaction 使用 OpenAI 原生上下文压缩；priority 加钱换更快出字，默认关。
+	// nativeCompaction uses OpenAI's native context compaction; priority pays more for faster output and is off by default.
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {
@@ -29,34 +29,34 @@
 		}
 	},
 
-	// 新会话默认激活指挥官。
+	// New sessions activate the Master by default. Role names are yours to choose; the Master picks a role by its "use".
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
 		"roles": {
-			"调研员": {
+			"researcher": {
 				"model": "anthropic/claude-haiku-5-5/low",
-				"use": "只读不改：联网搜索、查文档与版本、读日志、按线索定位代码与核对资料",
+				"use": "Read-only: web search, docs and version lookups, reading logs, locating code from leads, checking references",
 				"fallback": ["openai-codex/gpt-6-luna/medium"]
 			},
-			"工程师": {
+			"engineer": {
 				"model": "anthropic/claude-sonnet-5-5/high",
-				"use": "要改代码：实现、调试；需要深读代码找缺陷的审计也派它（只读）",
+				"use": "Changes code: implementation, debugging; also for audits that need deep code reading to find defects (read-only)",
 				"fallback": ["openai-codex/gpt-6.1-sol/high"]
 			},
-			"批量工": {
+			"batch": {
 				"model": "anthropic/claude-haiku-5-5/medium",
-				"use": "规格明确、靠测试或类型检查就能验收的批量改动：按模式迁移、改名、补样板；量大时按文件划界并行多派",
+				"use": "Well-specified bulk changes that tests or type checks can verify: pattern migrations, renames, boilerplate; for large volumes split by file and run several in parallel",
 				"fallback": ["openai-codex/gpt-6.1-sol/medium"]
 			},
-			"设计师": {
+			"designer": {
 				"model": "anthropic/claude-opus-5-5/medium",
-				"use": "视觉、前端",
+				"use": "Visual and frontend work",
 				"fallback": ["openai-codex/gpt-6.1-sol/high"]
 			},
-			"哨兵": {
+			"sentinel": {
 				"model": "anthropic/claude-haiku-5-5/low",
-				"use": "CI、部署、长测试等待",
+				"use": "Waiting on CI, deployments and long tests",
 				"fallback": ["anthropic/claude-sonnet-5-5/low"]
 			}
 		}
@@ -71,7 +71,7 @@
 		"ds": { "model": "deepseek/deepseek-flash/high", "key": "alt+6" }
 	},
 
-	// 审查只在用户或指挥官发起时调用模型。
+	// Review only calls models when the user or the Master starts it.
 	"review": {
 		"advisor": "anthropic/claude-fable-5-1/high",
 		"reviewers": ["anthropic/claude-opus-5-5/low", "openai-codex/gpt-6.1-sol/low"],
@@ -81,7 +81,7 @@
 		"tools": ["read", "grep", "find", "ls", "bash"]
 	},
 
-	// 激活后每个主会话回合评估新增内容，会产生额外模型调用；需要开口时当场插话。
+	// Once active, it evaluates what each main-session turn added, which costs extra model calls; it speaks up on the spot when needed.
 	"watcher": {
 		"enabled": false,
 		"model": "openai-codex/gpt-6.1-sol/medium",

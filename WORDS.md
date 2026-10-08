@@ -14,7 +14,6 @@
 - **工单库**（Tracker）：项目里存放工单的位置，插件不读写；避免：任务队列、任务板
 - **工单**（Ticket）：工单库里的一项工作，是指挥官写工作说明的输入；避免：任务、工作说明
 - **角色**（Role）→ 配置 `master.roles` 的键；避免：模型别名、预设
-- **哨兵角色**（Sentinel Role）：盯守 CI、部署、长测试的低成本角色；避免：轮询票、观察员（后者观察主会话）
 - **fallback 链**（Fallback Chain）→ `master.roles.*.fallback`、`master/run.ts`；避免：质量路由、瞬时限流重试、静默降级
 - **收割**（Harvest）：调研与盯守子代理取完要点即 kill；避免：清理、归档
 - **发落**（Disposition）→ 档案 `disposition`；指挥官对落定类事件的 send / review / kill / ack；避免：确认、处置

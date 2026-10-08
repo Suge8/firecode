@@ -5,6 +5,7 @@
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { msg } from "./messages.js";
 import { isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export function registerWorkerGuard(pi: ExtensionAPI): void {
@@ -21,7 +22,7 @@ const TEMP_ROOTS = [tmpdir(), "/tmp"];
 async function outsideCheckoutReason(path: string, cwd: string): Promise<string | undefined> {
 	const target = await canonicalWritePath(resolve(cwd, path));
 	const roots = await Promise.all([cwd, ...TEMP_ROOTS].map(canonicalWritePath));
-	return roots.some((root) => within(root, target)) ? undefined : `子代理只能修改当前 checkout 或系统临时目录：${path}`;
+	return roots.some((root) => within(root, target)) ? undefined : msg.guard(path);
 }
 
 function within(root: string, target: string): boolean {

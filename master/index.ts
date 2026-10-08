@@ -13,6 +13,7 @@ import { registerWorkerGuard } from "./guard.js";
 import {
 	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
+import { msg } from "./messages.js";
 import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
 import { armInterruptReminder, modelAtomText } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
@@ -86,7 +87,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		const active = runtime = new MasterRuntime(setup, ctx, restored);
 		setTools(true);
 		if (active.store.discardedLegacyVersion !== undefined)
-			ctx.ui.notify(`旧版 v${active.store.discardedLegacyVersion} 子代理池已丢弃并从空池重建；旧运行时进程不会纳入新池，请手动清理`, "warning");
+			ctx.ui.notify(msg.command.legacyPool(active.store.discardedLegacyVersion), "warning");
 		active.render();
 		return active;
 	};
@@ -123,25 +124,25 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	};
 
 	pi.registerCommand("fire-master", {
-		description: "翻转当前会话的指挥官模式；status 查看状态",
+		description: msg.command.description,
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
-				ctx.ui.notify(runtime ? statusText(runtime.store.state.workers) : "指挥官模式未启动", "info");
+				ctx.ui.notify(runtime ? statusText(runtime.store.state.workers) : msg.command.notStarted, "info");
 				return;
 			}
 			if (input) {
-				ctx.ui.notify("/fire-master 只接受 status；裸命令翻转开关", "error");
+				ctx.ui.notify(msg.command.statusOnly, "error");
 				return;
 			}
 			if (runtime) {
 				await deactivate();
-				ctx.ui.notify("指挥官模式已关闭", "info");
+				ctx.ui.notify(msg.command.off, "info");
 				return;
 			}
 			try {
 				activateSession(ctx);
-				ctx.ui.notify("指挥官模式已启动", "info");
+				ctx.ui.notify(msg.command.on, "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			}
@@ -161,11 +162,11 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 	pi.registerTool({
 		name: MASTER_LIST_TOOL,
-		label: "子代理",
-		description: "查看子代理池快照",
+		label: msg.tool.label,
+		description: msg.tool.listDescription,
 		renderShell: "self",
 		renderCall: (_args, theme, ctx) =>
-			new ToolLine({ label: "子代理", value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx }),
+			new ToolLine({ label: msg.tool.label, value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx }),
 		renderResult: (result, options, theme, context) => {
 			const details = result.details as { workers?: unknown } | undefined;
 			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
@@ -176,7 +177,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		parameters: Type.Object({}),
 		async execute() {
 			const active = runtime;
-			if (!active) throw new Error("subagents_list 只在 Master 中可用");
+			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_LIST_TOOL));
 			const workers = active.store.state.workers.map(compactWorker);
 			return {
 				content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
@@ -189,27 +190,27 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 	pi.registerTool({
 		name: MASTER_TOOL,
-		label: "子代理",
-		description: "指挥官的七动作子代理接口：start 按角色新建，send 续派或切换角色，interrupt 中断，review 显式审查，tail 读轨迹，ack 确认落定，kill 收口移除；无 sleep/session。",
+		label: msg.tool.label,
+		description: msg.tool.description,
 		renderShell: "self",
 		renderCall: (args, theme, ctx) =>
-			new ToolLine({ label: "子代理", value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
+			new ToolLine({ label: msg.tool.label, value: subagentsCallParts(args as Record<string, unknown>), clip: "end", theme, ctx }),
 		renderResult: renderSubagentsResult,
 		parameters: Type.Object({
-			action: StringEnum(ACTIONS, { description: "七动作之一；等待状态变化，不要用 sleep 轮询。" }),
-			worker: Type.String({ description: "start 起简短任务名；其余动作填目标 Worker。" }),
-			prompt: Type.Optional(Type.String({ description: "start/send 必填自包含任务说明，包括交付物、限制与验证要求。" })),
+			action: StringEnum(ACTIONS, { description: msg.tool.action }),
+			worker: Type.String({ description: msg.tool.worker }),
+			prompt: Type.Optional(Type.String({ description: msg.tool.prompt })),
 			// 角色词只来自角色表，代码不持有固定词表；代价是角色名拼错无法在加载时报出。
-			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: "start 必填角色表中的角色；send 可选，传入时切换角色，省略则沿用。" })),
-			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "可选思考档覆盖；省略时使用角色原子档或当前档。" })),
-			cwd: Type.Optional(Type.String({ description: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。" })),
-			review: Type.Optional(Type.Boolean({ description: "按审查纪律为 start/send 记录义务；true 不自动开审。" })),
+			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: msg.tool.role })),
+			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: msg.tool.thinking })),
+			cwd: Type.Optional(Type.String({ description: msg.tool.cwd })),
+			review: Type.Optional(Type.Boolean({ description: msg.tool.review })),
 		}),
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
-			if (!active) throw new Error("subagents 只在 Master 中可用");
+			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_TOOL));
 			const handler = ACTION_HANDLERS[params.action as keyof typeof ACTION_HANDLERS];
-			if (!handler) throw new Error(`未知 subagents action：${String(params.action)}`);
+			if (!handler) throw new Error(msg.tool.unknownAction(String(params.action)));
 			return handler(active, params, ctx);
 		},
 	});
@@ -220,7 +221,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		try {
 			activateSession(ctx);
 		} catch (error) {
-			ctx.ui.notify(`指挥官模式恢复失败：${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(msg.command.restoreFailed(error instanceof Error ? error.message : String(error)), "error");
 		}
 	});
 
@@ -229,7 +230,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 function reviewGateError(): string | undefined {
 	const loaded = loadConfig();
-	if (loaded.config.features.review === false) return "fire-review 已关闭，不能挂审查义务或发起审查";
+	if (loaded.config.features.review === false) return msg.command.reviewOff;
 	return "error" in loaded.review ? loaded.review.error : undefined;
 }
 
@@ -243,7 +244,7 @@ function loadMasterPrompts() {
 
 function rosterText(models: MasterRole[]): string {
 	return models.map((entry) => {
-		const fallback = entry.fallback.length ? `，fallback ${entry.fallback.map(modelAtomText).join(" → ")}` : "";
-		return `${entry.role}：${modelAtomText(entry)}（${entry.use}${fallback}）`;
-	}).join("；");
+		const fallback = entry.fallback.length ? msg.roster.fallback(entry.fallback.map(modelAtomText).join(" → ")) : "";
+		return msg.roster.entry(entry.role, modelAtomText(entry), entry.use, fallback);
+	}).join(msg.roster.join);
 }

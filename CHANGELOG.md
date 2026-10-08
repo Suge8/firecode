@@ -6,12 +6,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. In this first stage the header, input-box shell, tool rows, providers and the watcher are bilingual; Master, review and session commands follow.
-- Review (`/fire-review` cards, prompts, notices, validation errors) and the session commands (`/preset`, `/quota`, `/tokens`, herdr sidebar labels) follow the `language` setting. Review output parsing and review-card previews keep accepting both languages' field names, so sessions that cross a language switch still resume cleanly.
+- English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. The header, input-box shell, tool rows, providers, the watcher and Master (activity list, Worker view, events, tool descriptions and both prompts), review (cards, prompts, notices, validation errors) and the session commands (\`/preset\`, \`/quota\`, \`/tokens\`, herdr sidebar labels) are bilingual too. Review output parsing and review-card previews keep accepting both languages' field names, so sessions that cross a language switch still resume cleanly.
 - The first main-session launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file) and uses it right away; adjust models and restart when ready.
 
 ### Changed
 
+- The recommended `config.example.jsonc` is now in English, including the role names (`researcher`, `engineer`, `batch`, `designer`, `sentinel`) and their `use` text; existing configs are untouched. The Master prompt no longer names any role: it points to roles by their stated use, so role names are entirely up to your config.
 - **Breaking:** `review.language` is removed in favour of the top-level `language`; the old key is reported as an unknown field.
 - **Breaking:** the Fast toggle shortcut now defaults to `Alt+S` (was `Ctrl+F`, which collided with Pi's built-in `tui.editor.cursorRight` and produced an "Extension issues" warning on every fresh install). `/fast` is unchanged.
 - **Breaking:** session rename is no longer an extension shortcut: pressing Pi's own rename key (`app.session.rename`, `Ctrl+R` by default, follows `keybindings.json`) in the input box now opens the rename prompt. The `keys.rename` setting, the `features.rename` switch and the `/rename` command are removed (use Pi's `/name`); the removed settings are reported as unknown. Rename now ships with the input-box shell, so it needs `features.statusbar`.

@@ -131,8 +131,6 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	for (const feature of ["claudeSub", "openaiNative", "review", "master", "watcher"])
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.config.master.autoActivate).toBeTrue();
-	// 指挥官提示词点名“哨兵”承接长等待，模板必须带着它。
-	expect(loaded.config.master.roles.map((entry: any) => entry.role)).toContain("哨兵");
 	expect(loaded.config.watcher.enabled).toBeFalse();
 });
 

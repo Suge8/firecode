@@ -21,25 +21,24 @@ import { TurnClock } from "../tools/turn-clock.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
 import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { msg } from "./messages.js";
 import { modelAtomText } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
 /** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
-const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = {
-	running: "运行中", review: "审查中", done: "完成", failed: "失败", interrupted: "被中断", idle: "空闲",
-};
+const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
 /** 名字被迫截短时至少留的宽度；再窄就不写名字。 */
 const MIN_NAME = 6;
-/** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。model 是模型原子的位置。 */
-const TAIL = [
-	{ text: "model", drop: 2 },
-	{ text: "Tab 换子代理", drop: 3 },
-	{ text: "点摘要展开", drop: 0 },
-	{ text: "ctrl+o 全部展开", drop: 1 },
-	{ text: "esc 返回", drop: Infinity },
+/** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。text 缺省的一项是模型原子的位置。 */
+const TAIL: { text?: string; drop: number }[] = [
+	{ drop: 2 },
+	{ text: msg.view.hints.tab, drop: 3 },
+	{ text: msg.view.hints.expand, drop: 0 },
+	{ text: msg.view.hints.expandAll, drop: 1 },
+	{ text: msg.view.hints.back, drop: Infinity },
 ];
 /** “已发出”替换按键提示的时长；任何按键也会提前收起。 */
 const NOTICE_MS = 3_000;
@@ -188,7 +187,7 @@ function fileBranch(path: string): MirrorEntry[] {
 }
 
 export class WorkerView implements Component, Focusable {
-	private readonly input = new Input({ prompt: "› ", placeholder: "补话给这个子代理，回车发送" });
+	private readonly input = new Input({ prompt: "› ", placeholder: msg.view.placeholder });
 	private readonly projection = new Container();
 	private readonly headless = {};
 	/** 打开期间看过的子代理：名字 → 记录。 */
@@ -280,7 +279,7 @@ export class WorkerView implements Component, Focusable {
 		this.failure = undefined;
 		const worker = this.worker();
 		if (!worker) {
-			this.failure = `${this.name} 已不在池里`;
+			this.failure = msg.view.gone(this.name);
 			return;
 		}
 		const session = this.source.session(worker);
@@ -291,7 +290,7 @@ export class WorkerView implements Component, Focusable {
 		try {
 			this.records.set(this.name, new WorkerRecord(worker, session, this.tui as TUI, this.theme, () => this.tui.requestRender()));
 		} catch (error) {
-			this.failure = error instanceof HostShapeError ? error.message : `读不到 ${worker.name} 的记录：${error instanceof Error ? error.message : String(error)}`;
+			this.failure = error instanceof HostShapeError ? error.message : msg.view.unreadable(worker.name, error instanceof Error ? error.message : String(error));
 		}
 	}
 
@@ -365,7 +364,7 @@ export class WorkerView implements Component, Focusable {
 	/** 已发出、还没在句缝送达的补话：读 Worker 会话的排队事实，送达后自然消失。 */
 	private queued(width: number): string[] {
 		const steering = this.removed ? [] : this.record?.session?.getSteeringMessages() ?? [];
-		return steering.map((text) => clip(this.theme.fg("dim", ` 排队中：${text}`), width));
+		return steering.map((text) => clip(this.theme.fg("dim", ` ${msg.view.queued(text)}`), width));
 	}
 
 	private readonly line = (text: string) => this.theme.fg("borderMuted", text);
@@ -374,7 +373,7 @@ export class WorkerView implements Component, Focusable {
 	private topLine(width: number, worker: WorkerRef | undefined, state: ReturnType<typeof rowState> | undefined): string {
 		const name = this.theme.bold(this.name);
 		if (!worker || !state) {
-			const status = this.removed ? this.theme.fg("warning", "已移除") : "";
+			const status = this.removed ? this.theme.fg("warning", msg.view.removed) : "";
 			return fitBorder(width, this.line, 0, [[status, name], [status, ""]]);
 		}
 		const { kind, row } = state;
@@ -391,7 +390,7 @@ export class WorkerView implements Component, Focusable {
 	}
 
 	private inputLine(width: number): string {
-		if (this.removed) return clip(`› ${this.theme.fg("dim", "子代理已移除，不能再补话")}`, width);
+		if (this.removed) return clip(`› ${this.theme.fg("dim", msg.view.removedInput)}`, width);
 		return this.input.render(width)[0] ?? "";
 	}
 
@@ -409,9 +408,9 @@ export class WorkerView implements Component, Focusable {
 				for (let room = visibleWidth(notice); room >= 1; room--) yield [lead, dim(clip(notice, room))];
 				return;
 			}
-			const tail = TAIL.filter((item) => item.text !== "model" || model);
+			const tail = TAIL.filter((item) => item.text !== undefined || model);
 			for (;;) {
-				yield [lead, dim(tail.map((item) => (item.text === "model" ? model : item.text)).join(" · "))];
+				yield [lead, dim(tail.map((item) => item.text ?? model).join(" · "))];
 				const weakest = tail.reduce((a, b) => (b.drop < a.drop ? b : a));
 				if (weakest.drop === Infinity) return;
 				tail.splice(tail.indexOf(weakest), 1);
@@ -492,14 +491,14 @@ export class WorkerView implements Component, Focusable {
 		if (!prompt || this.sending || this.removed) return;
 		const name = this.name;
 		this.sending = true;
-		this.showNotice("发送中…");
+		this.showNotice(msg.view.sending);
 		try {
 			await this.source.send(name, prompt);
 			if (name === this.name) this.input.setValue("");
 			this.source.drafts.delete(name);
-			this.showNotice("已发出", NOTICE_MS);
+			this.showNotice(msg.view.sent, NOTICE_MS);
 		} catch (error) {
-			this.showNotice(`未送达：${error instanceof Error ? error.message : String(error)}`);
+			this.showNotice(msg.view.undelivered(error instanceof Error ? error.message : String(error)));
 		} finally {
 			this.sending = false;
 		}
