@@ -22,7 +22,7 @@
 pi install npm:pi-firecode
 ```
 
-装完即用（需要 Pi 1.1.0 及以上）。首次启动时 FireCode 会把推荐配置写到 `~/.pi/agent/extensions/firecode/config.jsonc`，把里面的模型换成你已登录的就行。
+装完即用（需要 Pi 1.1.0 及以上）。首次启动时 FireCode 会把推荐配置写到 `~/.pi/agent/extensions/firecode/config.jsonc`，把里面的模型换成你已登录的就行。界面支持中英文，默认跟随系统语言，也可以在配置里用 `"language"` 指定。
 
 ## 先试试这几句
 
