@@ -24,6 +24,20 @@ import type {
 } from "./state.js";
 
 export const CHECKPOINT_TYPE = "firecode-review-checkpoint";
+export const REFUSAL_TYPE = "firecode-review-refusal";
+
+/** 命令入口拒绝启动的记录：无 UI 的会话（Worker）里这是拒绝原因唯一的读取通道，id 让读取方区分每一次拒绝。 */
+export function recordRefusal(pi: ExtensionAPI, message: string): void {
+	pi.appendEntry(REFUSAL_TYPE, { id: crypto.randomUUID(), message });
+}
+
+export function refusalOf(entry: unknown): { id: string; message: string } | undefined {
+	if (typeof entry !== "object" || entry === null) return undefined;
+	const { type, customType, data } = entry as Record<string, unknown>;
+	if (type !== "custom" || customType !== REFUSAL_TYPE || typeof data !== "object" || data === null) return undefined;
+	const { id, message } = data as Record<string, unknown>;
+	return typeof id === "string" && typeof message === "string" ? { id, message } : undefined;
+}
 const VERSION = 5;
 
 /** 写入凭证：同一场审查内 Run ID 不变，靠单调递增的 seq 识别陈旧写者。 */

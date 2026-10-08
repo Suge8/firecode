@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupFirecodeModules, FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 
@@ -50,6 +52,22 @@ describe("review outcome reader", () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "none.jsonl"))).toEqual({ status: "none" });
 		expect(readReviewOutcome(join(fixtures, "missing.jsonl"))).toEqual({ status: "none" });
+	});
+
+	test("a refusal record is the latest outcome until a later checkpoint supersedes it", async () => {
+		const readReviewOutcome = await loadReader();
+		const directory = await mkdtemp(join(tmpdir(), "review-refusal-"));
+		try {
+			const passed = (await readFile(join(fixtures, "passed.jsonl"), "utf8")).trimEnd();
+			const refusal = JSON.stringify({ type: "custom", customType: "firecode-review-refusal", data: { id: "r1", message: "配置有问题" } });
+			const path = join(directory, "session.jsonl");
+			await writeFile(path, `${passed}\n${refusal}\n`);
+			expect(readReviewOutcome(path)).toEqual({ status: "refused", runId: "r1", message: "配置有问题" });
+			await writeFile(path, `${refusal}\n${passed}\n`);
+			expect(readReviewOutcome(path)).toMatchObject({ status: "passed" });
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("ignores a truncated tail after the latest valid checkpoint", async () => {

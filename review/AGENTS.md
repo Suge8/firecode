@@ -37,6 +37,7 @@ AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill �
 `outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` /
 `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。事故终态的 `reason` 取该轮
 `details` 原文（超时、供应商报错都写在里面），枚举名只作缺失兜底：读取方不得把枚举名当原因展示。
+命令入口拒绝启动（配置问题、已有审查在跑、参数错误）统一经 `checkpoint.ts` 的 `recordRefusal` 写一条拒绝记录（不动 checkpoint，不碰进行中的审查），有 UI 时另行通知；无 UI 的 Worker 里这条记录是原因唯一的出口，`outcome.ts` 把它读成 `refused`（`runId` 是这次拒绝的 id，`message` 是原文），Master 原样报给指挥官。新增拒绝分支必须走同一个 `refuse`。
 
 ## 卡片与审查进度
 

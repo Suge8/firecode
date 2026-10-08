@@ -57,6 +57,7 @@ export const masterEvent = {
 				...final,
 			);
 		if (outcome.status === "failed") return masterEvent.reviewIncomplete(name, outcome.reason, reply);
+		if (outcome.status === "refused") return masterEvent.reviewIncomplete(name, outcome.message);
 		if (outcome.status === "error") return masterEvent.reviewIncomplete(name, msg.event.reviewReadFailed(outcome.message));
 		return masterEvent.reviewIncomplete(name, msg.event.reviewNoFinal(outcome.status));
 	},

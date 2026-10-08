@@ -26,6 +26,7 @@ import {
 	type CheckpointStamp,
 	readCheckpoint,
 	readStamp,
+	recordRefusal,
 	writeCheckpoint,
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
@@ -239,20 +240,11 @@ function limitsOf(config: ReviewConfig): ReviewLimits {
 async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionContext) {
 	// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 	const loaded = loadReviewConfig();
-	if ("error" in loaded) {
-		if (ctx.hasUI) ctx.ui.notify(loaded.error, "error");
-		return;
-	}
+	if ("error" in loaded) return refuse(rt, ctx, loaded.error, "error");
 	const config = loaded.config;
-	if (rt.controller && isActive(rt.controller.state)) {
-		if (ctx.hasUI) ctx.ui.notify(msg.command.alreadyRunning, "info");
-		return;
-	}
+	if (rt.controller && isActive(rt.controller.state)) return refuse(rt, ctx, msg.command.alreadyRunning, "info");
 	const command = parseCommand(args);
-	if ("error" in command) {
-		if (ctx.hasUI) ctx.ui.notify(command.error, "error");
-		return;
-	}
+	if ("error" in command) return refuse(rt, ctx, command.error, "error");
 	rt.controller = {
 		ctx,
 		config,
@@ -269,6 +261,12 @@ async function handleCommand(rt: ReviewRuntime, args: string, ctx: ExtensionCont
 		focus: command.focus,
 		busy: true,
 	});
+}
+
+/** 拒绝启动：有 UI 时通知，无论有无 UI 都记录——Worker 里没有 UI，Master 靠这条记录读到原因。 */
+function refuse(rt: ReviewRuntime, ctx: ExtensionContext, message: string, level: "info" | "error"): void {
+	recordRefusal(rt.pi, message);
+	if (ctx.hasUI) ctx.ui.notify(message, level);
 }
 
 /** 重启 / 会话恢复：从 checkpoint 重建 controller 并续跑未完成的环节。
