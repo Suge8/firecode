@@ -1,6 +1,7 @@
 /** OpenAI / Codex 请求层：verbosity、Fast（priority）、可选原生压缩。 */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CONFIG_PATH, loadConfig } from "../../config.js";
+import { CONFIG_PATH } from "../../config-file.js";
+import { loadConfig } from "../../config.js";
 import openAINativeExtension from "./src/extension.ts";
 
 export function registerOpenAINative(pi: ExtensionAPI): void {

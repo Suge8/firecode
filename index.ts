@@ -3,8 +3,10 @@
  * Claude 订阅适配、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CONFIG_PATH, type Feature, loadConfig, seedConfig } from "./config.js";
+import { CONFIG_PATH, seedConfig } from "./config-file.js";
+import { type Feature, loadConfig } from "./config.js";
 import { registerHeader } from "./header.js";
+import { msg } from "./messages.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
@@ -64,7 +66,7 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 			else if (seeding.level === "error") console.error(seeding.message);
 			seeding = undefined;
 		}
-		if (problems.length) ctx.ui.notify(`FireCode 配置有问题：${problems.join("；")}`, "warning");
+		if (problems.length) ctx.ui.notify(msg.startup.problems(problems), "warning");
 	});
 }
 
@@ -75,11 +77,11 @@ function seedForMainSession(role: FirecodeSessionRole): SeedNotice | undefined {
 	if (role !== "main") return undefined;
 	try {
 		return seedConfig()
-			? { message: `已生成配置：${CONFIG_PATH}，按需修改模型后重启生效`, level: "info" }
+			? { message: msg.startup.seeded(CONFIG_PATH), level: "info" }
 			: undefined;
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
-		return { message: `无法生成配置：${CONFIG_PATH}（${reason}）`, level: "error" };
+		return { message: msg.startup.seedFailed(CONFIG_PATH, reason), level: "error" };
 	}
 }
 

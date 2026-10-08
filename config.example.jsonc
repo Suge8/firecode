@@ -2,6 +2,8 @@
 	// 推荐配置：功能全开。首次启动时自动写到这里，按需把模型换成你已登录的，改完重启 Pi。
 	// Watcher 新会话不自动激活，需要时 /fire-watch 翻转当前会话。
 	// 凡是指定模型的位置都写同一个模型原子："provider/model/thinking"，思考档取最后一段。
+	// 界面与给模型看的文字语言：默认跟随系统 locale（zh 开头为中文，其余英文）；要固定就取消下一行注释，可选 "zh" | "en"。
+	// "language": "en",
 	"features": {
 		"header": true,
 		"statusbar": true,
@@ -76,8 +78,7 @@
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
-		"tools": ["read", "grep", "find", "ls", "bash"],
-		"language": "zh"
+		"tools": ["read", "grep", "find", "ls", "bash"]
 	},
 
 	// 激活后每个主会话回合评估新增内容，会产生额外模型调用；需要开口时当场插话。

@@ -32,6 +32,9 @@ export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.t
 const PI_AI = PI_AI_URL;
 const PI_TUI = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
 
+/** 测试默认中文：配置未写 language 时 FireCode 跟随系统 locale，这里固定它，断言才与机器无关。 */
+process.env.LC_ALL = "zh_CN.UTF-8";
+
 /** 同一份配置与改写只复制一次仓库：复制是测试耗时的大头（每次数百个文件）。进程退出时统一删除。 */
 const copies = new Map<string, Promise<string>>();
 process.on("exit", () => {
@@ -46,7 +49,6 @@ export const TEST_REVIEW_CONFIG = {
 	advisorAfterFailures: 2,
 	timeoutMinutes: 1,
 	tools: ["read", "bash"],
-	language: "zh",
 };
 const TEST_CONFIG_JSONC = JSON.stringify({
 	features: {
@@ -152,7 +154,7 @@ async function prepareCopy(
 		await writeFile(destination, content);
 	}
 	await rewriteImports(directory);
-	const configModule = join(directory, "config.ts");
+	const configModule = join(directory, "config-file.ts");
 	const getAgentDirImport = `import { getAgentDir } from ${JSON.stringify(PI_CODING_AGENT)};`;
 	const configSource = await readFile(configModule, "utf8");
 	if (!configSource.includes(getAgentDirImport)) throw new Error("FireCode config path seam changed");

@@ -4,6 +4,7 @@
  * 注册同键必报冲突提示；改走编辑器动作则键位只归宿主配置，用户在 keybindings.json 改键即同步改到这里。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { msg } from "./messages.js";
 
 const MAX_TITLE_CHARS = 160;
 const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
@@ -19,9 +20,9 @@ function cleanTitle(raw: string): string {
 }
 
 export async function promptRename(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	const next = await ctx.ui.input("重命名会话", pi.getSessionName() ?? "新名字");
+	const next = await ctx.ui.input(msg.rename.title, pi.getSessionName() ?? msg.rename.placeholder);
 	const name = cleanTitle(next ?? "");
 	if (!name) return;
 	pi.setSessionName(name);
-	ctx.ui.notify(`会话已改名：${name}`, "info");
+	ctx.ui.notify(msg.rename.done(name), "info");
 }

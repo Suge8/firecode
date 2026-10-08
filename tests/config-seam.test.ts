@@ -159,7 +159,7 @@ let seedCase = 0;
 async function seedHarness(options: { configJsonc: string | null; role?: string; hasUI?: boolean; beforeRegister?: (configPath: string) => Promise<void> }) {
 	const loadOptions = { configJsonc: options.configJsonc, extraFiles: { ["seed-case-" + ++seedCase]: "" } };
 	const { registerFirecode } = await loadFirecodeModule("index.ts", loadOptions) as any;
-	const { CONFIG_PATH } = await loadFirecodeModule("config.ts", loadOptions) as { CONFIG_PATH: string };
+	const { CONFIG_PATH } = await loadFirecodeModule("config-file.ts", loadOptions) as { CONFIG_PATH: string };
 	await options.beforeRegister?.(CONFIG_PATH);
 	const fake = fakePi({ registerProvider() {} });
 	registerFirecode(fake.pi, options.role ?? "main");

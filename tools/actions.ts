@@ -1,9 +1,10 @@
 /** 内置工具的动作词与目标：工具行渲染与 Master 活动列表共用的唯一来源。 */
 import { homedir } from "node:os";
 import type { ClipSide } from "../format.js";
+import { msg } from "./messages.js";
 import { commandParts, genericArgsParts, pathValue, type Part } from "./parts.js";
 
-export const LABEL = { read: "读取", bash: "操作", edit: "修改", write: "写入" } as const;
+export const LABEL = msg.labels;
 
 export type ToolArgs = {
 	path?: string;

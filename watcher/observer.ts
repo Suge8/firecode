@@ -1,16 +1,15 @@
 /**
  * 观察会话：进程内 memory 子会话 + 只读工具 + 唯一自定义工具 advise。
- * 系统提示以 prompts/watch.zh.md 为唯一事实源（整体替换，不受项目文件改写）。
+ * 系统提示以 prompts/watch.{zh,en}.md 为唯一事实源（整体替换，不受项目文件改写）。
  */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Model } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 import type { InProcessSessionPool } from "../master/spawn.js";
 import type { ThinkingLevelValue } from "../config.js";
+import { readPrompt } from "../i18n.js";
+import { msg } from "./messages.js";
 
-const PROMPT_PATH = join(dirname(fileURLToPath(import.meta.url)), "prompts", "watch.zh.md");
+const PROMPTS = new URL("./prompts/", import.meta.url);
 const OBSERVER_TOOLS = ["read", "grep", "find", "ls", "advise"];
 
 export interface Advice {
@@ -41,7 +40,7 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 		thinking: options.thinking,
 		tools: OBSERVER_TOOLS,
 		customTools: [adviseTool(() => advice, (next) => { advice = next; })],
-		systemPrompt: { mode: "replace", text: readFileSync(PROMPT_PATH, "utf8") },
+		systemPrompt: { mode: "replace", text: readPrompt(PROMPTS, "watch") },
 		contextFiles: true,
 		persistence: { type: "memory" },
 	});
@@ -59,17 +58,17 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 function adviseTool(current: () => Advice | undefined, capture: (advice: Advice) => void) {
 	return {
 		name: "advise",
-		label: "建议",
-		description: "向主代理提交一条供权衡的观察建议；每次评估只接受一条，请只提最要紧的那一条。",
+		label: msg.advise.label,
+		description: msg.advise.description,
 		parameters: Type.Object({
-			note: Type.String({ description: "一句话说清问题与定位。" }),
+			note: Type.String({ description: msg.advise.noteDescription }),
 		}),
 		async execute(_id: string, params: Record<string, unknown>) {
-			if (current()) throw new Error("本次评估已提交过建议；余下的问题留到下一次评估");
+			if (current()) throw new Error(msg.advise.alreadySubmitted);
 			const note = typeof params.note === "string" ? params.note.trim() : "";
-			if (!note) throw new Error("note 不能为空");
+			if (!note) throw new Error(msg.advise.emptyNote);
 			capture({ note });
-			return { content: [{ type: "text" as const, text: "已记录，本次评估结束。" }], details: undefined };
+			return { content: [{ type: "text" as const, text: msg.advise.recorded }], details: undefined };
 		},
 	};
 }

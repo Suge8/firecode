@@ -18,6 +18,7 @@ import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { LABEL, toolTarget } from "./actions.js";
 import { diffMeta } from "./parts.js";
+import { msg } from "./messages.js";
 import { ROUND_ENTRY, renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
@@ -172,7 +173,7 @@ export function registerToolRendering(pi: ExtensionAPI): void {
 	for (const definition of Object.values(toolDefinitions())) pi.registerTool(definition);
 
 	pi.registerCommand("tool-status", {
-		description: "显示当前已加载/启用工具",
+		description: msg.toolStatusCommand,
 		handler: async (_args, ctx) => {
 			ctx.ui.notify(
 				`active: ${pi.getActiveTools().join(", ")}\nall: ${pi

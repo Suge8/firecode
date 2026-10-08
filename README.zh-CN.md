@@ -101,7 +101,7 @@ flowchart LR
 | 会话改名 | 输入框里按 `Ctrl+R` | 弹出输入框改当前会话名；用的是 Pi 自带的改名键（`app.session.rename`），在 `keybindings.json` 里改键会同步生效 |
 | OpenAI 请求层 | `/fast`、`Alt+S` | 回答详略、加速档、可选的原生上下文压缩 |
 
-在配置里写 `"features": { "<名字>": false }` 关掉任一功能。
+在配置里写 `"features": { "<名字>": false }` 关掉任一功能。界面与提示词的语言（中文/英文）由顶层 `"language": "zh" | "en"` 决定，省略时跟随系统语言，改后重启生效。
 
 ## 参与开发
 

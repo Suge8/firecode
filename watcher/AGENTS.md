@@ -6,7 +6,7 @@
 ## 观察会话
 
 只经 `master/spawn.ts` 创建：memory 持久化（观察过程不落盘、无 checkpoint）、只读工具
-read/grep/find/ls、系统提示整体替换、注入 contextFiles。`prompts/watch.zh.md` 是提示词唯一事实源，不在此复述；
+read/grep/find/ls、系统提示整体替换、注入 contextFiles。`prompts/watch.{zh,en}.md` 是提示词唯一事实源（两版等价，改一边同步另一边），不在此复述；
 它的四段（角色克制、关注面、输出契约、证据纪律）缺一不可。
 
 `advise` 是注入观察会话的唯一自定义工具，也是观察员唯一的输出通道：正文文字不会被任何人看到。它只收

@@ -1,5 +1,7 @@
 # FireCode 术语表
 
+括号里的英文名同时是英文界面的用词；没有英文名的词在英文界面用普通英文表达。
+
 ## 委派
 
 - **指挥官**（Master）→ `master/`；避免：主控、Supervisor、Team Lead

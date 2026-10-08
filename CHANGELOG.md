@@ -6,10 +6,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- English and Chinese UI and model-facing text. The new top-level `language` (`"zh"` | `"en"`) in `config.jsonc` picks it; when omitted it follows the system locale (`zh*` → Chinese, otherwise English). Restart to apply a change. In this first stage the header, input-box shell, tool rows, providers and the watcher are bilingual; Master, review and session commands follow.
 - The first main-session launch writes the recommended `config.jsonc` into the Pi Agent directory when it is missing (never overwrites an existing file) and uses it right away; adjust models and restart when ready.
 
 ### Changed
 
+- **Breaking:** `review.language` is removed in favour of the top-level `language`; the old key is reported as an unknown field.
 - **Breaking:** the Fast toggle shortcut now defaults to `Alt+S` (was `Ctrl+F`, which collided with Pi's built-in `tui.editor.cursorRight` and produced an "Extension issues" warning on every fresh install). `/fast` is unchanged.
 - **Breaking:** session rename is no longer an extension shortcut: pressing Pi's own rename key (`app.session.rename`, `Ctrl+R` by default, follows `keybindings.json`) in the input box now opens the rename prompt. The `keys.rename` setting, the `features.rename` switch and the `/rename` command are removed (use Pi's `/name`); the removed settings are reported as unknown. Rename now ships with the input-box shell, so it needs `features.statusbar`.
 - README rewritten around the review loop, sub-agent view and watcher, with a delegation-size comparison; install is now a single command.

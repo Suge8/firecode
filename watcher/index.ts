@@ -16,6 +16,7 @@ import {
 	WATCHER_MESSAGE_TYPE,
 	type WatcherCard,
 } from "./card.js";
+import { msg } from "./messages.js";
 import { createObserver, type Advice, type Observer } from "./observer.js";
 import { renderTurn } from "./transcript.js";
 
@@ -47,8 +48,8 @@ export function registerWatcher(
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
 	if ("error" in loaded) {
 		pi.registerCommand("fire-watch", {
-			description: "翻转当前会话的观察员开关",
-			handler: async (args, ctx) => ctx.ui.notify(args.trim() ? "/fire-watch 不接受参数" : loaded.error, "error"),
+			description: msg.command,
+			handler: async (args, ctx) => ctx.ui.notify(args.trim() ? msg.noArguments : loaded.error, "error"),
 		});
 		return;
 	}
@@ -79,7 +80,7 @@ export function registerWatcher(
 	const activate = (ctx: ExtensionContext): WatcherRuntime => {
 		const owner = { ctx, pending: [], lastTurnIndex: 0, evaluating: false };
 		runtime = owner;
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", "观察员"));
+		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", msg.statusLabel));
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
@@ -89,7 +90,7 @@ export function registerWatcher(
 		try {
 			await deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
 		} catch (error) {
-			if (runtime === owner) owner.ctx.ui.notify(`观察员这条建议投递失败，已丢弃：${error instanceof Error ? error.message : String(error)}`, "warning");
+			if (runtime === owner) owner.ctx.ui.notify(msg.deliveryFailed(error instanceof Error ? error.message : String(error)), "warning");
 		}
 	};
 	const evaluate = async (owner: WatcherRuntime) => {
@@ -123,7 +124,7 @@ export function registerWatcher(
 		} catch (error) {
 			// 被重新入场中断的评估不算故障：下一批增量会开一个新观察会话。
 			if (runtime !== owner) return;
-			owner.ctx.ui.notify(`观察员已停止：${error instanceof Error ? error.message : String(error)}`, "warning");
+			owner.ctx.ui.notify(msg.stopped(error instanceof Error ? error.message : String(error)), "warning");
 			deactivate(owner);
 		} finally {
 			owner.evaluating = false;
@@ -131,19 +132,19 @@ export function registerWatcher(
 	};
 
 	pi.registerCommand("fire-watch", {
-		description: "翻转当前会话的观察员开关",
+		description: msg.command,
 		handler: async (args, ctx) => {
 			if (args.trim()) {
-				ctx.ui.notify("/fire-watch 不接受参数", "error");
+				ctx.ui.notify(msg.noArguments, "error");
 				return;
 			}
 			if (runtime) {
 				deactivate();
-				ctx.ui.notify("观察员已关闭", "info");
+				ctx.ui.notify(msg.disabled, "info");
 				return;
 			}
 			activate(ctx);
-			ctx.ui.notify("观察员已开启", "info");
+			ctx.ui.notify(msg.enabled, "info");
 		},
 	});
 

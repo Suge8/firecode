@@ -29,6 +29,8 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `activity.ts` | 子代理活动列表的单行布局，只有 `master/activity-list.ts` 使用 | |
 | `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置，并给出 review/master/watcher 每节能否启动的判定 | |
+| `config-file.ts` | 运行配置的路径、首次播种、原始读取；不含文案（被 `i18n.ts` 依赖） | |
+| `i18n.ts` `*/messages.ts` | 双语文案机制与各目录文案表，见下「文案」 | |
 
 改 `review/` 或 `master/` 前先读对应细则页：两者的状态机、持久化与投递契约都有事故换来的硬约束。术语与命名见 `WORDS.md`。
 
@@ -41,11 +43,22 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
+## 文案
+
+界面与给模型看的文字支持中英。所有用户/模型可见文案必须经文案表，新增文案中英同时提供；代码注释保持中文。语言由 `config.jsonc` 顶层 `language` 决定（省略则跟随系统 locale：`LC_ALL`/`LC_MESSAGES`/`LANG`，再退到运行时默认 locale，zh 开头为中文，其余英文），模块加载时定下，改语言重启生效，调用处不传语言。
+
+- 每个目录一个 `messages.ts`：`export const msg = defineMessages({ zh: {...}, en: {...} })`，用 `msg.分组.键`；带参数的文案写成函数。en 与 zh 的键、嵌套、函数参数不一致是类型错误。根目录的 `messages.ts` 另放机器消息（信封）里生产端与折叠界面共用的词汇（`envelope`），两侧必须读它，不各写一份。
+- 提示词按语言分文件 `<name>.zh.md` / `<name>.en.md`，用 `i18n.ts` 的 `readPrompt(new URL("./prompts/", import.meta.url), name)` 读；英文版是等价翻译，改一边必须同步另一边。
+- 不进文案表的：代码标识符、协议字段名、模型原子等配置值、`active: … / all: …` 这类纯技术输出、上游子包 `provider/openai-native/src` 里已是英文的诊断。
+- 测试把 `LC_ALL` 固定为 zh（`tests/loader.ts`），断言默认中文；英文行为在 `tests/i18n.test.ts` 用 `language: "en"` 的配置验证。
+
 ## 配置
 
 唯一运行配置是 Pi Agent 目录（由官方 `getAgentDir()` 解析，含 `PI_CODING_AGENT_DIR` 覆写）下的
-`extensions/firecode/config.jsonc`；用户侧安装见 README。文件不存在时，主会话在扩展加载时（`registerFirecode`，先于 `loadConfig`）把随包模板 `config.example.jsonc` 原样写过去（`config.ts` 的 `seedConfig`，构建把模板复制进 `dist` 以便打包后定位），本次会话即按新文件生效；不区分 TUI/print/rpc，提示“已生成配置…重启生效”留到有 UI 的 `session_start` 显示一次。已存在的文件（含内容有问题）绝不覆盖，子会话不写盘，写入失败明确报错。改完本机运行配置后，把其中属于推荐配置的部分
+`extensions/firecode/config.jsonc`；用户侧安装见 README。文件不存在时，主会话在扩展加载时（`registerFirecode`，先于 `loadConfig`）把随包模板 `config.example.jsonc` 原样写过去（`config-file.ts` 的 `seedConfig`，构建把模板复制进 `dist` 以便打包后定位），本次会话即按新文件生效；不区分 TUI/print/rpc，提示“已生成配置…重启生效”留到有 UI 的 `session_start` 显示一次。已存在的文件（含内容有问题）绝不覆盖，子会话不写盘，写入失败明确报错。改完本机运行配置后，把其中属于推荐配置的部分
 同步进 `config.example.jsonc`，个人化内容（自定义 instructions、私人扩展名）留在本机。
+
+顶层 `language` 是唯一语言设置，不再有 `review.language`（旧写法按未知字段报错）；`ReviewConfig.language` 是从顶层派生的只读值。
 
 配置里凡是指定模型的位置都写同一个模型原子 `"provider/model/thinking"`，解析在 `config.ts` 的 `parseModelAtom`
 一处收口；旧的分字段与两段式写法一律报配置问题。

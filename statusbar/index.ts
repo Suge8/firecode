@@ -18,6 +18,7 @@ import { clip, firstSentence, formatDuration, formatModelName, formatTokens, one
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
+import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 import { promptRename } from "./rename.js";
 
@@ -42,7 +43,7 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 		const title = userTitle(entry.message);
 		if (title) return title;
 	}
-	return (incoming && userTitle(incoming)) || "新会话";
+	return (incoming && userTitle(incoming)) || msg.newSession;
 }
 
 const FAST_STATUS = "pi-openai-native-fast";
@@ -53,7 +54,7 @@ const GLOW_FADE_MS = 1_000;
 
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
-	title = "新会话";
+	title = msg.newSession;
 	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数。 */
 	busy: BusyView = IDLE;
 	/**
@@ -144,22 +145,18 @@ class Shell {
 /** 进行中的那个词：主会话审查期间（等结论、修复、总结）一律由审查进度说明，不另写词；否则指挥官在跑是“处理中”，再否则是在等子代理。 */
 function activityWord(busy: BusyView): string {
 	if (busy.review) return "";
-	return busy.agentRunning ? "处理中" : `等待 ${busy.inFlight} 个子代理`;
+	return busy.agentRunning ? msg.working : msg.waitingWorkers(busy.inFlight);
 }
-
-const STAGE_TEXT: Record<Exclude<ReviewStage, "reviewing">, string> = {
-	queued: "排队中", advisor: "顾问介入", fixing: "修复中", summarizing: "总结中",
-};
 
 /** 审查进度的退让档：`审查 第2轮 1/3 · 1 阻断` → 丢阻断数 → 丢票数或阶段，“审查 第N轮”留到最后；字形始终在。 */
 function reviewTiers(progress: ReviewProgress | undefined, theme: Theme): string[] {
 	const gold = (text: string) => paint(HEAT_COLORS.gold, text);
 	const mark = reviewMark(phaseOf(2));
-	const head = `${mark} ${gold("审查")}`;
+	const head = `${mark} ${gold(msg.review)}`;
 	if (!progress) return [head];
-	const named = progress.round > 0 ? `${head}${gold(` 第${progress.round}轮`)}` : head;
-	const body = gold(progress.stage === "reviewing" ? `${progress.passed}/${progress.total}` : STAGE_TEXT[progress.stage]);
-	const blocked = progress.stage === "reviewing" && progress.blocked ? `${gold(" · ")}${theme.fg("error", `${progress.blocked} 阻断`)}` : "";
+	const named = progress.round > 0 ? `${head}${gold(` ${msg.reviewRound(progress.round)}`)}` : head;
+	const body = gold(progress.stage === "reviewing" ? `${progress.passed}/${progress.total}` : msg.reviewStage[progress.stage]);
+	const blocked = progress.stage === "reviewing" && progress.blocked ? `${gold(" · ")}${theme.fg("error", msg.reviewBlocked(progress.blocked))}` : "";
 	const tiers = [`${named} ${body}${blocked}`, `${named} ${body}`, named];
 	return tiers.filter((tier, index) => tier !== tiers[index - 1]);
 }
