@@ -88,13 +88,15 @@ export type Feature = (typeof FEATURES)[number];
 /** 顶层只认这些节；openai 节由 provider/openai-native 自己解析。 */
 const SECTIONS = ["features", "keys", "openai", "presets", "review", "master", "watcher"];
 
+/**
+ * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
+ * （tests/config-seam.test.ts 守这条）。alt+s：宿主默认键位里没有，s 取 speed。
+ */
 export const DEFAULT_KEYS = {
-	rename: "ctrl+r",
-	fast: "ctrl+f",
+	fast: "alt+s",
 } as const;
 
 export type FireCodeKeys = {
-	rename: string;
 	fast: string;
 };
 
@@ -220,20 +222,7 @@ function checkFeatures(features: Record<string, unknown>, problems: string[]): v
 }
 
 function checkKeys(keys: FireCodeKeys, presets: Record<string, Preset>, problems: string[]): void {
-	const owners = new Map<string, string>([
-		[keys.rename, "keys.rename"],
-		[keys.fast, "keys.fast"],
-	]);
-	const declared = Object.entries(keys);
-	for (let index = 0; index < declared.length; index++) {
-		for (let other = index + 1; other < declared.length; other++) {
-			if (declared[index][1] === declared[other][1]) {
-				problems.push(
-					`快捷键 ${declared[index][1]} 被 keys.${declared[index][0]} 和 keys.${declared[other][0]} 重复占用`,
-				);
-			}
-		}
-	}
+	const owners = new Map<string, string>([[keys.fast, "keys.fast"]]);
 	for (const [name, preset] of Object.entries(presets)) {
 		if (!preset?.key) continue;
 		const owner = owners.get(preset.key);
@@ -265,7 +254,6 @@ export function loadConfig(): LoadedConfig {
 	rejectUnknownKeys(rawKeys, Object.keys(DEFAULT_KEYS), "keys", problems);
 	const presets = parsePresets(raw.presets, problems);
 	const keys: FireCodeKeys = {
-		rename: typeof rawKeys.rename === "string" ? rawKeys.rename : DEFAULT_KEYS.rename,
 		fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_KEYS.fast,
 	};
 	checkKeys(keys, presets, problems);

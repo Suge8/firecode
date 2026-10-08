@@ -98,7 +98,8 @@ Checked against public docs and source in October 2026.
 | Presets | `/preset`, your key bindings | Switch model, thinking level, tools and instructions together |
 | Usage | `/quota`, `/tokens` | Claude and Codex subscription quota; local token and cost totals |
 | Claude subscription | automatic | Claude Code attribution; one retry on a 401 caused by token rotation |
-| OpenAI request layer | `Ctrl+F` | Verbosity, Fast mode, optional native context compaction |
+| Session rename | `Ctrl+R` in the input box | Pops up a name prompt for the current session; it is Pi's own rename key (`app.session.rename`), so rebinding it in `keybindings.json` moves it here too |
+| OpenAI request layer | `/fast`, `Alt+S` | Verbosity, Fast mode, optional native context compaction |
 
 Turn any feature off with `"features": { "<name>": false }` in the config.
 

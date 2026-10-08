@@ -98,7 +98,8 @@ flowchart LR
 | 预设 | `/preset`、你配的快捷键 | 一起切换模型、思考档、工具集与附加指令 |
 | 用量 | `/quota`、`/tokens` | Claude、Codex 订阅剩余额度；本地 token 与成本统计 |
 | Claude 订阅适配 | 自动 | 请求带 Claude Code 归因；令牌换发导致的 401 自动重试一次 |
-| OpenAI 请求层 | `Ctrl+F` | 回答详略、加速档、可选的原生上下文压缩 |
+| 会话改名 | 输入框里按 `Ctrl+R` | 弹出输入框改当前会话名；用的是 Pi 自带的改名键（`app.session.rename`），在 `keybindings.json` 里改键会同步生效 |
+| OpenAI 请求层 | `/fast`、`Alt+S` | 回答详略、加速档、可选的原生上下文压缩 |
 
 在配置里写 `"features": { "<名字>": false }` 关掉任一功能。
 

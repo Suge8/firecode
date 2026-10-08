@@ -16,6 +16,7 @@ import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../bus
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
+import { RENAME_REQUEST_CHANNEL } from "../session/rename.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
@@ -170,9 +171,11 @@ class ShellEditor extends CustomEditor {
 		keybindings: KeybindingsManager,
 		private readonly shell: Shell,
 		private readonly bottomParts: () => BottomParts,
+		onRename: () => void,
 	) {
 		super(tui, theme, keybindings);
 		shell.requestRender = () => tui.requestRender();
+		this.onAction("app.session.rename", onRename);
 	}
 
 	// 输入过长滚动时让位给宿主的“↑ n more”提示。
@@ -241,7 +244,8 @@ export function registerStatusBar(pi: ExtensionAPI, subsession = false): void {
 			return { dispose() {}, invalidate() {}, render: () => [] };
 		});
 		ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-			new ShellEditor(tui, theme, keybindings, shell, () => shell.bottom(ctx, pi.getThinkingLevel())));
+			new ShellEditor(tui, theme, keybindings, shell, () => shell.bottom(ctx, pi.getThinkingLevel()),
+				() => pi.events.emit(RENAME_REQUEST_CHANNEL, ctx)));
 	});
 	pi.on("thinking_level_select", () => shell.requestRender());
 	pi.on("model_select", () => shell.requestRender());

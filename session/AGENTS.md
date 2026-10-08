@@ -5,7 +5,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `presets.ts` | 预设切换：模型原子、工具集、附加指令；生效中的预设名以 `preset` 状态键发布（accent 色名字，不带图标），输入框下边框显示；只有改了工具集或附加指令（边框看不见的改动）的预设才发布，只改模型与思考档的不发布 |
-| `rename.ts` | `/rename` 与 `keys.rename` 改会话名 |
+| `rename.ts` | 输入框里按宿主改名键（`app.session.rename`，默认 Ctrl+R，随 keybindings.json 走）弹输入框改会话名；请求由 statusbar 发布，故依赖 `features.statusbar`；不提供 `/rename`（宿主自带 `/name`） |
 | `herdr-display.ts` | 会话身份投影到 herdr 的 agent 副标题 |
 | `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT） |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
