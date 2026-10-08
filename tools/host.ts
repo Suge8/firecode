@@ -130,7 +130,7 @@ export function findChat(value: Component): Container | undefined {
 	return undefined;
 }
 
-export function isChatChild(child: Component): boolean {
+function isChatChild(child: Component): boolean {
 	return child instanceof ToolExecutionComponent || child instanceof AssistantMessageComponent || child instanceof UserMessageComponent;
 }
 

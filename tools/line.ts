@@ -45,7 +45,7 @@ export type RowState = {
 	errorText?: string;
 };
 
-export type RenderContext = {
+type RenderContext = {
 	state: RowState;
 	cwd: string;
 	toolCallId: string;
@@ -57,7 +57,7 @@ export type RenderContext = {
 type ResultContent = { type: string; text?: string };
 export type ToolResult = { content?: ResultContent[]; details?: unknown };
 
-export type ToolLineOptions = {
+type ToolLineOptions = {
 	label: string;
 	value: Part[];
 	/** 溢出时从哪端截断：路径保尾部，命令保头部 */

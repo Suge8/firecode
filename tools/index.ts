@@ -12,42 +12,28 @@ import {
 	createWriteTool,
 	defineTool,
 	type ExtensionAPI,
+	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { watchBusy } from "../busy.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
-import { LABEL, toolTarget } from "./actions.js";
-import { diffMeta } from "./parts.js";
+import { toolTarget } from "./actions.js";
+import { type Part, diffMeta } from "./parts.js";
 import { msg } from "./messages.js";
 import { ROUND_ENTRY, renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
 
-type ToolMap = {
-	read: ReturnType<typeof createReadTool>;
-	bash: ReturnType<typeof createBashTool>;
-	edit: ReturnType<typeof createEditTool>;
-	write: ReturnType<typeof createWriteTool>;
-};
-
-const cache = new Map<string, ToolMap>();
-
-function createTools(cwd: string): ToolMap {
-	return {
-		read: createReadTool(cwd),
-		bash: createBashTool(cwd),
-		edit: createEditTool(cwd),
-		write: createWriteTool(cwd),
-	};
+function createTools(cwd: string) {
+	return { read: createReadTool(cwd), bash: createBashTool(cwd), edit: createEditTool(cwd), write: createWriteTool(cwd) };
 }
 
 /** 工具实例按 cwd 复用：同一会话内 cwd 不变，切目录也不必重建全部工具。 */
-function tools(cwd: string): ToolMap {
+const cache = new Map<string, ReturnType<typeof createTools>>();
+
+function tools(cwd: string) {
 	let value = cache.get(cwd);
-	if (!value) {
-		value = createTools(cwd);
-		cache.set(cwd, value);
-	}
+	if (!value) cache.set(cwd, value = createTools(cwd));
 	return value;
 }
 
@@ -57,19 +43,22 @@ function lineCount(text: string): number {
 	return text.endsWith("\n") ? lines - 1 : lines;
 }
 
-function invoke<T extends (...args: never[]) => unknown>(
-	execute: T,
-	args: unknown[],
-): ReturnType<T> {
-	return Reflect.apply(execute, undefined, args) as ReturnType<T>;
+/** 四个工具共有的展示壳：执行仍是宿主工具（按调用 cwd 取实例）外加真实耗时，调用行是动作词 + 目标；meta 给调用行追加后缀。 */
+function shell(name: "read" | "bash" | "edit" | "write", meta?: (args: any) => Part[]) {
+	return {
+		label: msg.labels[name],
+		renderShell: "self" as const,
+		execute: (id: string, params: any, signal: any, update: any, ctx: any) =>
+			executeTimed(id, () => (tools(ctx.cwd)[name].execute as (...args: unknown[]) => Promise<any>)(id, params, signal, update, ctx)),
+		renderCall: (args: any, theme: Theme, ctx: any) =>
+			new ToolLine({ label: msg.labels[name], ...toolTarget(name, args, ctx.cwd), meta: meta?.(args), theme, ctx }),
+	};
 }
 
 const EDIT_RESULT = makeResultRenderer(false);
 let definitions: ReturnType<typeof buildDefinitions> | undefined;
 
-/**
- * 默认四工具的展示包装（执行仍是宿主工具，按调用 cwd 取实例）：主会话注册它们，子代理全过程视图拿同一份定义渲染子会话的工具行。
- */
+/** 默认四工具的展示包装：主会话注册它们，子代理全过程视图拿同一份定义渲染子会话的工具行。 */
 export function toolDefinitions() {
 	return definitions ??= buildDefinitions();
 }
@@ -77,49 +66,11 @@ export function toolDefinitions() {
 function buildDefinitions() {
 	const initial = tools(process.cwd());
 	return {
-		read: defineTool({
-			...initial.read,
-			label: LABEL.read,
-			renderShell: "self",
-			execute: (id, params, signal, update, ctx) =>
-				executeTimed(id, () => invoke(tools(ctx.cwd).read.execute, [id, params, signal, update, ctx])),
-			renderCall: (args, theme, ctx) =>
-				new ToolLine({
-					label: LABEL.read,
-					...toolTarget("read", args, ctx.cwd),
-					theme,
-					ctx,
-				}),
-			renderResult: makeResultRenderer(true),
-		}),
-		bash: defineTool({
-			...initial.bash,
-			label: LABEL.bash,
-			renderShell: "self",
-			execute: (id, params, signal, update, ctx) =>
-				executeTimed(id, () => invoke(tools(ctx.cwd).bash.execute, [id, params, signal, update, ctx])),
-			renderCall: (args, theme, ctx) =>
-				new ToolLine({
-					label: LABEL.bash,
-					...toolTarget("bash", args, ctx.cwd),
-					theme,
-					ctx,
-				}),
-			renderResult: makeResultRenderer(true),
-		}),
+		read: defineTool({ ...initial.read, ...shell("read"), renderResult: makeResultRenderer(true) }),
+		bash: defineTool({ ...initial.bash, ...shell("bash"), renderResult: makeResultRenderer(true) }),
 		edit: defineTool({
 			...initial.edit,
-			label: LABEL.edit,
-			renderShell: "self",
-			execute: (id, params, signal, update, ctx) =>
-				executeTimed(id, () => invoke(tools(ctx.cwd).edit.execute, [id, params, signal, update, ctx])),
-			renderCall: (args, theme, ctx) =>
-				new ToolLine({
-					label: LABEL.edit,
-					...toolTarget("edit", args, ctx.cwd),
-					theme,
-					ctx,
-				}),
+			...shell("edit"),
 			renderResult(result, options, theme, ctx) {
 				const details = result.details as { diff?: unknown } | undefined;
 				const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
@@ -132,18 +83,7 @@ function buildDefinitions() {
 		}),
 		write: defineTool({
 			...initial.write,
-			label: LABEL.write,
-			renderShell: "self",
-			execute: (id, params, signal, update, ctx) =>
-				executeTimed(id, () => invoke(tools(ctx.cwd).write.execute, [id, params, signal, update, ctx])),
-			renderCall: (args, theme, ctx) =>
-				new ToolLine({
-					label: LABEL.write,
-					...toolTarget("write", args, ctx.cwd),
-					meta: [{ text: ` +${lineCount(args.content ?? "")}`, color: "toolDiffAdded" }],
-					theme,
-					ctx,
-				}),
+			...shell("write", (args) => [{ text: " +" + lineCount(args.content ?? ""), color: "toolDiffAdded" }]),
 			renderResult: makeResultRenderer(false),
 		}),
 	};
