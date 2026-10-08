@@ -19,8 +19,7 @@ export interface MasterSetup {
 	pool: InProcessSessionPool;
 	roster: MasterRole[];
 	exclusions: string[];
-	/** Worker 系统提示；提示词文件坏了时抛错。 */
-	workerPrompt(): string;
+	workerPrompt: string;
 	/** fire-review 不可用的原因；可用时为 undefined。 */
 	reviewGate?: string;
 	interruptResumeMs: number;
@@ -76,6 +75,8 @@ const LIST_WIDGET_KEY = "firecode-master-list";
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
+const newLive = (): WorkerLive => ({ currentTools: new Map(), viewPrompts: [], origin: "master" });
+
 export class MasterRuntime {
 	readonly store: MasterStore;
 	readonly outbox: Outbox;
@@ -90,7 +91,7 @@ export class MasterRuntime {
 	/** 子代理被移除（kill 或启动失败撤票）时通知：全过程视图据此显示已移除。 */
 	private readonly removedListeners = new Set<(name: string) => void>();
 
-	constructor(readonly setup: MasterSetup, public ctx: ExtensionContext) {
+	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext) {
 		this.outbox = new Outbox(this);
 		this.store = new MasterStore(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()), () => this.render());
 		this.launchSeq = Math.max(0, ...this.store.workers.map((worker) => worker.launch));
@@ -129,13 +130,13 @@ export class MasterRuntime {
 
 	liveOf(name: string): WorkerLive {
 		let live = this.live.get(name);
-		if (!live) this.live.set(name, live = { currentTools: new Map(), viewPrompts: [], origin: "master" });
+		if (!live) this.live.set(name, live = newLive());
 		return live;
 	}
 
 	/** start 同步段占名并取启动序（并发 start 越过后续 await 的先后不定，序号必须在此取）。 */
 	reserve(name: string): { live: WorkerLive; launch: number } {
-		const live: WorkerLive = { currentTools: new Map(), viewPrompts: [], origin: "master", starting: true };
+		const live: WorkerLive = { ...newLive(), starting: true };
 		this.live.set(name, live);
 		return { live, launch: ++this.launchSeq };
 	}

@@ -32,8 +32,7 @@ export interface ActivityFacts {
 }
 
 type Toggle = "running" | "done" | "idle";
-/** 一行输出：子代理行，或可点击的折叠行。 */
-/** 折叠行：计数（可点）与收起时被折叠的名字。 */
+/** 一行输出：子代理行，或可点击的折叠行（计数可点，收起时附被折叠的名字）。 */
 type Line = { row: Row } | { label: string; mark: string; toggle: Toggle; names: readonly string[] };
 /** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
 type Target = { toggle: Toggle } | { open: string };

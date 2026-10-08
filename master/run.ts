@@ -38,7 +38,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		thinking: worker.thinking,
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
-		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt(), worker.name) },
+		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
 		contextFiles: true,
 		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume ? { resume: true } : {}) },
 	});
@@ -196,7 +196,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			const idle: WorkerRef = { ...(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current), status: "idle" };
 			active.store.upsert(idle);
 			active.markIdle(idle, reviewOutcomeRow(outcome));
-			active.outbox.enqueue(masterEvent.review(target.name, outcome, latestAssistantText(session.messages)), target.name);
+			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
 		},
 		(error) => {
 			const current = reviewing();
@@ -267,7 +267,7 @@ function reviewOutcomeRow(outcome: ReviewOutcome): WorkerLive["outcome"] {
 function captureWorkerTerminal(
 	messages: Array<{ role: string; content?: unknown; stopReason?: string; errorMessage?: string }>,
 ): WorkerTerminal | undefined {
-	const message = messages.findLast((candidate) => candidate.role === "assistant");
+	const message = lastAssistant(messages);
 	if (!message) return undefined;
 	return {
 		text: textOf(message.content),
@@ -291,8 +291,8 @@ function faultSummary(terminal: WorkerTerminal): string {
 	return clip(first.trim(), FAULT_SUMMARY_WIDTH);
 }
 
-function latestAssistantText(messages: Array<{ role: string; content?: unknown }>): string {
-	return textOf(messages.findLast((candidate) => candidate.role === "assistant")?.content);
+function lastAssistant<T extends { role: string }>(messages: readonly T[]): T | undefined {
+	return messages.findLast((candidate) => candidate.role === "assistant");
 }
 
 function nextFallback(role: MasterRole, worker: WorkerRef): ModelAtom | undefined {

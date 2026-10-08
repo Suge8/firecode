@@ -11,7 +11,7 @@ import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { registerWorkerGuard } from "./guard.js";
 import {
-	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, renderSubagentsResult, statusText, subagentsCallParts,
+	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
@@ -40,15 +40,13 @@ interface MasterDependencies {
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}, worker = false): void {
 	// Worker 会话里只注册 checkout 守卫，不注册命令、工具与生命周期。
 	if (worker) return registerWorkerGuard(pi);
-	const loaded = loadConfig().master;
+	const all = loadConfig();
+	const loaded = all.master;
 	const prompts = loadMasterPrompts();
-	const startupError = "error" in loaded ? loaded.error : "error" in prompts ? prompts.error : undefined;
+	// 配置或提示词有问题时拒绝激活：runtime 存在就意味着两者都可用。
+	const startupError = "error" in loaded ? loaded.error : prompts.error;
 	const roster = "error" in loaded ? [] : loaded.config.roles;
 	const autoActivate = "error" in loaded ? false : loaded.config.autoActivate;
-	const requirePrompts = () => {
-		if ("error" in prompts) throw new Error(prompts.error);
-		return prompts;
-	};
 	// 在飞子代理数的唯一发布者。
 	let publishedInFlight = 0;
 	const publishInFlight = (count: number, teardown = false) => {
@@ -64,8 +62,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		pool: dependencies.pool ?? new InProcessSessionPool(),
 		roster,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
-		workerPrompt: () => requirePrompts().worker,
-		reviewGate: reviewGateError(),
+		workerPrompt: prompts.worker,
+		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
 		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
 		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
 		publishInFlight,
@@ -133,7 +131,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${assembleMasterPrompt(requirePrompts().master, rosterText(roster))}`,
+			systemPrompt: `${event.systemPrompt}\n\n${assembleMasterPrompt(prompts.master, rosterText(roster))}`,
 		};
 	});
 
@@ -145,10 +143,9 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		renderCall: (_args, theme, ctx) =>
 			new ToolLine({ label: msg.tool.label, value: subagentsCallParts({ action: "list" }), clip: "end", theme, ctx }),
 		renderResult: (result, options, theme, context) => {
-			const details = result.details as { workers?: unknown } | undefined;
-			context.state.meta = !context.isError && Array.isArray(details?.workers) ? listMeta(details.workers) : undefined;
-			if (options.expanded && Array.isArray(details?.workers))
-				return expandedWorkerList(details.workers, theme, context);
+			const workers = (result.details as { workers?: ListedWorker[] } | undefined)?.workers;
+			context.state.meta = !context.isError && workers ? listMeta(workers) : undefined;
+			if (options.expanded && workers) return expandedWorkerList(workers, theme, context);
 			return renderSubagentsResult(result, options, theme, context);
 		},
 		parameters: Type.Object({}),
@@ -203,17 +200,11 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	pi.on("session_shutdown", () => deactivate());
 }
 
-function reviewGateError(): string | undefined {
-	const loaded = loadConfig();
-	if (loaded.config.features.review === false) return msg.command.reviewOff;
-	return "error" in loaded.review ? loaded.review.error : undefined;
-}
-
-function loadMasterPrompts() {
+function loadMasterPrompts(): { master: string; worker: string; error?: string } {
 	try {
 		return { master: readMasterPrompt("master"), worker: readMasterPrompt("worker") };
 	} catch (error) {
-		return { error: error instanceof Error ? error.message : String(error) };
+		return { master: "", worker: "", error: error instanceof Error ? error.message : String(error) };
 	}
 }
 
