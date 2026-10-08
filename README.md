@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<h3 align="center">The only Pi extension I still run.</h3>
+<h3 align="center">Install one extension. Uninstall the rest.</h3>
 
 <p align="center">Parallel sub-agents, multi-model code review and a cleaner terminal for <a href="https://pi.dev">Pi</a>. One install, works out of the box.</p>
 

@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<h3 align="center">我现在唯一保留的 Pi 扩展。</h3>
+<h3 align="center">装这一个，其余扩展都可以卸了。</h3>
 
 <p align="center">给 <a href="https://pi.dev">Pi</a> 加上并行子代理、多模型代码审查和更干净的终端界面。装一个就够，开箱即用。</p>
 
