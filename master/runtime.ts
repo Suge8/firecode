@@ -11,7 +11,7 @@ import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "./spawn.js";
-import { MasterStore, masterStatePath, type MasterState, type WorkerRef } from "./state.js";
+import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
 
 /** 注册时定下、跨会话不变的配置与依赖。 */
 export interface MasterSetup {
@@ -90,10 +90,10 @@ export class MasterRuntime {
 	/** 子代理被移除（kill 或启动失败撤票）时通知：全过程视图据此显示已移除。 */
 	private readonly removedListeners = new Set<(name: string) => void>();
 
-	constructor(readonly setup: MasterSetup, public ctx: ExtensionContext, restored?: MasterState) {
+	constructor(readonly setup: MasterSetup, public ctx: ExtensionContext) {
 		this.outbox = new Outbox(this);
-		this.store = new MasterStore(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()), restored, () => this.render());
-		this.launchSeq = Math.max(0, ...this.store.state.workers.map((worker) => worker.launch));
+		this.store = new MasterStore(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()), () => this.render());
+		this.launchSeq = Math.max(0, ...this.store.workers.map((worker) => worker.launch));
 		// 池空闲释放热会话后放掉订阅：不再持有已关闭的会话。
 		this.stopReleaseWatch = setup.pool.onRelease((sessionPath) => {
 			for (const live of this.live.values())
@@ -151,16 +151,15 @@ export class MasterRuntime {
 			if (live.observed) this.unobserve(live);
 			this.live.delete(name);
 		}
-		const before = this.store.state;
-		if (this.store.dispatch({ type: "REMOVE_WORKER", name }) === before) return;
+		if (!this.store.remove(name)) return;
 		for (const notify of this.removedListeners) notify(name);
 	}
 
 	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就释放热会话并放弃本次动作。 */
 	current(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef {
 		this.assertOpen();
-		const current = this.store.state.workers.find((worker) => worker.name === identity.name);
-		if (current?.sessionPath === identity.sessionPath) return current;
+		const current = this.find(identity);
+		if (current) return current;
 		void this.setup.pool.dispose(identity.sessionPath);
 		throw new Error(msg.runtime.killed(identity.name));
 	}
@@ -168,13 +167,13 @@ export class MasterRuntime {
 	/** await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖。 */
 	commit(identity: Pick<WorkerRef, "name" | "sessionPath">, update: (current: WorkerRef) => WorkerRef): WorkerRef {
 		const next = update(this.current(identity));
-		this.store.dispatch({ type: "UPSERT_WORKER", worker: next });
+		this.store.upsert(next);
 		return next;
 	}
 
 	/** 同步读：档案仍是这一票时返回，否则 undefined（落定回调用，不抛）。 */
 	find(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef | undefined {
-		const current = this.store.state.workers.find((worker) => worker.name === identity.name);
+		const current = this.store.find(identity.name);
 		return current?.sessionPath === identity.sessionPath ? current : undefined;
 	}
 
@@ -242,7 +241,7 @@ export class MasterRuntime {
 
 	/** 活动列表的输入：档案加运行时事实的一次投影（全过程视图按同一顺序换子代理）。 */
 	activityFacts(): ActivityFacts {
-		const workers = this.store.state.workers;
+		const workers = this.store.workers;
 		const byPath = <T>(pick: (live: WorkerLive) => T | undefined) => new Map(workers.flatMap((worker) => {
 			const live = this.live.get(worker.name);
 			const value = live && pick(live);

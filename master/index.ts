@@ -3,11 +3,11 @@
  * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts。
  */
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { WORKERS_CHANNEL, type WorkersPayload, watchBusy } from "../busy.js";
 import { loadConfig, type MasterRole } from "../config.js";
 import { ToolLine } from "../tools/line.js";
-import { ACTION_HANDLERS, ACTIONS } from "./actions.js";
+import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import { registerWorkerGuard } from "./guard.js";
 import {
@@ -18,7 +18,7 @@ import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
 import { armInterruptReminder, modelAtomText } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { InProcessSessionPool } from "./spawn.js";
-import { loadMasterState, masterStatePath, recoverMasterState, THINKING_LEVELS, type MasterState } from "./state.js";
+import { THINKING_LEVELS } from "./state.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
@@ -78,18 +78,16 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		const tools = pi.getActiveTools().filter((name) => !MASTER_TOOLS.includes(name));
 		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
-	const activate = (ctx: ExtensionContext, restored?: MasterState): MasterRuntime => {
+	/** 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt，这里补挂续跑提醒并重投未确认事件。 */
+	const activate = (ctx: ExtensionContext): void => {
 		if (startupError) throw new Error(startupError);
-		if (runtime) {
-			runtime.ctx = ctx;
-			return runtime;
-		}
-		const active = runtime = new MasterRuntime(setup, ctx, restored);
+		const active = runtime = new MasterRuntime(setup, ctx);
 		setTools(true);
 		if (active.store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(msg.command.legacyPool(active.store.discardedLegacyVersion), "warning");
 		active.render();
-		return active;
+		for (const worker of active.store.workers) if (worker.interruptedAt) armInterruptReminder(active, worker);
+		active.outbox.replayUnacked(ctx);
 	};
 	/** 会话关闭先清空当前 runtime，再释放池、订阅与定时器：迟到任务不写状态、投递、UI 或持久化。 */
 	const deactivate = async () => {
@@ -101,34 +99,13 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		await setup.pool.disposeAll();
 		setTools(false);
 	};
-	/** reload 恢复：在飞状态收敛为 idle + interruptedAt，补挂续跑提醒，重投未确认事件。 */
-	const activateSession = (ctx: ExtensionContext): MasterRuntime => {
-		if (runtime) return activate(ctx);
-		let restored: MasterState | undefined;
-		try {
-			restored = loadMasterState(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()));
-		} catch {
-			return activate(ctx);
-		}
-		const active = activate(ctx, restored);
-		if (restored) {
-			const recovered = recoverMasterState(restored);
-			for (const worker of recovered.workers) {
-				if (worker !== restored.workers.find((candidate) => candidate.name === worker.name))
-					active.store.dispatch({ type: "UPSERT_WORKER", worker });
-				if (worker.interruptedAt) armInterruptReminder(active, worker);
-			}
-		}
-		active.outbox.replayUnacked(ctx);
-		return active;
-	};
 
 	pi.registerCommand("fire-master", {
 		description: msg.command.description,
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
-				ctx.ui.notify(runtime ? statusText(runtime.store.state.workers) : msg.command.notStarted, "info");
+				ctx.ui.notify(runtime ? statusText(runtime.store.workers) : msg.command.notStarted, "info");
 				return;
 			}
 			if (input) {
@@ -141,7 +118,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				return;
 			}
 			try {
-				activateSession(ctx);
+				activate(ctx);
 				ctx.ui.notify(msg.command.on, "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -178,7 +155,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		async execute() {
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_LIST_TOOL));
-			const workers = active.store.state.workers.map(compactWorker);
+			const workers = active.store.workers.map(compactWorker);
 			return {
 				content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
 				details: {
@@ -209,9 +186,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_TOOL));
-			const handler = ACTION_HANDLERS[params.action as keyof typeof ACTION_HANDLERS];
-			if (!handler) throw new Error(msg.tool.unknownAction(String(params.action)));
-			return handler(active, params, ctx);
+			return ACTION_HANDLERS[params.action as Action](active, params, ctx);
 		},
 	});
 
@@ -219,7 +194,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		await deactivate();
 		if (!autoActivate) return;
 		try {
-			activateSession(ctx);
+			activate(ctx);
 		} catch (error) {
 			ctx.ui.notify(msg.command.restoreFailed(error instanceof Error ? error.message : String(error)), "error");
 		}

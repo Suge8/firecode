@@ -892,9 +892,9 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 	};
 	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
 	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
-	active.store.dispatch({ type: "UPSERT_WORKER", worker: {
+	active.store.upsert({
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
-	} });
+	});
 	const removed: string[] = [];
 	active.onWorkerRemoved((name: string) => removed.push(name));
 	await ACTION_HANDLERS.kill(active, { worker: "quick" }, ctx);

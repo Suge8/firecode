@@ -106,7 +106,7 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef): void {
 	const current = active.find(identity);
 	if (!current) return;
 	const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
-	active.store.dispatch({ type: "UPSERT_WORKER", worker: interrupted });
+	active.store.upsert(interrupted);
 	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
 	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true, takeViewPrompts(active, identity)), identity.name);
 }
@@ -125,7 +125,7 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		live.interruptTimer = undefined;
 		const current = active.find(worker);
 		if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
-		active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...current, disposition: "reminded" } });
+		active.store.upsert({ ...current, disposition: "reminded" });
 		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
 	}, delay);
 	live.interruptTimer.unref?.();
@@ -171,7 +171,7 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 	if (!current) return;
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
 	const idle: WorkerRef = { ...current, status: "idle" };
-	active.store.dispatch({ type: "UPSERT_WORKER", worker: idle });
+	active.store.upsert(idle);
 	// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
 	active.markIdle(idle, failure ? { kind: "failed", note: firstSentence(failure) } : { kind: "done", note: firstSentence(terminal!.text) });
 	const obligation = current.reviewNeeded === true;
@@ -194,7 +194,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			if (!current) return;
 			const { reviewNeeded: _needed, ...fulfilled } = current;
 			const idle: WorkerRef = { ...(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current), status: "idle" };
-			active.store.dispatch({ type: "UPSERT_WORKER", worker: idle });
+			active.store.upsert(idle);
 			active.markIdle(idle, reviewOutcomeRow(outcome));
 			active.outbox.enqueue(masterEvent.review(target.name, outcome, latestAssistantText(session.messages)), target.name);
 		},
@@ -202,7 +202,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			const current = reviewing();
 			if (!current) return;
 			const idle: WorkerRef = { ...current, status: "idle" };
-			active.store.dispatch({ type: "UPSERT_WORKER", worker: idle });
+			active.store.upsert(idle);
 			active.markIdle(idle, { kind: "failed", note: msg.run.reviewIncomplete });
 			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
 		},

@@ -3,11 +3,11 @@ import { dirname, join } from "node:path";
 import { msg } from "./messages.js";
 
 const STATE_VERSION = 9;
+export const WORKER_NAME = /^[a-z][a-z0-9_-]{0,31}$/u;
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type WorkerThinking = (typeof THINKING_LEVELS)[number];
 export type WorkerStatus = "working" | "idle" | "reviewing";
-export type WorkerDisposition = "pending" | "reminded";
 
 export interface WorkerRef {
 	name: string;
@@ -24,61 +24,7 @@ export interface WorkerRef {
 	 */
 	launch: number;
 	reviewNeeded?: boolean;
-	disposition?: WorkerDisposition;
-}
-
-export interface MasterState {
-	version: typeof STATE_VERSION;
-	workers: WorkerRef[];
-}
-
-export type MasterEvent =
-	| { type: "UPSERT_WORKER"; worker: WorkerRef }
-	| { type: "REMOVE_WORKER"; name: string }
-	| { type: "CLEAR" };
-
-export function initialMasterState(): MasterState {
-	return { version: STATE_VERSION, workers: [] };
-}
-
-export function reduceMaster(state: MasterState, event: MasterEvent): MasterState {
-	switch (event.type) {
-		case "UPSERT_WORKER":
-			return { ...state, workers: upsertWorker(state.workers, event.worker) };
-		case "REMOVE_WORKER": {
-			const workers = state.workers.filter((worker) => worker.name !== event.name);
-			return workers.length === state.workers.length ? state : { ...state, workers };
-		}
-		case "CLEAR":
-			return initialMasterState();
-	}
-}
-
-export function recoverMasterState(state: MasterState, interruptedAt = Date.now()): MasterState {
-	let changed = false;
-	const workers = state.workers.map((worker) => {
-		if (worker.status === "idle") return worker;
-		changed = true;
-		return { ...worker, status: "idle" as const, interruptedAt };
-	});
-	return changed ? { ...state, workers } : state;
-}
-
-export function restoreMasterState(data: unknown): MasterState | undefined {
-	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
-	const record = data as Record<string, unknown>;
-	if (record.version !== STATE_VERSION || !Array.isArray(record.workers) || !record.workers.every(isWorker))
-		return undefined;
-	const workers = record.workers as WorkerRef[];
-	if (new Set(workers.map((worker) => worker.name)).size !== workers.length) return undefined;
-	if (new Set(workers.map((worker) => worker.sessionPath)).size !== workers.length) return undefined;
-	return { version: STATE_VERSION, workers };
-}
-
-export class LegacyMasterStateError extends Error {
-	constructor(readonly version: number) {
-		super(msg.state.legacy(version, STATE_VERSION));
-	}
+	disposition?: "pending" | "reminded";
 }
 
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
@@ -87,125 +33,111 @@ export function masterStatePath(agentDir: string, sessionId: string): string {
 	return join(agentDir, "tmp", `firecode-master-${safeId}.json`);
 }
 
-export function loadMasterState(path: string): MasterState | undefined {
+/**
+ * 池档案的唯一所有者：每次变更同步原子落盘（0600）。构造即加载——运行时不跨进程存活，所以载入时在飞的
+ * working/reviewing 一律收敛为带 interruptedAt 的 idle（会话与审查义务保留，等指挥官续派）。
+ * 旧版档案由所有者丢弃并记下版本，供上层告知；格式损坏明确失败，不当作空池。
+ */
+export class MasterStore {
+	private list: readonly WorkerRef[];
+	readonly discardedLegacyVersion?: number;
+
+	constructor(private readonly path: string, private readonly onChange?: () => void) {
+		const loaded = load(path);
+		this.discardedLegacyVersion = loaded.legacyVersion;
+		const now = Date.now();
+		this.list = loaded.workers.map((worker) =>
+			worker.status === "idle" ? worker : { ...worker, status: "idle", interruptedAt: now });
+		if (this.list.some((worker, index) => worker !== loaded.workers[index])) this.persist();
+	}
+
+	get workers(): readonly WorkerRef[] {
+		return this.list;
+	}
+
+	find(name: string): WorkerRef | undefined {
+		return this.list.find((worker) => worker.name === name);
+	}
+
+	require(name: string): WorkerRef {
+		const worker = this.find(name);
+		if (!worker) throw new Error(msg.state.missing(name));
+		return worker;
+	}
+
+	/** 按名字新增或覆盖；名字与 sessionPath 各自唯一，身份（sessionPath）一经建立不可更换。 */
+	upsert(worker: WorkerRef): void {
+		const owner = this.list.find((candidate) => candidate.sessionPath === worker.sessionPath);
+		if (owner && owner.name !== worker.name) throw new Error(msg.state.pathTaken(worker.sessionPath));
+		const existing = this.find(worker.name);
+		if (existing && existing.sessionPath !== worker.sessionPath) throw new Error(msg.state.pathChange(worker.name));
+		this.list = existing
+			? this.list.map((candidate) => (candidate === existing ? worker : candidate))
+			: [...this.list, worker];
+		this.commit();
+	}
+
+	/** 返回是否确有这一票。 */
+	remove(name: string): boolean {
+		if (!this.find(name)) return false;
+		this.list = this.list.filter((worker) => worker.name !== name);
+		this.commit();
+		return true;
+	}
+
+	private commit(): void {
+		this.persist();
+		this.onChange?.();
+	}
+
+	private persist(): void {
+		mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+		const temporary = `${this.path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+		try {
+			writeFileSync(temporary, `${JSON.stringify({ version: STATE_VERSION, workers: this.list })}\n`, { encoding: "utf8", mode: 0o600 });
+			renameSync(temporary, this.path);
+		} catch (error) {
+			rmSync(temporary, { force: true });
+			throw error;
+		}
+	}
+}
+
+function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 	let raw: string;
 	try {
 		raw = readFileSync(path, "utf8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { workers: [] };
 		throw error;
 	}
-	let data: unknown;
+	let data: { version?: unknown; workers?: unknown } | null;
 	try {
 		data = JSON.parse(raw);
 	} catch {
 		throw new Error(msg.state.invalidJson(path));
 	}
-	const version = (data as { version?: unknown } | null)?.version;
-	if (typeof version === "number" && version !== STATE_VERSION && version !== 8) throw new LegacyMasterStateError(version);
-	const state = restoreMasterState(version === 8 ? migrateFromV8(data as { workers?: unknown }) : data);
-	if (!state) throw new Error(msg.state.invalidShape(path));
-	return state;
-}
-
-export class MasterStore {
-	private stateValue: MasterState;
-	private readonly path: string;
-	private readonly onChange?: () => void;
-	readonly discardedLegacyVersion?: number;
-
-	constructor(path: string, restored?: MasterState, onChange?: () => void) {
-		this.path = path;
-		this.onChange = onChange;
-		if (restored) this.stateValue = restored;
-		else {
-			const loaded = this.loadOwnedState();
-			this.stateValue = loaded.state;
-			this.discardedLegacyVersion = loaded.discardedLegacyVersion;
-		}
+	if (typeof data?.version === "number" && data.version !== STATE_VERSION) {
+		rmSync(path, { force: true });
+		return { workers: [], legacyVersion: data.version };
 	}
-
-	get state(): MasterState {
-		return this.stateValue;
-	}
-
-	dispatch(event: MasterEvent): MasterState {
-		const next = reduceMaster(this.stateValue, event);
-		if (next === this.stateValue) return next;
-		if (event.type === "CLEAR") rmSync(this.path, { force: true });
-		else writeState(this.path, next);
-		this.stateValue = next;
-		this.onChange?.();
-		return next;
-	}
-
-	private loadOwnedState(): { state: MasterState; discardedLegacyVersion?: number } {
-		try {
-			return { state: loadMasterState(this.path) ?? initialMasterState() };
-		} catch (error) {
-			if (!(error instanceof LegacyMasterStateError)) throw error;
-			rmSync(this.path, { force: true });
-			return { state: initialMasterState(), discardedLegacyVersion: error.version };
-		}
-	}
-}
-
-/**
- * v8 → v9 只差启动序：v8 的创建时间是同一先后的近似（并行 start 下可能有出入，从此以 launch 为准），没有创建时间的
- * 是更早版本恢复来的、排最前。升级不丢池：池里是用户仍在用的子代理，丢弃会让指挥官失去它们的会话与审查义务。
- */
-function migrateFromV8(data: { workers?: unknown }): unknown {
-	if (!Array.isArray(data.workers)) return data;
-	const workers = data.workers as Record<string, unknown>[];
-	const created = (index: number) => (typeof workers[index]?.createdAt === "number" ? workers[index].createdAt as number : -Infinity);
-	const order = workers.map((_, index) => index).sort((a, b) => created(a) - created(b) || a - b);
-	return {
-		version: STATE_VERSION,
-		workers: workers.map((worker, index) => {
-			const { createdAt: _createdAt, ...rest } = worker ?? {};
-			return { ...rest, launch: order.indexOf(index) + 1 };
-		}),
-	};
-}
-
-export function requireWorker(state: MasterState, name: string): WorkerRef {
-	const worker = state.workers.find((candidate) => candidate.name === name);
-	if (!worker) throw new Error(msg.state.missing(name));
-	return worker;
-}
-
-function writeState(path: string, state: MasterState): void {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-	try {
-		writeFileSync(temporary, `${JSON.stringify(state)}\n`, { encoding: "utf8", mode: 0o600 });
-		renameSync(temporary, path);
-	} catch (error) {
-		rmSync(temporary, { force: true });
-		throw error;
-	}
-}
-
-function upsertWorker(workers: WorkerRef[], worker: WorkerRef): WorkerRef[] {
-	const index = workers.findIndex((candidate) => candidate.name === worker.name);
-	const sessionOwner = workers.find((candidate) => candidate.sessionPath === worker.sessionPath);
-	if (sessionOwner && sessionOwner.name !== worker.name)
-		throw new Error(msg.state.pathTaken(worker.sessionPath));
-	if (index < 0) return [...workers, worker];
-	if (workers[index].sessionPath !== worker.sessionPath)
-		throw new Error(msg.state.pathChange(worker.name));
-	return workers.map((candidate, position) => (position === index ? worker : candidate));
+	const workers = data?.workers;
+	if (data?.version !== STATE_VERSION || !Array.isArray(workers) || !workers.every(isWorker)
+		|| new Set(workers.map((worker) => worker.name)).size !== workers.length
+		|| new Set(workers.map((worker) => worker.sessionPath)).size !== workers.length)
+		throw new Error(msg.state.invalidShape(path));
+	return { workers };
 }
 
 function isWorker(value: unknown): value is WorkerRef {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
 	if (
-		typeof record.name !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/u.test(record.name) ||
+		typeof record.name !== "string" || !WORKER_NAME.test(record.name) ||
 		typeof record.role !== "string" || !record.role ||
 		typeof record.model !== "string" || !record.model ||
 		typeof record.thinking !== "string" || !THINKING_LEVELS.includes(record.thinking as WorkerThinking) ||
-		typeof record.status !== "string" || !isStatus(record.status) ||
+		(record.status !== "working" && record.status !== "idle" && record.status !== "reviewing") ||
 		typeof record.sessionPath !== "string" || !record.sessionPath
 	) return false;
 	if (record.cwd !== undefined && (typeof record.cwd !== "string" || !record.cwd)) return false;
@@ -213,11 +145,5 @@ function isWorker(value: unknown): value is WorkerRef {
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
 	if (typeof record.launch !== "number" || !Number.isInteger(record.launch) || record.launch <= 0) return false;
-	if (record.disposition !== undefined && record.disposition !== "pending" && record.disposition !== "reminded")
-		return false;
-	return true;
-}
-
-function isStatus(value: string): value is WorkerStatus {
-	return value === "working" || value === "idle" || value === "reviewing";
+	return record.disposition === undefined || record.disposition === "pending" || record.disposition === "reminded";
 }

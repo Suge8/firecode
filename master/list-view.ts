@@ -114,7 +114,7 @@ export function listMeta(workers: unknown[]): Part[] {
 	return [{ text: ` — ${msg.list.pool(workers.length, summary)}`, color: "muted" }];
 }
 
-export function statusText(workers: WorkerRef[]): string {
+export function statusText(workers: readonly WorkerRef[]): string {
 	return workers.length
 		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
 		: msg.list.noWorkers;

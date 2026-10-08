@@ -81,7 +81,7 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 	if (!drafts) runtimeDrafts.set(active, drafts = new Map());
 	return {
 		facts: () => active.activityFacts(),
-		worker: (name) => active.store.state.workers.find((worker) => worker.name === name),
+		worker: (name) => active.store.find(name),
 		session: (worker) => active.setup.pool.getSession(worker.sessionPath),
 		onSession: (listener) => active.onWorkerSession(listener),
 		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),

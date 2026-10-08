@@ -23,7 +23,7 @@ Worker 是主进程内的 SDK 子会话而非独立进程：reload 会中断在�
 所有子会话只经 `spawn.ts` 创建：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
 系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在模型解析时不可见。这份 ModelRuntime 同时交给池里建出的每个子会话，所以某个子会话里扩展注册的 provider 对同池其他子会话也可见（宿主跨会话复用服务也是如此）。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
 
-Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子，`launch` 记录启动序（v8 档案加载时就地升级：按 v8 的创建时间补启动序，整池保留；更早版本仍丢弃并告知）；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。reload 把在飞状态收敛为 `idle + interruptedAt`，保留会话与审查义务。首次续派会前置现场核对提示。
+Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子，`launch` 记录启动序；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。非 v9 的旧档案由 `MasterStore` 丢弃并告知，不迁移。`MasterStore` 是档案唯一所有者，载入时就把在飞状态收敛为 `idle + interruptedAt`（保留会话与审查义务），激活时再补挂续跑提醒。首次续派会前置现场核对提示。
 
 热冷只属于运行时缓存：池不订阅会话事件自判空闲，只有 Master 在回合落定、中断落定、审查落定时 `markIdle` 才起释放计时，因此 reviewing 中的 Worker（审查期间它自己是闲的，修复回合结束也会落定）不会被释放；释放热会话后池通知持有方，Master 随即退订，不再持有已关闭的会话；到期释放先经该会话的 extensionRunner 发 `session_shutdown`（reason quit）让会话内扩展收口，再 dispose——与宿主替换会话的顺序一致，否则会话里跑着的 fire-review 会成为握着死 ctx 的孤儿。档案与 JSONL 保留；后续 `send` 打开原会话继续。档案存在但文件缺失时明确失败，不创建新会话冒充恢复。`kill` 在同步段内删档案与该名下的整条运行时事实（计时器、订阅、当前工具、落定结局一次清掉），再等待 session_shutdown 收口后释放热会话，永不删除 JSONL；start 失败同样只撤自己这一票的事实。异步回写只属于未关闭的当前 runtime；会话关闭先清空当前 runtime 并置 closed，再释放池、订阅与定时器，迟到任务不写状态、投递、UI 或持久化。
 

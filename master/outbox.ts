@@ -70,7 +70,7 @@ export class Outbox {
 			this.inFlightScheduled = false;
 			if (this.active.closed) return;
 			const names = new Set<string>();
-			for (const worker of this.active.store.state.workers)
+			for (const worker of this.active.store.workers)
 				if ((worker.status === "working" || worker.status === "reviewing") && this.active.live.get(worker.name)?.origin !== "view")
 					names.add(worker.name);
 			for (const event of [...this.queued, ...this.delivering]) if (event.worker && !event.inform) names.add(event.worker);
@@ -133,9 +133,9 @@ export class Outbox {
 			}
 			for (const event of batch) {
 				if (!event.worker) continue;
-				const worker = active.store.state.workers.find((candidate) => candidate.name === event.worker);
+				const worker = active.store.find(event.worker);
 				if (worker?.status === "idle" && worker.disposition !== "reminded")
-					active.store.dispatch({ type: "UPSERT_WORKER", worker: { ...worker, disposition: "pending" } });
+					active.store.upsert({ ...worker, disposition: "pending" });
 			}
 			this.scheduleInFlight();
 		}, (error) => {
