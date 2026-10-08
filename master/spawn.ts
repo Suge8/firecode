@@ -12,6 +12,7 @@ import {
 	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { msg } from "./messages.js";
 import { withSubsessionRole, type SubsessionRole } from "./role.js";
 import type { WorkerThinking } from "./state.js";
 
@@ -84,16 +85,16 @@ export class InProcessSessionPool {
 		const runtime = await this.modelRuntime();
 		const slash = id.indexOf("/");
 		const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-		if (!model) throw new Error(`找不到模型：${id}；子会话只能使用内置 provider 或 models.json 里的模型`);
+		if (!model) throw new Error(msg.spawn.modelNotFound(id));
 		return model;
 	}
 
 	async spawn(options: SpawnSessionOptions): Promise<SpawnedSession> {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
 		if (sessionPath && SESSION_WRITERS.has(sessionPath))
-			throw new Error(`sessionPath 已有进程内会话持有：${sessionPath}`);
+			throw new Error(msg.spawn.held(sessionPath));
 		if (options.persistence.type === "file" && options.persistence.resume && !existsSync(sessionPath!))
-			throw new Error(`无法恢复子代理：会话文件不存在：${sessionPath}`);
+			throw new Error(msg.spawn.missingFile(sessionPath!));
 		if (sessionPath) SESSION_WRITERS.add(sessionPath);
 
 		let created: AgentSession;
@@ -117,7 +118,7 @@ export class InProcessSessionPool {
 			});
 			await withSubsessionRole(options.role, () => loader.reload());
 			if (loader.getExtensions().errors.length)
-				throw new Error(`子会话扩展加载失败：${JSON.stringify(loader.getExtensions().errors)}`);
+				throw new Error(msg.spawn.extensionErrors(JSON.stringify(loader.getExtensions().errors)));
 			const sessionManager = makeSessionManager(options.persistence, options.cwd);
 			const result = await createAgentSession({
 				cwd: options.cwd,
@@ -220,7 +221,7 @@ export class InProcessSessionPool {
 
 export function preallocateWorkerSession(mainSessionPath: string, cwd: string): string {
 	const sessionPath = SessionManager.create(cwd, `${dirname(mainSessionPath)}/subagents`).getSessionFile();
-	if (!sessionPath) throw new Error("无法为子代理预分配 Pi session 路径");
+	if (!sessionPath) throw new Error(msg.spawn.noSessionPath);
 	return sessionPath;
 }
 

@@ -1,24 +1,23 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readPrompt } from "../i18n.js";
+import { msg } from "./messages.js";
 
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "prompts");
+const PROMPTS_DIR = new URL("./prompts/", import.meta.url);
 
 export type MasterPromptKind = "master" | "worker";
 
 export function readMasterPrompt(kind: MasterPromptKind): string {
 	let prompt: string;
 	try {
-		prompt = readFileSync(join(PROMPTS_DIR, `${kind}.zh.md`), "utf8");
+		prompt = readPrompt(PROMPTS_DIR, kind);
 	} catch (error) {
-		throw new Error(`Master ${kind} prompt 读取失败：${error instanceof Error ? error.message : String(error)}`);
+		throw new Error(msg.prompt.readFailed(kind, error instanceof Error ? error.message : String(error)));
 	}
-	if (!prompt.trim()) throw new Error(`Master ${kind} prompt 为空`);
+	if (!prompt.trim()) throw new Error(msg.prompt.empty(kind));
 	return prompt.trim();
 }
 
 export function assembleMasterPrompt(prompt: string, roster: string): string {
-	return `${prompt}\n\n角色表：${roster}。`;
+	return `${prompt}\n\n${msg.roster.prompt(roster)}`;
 }
 
 export function assembleWorkerPrompt(prompt: string, name: string): string {

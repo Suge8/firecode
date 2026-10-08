@@ -26,7 +26,7 @@ pi install npm:pi-firecode
 
 ## 先试试这几句
 
-- “派三个调研员并行，分别总结 `src/`、`test/`、`docs/` 是做什么的，最后给我一张表。”
+- “派三个 researcher 并行，分别总结 `src/`、`test/`、`docs/` 是做什么的，最后给我一张表。”
 - 改完代码后执行 `/fire-review`。
 - 打开 `/fire-watch`，让便宜模型每回合帮你盯一眼。
 

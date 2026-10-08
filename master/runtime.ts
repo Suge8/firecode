@@ -7,6 +7,7 @@ import type { MasterRole } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewProgress } from "../review/outcome.js";
 import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from "./activity-list.js";
+import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "./spawn.js";
@@ -73,7 +74,7 @@ export interface WorkerLive {
 
 const LIST_WIDGET_KEY = "firecode-master-list";
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
-const MASTER_IDENTITY = paint(HEAT_COLORS.orange, "指挥官");
+const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
 export class MasterRuntime {
 	readonly store: MasterStore;
@@ -110,7 +111,7 @@ export class MasterRuntime {
 	}
 
 	assertOpen(): void {
-		if (this.closedValue) throw new Error("Master 会话已替换，取消旧会话动作");
+		if (this.closedValue) throw new Error(msg.runtime.replaced);
 	}
 
 	/** 事实变化后的唯一重绘入口：在飞数、边框身份与活动列表。 */
@@ -161,7 +162,7 @@ export class MasterRuntime {
 		const current = this.store.state.workers.find((worker) => worker.name === identity.name);
 		if (current?.sessionPath === identity.sessionPath) return current;
 		void this.setup.pool.dispose(identity.sessionPath);
-		throw new Error(`${identity.name} 已被 kill，取消本次动作`);
+		throw new Error(msg.runtime.killed(identity.name));
 	}
 
 	/** await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖。 */
