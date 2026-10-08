@@ -1,0 +1,31 @@
+{
+	"extends": "./.pi-mono/tsconfig.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"erasableSyntaxOnly": false,
+		"declaration": false,
+		"declarationMap": false,
+		"sourceMap": false,
+		"inlineSources": false,
+		"typeRoots": [
+			"./.pi-mono/node_modules/@types"
+		]
+	},
+	"files": [
+		".pi-mono/packages/coding-agent/src/utils/highlight-js.d.ts"
+	],
+	"include": [
+		"**/*.ts"
+	],
+	"exclude": [
+		"node_modules",
+		".pi-mono",
+		"dist",
+		"scripts",
+		"tests",
+		"evals",
+		"**/*.test.ts",
+		"provider/openai-native/test"
+	]
+}

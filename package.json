@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "test": "bun test",
+    "typecheck": "bun scripts/typecheck.ts",
     "build": "bun scripts/build.ts",
     "prepack": "bun scripts/build.ts"
   },

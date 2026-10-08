@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { registerPiAiStub } from "../test/pi-ai-stub";
 import { executeNativeCompaction } from "./compact-client";
 import type { NativeCompactionRuntime } from "./native-runtime";
 
@@ -18,6 +19,7 @@ const baseModel = {
 let serializerImportCounter = 0;
 
 async function loadSerializerModule() {
+	registerPiAiStub();
 	mock.module("@earendil-works/pi-coding-agent", () => ({
 		buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
 		convertToLlm: (messages: unknown[]) => messages,

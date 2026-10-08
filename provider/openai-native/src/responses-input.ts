@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { renderSystemMessageUpdate, resolveTranscriptTools } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type {
 	Api,
@@ -79,6 +80,15 @@ export type NativeCompactionRequest = {
 export type SerializeResponsesMessagesOptions = {
 	instructions?: string;
 	includeInstructionsInInput?: boolean;
+	/** messages[0] 是系统提示本身（已由 instructions 或请求前导携带），不再输出；否则所有系统消息都是对话中途的更新。 */
+	leadingSystemMessage?: boolean;
+};
+
+type ResponsesCompat = {
+	supportsDeveloperRole?: boolean;
+	supportsMidConvoSystemMessages?: boolean;
+	supportsAdditionalTools?: boolean;
+	supportsToolSearch?: boolean;
 };
 
 type ParsedTextSignature = {
@@ -92,6 +102,34 @@ function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+function compatOf(model: Model<Api>): ResponsesCompat {
+	return (model.compat ?? {}) as ResponsesCompat;
+}
+
+function instructionRole(model: Model<Api>): "developer" | "system" {
+	return model.reasoning && compatOf(model).supportsDeveloperRole !== false ? "developer" : "system";
+}
+
+/**
+ * 宿主会把中途系统消息新增的工具原位发成 additional_tools / tool_search 项；
+ * 扩展拿不到宿主的工具声明转换器（扩展运行时只暴露 pi-ai 根入口），这类历史无法逐项复现。
+ */
+export function hasAnchoredToolAdditions(
+	model: Model<Api>,
+	messages: AgentMessage[],
+	options: Pick<SerializeResponsesMessagesOptions, "leadingSystemMessage"> = {},
+): boolean {
+	const compat = compatOf(model);
+	if (compat.supportsMidConvoSystemMessages !== true) return false;
+	const llmMessages = convertToLlm(messages);
+	const supportsAdditions = compat.supportsAdditionalTools === true || compat.supportsToolSearch === true;
+	if (!resolveTranscriptTools(llmMessages, supportsAdditions).anchorsAdditions) return false;
+	return llmMessages.some(
+		(message, index) =>
+			message.role === "system" && !(options.leadingSystemMessage && index === 0) && (message.toolsAdded?.length ?? 0) > 0,
+	);
+}
+
 export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 	model: Model<TApi>;
 	messages: AgentMessage[];
@@ -99,7 +137,7 @@ export function serializeMessagesToCompactRequest<TApi extends Api>(args: {
 }): NativeCompactionRequest {
 	return {
 		model: args.model.id,
-		input: serializeMessagesToResponsesInput(args.model, args.messages),
+		input: serializeMessagesToResponsesInput(args.model, args.messages, { leadingSystemMessage: true }),
 		instructions: sanitizeSurrogates(args.instructions),
 	};
 }
@@ -110,17 +148,29 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	options: SerializeResponsesMessagesOptions = {},
 ): ResponsesInputItem[] {
 	const transformedMessages = transformMessagesForResponses(convertToLlm(messages), model);
+	const compat = compatOf(model);
 	const input: ResponsesInputItem[] = [];
 
 	if (options.includeInstructionsInInput && options.instructions) {
 		input.push({
-			role: model.reasoning ? "developer" : "system",
+			role: instructionRole(model),
 			content: sanitizeSurrogates(options.instructions),
 		});
 	}
 
 	let messageIndex = 0;
-	for (const message of transformedMessages) {
+	for (const [sourceIndex, message] of transformedMessages.entries()) {
+		if (message.role === "system") {
+			// 与宿主 convertResponsesMessages 一致：模型不支持中途系统消息时宿主把它们折进首条提示，输入里没有对应项；
+			// 支持时原位发出更新文本并占一个消息序号；新增工具项不发：压缩请求本身不带工具声明。
+			if (options.leadingSystemMessage && sourceIndex === 0) continue;
+			if (compat.supportsMidConvoSystemMessages !== true) continue;
+			const text = renderSystemMessageUpdate(message);
+			if (text.length > 0) input.push({ role: instructionRole(model), content: sanitizeSurrogates(text) });
+			messageIndex++;
+			continue;
+		}
+
 		if (message.role === "user") {
 			const item = serializeUserMessage(message, model);
 			if (item) {
