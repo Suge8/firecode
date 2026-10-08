@@ -38,4 +38,5 @@ if (!result.success) {
 	for (const log of result.logs) console.error(log);
 	process.exit(1);
 }
+await cp(join(ROOT, "config.example.jsonc"), join(DIST, "config.example.jsonc"));
 for (const dir of PROMPT_DIRS) await cp(join(ROOT, dir), join(DIST, dir), { recursive: true });
