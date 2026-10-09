@@ -15,7 +15,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { msg } from "./messages.js";
