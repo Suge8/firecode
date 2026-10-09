@@ -22,17 +22,17 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 
 AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill 与会话关闭一起拖死；卡死的审查者会话在
 进程里惰性留到 TCP 层放弃。
 
-`awaiting_fix` 把修复生命周期 `pending → awaiting_start → running → completed` 写进 checkpoint；reload
-会重投未确认完成的反馈，只有 completed 才进入下一审查轮。宿主 `sendMessage` 返回 void，因此反馈用
-`agent_start` 确认启动、最终 `agent_end` 确认未以 error/aborted 结束，不靠同步 try/catch 猜异步结果。
+`awaiting_fix` 把修复生命周期 `pending → running → completed` 写进 checkpoint；reload
+会把未完成的反馈重置为 pending 重投，只有 completed 才进入下一审查轮。反馈经根级 `deliver.ts` 投递（空闲时前门唤起，
+回合照常经过 `before_agent_start`），以消息送达为回执、没有计时器：deliver resolve 推进 pending → running，
+最终 `agent_end` 确认未以 error/aborted 结束才 completed，以 error/aborted 结束按用户取消收尾。宿主拒收时 deliver
+不 resolve，状态停在 pending，由下一个回合把这条信封补投进去（同 Master 事件）；等待期间 controller 的 `delivering` 标记挡住重复推进。
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环
-禁令的总结提示（followUp + triggerTurn，agent_start 回执、agent_end 收尾），总结回合结束才落 `settled`；
+禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；
 总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）
-不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程；details 保持原始卡片数据。
+不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程（空闲时它们是前门送达的用户消息，显示为折叠的一行 ↳）；details 保持原始卡片数据。给审查者的证据（`sessionEntries`）过滤掉审查自己的信封：自定义消息与整条由审查信封构成的用户消息都不进证据。
 占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
-
-已知暴露：修复反馈与总结提示的 followUp 唤起仍走宿主侧门（跳过 before_agent_start，#33 上游缺陷），修复回合内扩展注入的段会被撤下再补回；因 display:false 的隐形投递无前门等价物，接受此暴露待上游修复，不在插件侧绕行。
 
 `outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` /
 `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。事故终态的 `reason` 取该轮

@@ -1833,7 +1833,7 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 5, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
+		version: 6, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
 		consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {

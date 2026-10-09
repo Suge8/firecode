@@ -1,5 +1,5 @@
 /**
- * 统一投递入口（Master 事件与观察员发言共用）：宿主流式中投自定义卡片、经
+ * 统一投递入口（Master 事件、观察员发言与 review 的修复反馈/总结提示共用）：宿主流式中投自定义卡片、经
  * steer 队列在句缝送达；会话歇透时改走 sendUserMessage 前门唤起（只告知不唤醒的
  * 结果改走 inform，歇透时直接追加）。唤醒走前门而非 triggerTurn 的原因（#33）与回合中不得立即追加（#28）见根 AGENTS.md 硬约束。
  * 宿主的扩展 sendUserMessage 返回 void、不等回合：以宿主记录这条消息为送达，没进回合就改走 steer 补投（tests/delivery-contract.test.ts 钉住）。

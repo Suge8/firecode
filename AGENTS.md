@@ -25,7 +25,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `today.ts` | 系统提示的日期段，每个会话都注册 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖，`cd site && bun run build`），推送 main 由 Vercel 自动部署，只在 `site/`、`design/` 或 README 变化时构建；品牌素材直接引用根下 `design/`，给 Agent 的 Markdown 与 `llms.txt` 构建时从 README 生成 | |
-| `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言共用） | |
+| `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言、review 的修复反馈与总结提示共用） | |
 | `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及相关频道 | |
 | `herdr-client.ts` | herdr socket 短连接客户端，只有 herdr 投影使用 | |
 | `activity.ts` | 子代理活动列表的单行布局，只有 `master/activity-list.ts` 使用 | |
@@ -43,7 +43,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断
 外层背景色（上游 #4894 已报被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（机制见其头注释；唯一例外：review 的修复反馈与总结提示走 followUp 侧门，见 review/AGENTS.md 已知暴露）。两条红线是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，该回合第一次工具调用后扩展注入的段被撤下，下一次前门回合再补回（#33，宿主缺陷，已报上游）。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。两条红线是事故换来的：回合进行中以 `triggerTurn: false` 立即追加会造成快照与状态分叉、提示词缓存整段重写（#28）；以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，该回合第一次工具调用后扩展注入的段被撤下，下一次前门回合再补回（#33，宿主缺陷，已报上游）。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 
