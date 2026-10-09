@@ -8,14 +8,14 @@
 import { readFileSync } from "node:fs";
 import { readConfigFile } from "./config-file.js";
 
-export const LANGUAGES = ["zh", "en"] as const;
-export type Language = (typeof LANGUAGES)[number];
+const LANGUAGES = ["zh", "en"] as const;
+type Language = (typeof LANGUAGES)[number];
 
 export function parseLanguage(value: unknown): Language | undefined {
 	return LANGUAGES.find((language) => language === value);
 }
 
-export function inferLanguage(locale: string | undefined): Language {
+function inferLanguage(locale: string | undefined): Language {
 	return /^zh/iu.test(locale ?? "") ? "zh" : "en";
 }
 
@@ -25,7 +25,7 @@ function systemLocale(): string {
 	return LC_ALL || LC_MESSAGES || LANG || Intl.DateTimeFormat().resolvedOptions().locale;
 }
 
-export const LANGUAGE: Language = parseLanguage(readConfigFile().raw.language) ?? inferLanguage(systemLocale());
+const LANGUAGE: Language = parseLanguage(readConfigFile().raw.language) ?? inferLanguage(systemLocale());
 
 type Messages = { readonly [key: string]: string | ((...args: never[]) => string) | Messages };
 /** 与 zh 同形的表：字符串对字符串，函数对同参数的函数，嵌套逐层对齐。 */
