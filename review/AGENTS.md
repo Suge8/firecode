@@ -75,7 +75,7 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 ## 占用信号
 
-审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见 `occupancy.ts`），review 是唯一发布者，不接触 herdr。
+审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见根 `busy.ts`，读者一律经 `watchBusy`），review 是唯一发布者，不接触 herdr。
 `busy.ts` 把它算进“会话进行中”，herdr 投影据此报 working 并带“对抗审查进行中”标签（不报 blocked：审查期间不需要用户决定任何事，
 blocked 会触发需要关注的通知）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障不影响审查。
 

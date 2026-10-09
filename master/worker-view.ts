@@ -151,7 +151,7 @@ class WorkerRecord {
 	}
 
 	private sync(running: boolean): void {
-		this.clock.sync({ agentRunning: running, inFlight: 0, busy: running, review: false, ...(running ? { since: Date.now() } : {}) });
+		this.clock.sync({ agentRunning: running, inFlight: 0, busy: running, review: undefined, ...(running ? { since: Date.now() } : {}) });
 	}
 }
 

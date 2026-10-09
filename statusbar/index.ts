@@ -12,10 +12,9 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../busy.js";
+import { type BusyView, IDLE, OUTCOME_TEXT, type ReviewProgress, roundTexts, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { msg } from "./messages.js";
@@ -55,23 +54,21 @@ const GLOW_FADE_MS = 1_000;
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
 	title = msg.newSession;
-	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数。 */
+	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数、审查进度访问器。 */
 	busy: BusyView = IDLE;
 	/**
 	 * 最近一轮的落定事实（分支轮记录按与摘要行同一条规则合成）与落定时刻，留到下一轮开始。
 	 * 只在轮记录写入、开会话、切分支时算一次，绘制只读它：读分支是整条回溯。at 为空是开会话时恢复的，不播落定过渡。
 	 */
 	settled: { record: TurnRecord; at?: number } | undefined;
-	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
-	review: (() => ReviewProgress | undefined) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
 	theme: Theme | undefined;
 	requestRender = () => {};
 	private stopClock: (() => void) | undefined;
 
-	/** 时钟只在有动效要播时订阅：回合进行、落定过渡或审查进行。 */
+	/** 时钟只在有动效要播时订阅：会话进行中（含审查）或落定过渡。 */
 	syncClock(): void {
-		const need = this.review !== undefined || this.busy.busy || (this.settled?.at !== undefined && settling(Date.now() - this.settled.at));
+		const need = this.busy.busy || (this.settled?.at !== undefined && settling(Date.now() - this.settled.at));
 		if (need && !this.stopClock) this.stopClock = onFrame(() => { this.syncClock(); this.requestRender(); });
 		if (!need && this.stopClock) { this.stopClock(); this.stopClock = undefined; }
 	}
@@ -82,7 +79,6 @@ class Shell {
 		this.requestRender = () => {};
 		this.busy = IDLE;
 		this.settled = undefined;
-		this.review = undefined;
 	}
 
 	sync(view: BusyView): void {
@@ -99,7 +95,7 @@ class Shell {
 	private readonly fg = (color: Parameters<Theme["fg"]>[0], text: string): string => this.theme?.fg(color, text) ?? text;
 
 	top(): TopParts {
-		const { busy, settled, review } = this;
+		const { busy, settled } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: [], glow: 0,
@@ -124,7 +120,7 @@ class Shell {
 			].join(this.fg("dim", " · "));
 			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
 		}
-		if (review) parts.review = reviewTiers(review(), (text) => this.fg("error", text));
+		if (busy.review) parts.review = reviewTiers(busy.review(), (text) => this.fg("error", text));
 		return parts;
 	}
 
@@ -224,12 +220,6 @@ export function registerStatusBar(pi: ExtensionAPI): void {
 	pi.on("session_tree", (_event, ctx) => {
 		updateTitle(ctx);
 		showRecord();
-	});
-	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
-		const occupancy = data as OccupancyPayload;
-		shell.review = occupancy.active ? occupancy.progress : undefined;
-		shell.syncClock();
-		shell.requestRender();
 	});
 	pi.on("session_start", (_event, ctx) => {
 		updateTitle(ctx);

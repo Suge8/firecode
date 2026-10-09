@@ -32,7 +32,7 @@ import {
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { ReviewUi } from "./ui.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../busy.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";

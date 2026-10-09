@@ -6,10 +6,10 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
 import { InProcessSessionPool } from "../master/spawn.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "../review/occupancy.js";
 import {
 	adviceMessage,
 	registerWatcherCardRenderer,
@@ -157,11 +157,14 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	});
 
 	// fire-review 活跃期静默：不与对抗审查的反馈打架，增量留着审查完合并评估。
-	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
-		reviewActive = (data as OccupancyPayload).active;
-		const active = runtime;
-		if (reviewActive || !active || active.evaluating || !active.pending.length) return;
-		void evaluate(active);
+	watchBusy(pi, {
+		onChange: (view) => {
+			const wasActive = reviewActive;
+			reviewActive = view.review !== undefined;
+			const active = runtime;
+			if (!wasActive || reviewActive || !active || active.evaluating || !active.pending.length) return;
+			void evaluate(active);
+		},
 	});
 
 	// 主会话压缩：旧增量已不再对应主会话现场，观察员从当前尾部重新入场而不回放。

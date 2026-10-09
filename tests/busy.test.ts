@@ -252,7 +252,7 @@ test("主会话审查进行中算会话进行中：审查期间不歇下，视�
 		h.review(true);
 		h.agentSettled();
 		expect(h.settled).toBe(0);
-		expect(h.view).toMatchObject({ busy: true, review: true, agentRunning: false });
+		expect(h.view).toMatchObject({ busy: true, review: expect.any(Function), agentRunning: false });
 		// 修复回合在审查期间照常开跑、落定，都不切段。
 		h.agentStart();
 		h.agentSettled();
@@ -261,7 +261,7 @@ test("主会话审查进行中算会话进行中：审查期间不歇下，视�
 		h.review(false);
 		expect(h.settled).toBe(1);
 		expect(h.result.elapsed).toBe(240_000);
-		expect(h.view).toMatchObject({ busy: false, review: false });
+		expect(h.view).toMatchObject({ busy: false, review: undefined });
 	} finally {
 		setSystemTime();
 	}

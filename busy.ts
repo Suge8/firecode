@@ -3,12 +3,11 @@
  * 指挥官回合结束不等于歇下：回合结束后仍有子代理在飞、审查在跑，会话照旧进行中。
  * Master 是在飞子代理数的唯一发布者；轮记录器、上边框、本轮摘要与轮次时钟都经 watchBusy 读同一个事实并消费同一个歇下边沿。
  * 本段进行中的起点也只在这里记：首次变忙那一刻起，中途的人类输入与结果唤醒都不重置，歇下边沿报告整段事实：时长、终态、均速。
- * 频道名与 payload 只在本文件定义。
+ * 两个输入频道（在飞子代理数、审查占用）的名字与 payload 只在本文件定义，各有唯一发布者；读者一律经 watchBusy，不另订阅频道。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "./format.js";
 import { msg } from "./messages.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "./review/occupancy.js";
 
 /** 进程内事件总线：在飞子代理数变化时发布 `{ inFlight }`，激活/停用同步。 */
 export const WORKERS_CHANNEL = "firecode:workers";
@@ -18,17 +17,40 @@ export interface WorkersPayload {
 	teardown?: true;
 }
 
+/**
+ * 审查占用频道：review 是唯一发布者。进度变化不能靠重发 true：持有时带活的 progress 访问器，
+ * 读者（输入框外壳）每次绘制调用它。progress 是进程内求值函数，频道不可序列化转发。
+ */
+export const OCCUPANCY_CHANNEL = "firecode:review";
+
+/** 审查此刻在哪一步：排队等回合结束、审查者在审、顾问介入、执行模型修复、总结回合。 */
+export type ReviewStage = "queued" | "reviewing" | "advisor" | "fixing" | "summarizing";
+
+export interface ReviewProgress {
+	stage: ReviewStage;
+	/** 当前轮次；排队时为 0。 */
+	round: number;
+	/** 本轮通过 / 阻断 / 审查者总数；只有 reviewing 有意义。 */
+	passed: number;
+	blocked: number;
+	total: number;
+}
+
+export type OccupancyPayload =
+	| { active: true; progress: () => ReviewProgress | undefined }
+	| { active: false };
+
 export interface BusyView {
 	agentRunning: boolean;
 	inFlight: number;
-	/** 主会话 /fire-review 进行中（含修复与总结回合之间的等待）：算会话进行中，审查时长计入这一段。 */
-	review: boolean;
+	/** 主会话 /fire-review 进行中（含修复与总结回合之间的等待）时的进度访问器，否则 undefined：审查算会话进行中，审查时长计入这一段。 */
+	review: (() => ReviewProgress | undefined) | undefined;
 	/** 会话进行中 = 指挥官回合在跑 || 有子代理在飞 || 主会话审查进行中。 */
 	busy: boolean;
 	/** 本段进行中的起点（Date.now）；当且仅当 busy 时存在。 */
 	since?: number;
 }
-export const IDLE: BusyView = { agentRunning: false, inFlight: 0, review: false, busy: false };
+export const IDLE: BusyView = { agentRunning: false, inFlight: 0, review: undefined, busy: false };
 
 /**
  * 本段最后一个指挥官回合的终态：宿主的回合中断信号（ctx.signal.aborted）为真即“已中断”——工具执行中被 Esc 时
@@ -106,7 +128,7 @@ export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
 function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): void {
 	let agentRunning = false;
 	let inFlight = 0;
-	let review = false;
+	let review: BusyView["review"];
 	/** 本段起点；有值即进行中。 */
 	let since: number | undefined;
 	let outcome: Outcome = "complete";
@@ -116,7 +138,7 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 	const update = (teardown = false) => {
 		if (closed) return;
 		const now = Date.now();
-		const busy = agentRunning || inFlight > 0 || review;
+		const busy = agentRunning || inFlight > 0 || review !== undefined;
 		if (busy && since === undefined) {
 			since = now;
 			requests = FRESH;
@@ -167,7 +189,8 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 	});
 	// 主会话审查算会话进行中：审查与修复、总结回合同属这一段，审查时长计入轮记录。
 	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
-		review = (data as OccupancyPayload).active;
+		const occupancy = data as OccupancyPayload;
+		review = occupancy.active ? occupancy.progress : undefined;
 		update();
 	});
 	pi.events.on(WORKERS_CHANNEL, (data) => {
