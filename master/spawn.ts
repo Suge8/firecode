@@ -60,7 +60,6 @@ const WRITERS_KEY = Symbol.for("firecode.session-writers");
 const SESSION_WRITERS = ((globalThis as Record<symbol, unknown>)[WRITERS_KEY] ??= new Set<string>()) as Set<string>;
 
 interface PoolEnvironment {
-	agentDir?: string;
 	modelRuntime?: ModelRuntime;
 	idleTimeoutMs?: number;
 	/** 模型原子 id（provider/model）解析；默认用池内缓存的一份 ModelRuntime。 */
@@ -100,7 +99,7 @@ export class InProcessSessionPool {
 		try {
 			const loader = new DefaultResourceLoader({
 				cwd: options.cwd,
-				agentDir: this.environment.agentDir ?? getAgentDir(),
+				agentDir: getAgentDir(),
 				noContextFiles: !options.contextFiles,
 				extensionFactories: [BUILTIN_CODEMODE],
 				noExtensions: options.isolated,
@@ -121,7 +120,6 @@ export class InProcessSessionPool {
 			const sessionManager = makeSessionManager(options.persistence, options.cwd);
 			const result = await createAgentSession({
 				cwd: options.cwd,
-				agentDir: this.environment.agentDir,
 				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
 				modelRuntime: await this.modelRuntime(),
 				model: options.model,
@@ -155,15 +153,11 @@ export class InProcessSessionPool {
 	}
 
 	private modelRuntime(): Promise<ModelRuntime> {
-		const agentDir = this.environment.agentDir ?? getAgentDir();
+		const agentDir = getAgentDir();
 		this.runtime ??= this.environment.modelRuntime
 			? Promise.resolve(this.environment.modelRuntime)
 			: ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
 		return this.runtime;
-	}
-
-	has(sessionPath: string): boolean {
-		return this.held.has(sessionPath);
 	}
 
 	getSession(sessionPath: string): AgentSession | undefined {

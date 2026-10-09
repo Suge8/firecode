@@ -4,9 +4,18 @@ import { join } from "node:path";
 import { gitArchive, initGit, WORK } from "./lib.ts";
 import type { FixtureKind } from "./tasks.ts";
 
-export const FIXTURE_REF = "b0fb416";
+const FIXTURE_REF = "b0fb416";
 const FIXTURES = join(WORK, "fixtures");
 export const T9_TRUTH_FILE = join(FIXTURES, "t9-truth.json");
+const LINE_SLACK = 5;
+/** 报告里的“文件:行号”引用，行号可以是 `12, 14` 或 `12-14` 这类写法。 */
+const CITATION = /([\w./-]+\.ts)[`'"）)]*[:：#\sL第]*(\d+(?:\s*[,，、\-–~]\s*\d+)*)/g;
+
+/** 报告里指到“同文件且行号相差 ≤5”的植入缺陷；命中只是候选，漏指行号的须人读。 */
+export function citedTruth<T extends { file: string; line: number }>(truth: T[], report: string): T[] {
+	const cites = [...report.matchAll(CITATION)].map((m) => ({ file: m[1]!, lines: m[2]!.split(/\D+/).filter(Boolean).map(Number) }));
+	return truth.filter((t) => cites.some((c) => (t.file.endsWith(c.file) || c.file.endsWith(t.file)) && c.lines.some((l) => Math.abs(l - t.line) <= LINE_SLACK)));
+}
 
 const E2E = `#!/bin/bash
 # 端到端套件：12 个场景串行，每个约 75 秒，全套约 15 分钟。
@@ -24,7 +33,7 @@ echo "[e2e] 失败：\${failed[*]:-无}"
 [ \${#failed[@]} -eq 0 ]
 `;
 
-export interface Seed {
+interface Seed {
 	id: string;
 	file: string;
 	from: string;
@@ -33,7 +42,7 @@ export interface Seed {
 }
 
 /** 在真实代码上做的最小逻辑改动；from 必须在文件里恰好出现一次。 */
-export const SEEDS: Seed[] = [
+const SEEDS: Seed[] = [
 	{ id: "M1", file: "master/actions.ts", from: ">= MAX_IN_FLIGHT)", to: "> MAX_IN_FLIGHT)", desc: "并发上限判定改为 >，第 16 个 start 不再被拒（契约：第 16 个 start 直接拒绝）" },
 	{ id: "M2", file: "master/outbox.ts", from: "this.schedule(Math.min(quiet, Math.max(0, this.firstQueuedAt", to: "this.schedule(Math.max(quiet, Math.max(0, this.firstQueuedAt", desc: "合并唤醒窗口 min 改 max：第一条结果要等满 6 秒才唤醒（契约：安静 1.5 秒即唤醒、最多等 6 秒）" },
 	{ id: "M3", file: "master/activity-list.ts", from: "Math.floor(silent / MINUTE_MS)", to: "Math.ceil(silent / MINUTE_MS)", desc: "“N 分钟无输出”向上取整，5分01秒显示 6 分钟" },

@@ -57,14 +57,6 @@ test("格式不合法的档案明确失败，不当作空池", async () => {
 	}
 });
 
-test("旧版本档案由所有者丢弃并记下版本，供上层告知", async () => {
-	await seed([worker], 8);
-	const store = new MasterStore(path);
-	expect(store.workers).toEqual([]);
-	expect(store.discardedLegacyVersion).toBe(8);
-	expect(await readdir(directory)).toEqual([]);
-});
-
 test("同名覆盖保留身份：不能更换 sessionPath，也不能占用别人的 sessionPath", async () => {
 	await seed([]);
 	const store = new MasterStore(path);

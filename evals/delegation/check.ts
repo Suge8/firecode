@@ -6,12 +6,11 @@
 //   bun check.ts iso         扫描全部运行里写死的 /tmp 路径，找出被多个运行共用的（隔离是软的，见 README）
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { T9_TRUTH_FILE } from "./fixtures.ts";
+import { citedTruth, T9_TRUTH_FILE } from "./fixtures.ts";
 import { jsonlFiles, readJsonl, WORK } from "./lib.ts";
 import { T7_TRUTH } from "./tasks.ts";
 
 const [mode, ...files] = process.argv.slice(2);
-const LINE_SLACK = 5;
 
 async function checkT3(): Promise<void> {
 	const registry = new Map<string, Promise<{ version: string; date: string; deprecated: boolean } | undefined>>();
@@ -53,10 +52,8 @@ function checkT7(): void {
 function checkT9(): void {
 	if (!existsSync(T9_TRUTH_FILE)) throw new Error("还没生成过 t9 fixture（先跑一次 t9 任务）");
 	const truth: Array<{ id: string; file: string; line: number }> = JSON.parse(readFileSync(T9_TRUTH_FILE, "utf8"));
-	const REF = /([\w./-]+\.ts)[`'"）)]*[:：#\sL第]*(\d+(?:\s*[,，、\-–~]\s*\d+)*)/g;
 	for (const file of files) {
-		const cites = [...readFileSync(file, "utf8").matchAll(REF)].map((m) => ({ file: m[1]!, lines: m[2]!.split(/\D+/).filter(Boolean).map(Number) }));
-		const hit = truth.filter((t) => cites.some((c) => (t.file.endsWith(c.file) || c.file.endsWith(t.file)) && c.lines.some((l) => Math.abs(l - t.line) <= LINE_SLACK)));
+		const hit = citedTruth(truth, readFileSync(file, "utf8"));
 		const missed = truth.filter((t) => !hit.includes(t));
 		console.log(`${basename(file)}: ${hit.length}/${truth.length}  命中 ${hit.map((t) => t.id).join(" ")}  | 未指到行号（需人读确认） ${missed.map((t) => t.id).join(" ")}`);
 	}

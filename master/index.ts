@@ -15,11 +15,11 @@ import {
 } from "./list-view.js";
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
-import { armInterruptReminder, modelAtomText } from "./run.js";
+import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import { InProcessSessionPool } from "./spawn.js";
-import { THINKING_LEVELS } from "./state.js";
+import { modelAtomText, THINKING_LEVELS } from "./state.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";

@@ -8,13 +8,12 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, symli
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { PI_PACKAGES } from "../../tests/loader.ts";
-import { fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
+import { citedTruth, fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
 import { finalText, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, startPi, USER_AGENT_DIR, WORK } from "./lib.ts";
 
 const OUT = join(WORK, "worker");
 const VARIANT = "worker";
 const MINUTE = 60_000;
-const LINE_SLACK = 5;
 const TMP_NOTE = " 需要临时文件时只能放在环境变量 TMPDIR 指向的目录里。";
 const audit = (scope: string) => "审计这个仓库的 " + scope + "：找真实缺陷——代码行为与各目录 AGENTS.md、代码注释和命名所表达的契约不符，或会导致错误结果、状态错乱、数据丢失的逻辑错误。给我一份带文件:行号和触发条件的清单，按严重度排序，不要改任何代码。" + TMP_NOTE;
 
@@ -125,9 +124,7 @@ function quality(task: string, dir: string): string {
 	const final = readFileSync(join(dir, "final.md"), "utf8");
 	if (spec.scope) {
 		const truth: Array<{ id: string; file: string; line: number }> = JSON.parse(readFileSync(T9_TRUTH_FILE, "utf8")).filter((t: { file: string }) => spec.scope!(t.file));
-		const cites = [...final.matchAll(/([\w./-]+\.ts)[`'"）)]*[:：#\sL第]*(\d+(?:\s*[,，、\-–~]\s*\d+)*)/g)].map((m) => ({ file: m[1]!, lines: m[2]!.split(/\D+/).filter(Boolean).map(Number) }));
-		const hits = truth.filter((t) => cites.some((c) => (t.file.endsWith(c.file) || c.file.endsWith(t.file)) && c.lines.some((l) => Math.abs(l - t.line) <= LINE_SLACK)));
-		return hits.length + "/" + truth.length;
+		return citedTruth(truth, final).length + "/" + truth.length;
 	}
 	return spec.verdict ? (spec.verdict(final, join(dir, "repo")) ? "对" : "错") : "人读";
 }

@@ -1,6 +1,6 @@
 // 任务集。prompt 是用户原话；ideal 是评测者对首步决策的判断（t5 是边界题，依据是用户提供的调研结论，未独立核实）。
 // 有 ideal 的任务用 decide.ts 测首步决策；有 timeoutSec 的任务用 run.ts 跑到完成。
-export type Mode = "hand" | "delegate" | "parallel";
+type Mode = "hand" | "delegate" | "parallel";
 export type FixtureKind = "base" | "t9";
 
 export interface Task {
