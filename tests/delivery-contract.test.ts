@@ -103,7 +103,7 @@ test("idle wake via sendUserMessage runs before_agent_start on every request", a
 	};
 	const session = await hostSession(`
 export default function (pi) {
-	pi.on("before_agent_start", async (event) => ({ systemPrompt: event.systemPrompt + "\\n\\nGUIDELINES-MARK" }));
+	pi.on("before_agent_start", (event) => { event.systemPromptOptions.sections.guidelines_mark = "GUIDELINES-MARK"; });
 }
 `, [record(toolCallResponse), record(fauxAssistantMessage("woken"))], waitToolOptions);
 

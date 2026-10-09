@@ -237,8 +237,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		dropIfDiverged(ctx);
 		const instructions = activePreset()?.instructions;
-		if (!instructions) return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
+		if (instructions) event.systemPromptOptions.sections.firecode_preset = instructions;
 	});
 
 	/** 同进程内新开/切换会话或切分支复用本模块实例：上一处的预设不带进来。 */

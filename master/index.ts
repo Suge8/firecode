@@ -130,9 +130,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${assembleMasterPrompt(prompts.master, rosterText(roster))}`,
-		};
+		event.systemPromptOptions.sections.firecode_master = assembleMasterPrompt(prompts.master, rosterText(roster));
 	});
 
 	pi.registerTool({

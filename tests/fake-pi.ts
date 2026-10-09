@@ -50,6 +50,13 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		...overrides,
 	};
 
+	/** 按注册顺序同步调用某事件的全部处理器；全是同步处理器时同步返回，否则返回 Promise。结果取最后一个非 undefined。 */
+	const fire = (name: string, ...args: unknown[]): any => {
+		const results = (handlers.get(name) ?? []).map((handler) => handler(...args));
+		const last = (settled: unknown[]) => settled.findLast((value) => value !== undefined);
+		return results.some((value) => value instanceof Promise) ? Promise.all(results).then(last) : last(results);
+	};
+
 	return {
 		pi,
 		handlers,
@@ -63,11 +70,12 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		userMessages,
 		appended,
 		emitted,
-		/** 按注册顺序同步调用某事件的全部处理器；全是同步处理器时同步返回，否则返回 Promise。结果取最后一个非 undefined。 */
-		fire: (name: string, ...args: unknown[]): any => {
-			const results = (handlers.get(name) ?? []).map((handler) => handler(...args));
-			const last = (settled: unknown[]) => settled.findLast((value) => value !== undefined);
-			return results.some((value) => value instanceof Promise) ? Promise.all(results).then(last) : last(results);
+		fire,
+		/** 按宿主契约跑 before_agent_start：处理器往 systemPromptOptions.sections 登记段，返回宿主渲染出的系统提示。 */
+		systemPrompt: async (initial: string, ctx?: unknown): Promise<string> => {
+			const sections: Record<string, string> = {};
+			await fire("before_agent_start", { systemPrompt: initial, systemPromptOptions: { sections } }, ctx);
+			return [initial, ...Object.values(sections)].join("\n\n");
 		},
 	};
 }

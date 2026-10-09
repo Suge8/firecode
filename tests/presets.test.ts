@@ -71,8 +71,7 @@ async function presetHost() {
 		state.tools = state.recordedTools;
 		await emit("session_start");
 	};
-	const instructions = async () =>
-		((await emit("before_agent_start", { systemPrompt: "BASE" })) as { systemPrompt?: string } | undefined)?.systemPrompt ?? "BASE";
+	const instructions = () => fake.systemPrompt("BASE", ctx);
 	const preset = (name: string) => fake.commands.get("preset").handler(name, ctx);
 	return { state, emit, reopen, instructions, preset, models, DEFAULT_TOOLS };
 }
