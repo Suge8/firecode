@@ -22,6 +22,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩 | |
 | `round-recorder.ts` | 轮记录器：歇下时写轮记录；不属于任何可关的功能，主会话与每个子代理会话都注册 | |
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回）；同样每个会话都注册 | |
+| `today.ts` | 系统提示的日期段，每个会话都注册 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖，`cd site && bun run build`），推送 main 由 Vercel 自动部署，只在 `site/`、`design/` 或 README 变化时构建；品牌素材直接引用根下 `design/`，给 Agent 的 Markdown 与 `llms.txt` 构建时从 README 生成 | |
 | `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言共用） | |
