@@ -1,7 +1,7 @@
 /** 顾问仲裁：连续 N 轮失败后经独立进程内会话返回三选一裁决。 */
 import { msg } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
-import type { AdvisorResult, AdvisorVerdict } from "./state.js";
+import { ADVISOR_VERDICTS, type AdvisorResult, type AdvisorVerdict } from "./state.js";
 import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
 
 interface RunAdvisorOptions {
@@ -24,8 +24,6 @@ export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorRes
 		throw new Error(msg.advisor.unavailable(result.kind === "error" ? result.message : result.kind));
 	return parseAdvisorOutput(result.text);
 }
-
-const VERDICTS = new Set<AdvisorVerdict>(["continue", "stop", "narrow"]);
 
 /** 首行应为裸裁决词；容忍模型前言，在前几个非空行内识别裁决行，
  * 其余行（含前言）并入 advice；完全识别不出才回落 continue。 */
@@ -83,7 +81,5 @@ function normalizeVerdict(line: string): AdvisorVerdict | undefined {
 		.replace(/^`+(.+?)`+$/u, "$1")
 		.trim()
 		.toLowerCase();
-	return VERDICTS.has(normalized as AdvisorVerdict)
-		? (normalized as AdvisorVerdict)
-		: undefined;
+	return ADVISOR_VERDICTS.find((verdict) => verdict === normalized);
 }

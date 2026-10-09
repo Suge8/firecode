@@ -19,8 +19,6 @@ const MESSAGE_MAX_CHARS = 3_000;
 
 export interface Evidence {
 	text: string;
-	/** 被预算裁剪掉的中间消息条数。 */
-	omitted: number;
 }
 
 interface Render {
@@ -35,7 +33,7 @@ export function buildEvidence(
 ): Evidence {
 	const render: Render = { ...(sessionFile ? { sessionFile } : {}), failedCalls: collectFailedCalls(entries) };
 	const blocks = entries.flatMap((entry) => renderEntry(entry, render));
-	if (blocks.length === 0) return { text: "", omitted: 0 };
+	if (blocks.length === 0) return { text: "" };
 	// 锚点必须是首条用户消息（原始需求）：它之前可能排着其他扩展的可显示消息，
 	// 盲取第一块会把真正的需求锚点让进预算竞争、在长会话里被裁掉。
 	const anchorIndex = Math.max(
@@ -62,7 +60,7 @@ export function buildEvidence(
 		recent.length === 0
 			? anchor.text
 			: `${anchor.text}\n\n${omitted > 0 ? `${msg.evidence.gap(omitted)}\n\n` : ""}${recent.join("\n\n")}`;
-	return { text, omitted };
+	return { text };
 }
 
 type EvidenceBlock = { text: string; role?: "user" };

@@ -23,7 +23,6 @@ import { msg } from "./messages.js";
  * awaiting_fix 相不接管——那时是执行模型在改代码，用户应能正常输入与中断。
  */
 function lockEditor(ctx: ExtensionContext, cancel: () => void): () => void {
-	if (ctx.hasUI === false || typeof ctx.ui.setEditorComponent !== "function") return () => {};
 	const previous = ctx.ui.getEditorComponent();
 	ctx.ui.setEditorComponent((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => {
 		const frame = previous?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
@@ -61,7 +60,7 @@ class ReviewEditor extends CustomEditor {
 	}
 }
 
-/** 一场审查的界面接管：终端标题与只读编辑器，各自记着要还原的东西。 */
+/** 一场审查的界面接管：终端标题与只读编辑器，各自记着要还原的东西；只在有 UI 的会话里使用。 */
 export class ReviewUi {
 	private unlockEditor: (() => void) | undefined;
 	private titleShown = false;
@@ -74,15 +73,13 @@ export class ReviewUi {
 	}
 
 	clear(ctx: ExtensionContext): void {
-		if (this.titleShown && canSetTitle(ctx)) ctx.ui.setTitle(restoredTitle(ctx));
+		if (this.titleShown) ctx.ui.setTitle(restoredTitle(ctx));
 		this.titleShown = false;
 		this.releaseEditor();
 	}
 
 	private showTitle(ctx: ExtensionContext, round: number): void {
-		if (!canSetTitle(ctx)) return;
-		const { name, dir } = identity(ctx);
-		const who = name || dir;
+		const who = ctx.sessionManager.getSessionName() || basename(ctx.sessionManager.getCwd());
 		this.titleShown = true;
 		ctx.ui.setTitle(`${msg.ui.reviewing}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
 	}
@@ -93,19 +90,9 @@ export class ReviewUi {
 	}
 }
 
-function canSetTitle(ctx: ExtensionContext): boolean {
-	return ctx.hasUI && typeof ctx.ui.setTitle === "function";
-}
-
-function identity(ctx: ExtensionContext): { name: string | undefined; dir: string } {
-	const manager = ctx.sessionManager as { getSessionName?: () => unknown; getCwd?: () => unknown };
-	const name = manager.getSessionName?.();
-	const cwd = manager.getCwd?.();
-	return { name: typeof name === "string" && name ? name : undefined, dir: typeof cwd === "string" ? basename(cwd) : "" };
-}
-
 /** 与宿主默认终端标题同一写法。 */
 function restoredTitle(ctx: ExtensionContext): string {
-	const { name, dir } = identity(ctx);
+	const name = ctx.sessionManager.getSessionName();
+	const dir = basename(ctx.sessionManager.getCwd());
 	return name ? `π - ${name} - ${dir}` : `π - ${dir}`;
 }

@@ -10,25 +10,27 @@
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
-import type { ModelAtom } from "../config.js";
+import type { ModelAtom, ReviewConfig } from "../config.js";
 import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
 const ISSUE_LINE = new RegExp(`^[-*+]\\s*(?:\\*\\*)?${termPattern((terms) => terms.field.issue)}(?:\\*\\*)?\\s*[:：]\\s*(.+)$`, "iu");
 
-export type Phase =
-	| "idle"
-	| "queued"
-	| "reviewing"
-	| "needs_fix"
-	| "awaiting_fix"
-	| "summarizing"
-	| "settled";
+// 取值表是类型与 checkpoint 校验（checkpoint.ts）、顾问解析（advisor.ts）共用的唯一来源。
+export const PHASES = ["idle", "queued", "reviewing", "needs_fix", "awaiting_fix", "summarizing", "settled"] as const;
+export const REVIEWER_STATUSES = ["running", "passed", "failed", "error"] as const;
+export const ROUND_RESULTS = ["passed", "failed", "error", "stopped", "cancelled", "timed_out"] as const;
+export const ADVISOR_VERDICTS = ["continue", "stop", "narrow"] as const;
+export const STOP_REASONS = ["user", "shutdown", "timeout"] as const;
+export const REPAIR_STATUSES = ["pending", "awaiting_start", "running", "completed"] as const;
+export const SUMMARY_KINDS = ["passed", "max_rounds", "advisor_stop"] as const;
+export const SUMMARY_STATUSES = ["pending", "awaiting_start", "running"] as const;
 
-export type ReviewerStatus = "running" | "passed" | "failed" | "error";
-export type RoundResult = "passed" | "failed" | "error" | "stopped" | "cancelled" | "timed_out";
-export type AdvisorVerdict = "continue" | "stop" | "narrow";
-export type StopReason = "user" | "shutdown" | "timeout";
+export type Phase = (typeof PHASES)[number];
+export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
+export type RoundResult = (typeof ROUND_RESULTS)[number];
+export type AdvisorVerdict = (typeof ADVISOR_VERDICTS)[number];
+export type StopReason = (typeof STOP_REASONS)[number];
 
 /** 单个审查者的输出（output 契约解析结果，纯数据）。 */
 export interface ReviewerResult extends ModelAtom {
@@ -79,7 +81,7 @@ export interface PendingRound {
 	details: string;
 }
 
-export type RepairStatus = "pending" | "awaiting_start" | "running" | "completed";
+export type RepairStatus = (typeof REPAIR_STATUSES)[number];
 
 /** FAIL 后的修复回合。必须持久化，reload 才不会跳过尚未启动的反馈。 */
 export interface RepairState {
@@ -88,8 +90,8 @@ export interface RepairState {
 	status: RepairStatus;
 }
 
-export type SummaryKind = "passed" | "max_rounds" | "advisor_stop";
-export type SummaryStatus = "pending" | "awaiting_start" | "running";
+export type SummaryKind = (typeof SUMMARY_KINDS)[number];
+export type SummaryStatus = (typeof SUMMARY_STATUSES)[number];
 
 /** 质量裁决终态后的总结回合生命周期；持久化后 reload 才能重投未启动的总结。 */
 export interface SummaryState {
@@ -121,14 +123,8 @@ export interface ReviewState {
 	updatedAt: number;
 }
 
-/** reducer 需要的最小配置（限制语义 + 审查者模型清单，纯数据）。 */
-export interface ReviewLimits {
-	maxRounds: number;
-	advisorAfterFailures: number;
-	advisorModel: string;
-	/** 本轮审查者（model/thinking），beginRound 时填入 active。 */
-	reviewers: ModelAtom[];
-}
+/** reducer 需要的配置子集：轮数与顾问阈值、审查者（beginRound 时填入 active）、顾问模型。 */
+export type ReviewLimits = Pick<ReviewConfig, "maxRounds" | "advisorAfterFailures" | "advisor" | "reviewers">;
 
 export type ReviewEvent =
 	| { type: "START"; focus: string }
@@ -432,25 +428,17 @@ function onAdvisorSettled(
 				{
 					kind: "send_card",
 					// findings 已在咨询前的失败卡显示；终止卡只承载顾问裁决，避免重复整张报告。
-					card: { kind: "stop", reason: "advisor", round: pending.round, details: advisor.advice, advisor, advisorModel: limits.advisorModel, elapsedMs: consultMs },
+					card: { kind: "stop", reason: "advisor", round: pending.round, details: advisor.advice, advisor, advisorModel: limits.advisor.model, elapsedMs: consultMs },
 				},
 				{ kind: "advance" },
 			],
 		};
 	}
-	const round = closeRound(state, now, { round: pending.round, result: "failed", details: pending.details, reviewers: pending.reviewers, advisor });
 	return {
-		state: {
-			...state,
-			phase: "awaiting_fix",
-			pending: null,
-			repair: { details: pending.details, advisor, status: "pending" },
-			history: [...state.history, round],
-			updatedAt: now,
-		},
+		state: toRepair(state, pending, advisor, now),
 		// 失败卡已在咨询前发出；咨询完成只补中性的顾问建议卡。
 		effects: [
-			{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel: limits.advisorModel, elapsedMs: consultMs } },
+			{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel: limits.advisor.model, elapsedMs: consultMs } },
 			{ kind: "advance" },
 		],
 	};
@@ -458,22 +446,29 @@ function onAdvisorSettled(
 
 function onAdvisorSkipped(state: ReviewState, now: number): ReduceResult {
 	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
-	const pending = state.pending;
-	const round = closeRound(state, now, { round: pending.round, result: "failed", details: pending.details, reviewers: pending.reviewers });
+	return { state: toRepair(state, state.pending, null, now), effects: [{ kind: "advance" }] };
+}
+
+/** 顾问没有叫停（继续/收窄/被跳过）：把待仲裁轮收口为 failed，带着反馈进入修复。 */
+function toRepair(state: ReviewState, pending: PendingRound, advisor: AdvisorResult | null, now: number): ReviewState {
+	const round = closeRound(state, now, {
+		round: pending.round,
+		result: "failed",
+		details: pending.details,
+		reviewers: pending.reviewers,
+		...(advisor ? { advisor } : {}),
+	});
 	return {
-		state: {
-			...state,
-			phase: "awaiting_fix",
-			pending: null,
-			repair: { details: pending.details, advisor: null, status: "pending" },
-			history: [...state.history, round],
-			updatedAt: now,
-		},
-		effects: [{ kind: "advance" }],
+		...state,
+		phase: "awaiting_fix",
+		pending: null,
+		repair: { details: pending.details, advisor, status: "pending" },
+		history: [...state.history, round],
+		updatedAt: now,
 	};
 }
 
-/** 取消与超时：总结相已有质量裁决，静默收尾；其余相收口在途轮，由 effects 区分用户可见的反馈。 */
+/** 取消与超时：收口在途轮，由 effects 区分用户可见的反馈。 */
 function onInterrupted(
 	state: ReviewState,
 	now: number,
@@ -481,10 +476,25 @@ function onInterrupted(
 	reason: StopReason,
 	effects: ReviewEffect[],
 ): ReduceResult {
-	if (state.phase === "idle" || state.phase === "settled")
-		return { state, effects: [] };
+	return abort(state, now, interruptedRound(state, now, result, reason), effects);
+}
+
+function onInfrastructureError(
+	state: ReviewState,
+	details: string,
+	now: number,
+): ReduceResult {
+	const reviewers = state.active ? resultsOf(state.active.reviewers) : state.pending?.reviewers ?? [];
+	const round = state.round > 0
+		? closeRound(state, now, { round: state.round, result: "error", details, reviewers })
+		: undefined;
+	return abort(state, now, round, [{ kind: "send_card", card: { kind: "error", message: details } }]);
+}
+
+/** 事故终态的统一出口：总结相已有质量裁决，静默收尾；其余相追加在途轮记录后直接 settled。 */
+function abort(state: ReviewState, now: number, round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
+	if (state.phase === "idle" || state.phase === "settled") return { state, effects: [] };
 	if (state.phase === "summarizing") return onSummarySettled(state, now);
-	const round = interruptedRound(state, now, result, reason);
 	return {
 		state: {
 			...state,
@@ -496,31 +506,6 @@ function onInterrupted(
 			updatedAt: now,
 		},
 		effects,
-	};
-}
-
-function onInfrastructureError(
-	state: ReviewState,
-	details: string,
-	now: number,
-): ReduceResult {
-	if (state.phase === "idle" || state.phase === "settled") return { state, effects: [] };
-	if (state.phase === "summarizing") return onSummarySettled(state, now);
-	const reviewers = state.active ? resultsOf(state.active.reviewers) : state.pending?.reviewers ?? [];
-	const round = state.round > 0
-		? closeRound(state, now, { round: state.round, result: "error", details, reviewers })
-		: undefined;
-	return {
-		state: {
-			...state,
-			phase: "settled",
-			active: null,
-			pending: null,
-			repair: null,
-			history: round ? [...state.history, round] : state.history,
-			updatedAt: now,
-		},
-		effects: [{ kind: "send_card", card: { kind: "error", message: details } }],
 	};
 }
 
