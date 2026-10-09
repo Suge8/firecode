@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-09
+
 ### Changed
 
 - `/fire-review` fix requests and the closing summary are now delivered like Master events: each shows as one folded review line in the process view, and the fix round keeps FireCode's system prompt sections instead of dropping them and appending the Master prompt again afterwards. A review that was still in progress when you upgrade is discarded; start it again.
@@ -126,7 +128,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Suge8/firecode/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Suge8/firecode/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Suge8/firecode/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/Suge8/firecode/compare/v1.0.3...v1.0.4
