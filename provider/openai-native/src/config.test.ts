@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadOpenAINativeSettings, togglePriority } from "./config";
+import { loadOpenAINativeSettings, togglePriority } from "./config.js";
 
 const temporaryDirectories: string[] = [];
 
