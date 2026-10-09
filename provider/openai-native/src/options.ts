@@ -1,10 +1,10 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { isTextVerbosity, type OpenAINativeSettings, type TextVerbosity } from "./config";
 import { isRecord } from "../../../jsonc.js";
+import { isTextVerbosity, type OpenAINativeSettings, type TextVerbosity } from "./config.js";
+import { isOpenAIResponsesApi } from "./native-runtime.js";
 
 export const FAST_STATUS_KEY = "pi-openai-native-fast";
 
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "openai-codex-responses"]);
 const PRIORITY_MODEL_IDS = new Set([
 	"gpt-5.5",
 	"gpt-5.6-sol",
@@ -17,7 +17,7 @@ const PRIORITY_MODEL_IDS = new Set([
 ]);
 
 function isOpenAIResponsesModel(model: Model<Api> | undefined): boolean {
-	return model !== undefined && OPENAI_RESPONSES_APIS.has(model.api);
+	return model !== undefined && isOpenAIResponsesApi(model.api);
 }
 
 export function supportsFastMode(model: Model<Api> | undefined): boolean {

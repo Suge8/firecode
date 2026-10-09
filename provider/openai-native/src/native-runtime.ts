@@ -1,4 +1,5 @@
 import type { Api, Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import { isRecord } from "../../../jsonc.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const NATIVE_PROVIDERS = new Set(["openai", "openai-codex"]);
@@ -14,7 +15,7 @@ export type ResponsesRequestPayload = {
 	[key: string]: unknown;
 };
 
-export type NativeCompactionTarget = {
+type NativeCompactionTarget = {
 	provider: string;
 	api: NativeCompactionApi;
 	model: string;
@@ -37,15 +38,16 @@ type TargetFailureReason =
 	| "unsupported-payload"
 	| "payload-model-mismatch";
 
-export type NativeCompactionTargetResolution =
+type NativeCompactionTargetResolution =
 	| { ok: true; target: NativeCompactionTarget }
 	| { ok: false; reason: TargetFailureReason };
 
-export type NativeCompactionRuntimeResolution =
+type NativeCompactionRuntimeResolution =
 	| { ok: true; runtime: NativeCompactionRuntime }
 	| { ok: false; reason: "missing-api-key" | "auth-error" };
 
-function isNativeCompactionApi(value: string): value is NativeCompactionApi {
+/** OpenAI Responses 协议的两个入口：压缩重放与 verbosity / priority 选项共用这一判定。 */
+export function isOpenAIResponsesApi(value: string): value is NativeCompactionApi {
 	return NATIVE_APIS.has(value);
 }
 
@@ -65,11 +67,7 @@ function buildResponsesUrl(baseUrl: string, api: NativeCompactionApi): string {
 }
 
 function isResponsesRequestPayload(payload: unknown): payload is ResponsesRequestPayload {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-		return false;
-	}
-	const candidate = payload as Record<string, unknown>;
-	return typeof candidate.model === "string" && Array.isArray(candidate.input);
+	return isRecord(payload) && typeof payload.model === "string" && Array.isArray(payload.input);
 }
 
 export function resolveNativeCompactionTarget(
@@ -83,7 +81,7 @@ export function resolveNativeCompactionTarget(
 	if (!NATIVE_PROVIDERS.has(currentModel.provider)) {
 		return { ok: false, reason: "unsupported-provider" };
 	}
-	if (!isNativeCompactionApi(currentModel.api)) {
+	if (!isOpenAIResponsesApi(currentModel.api)) {
 		return { ok: false, reason: "unsupported-api" };
 	}
 	const baseUrl = normalizeBaseUrl(currentModel.baseUrl);
@@ -115,18 +113,8 @@ export async function resolveNativeCompactionRuntime(
 	ctx: ExtensionContext,
 	target: NativeCompactionTarget,
 ): Promise<NativeCompactionRuntimeResolution> {
-	const registry = ctx.modelRegistry as unknown as {
-		getApiKeyAndHeaders?: (model: RuntimeModel) => Promise<
-			| { ok: true; apiKey?: string; headers?: ProviderHeaders }
-			| { ok: false; error: string }
-		>;
-	};
-	if (typeof registry.getApiKeyAndHeaders !== "function") {
-		return { ok: false, reason: "missing-api-key" };
-	}
-
 	try {
-		const auth = await registry.getApiKeyAndHeaders(target.currentModel);
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(target.currentModel);
 		if (!auth.ok || !auth.apiKey) {
 			return { ok: false, reason: "missing-api-key" };
 		}

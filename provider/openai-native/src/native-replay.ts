@@ -6,18 +6,18 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
-import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details";
+import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details.js";
 import { isRecord } from "../../../jsonc.js";
-import type { ResponsesRequestPayload } from "./native-runtime";
+import type { ResponsesRequestPayload } from "./native-runtime.js";
 import {
 	hasAnchoredToolAdditions,
 	serializeMessagesToResponsesInput,
 	type ResponsesInputContentItem,
 	type ResponsesInputItem,
 	type ResponsesInputMessageItem,
-} from "./responses-input";
+} from "./responses-input.js";
 
-export type NativeReplayFailureReason =
+type NativeReplayFailureReason =
 	| "compaction-boundary-not-found"
 	| "first-kept-entry-not-found"
 	| "unsupported-instructions"
@@ -26,7 +26,7 @@ export type NativeReplayFailureReason =
 	| "unsupported-tool-additions"
 	| "expected-pi-replay-mismatch";
 
-export type NativeReplayResult =
+type NativeReplayResult =
 	| { ok: true; payload: ResponsesRequestPayload }
 	| { ok: false; reason: NativeReplayFailureReason };
 
