@@ -1,5 +1,6 @@
 /** 宽度、文本与数值格式化：状态栏与工具行共用。 */
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { isRecord } from "./jsonc.js";
 
 const ELLIPSIS = "…";
 const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g;
@@ -9,12 +10,7 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part): part is { type: "text"; text: string } =>
-			typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text"
-			&& typeof (part as { text?: unknown }).text === "string")
-		.map((part) => part.text)
-		.join("\n");
+	return content.flatMap((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [])).join("\n");
 }
 
 /** 压平换行与连续空白，用于把任意文本塞进单行 UI。 */

@@ -44,7 +44,7 @@ export interface MasterRole extends ModelAtom {
 	fallback: ModelAtom[];
 }
 
-export interface MasterConfig {
+interface MasterConfig {
 	roles: MasterRole[];
 	workerExcludeExtensions: string[];
 	autoActivate: boolean;
@@ -54,7 +54,7 @@ export interface MasterConfig {
 export type WatcherContext = "minimal" | "full";
 
 /** Watcher 观察员配置：模型原子必须显式配置，绝不回退默认模型。 */
-export interface WatcherConfig extends ModelAtom {
+interface WatcherConfig extends ModelAtom {
 	enabled: boolean;
 	context: WatcherContext;
 }
@@ -86,24 +86,19 @@ const DEFAULT_KEYS = {
 	fast: "ctrl+shift+s",
 } as const;
 
-export type FireCodeKeys = {
+type FireCodeKeys = {
 	fast: string;
 };
-
-export interface FireCodeConfig {
-	features: Partial<Record<Feature, boolean>>;
-	keys: FireCodeKeys;
-	presets: Record<string, Preset>;
-	review: ReviewConfig;
-	master: MasterConfig;
-	watcher: WatcherConfig;
-}
 
 /** 一节能否启动的唯一判定：要么交出可用配置，要么给出拒绝启动的原因。 */
 export type Section<T> = { config: T } | { error: string };
 
-export type LoadedConfig = {
-	config: FireCodeConfig;
+type LoadedConfig = {
+	config: {
+		features: Partial<Record<Feature, boolean>>;
+		keys: FireCodeKeys;
+		presets: Record<string, Preset>;
+	};
 	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
 	problems: string[];
 	review: Section<ReviewConfig>;
@@ -225,7 +220,7 @@ export function loadConfig(): LoadedConfig {
 		refused: (reasons: string[]) => string,
 		parse: (record: Record<string, unknown>, problems: string[]) => T,
 		incomplete: (config: T) => string | undefined,
-	): { config: T; verdict: Section<T> } => {
+	): Section<T> => {
 		const own: string[] = [];
 		if (raw[name] !== undefined && !isRecord(raw[name])) own.push(msg.config.mustBeObject(name));
 		const config = parse(asRecord(raw[name]), own);
@@ -233,7 +228,7 @@ export function loadConfig(): LoadedConfig {
 		const reasons = [...blocking, ...own];
 		const missing = reasons.length ? undefined : incomplete(config);
 		if (missing) reasons.push(missing);
-		return { config, verdict: reasons.length ? { error: refused(reasons) } : { config } };
+		return reasons.length ? { error: refused(reasons) } : { config };
 	};
 	const review = section("review", msg.config.refusedReview, parseReviewConfig, (config) =>
 		config.advisor.model && config.reviewers.length ? undefined : msg.config.reviewIncomplete);
@@ -242,11 +237,11 @@ export function loadConfig(): LoadedConfig {
 	const watcher = section("watcher", msg.config.refusedWatcher, parseWatcherConfig, () => undefined);
 
 	cached = {
-		config: { features, keys, presets, review: review.config, master: master.config, watcher: watcher.config },
+		config: { features, keys, presets },
 		problems,
-		review: review.verdict,
-		master: master.verdict,
-		watcher: watcher.verdict,
+		review,
+		master,
+		watcher,
 		featuresBroken,
 	};
 	return cached;

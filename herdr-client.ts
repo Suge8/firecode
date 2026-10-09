@@ -6,7 +6,7 @@ import net from "node:net";
 
 const REQUEST_TIMEOUT_MS = 500;
 
-export interface HerdrPaneEnv {
+interface HerdrPaneEnv {
 	paneId: string;
 	socketPath: string;
 }

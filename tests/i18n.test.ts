@@ -1,23 +1,22 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
 
-test("系统 locale：zh 开头为中文，其余为英文", async () => {
-	const { inferLanguage } = await loadFirecodeModule("i18n.ts") as any;
-	for (const locale of ["zh", "zh-CN", "zh_TW.UTF-8", "ZH_cn"]) expect(inferLanguage(locale)).toBe("zh");
-	for (const locale of ["en_US.UTF-8", "ja-JP", "C", "", undefined]) expect(inferLanguage(locale)).toBe("en");
-});
-
-test("顶层 language 压过系统 locale；省略时跟随系统 locale", async () => {
-	const explicit = await loadFirecodeModule("i18n.ts", { configJsonc: JSON.stringify({ language: "en" }) }) as any;
-	expect(explicit.LANGUAGE).toBe("en");
+test("顶层 language 压过系统 locale；省略时跟随系统 locale（zh 开头为中文，其余英文）", async () => {
+	const today = async (configJsonc: string) => ((await loadFirecodeModule("messages.ts", { configJsonc })) as any).msg.today("D");
+	expect(await today(JSON.stringify({ language: "en" }))).toBe("Today is D.");
+	expect(await today(JSON.stringify({ language: "zh" }))).toBe("今天是 D。");
 
 	const saved = process.env.LC_ALL;
-	process.env.LC_ALL = "en_US.UTF-8";
 	try {
-		const inferred = await loadFirecodeModule("i18n.ts", { configJsonc: JSON.stringify({ features: {} }) }) as any;
-		expect(inferred.LANGUAGE).toBe("en");
+		for (const [locale, expected] of [["en_US.UTF-8", "Today is D."], ["ja-JP", "Today is D."], ["zh_TW.UTF-8", "今天是 D。"]]) {
+			process.env.LC_ALL = locale;
+			expect(await today(JSON.stringify({ features: {}, locale }))).toBe(expected);
+		}
 	} finally {
 		process.env.LC_ALL = saved;
 	}
@@ -89,7 +88,7 @@ test("修复反馈与顾问卡在 en 下是英文", async () => {
 	expect(advisor.details.lines[0]).toBe("**Model · adv**");
 });
 
-test("session：en 下 /quota 与 /tokens 输出英文，herdr 标签与预设提示同样", async () => {
+test("session：en 下 /quota 与 /tokens 输出英文", async () => {
 	const configJsonc = JSON.stringify({ language: "en" });
 	const { fakePi } = await import("./fake-pi.ts");
 
@@ -114,11 +113,18 @@ test("session：en 下 /quota 与 /tokens 输出英文，herdr 标签与预设�
 	registerStats(stats.pi);
 	const printed: string[] = [];
 	const log = console.log;
+	// /tokens 扫描 Agent 目录下的会话：指到空目录，不读开发者真实的历史会话（那要十几秒）。
+	const agentDir = mkdtempSync(join(tmpdir(), "firecode-i18n-"));
+	const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	console.log = (line: string) => void printed.push(line);
 	try {
 		await stats.commands.get("tokens").handler("7", { mode: "print", hasUI: false });
 	} finally {
 		console.log = log;
+		if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 	expect(printed.join("\n")).toContain("# Token usage");
 	expect(printed.join("\n")).not.toMatch(CJK);

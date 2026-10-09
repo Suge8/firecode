@@ -17,8 +17,7 @@
     "pi-extension"
   ],
   "files": [
-    "dist",
-    "config.example.jsonc"
+    "dist"
   ],
   "scripts": {
     "test": "bun test",

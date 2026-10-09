@@ -14,8 +14,12 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "@earendil-works/pi-ai";
-/** Pi session messages to OpenAI Responses input. Pi does not export this converter. */
-export type AssistantPhase = "commentary" | "final_answer";
+/**
+ * Pi 会话消息 → OpenAI Responses input。宿主的转换器（pi-ai 的 api/openai-responses-shared）不在扩展运行时的模块白名单里，只能自带一份；
+ * tests/openai-native.test.ts 以宿主自己的转换结果为准逐项比对。与宿主不一致的写法（无签名的助手文本 id、外来工具调用 id 的归一化）
+ * 会让重放比对失败而放弃重放，请求照宿主原样发出。
+ */
+type AssistantPhase = "commentary" | "final_answer";
 
 type ResponsesTextInputItem = {
 	type: "input_text";
@@ -35,7 +39,7 @@ export type ResponsesInputMessageItem = {
 	content: ResponsesInputContentItem[] | string;
 };
 
-export type ResponsesAssistantOutputItem = {
+type ResponsesAssistantOutputItem = {
 	type: "message";
 	role: "assistant";
 	content: Array<{
@@ -48,7 +52,7 @@ export type ResponsesAssistantOutputItem = {
 	phase?: AssistantPhase;
 };
 
-export type ResponsesFunctionCallItem = {
+type ResponsesFunctionCallItem = {
 	type: "function_call";
 	id?: string;
 	call_id: string;
@@ -56,13 +60,13 @@ export type ResponsesFunctionCallItem = {
 	arguments: string;
 };
 
-export type ResponsesFunctionCallOutputItem = {
+type ResponsesFunctionCallOutputItem = {
 	type: "function_call_output";
 	call_id: string;
 	output: ResponsesInputContentItem[] | string;
 };
 
-export type ResponsesReasoningItem = Record<string, unknown>;
+type ResponsesReasoningItem = Record<string, unknown>;
 
 export type ResponsesInputItem =
 	| ResponsesInputMessageItem
@@ -77,9 +81,7 @@ export type NativeCompactionRequest = {
 	instructions: string;
 };
 
-export type SerializeResponsesMessagesOptions = {
-	instructions?: string;
-	includeInstructionsInInput?: boolean;
+type SerializeResponsesMessagesOptions = {
 	/** messages[0] 是系统提示本身（已由 instructions 或请求前导携带），不再输出；否则所有系统消息都是对话中途的更新。 */
 	leadingSystemMessage?: boolean;
 };
@@ -150,13 +152,6 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 	const transformedMessages = transformMessagesForResponses(convertToLlm(messages), model);
 	const compat = compatOf(model);
 	const input: ResponsesInputItem[] = [];
-
-	if (options.includeInstructionsInInput && options.instructions) {
-		input.push({
-			role: instructionRole(model),
-			content: sanitizeSurrogates(options.instructions),
-		});
-	}
 
 	let messageIndex = 0;
 	for (const [sourceIndex, message] of transformedMessages.entries()) {

@@ -4,14 +4,14 @@ import { isRecord } from "../../../jsonc.js";
 export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact";
 export const NATIVE_COMPACTION_SUMMARY = "[OpenAI native compaction checkpoint]";
 
-export type NativeCompactionIdentity = {
+type NativeCompactionIdentity = {
 	provider: string;
 	api: string;
 	model: string;
 	baseUrl: string;
 };
 
-export type NativeCompactionDetails = NativeCompactionIdentity & {
+type NativeCompactionDetails = NativeCompactionIdentity & {
 	strategy: typeof NATIVE_COMPACTION_STRATEGY;
 	compactedWindow: unknown[];
 	createdAt: string;

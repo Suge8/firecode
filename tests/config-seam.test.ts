@@ -40,7 +40,7 @@ test("runtime config enables only the switched-on feature: stats registers its c
 /** 以给定的运行配置原文跑一遍 loadConfig（每份配置各自一个模块副本）。 */
 async function loadFrom(configJsonc: string) {
 	const { loadConfig } = await loadFirecodeModule("config.ts", { configJsonc });
-	return (loadConfig as () => { config: any; problems: string[] })();
+	return (loadConfig as () => any)();
 }
 
 test("Master 角色对象严格解析原子与 fallback", async () => {
@@ -53,7 +53,7 @@ test("Master 角色对象严格解析原子与 fallback", async () => {
 		},
 	});
 	expect(valid.problems).toEqual([]);
-	expect(valid.config.master.roles).toEqual([
+	expect(valid.master.config.roles).toEqual([
 		{
 			role: "工程师", model: "test/shared", thinking: "medium", use: "实现",
 			fallback: [{ model: "test/backup", thinking: "high" }],
@@ -165,13 +165,13 @@ test("preset 只认模型原子，旧的三字段写法被拒", async () => {
 test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	const configJsonc = await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8");
 	const { loadConfig } = await loadFirecodeModule("config.ts", { configJsonc });
-	const loaded = (loadConfig as () => { config: any; problems: string[] })();
+	const loaded = (loadConfig as () => any)();
 
 	expect(loaded.problems).toEqual([]);
 	for (const feature of ["claudeSub", "openaiNative", "review", "master", "watcher"])
 		expect(loaded.config.features[feature]).toBeTrue();
-	expect(loaded.config.master.autoActivate).toBeTrue();
-	expect(loaded.config.watcher.enabled).toBeFalse();
+	expect(loaded.master.config.autoActivate).toBeTrue();
+	expect(loaded.watcher.config.enabled).toBeFalse();
 });
 
 test("功能关闭时它那一节的配置错误不全局警告；开启时照常警告", async () => {
@@ -264,15 +264,15 @@ test("子会话不写盘", async () => {
 	expect(await Bun.file(CONFIG_PATH).exists()).toBe(false);
 });
 
+/** 把配置目录换成同名文件，播种写入必然失败。 */
+const blockConfigDir = async (configPath: string) => {
+	const configDir = dirname(configPath);
+	await rm(configDir, { recursive: true });
+	await writeFile(configDir, "挡路的文件");
+};
+
 test("写入失败明确报错，不静默", async () => {
-	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({
-		configJsonc: null,
-		beforeRegister: async (configPath) => {
-			const configDir = dirname(configPath);
-			await rm(configDir, { recursive: true });
-			await writeFile(configDir, "挡路的文件");
-		},
-	});
+	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null, beforeRegister: blockConfigDir });
 
 	await sessionStart();
 
@@ -284,15 +284,7 @@ test("写入失败明确报错，不静默", async () => {
 test("无界面的主会话写入失败也明确报错（stderr），不静默", async () => {
 	const stderr = spyOn(console, "error").mockImplementation(() => {});
 	try {
-		const { CONFIG_PATH, sessionStart } = await seedHarness({
-			configJsonc: null,
-			hasUI: false,
-			beforeRegister: async (configPath) => {
-				const configDir = dirname(configPath);
-				await rm(configDir, { recursive: true });
-				await writeFile(configDir, "挡路的文件");
-			},
-		});
+		const { CONFIG_PATH, sessionStart } = await seedHarness({ configJsonc: null, hasUI: false, beforeRegister: blockConfigDir });
 
 		await sessionStart();
 

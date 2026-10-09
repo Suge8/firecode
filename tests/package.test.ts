@@ -25,7 +25,7 @@ test("npm pack ships only the build output and user-facing files", async () => {
 	const manifest = await Bun.file(join(FIRECODE_DIR, "package.json")).json();
 	const packed = packedPaths();
 
-	expect(packed.filter((path) => !path.startsWith("dist/") && !/^README(\.[\w-]+)?\.md$/.test(path) && !["LICENSE", "config.example.jsonc", "package.json"].includes(path))).toEqual([]);
+	expect(packed.filter((path) => !path.startsWith("dist/") && !/^README(\.[\w-]+)?\.md$/.test(path) && !["LICENSE", "package.json"].includes(path))).toEqual([]);
 	expect(packed.filter((path) => path.endsWith(".ts"))).toEqual([]);
 	const entries = (manifest.pi.extensions as string[]).map((entry) => entry.replace(/^\.\//, ""));
 	expect(entries.filter((entry) => !packed.includes(entry))).toEqual([]);

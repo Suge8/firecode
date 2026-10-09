@@ -1,22 +1,22 @@
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
-import { executeNativeCompaction, type NativeCompactionResult } from "./compact-client";
+import { executeNativeCompaction, type NativeCompactionResult } from "./compact-client.js";
 import {
 	cloneStructuredValue,
 	createNativeCompactionDetails,
 	createNativeCompactionResult,
 	resolveLatestNativeCompaction,
-} from "./native-details";
-import { rewriteNativeResponsesPayload, serializeLiveTailToResponsesInput } from "./native-replay";
+} from "./native-details.js";
+import { rewriteNativeResponsesPayload, serializeLiveTailToResponsesInput } from "./native-replay.js";
 import {
 	resolveNativeCompactionRuntime,
 	resolveNativeCompactionTarget,
 	type ResponsesRequestPayload,
-} from "./native-runtime";
+} from "./native-runtime.js";
 import {
 	serializeMessagesToCompactRequest,
 	type NativeCompactionRequest,
-} from "./responses-input";
+} from "./responses-input.js";
 
 type NativeCompactionHookResult = {
 	cancel?: boolean;

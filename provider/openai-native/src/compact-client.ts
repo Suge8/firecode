@@ -1,6 +1,6 @@
-import type { NativeCompactionRuntime } from "./native-runtime";
+import type { NativeCompactionRuntime } from "./native-runtime.js";
 import { isRecord } from "../../../jsonc.js";
-import type { NativeCompactionRequest } from "./responses-input";
+import type { NativeCompactionRequest } from "./responses-input.js";
 
 const JSON_CONTENT_TYPE = "application/json";
 const COMPACTION_TRIGGER = { type: "compaction_trigger" } as const;
@@ -16,7 +16,7 @@ type ParsedFailure = {
 	detail?: string;
 };
 
-export type NativeCompactionFailureReason =
+type NativeCompactionFailureReason =
 	| "aborted"
 	| "network-error"
 	| "non-2xx"

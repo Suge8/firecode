@@ -1,13 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	loadOpenAINativeSettings,
-	togglePriority,
-	type OpenAINativeSettings,
-} from "./config";
+import { isRecord } from "../../../jsonc.js";
 import { msg } from "../../messages.js";
-import { compactWithOpenAINative } from "./native-compaction";
-import { FAST_STATUS_KEY, fastModeEnabled, supportsFastMode } from "./options";
-import { rewriteOpenAIProviderRequest } from "./request-pipeline";
+import { loadOpenAINativeSettings, togglePriority, type OpenAINativeSettings } from "./config.js";
+import { compactWithOpenAINative, replayOpenAINative } from "./native-compaction.js";
+import { applyOpenAIOptions, FAST_STATUS_KEY, fastModeEnabled, supportsFastMode } from "./options.js";
 
 const VERBOSITY_FLAG = "verbosity";
 
@@ -19,10 +15,6 @@ function updateFastStatus(ctx: ExtensionContext, settings: OpenAINativeSettings)
 		FAST_STATUS_KEY,
 		fastModeEnabled(ctx.model, settings) ? ctx.ui.theme.fg("warning", "⚡ fast") : undefined,
 	);
-}
-
-function notifyUnsupportedFastMode(ctx: ExtensionContext): void {
-	ctx.ui.notify(msg.fastUnsupported, "warning");
 }
 
 export default function openAINativeExtension(
@@ -38,7 +30,7 @@ export default function openAINativeExtension(
 			return;
 		}
 		if (!supportsFastMode(ctx.model)) {
-			notifyUnsupportedFastMode(ctx);
+			ctx.ui.notify(msg.fastUnsupported, "warning");
 			return;
 		}
 
@@ -82,9 +74,14 @@ export default function openAINativeExtension(
 		}
 		return compactWithOpenAINative(event, ctx);
 	});
+	// 先重放原生压缩窗口，再叠加 verbosity / priority：选项只改请求字段，不碰 input。
 	pi.on("before_provider_request", (event, ctx) => {
-		const nextPayload = rewriteOpenAIProviderRequest(event.payload, ctx, settings, pi.getFlag(VERBOSITY_FLAG));
-		return nextPayload === event.payload ? undefined : nextPayload;
+		const replayed = settings.nativeCompaction ? replayOpenAINative(event.payload, ctx) : undefined;
+		const payload = replayed ?? event.payload;
+		const next = isRecord(payload)
+			? applyOpenAIOptions(payload, ctx.model, settings, pi.getFlag(VERBOSITY_FLAG))
+			: payload;
+		return next === event.payload ? undefined : next;
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.hasUI) {

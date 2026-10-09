@@ -34,7 +34,7 @@ export const IDLE: BusyView = { agentRunning: false, inFlight: 0, review: false,
  * 本段最后一个指挥官回合的终态：宿主的回合中断信号（ctx.signal.aborted）为真即“已中断”——工具执行中被 Esc 时
  * 宿主给的终态是 error（“The operation was aborted.”），不能只看 stopReason；其余按最后一条助手消息的 stopReason。
  */
-export type Outcome = "complete" | "aborted" | "error";
+type Outcome = "complete" | "aborted" | "error";
 export interface SettledRound {
 	elapsed: number;
 	outcome: Outcome;
@@ -69,7 +69,7 @@ function settledRound(elapsed: number, outcome: Outcome, { startedAt, requestMs,
 	return { elapsed, outcome, ...(valid ? { tps: (outputTokens * 1_000) / requestMs } : {}) };
 }
 
-export interface BusyHandlers {
+interface BusyHandlers {
 	/** 任一来源变化后调用（含歇下那一次，先于 onSettled）。 */
 	onChange?(view: BusyView, ctx: ExtensionContext | undefined): void;
 	/** 会话歇下边沿：busy 由真变假时触发一次，带本段进行中的总时长与终态。两个来源——agent_settled 时在飞数为 0，或在飞数归零时指挥官已空闲。 */

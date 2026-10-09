@@ -62,7 +62,7 @@ export function renderActivityRow(
 	width: number,
 	nameWidth: number,
 	theme: Theme,
-	showRole = roleFits(row, width, nameWidth),
+	showRole: boolean,
 ): string {
 	const color = (base: ThemeColor) => (row.settled ? "dim" : base);
 	const head = `  ${row.mark} ${theme.fg(color("text"), pad(clip(row.name, nameWidth), nameWidth))}`;

@@ -2,7 +2,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CONFIG_PATH } from "../../config-file.js";
 import { loadConfig } from "../../config.js";
-import openAINativeExtension from "./src/extension.ts";
+import openAINativeExtension from "./src/extension.js";
 
 export function registerOpenAINative(pi: ExtensionAPI): void {
 	openAINativeExtension(pi, CONFIG_PATH, loadConfig().config.keys.fast);
