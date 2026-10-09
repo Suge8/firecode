@@ -31,7 +31,9 @@ export function roundMarker(round: Round): Component {
 
 /** 本模块写的 entry 一定带 data；类型上的 data? 只是宿主给所有 CustomEntry 的通用形状。 */
 export const renderRound: EntryRenderer<SettledRound> = (entry: CustomEntry<SettledRound>) =>
-	roundMarker({ ...(entry.data as SettledRound), at: Date.parse(entry.timestamp) });
+	roundMarker(roundAt(entry.data as SettledRound, entry.timestamp));
+
+const roundAt = (data: SettledRound, timestamp: string): Round => ({ ...data, at: Date.parse(timestamp) });
 
 /**
  * 一轮可能有多条记录（中断后又跑了一段，如 /fire-review 或命令触发的再次进行）。合成规则不丢信息：
@@ -69,7 +71,7 @@ const isHumanEntry = (entry: BranchEntry) => entry.type === "message" && "messag
 export function roundFromEntry(entry: unknown): Round | undefined {
 	const record = entry as { type?: unknown; customType?: unknown; data?: unknown; timestamp?: unknown };
 	if (record?.type !== "custom" || record.customType !== ROUND_ENTRY || typeof record.timestamp !== "string") return undefined;
-	return { ...(record.data as SettledRound), at: Date.parse(record.timestamp) };
+	return roundAt(record.data as SettledRound, record.timestamp);
 }
 
 /**
