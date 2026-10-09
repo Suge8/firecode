@@ -165,7 +165,7 @@ describe("checkpoint schema", () => {
 	test("rejects version mismatch, unknown keys, and invalid phases (discard, no field-level compat)", async () => {
 		await loadAll();
 		const valid = {
-			version: 5,
+			version: 6,
 			seq: 1,
 			runId: "g",
 			phase: "reviewing",
@@ -186,7 +186,7 @@ describe("checkpoint schema", () => {
 			updatedAt: 1,
 		};
 		expect(isValidCheckpoint(valid)).toBe(true);
-		expect(isValidCheckpoint({ ...valid, version: 4 })).toBe(false);
+		expect(isValidCheckpoint({ ...valid, version: 5 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, extra: 1 })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, phase: "bogus" })).toBe(false);
 		expect(isValidCheckpoint({ ...valid, summary: { kind: "passed", status: "done" } })).toBe(false);

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PI_AI_COMPAT_URL, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
+import { FIRECODE_DIR, PI_AI_COMPAT_URL, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
 const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
@@ -140,6 +140,39 @@ export default function (pi) {
 		expect((globalThis as any).__wakeOrder).toEqual(["returned-void", "agent_start", "user:woken from extension"]);
 	} finally {
 		delete (globalThis as any).__wakeOrder;
+		session.dispose();
+	}
+}, 10_000);
+
+test("review 的修复反馈与总结提示经 deliver 前门唤起：回合的每次请求都经过 before_agent_start，扩展注入的段不被撤下", async () => {
+	const requests: { prompt: string; first: string }[] = [];
+	const record = (reply: unknown) => (context: any) => {
+		const user = context.messages.find((message: any) => message.role === "user");
+		requests.push({
+			prompt: getCurrentSystemPrompt(context.messages),
+			first: typeof user.content === "string" ? user.content : user.content.map((part: any) => part.text ?? "").join(""),
+		});
+		return reply;
+	};
+	const session = await hostSession(`
+import { deliver, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+export default function (pi) {
+	pi.on("before_agent_start", (event) => { event.systemPromptOptions.sections.guidelines_mark = "GUIDELINES-MARK"; });
+	pi.on("session_start", (_event, ctx) => {
+		globalThis.__deliverFix = () => deliver(pi, ctx, { customType: "firecode-review-card", content: wrapEnvelope("firecode_review", "fix the findings") });
+	});
+}
+`, [record(toolCallResponse), record(fauxAssistantMessage("fixed"))], waitToolOptions);
+	try {
+		await session.bindExtensions({ mode: "print" });
+		// 修复回合第一次工具调用之后的请求，系统提示里仍有扩展注入的段（followUp+triggerTurn 侧门会在这里把它撤下，#33）。
+		await (globalThis as any).__deliverFix();
+		await session.waitForIdle();
+		expect(requests).toHaveLength(2);
+		expect(requests.every(({ prompt }) => prompt.includes("GUIDELINES-MARK"))).toBe(true);
+		expect(requests[0].first).toBe("<firecode_review>\nfix the findings\n</firecode_review>");
+	} finally {
+		delete (globalThis as any).__deliverFix;
 		session.dispose();
 	}
 }, 10_000);

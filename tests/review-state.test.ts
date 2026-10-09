@@ -28,7 +28,7 @@ function reviewer(index: number, status: ReviewerResult["status"], details: stri
 // 每一步产出的状态都必须能写进 checkpoint：校验键表与领域类型漂移时，终态写不进去，重启后会恢复出幽灵审查。
 const step = (state: ReviewState, event: ReviewEvent, limits = LIMITS, now = 10_000) => {
 	const result = reduce(state, event, limits, now);
-	expect(`${event.type}:${isValidCheckpoint({ version: 5, seq: 1, ...result.state })}`).toBe(`${event.type}:true`);
+	expect(`${event.type}:${isValidCheckpoint({ version: 6, seq: 1, ...result.state })}`).toBe(`${event.type}:true`);
 	return result;
 };
 
@@ -48,7 +48,6 @@ function failRound(state: ReviewState, limits = LIMITS): ReviewState {
 }
 
 function completeRepair(state: ReviewState, limits = LIMITS, now = 20_000): ReviewState {
-	state = step(state, { type: "FEEDBACK_DISPATCHED" }, limits, now - 3).state;
 	state = step(state, { type: "REPAIR_STARTED" }, limits, now - 2).state;
 	return step(state, { type: "REPAIR_COMPLETED" }, limits, now - 1).state;
 }
@@ -109,10 +108,8 @@ describe("fire-review reducer", () => {
 			{ kind: "send_card", card: { kind: "pass", summary: "• m0：s\n• m1：s" } },
 			{ kind: "advance" },
 		]);
-		// 总结生命周期：投递 → 回合启动 → 回合结束 → settled，中途状态均可持久化。
-		let current = step(result.state, { type: "SUMMARY_DISPATCHED" }, LIMITS, 4000).state;
-		expect(current.summary?.status).toBe("awaiting_start");
-		current = step(current, { type: "SUMMARY_STARTED" }, LIMITS, 5000).state;
+		// 总结生命周期：投递确认 → 回合结束 → settled，中途状态均可持久化。
+		const current = step(result.state, { type: "SUMMARY_STARTED" }, LIMITS, 5000).state;
 		expect(current.summary?.status).toBe("running");
 		const settledResult = step(current, { type: "SUMMARY_SETTLED" }, LIMITS, 6000);
 		expect(settledResult.state.phase).toBe("settled");
@@ -125,7 +122,6 @@ describe("fire-review reducer", () => {
 		let state = begin();
 		state = settle(state, 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state;
 		state = settle(state, 1, "passed", "PASS\n证据：文件=b.ts；命令=ls").state;
-		state = step(state, { type: "SUMMARY_DISPATCHED" }, LIMITS, 4000).state;
 		state = step(state, { type: "SUMMARY_STARTED" }, LIMITS, 5000).state;
 		// reload 中断未完成的总结回合 → 重置 pending 重投。
 		const recovered = step(state, { type: "RECOVER" }, LIMITS, 6000).state;

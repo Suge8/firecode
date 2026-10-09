@@ -11,13 +11,15 @@
  * - 渲染器在此顶层无条件注册（不懒加载），live 与 reload 外观一致。
  */
 import { randomUUID } from "node:crypto";
-import { wrapEnvelope } from "../deliver.js";
+import { deliver, parseEnvelopes, wrapEnvelope } from "../deliver.js";
 import type {
 	AgentEndEvent,
 	ExtensionAPI,
 	ExtensionContext,
+	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type ReviewConfig } from "../config.js";
+import { textOf } from "../format.js";
 import { readPrompt } from "../i18n.js";
 import { InProcessSessionPool } from "../spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
@@ -48,11 +50,6 @@ import {
 	reduce,
 } from "./state.js";
 
-const FEEDBACK_TYPE = "firecode-review-feedback";
-/** 总结回合提示：与修复反馈同通道（进上下文不渲染），不参与证据自指。 */
-const SUMMARY_REQUEST_TYPE = "firecode-review-summary";
-/** sendMessage 没有 Promise/错误回调；用 agent_start 作为反馈已启动的回执。 */
-const FOLLOW_UP_START_TIMEOUT_MS = 2_000;
 const PROMPTS = new URL("./prompts/", import.meta.url);
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
 function overallTimeoutMs(config: ReviewConfig) {
@@ -88,8 +85,8 @@ interface Controller {
 	pendingCards: CardData[];
 	ui: ReviewUi;
 	action?: Action;
-	/** 修复反馈/总结提示已 sendMessage，等待 agent_start 回执。 */
-	startTimer?: ReturnType<typeof setTimeout>;
+	/** 修复反馈/总结提示正在投递（等 deliver 确认送达）：期间的推进请求不再重复投递。 */
+	delivering?: boolean;
 	/** 占用频道的 true/false 必须由同一 controller 配对，订阅方按最近一条取值。 */
 	occupancyHeld?: boolean;
 }
@@ -264,17 +261,6 @@ function handleSessionStart(rt: ReviewRuntime, ctx: ExtensionContext): Promise<v
 async function handleAgentStart(rt: ReviewRuntime): Promise<void> {
 	const active = rt.controller;
 	if (!active) return;
-	const { state } = active;
-	if (state.phase === "awaiting_fix" && state.repair?.status === "awaiting_start") {
-		clearStartTimer(active);
-		await dispatch(rt, { type: "REPAIR_STARTED" });
-		return;
-	}
-	if (state.phase === "summarizing" && state.summary?.status === "awaiting_start") {
-		clearStartTimer(active);
-		await dispatch(rt, { type: "SUMMARY_STARTED" });
-		return;
-	}
 	// 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：
 	// 宿主会 await 本 handler，因此先 abort 并等所有审查会话真正退出，再允许模型 turn_start。
 	if (!active.action) return;
@@ -329,17 +315,11 @@ async function advanceWhenIdle(rt: ReviewRuntime, ctx: ExtensionContext, runId: 
 			return startAction(rt, active, `advisor:${state.round}`, "advisor", (signal) => consultAdvisor(rt, active, signal));
 		case "summarizing":
 			if (state.summary?.status !== "pending") return;
-			await dispatch(rt, { type: "SUMMARY_DISPATCHED" });
-			if (rt.controller === active && active.state.phase === "summarizing" && active.state.summary?.status === "awaiting_start")
-				deliverSummary(rt, active, active.state);
-			return;
+			return deliverSummary(rt, active, state);
 		case "awaiting_fix":
 			if (state.repair?.status === "completed") return dispatch(rt, { type: "ADVANCE" });
 			if (state.repair?.status !== "pending") return;
-			await dispatch(rt, { type: "FEEDBACK_DISPATCHED" });
-			if (rt.controller === active && active.state.repair?.status === "awaiting_start")
-				deliverFeedback(rt, active, active.state.repair);
-			return;
+			return deliverPrompt(rt, active, buildFixFeedback(state.repair), { type: "REPAIR_STARTED" });
 	}
 }
 
@@ -383,7 +363,6 @@ async function handleShutdown(
 	// 无论何种终止都先取消并等待当前审查会话；旧动作不得泄漏到新运行时。
 	stopWork(active);
 	clearWatchdog(active);
-	clearStartTimer(active);
 	await active.action?.done;
 	active.ctx = ctx;
 	if (reason === "quit") await dispatch(rt, { type: "CANCEL", reason: "shutdown" });
@@ -415,11 +394,6 @@ function armWatchdog(rt: ReviewRuntime) {
 
 function clearWatchdog(active: Controller) {
 	if (active.watchdog) clearTimeout(active.watchdog);
-}
-
-function clearStartTimer(active: Controller): void {
-	if (active.startTimer) clearTimeout(active.startTimer);
-	active.startTimer = undefined;
 }
 
 // ---- 持久化 ----
@@ -467,7 +441,6 @@ function haltOnPersistFailure(rt: ReviewRuntime, active: Controller, state: Revi
 	// 内存态也必须释放：只停会话但留着活动态 controller，会把幽灵审查从磁盘搬到内存——
 	// 后续命令永远被「已有审查在进行中」挡住，且无处取消。
 	clearWatchdog(active);
-	clearStartTimer(active);
 	rt.controller = undefined;
 	if (!sealed) notify(active, msg.notify.cannotSeal, "warning");
 }
@@ -636,63 +609,35 @@ function sessionErrorText(kind: "reviewer" | "advisor", error: unknown) {
 }
 
 /**
- * 修复反馈与总结提示共用的投递：display:false 的消息进 LLM 上下文但不渲染，triggerTurn 让执行模型开回合；
- * sendMessage 返回 void，真实异步失败不会进 try/catch，所以持久化状态等 agent_start 回执，超时即视为没启动。
+ * 修复反馈与总结提示经统一投递入口（deliver.ts）：空闲时前门唤起，回合照常经过 before_agent_start；
+ * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器。宿主拒收时 deliver 不 resolve，
+ * 状态停在 pending，等下一个回合带着这条信封补投；reload 同样从 pending 重投。delivering 防止等待期间重复投递。
  */
-function sendFollowUp(
-	rt: ReviewRuntime,
-	active: Controller,
-	customType: string,
-	content: string,
-	handlers: { stillAwaiting: (state: ReviewState) => boolean; onNotStarted: () => void; onSendError: (error: unknown) => void },
-): void {
-	clearStartTimer(active);
-	active.startTimer = setTimeout(() => {
-		if (rt.controller !== active || !handlers.stillAwaiting(active.state)) return;
-		active.startTimer = undefined;
-		handlers.onNotStarted();
-	}, FOLLOW_UP_START_TIMEOUT_MS);
-	active.startTimer.unref?.();
+async function deliverPrompt(rt: ReviewRuntime, active: Controller, content: string, started: ReviewEvent): Promise<void> {
+	if (active.delivering) return;
+	active.delivering = true;
 	try {
-		rt.pi.sendMessage({ customType, content, display: false }, { deliverAs: "followUp", triggerTurn: true });
-	} catch (error) {
-		clearStartTimer(active);
-		handlers.onSendError(error);
+		await deliver(rt.pi, active.ctx, { customType: CARD_TYPE, content });
+		if (rt.controller === active) await dispatch(rt, started);
+	} finally {
+		active.delivering = false;
 	}
 }
 
-function deliverFeedback(rt: ReviewRuntime, active: Controller, repair: NonNullable<ReviewState["repair"]>): void {
-	sendFollowUp(rt, active, FEEDBACK_TYPE, buildFixFeedback(repair), {
-		stillAwaiting: (state) => state.phase === "awaiting_fix" && state.repair?.status === "awaiting_start",
-		onNotStarted: () => {
-			notify(active, msg.notify.feedbackNotStarted, "error");
-			stopWork(active);
-			void dispatch(rt, { type: "CANCEL", reason: "user" });
-		},
-		// 同步失败交给 requestAdvance 的收口：通知、中止、取消。
-		onSendError: (error) => { throw error; },
-	});
-}
-
-/** 总结是尽力而非必须：投递失败或没能启动回合都静默收尾，裁决与结果卡已落地。 */
-function deliverSummary(rt: ReviewRuntime, active: Controller, state: ReviewState): void {
+/** 总结是尽力而非必须：投递抛错就静默收尾，裁决与结果卡已落地。 */
+async function deliverSummary(rt: ReviewRuntime, active: Controller, state: ReviewState): Promise<void> {
 	if (!state.summary) return;
 	const last = state.history.at(-1);
 	const material = state.summary.kind === "advisor_stop"
 		? last?.advisor?.advice ?? last?.details ?? ""
 		: last?.details ?? "";
 	const prompt = buildSummaryPrompt({ kind: state.summary.kind, rounds: state.history.length, material });
-	sendFollowUp(rt, active, SUMMARY_REQUEST_TYPE, prompt, {
-		stillAwaiting: (current) => current.phase === "summarizing" && current.summary?.status === "awaiting_start",
-		onNotStarted: () => {
-			notify(active, msg.notify.summaryNotStarted, "warning");
-			void dispatch(rt, { type: "SUMMARY_SETTLED" });
-		},
-		onSendError: (error) => {
-			notifyEffectFailure(rt, error);
-			void dispatch(rt, { type: "SUMMARY_SETTLED" });
-		},
-	});
+	try {
+		await deliverPrompt(rt, active, prompt, { type: "SUMMARY_STARTED" });
+	} catch (error) {
+		notifyEffectFailure(rt, error);
+		await dispatch(rt, { type: "SUMMARY_SETTLED" });
+	}
 }
 
 function sendCard(rt: ReviewRuntime, active: Controller, card: CardData) {
@@ -727,10 +672,14 @@ function sendCardNow(rt: ReviewRuntime, card: CardData): void {
 	});
 }
 
-/** 会话分支 entries（供证据组装）；本插件的卡与反馈消息不参与证据，避免自指。 */
+/** 会话分支 entries（供证据组装）；本插件的卡与投给执行模型的反馈/总结信封不参与证据，避免自指。 */
 function sessionEntries(active: Controller) {
-	const own = new Set([CARD_TYPE, FEEDBACK_TYPE, SUMMARY_REQUEST_TYPE]);
-	return active.ctx.sessionManager
-		.getBranch()
-		.filter((entry) => entry.type !== "custom_message" || !own.has(entry.customType));
+	return active.ctx.sessionManager.getBranch().filter((entry) => !isOwnMessage(entry));
+}
+
+/** 结果卡（含忙时 steer 补投的提示，沿用卡的类型，渲染器降级成纯文本），或空闲时前门送达、整条由审查信封构成的用户消息。 */
+function isOwnMessage(entry: SessionEntry): boolean {
+	if (entry.type === "custom_message") return entry.customType === CARD_TYPE;
+	if (entry.type !== "message" || entry.message.role !== "user") return false;
+	return parseEnvelopes(textOf(entry.message.content))?.every((envelope) => envelope.tag === "firecode_review") ?? false;
 }

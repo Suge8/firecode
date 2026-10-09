@@ -46,7 +46,7 @@ export function refusalOf(entry: unknown): { id: string; message: string } | und
 	return typeof id === "string" && typeof message === "string" ? { id, message } : undefined;
 }
 
-const VERSION = 5;
+const VERSION = 6;
 
 /** 写入凭证：同一场审查内 Run ID 不变，靠单调递增的 seq 识别陈旧写者。 */
 export interface CheckpointStamp {

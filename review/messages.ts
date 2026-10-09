@@ -80,8 +80,6 @@ export const msg = defineMessages({
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint 写入失败，已停止审查：${reason}`,
 			cannotSeal: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
 			occupancyFailed: (reason: string) => `fire-review 无法同步占用状态：${reason}`,
-			feedbackNotStarted: "fire-review 修复反馈未能启动回合，审查已停止。",
-			summaryNotStarted: "fire-review 总结回合未能启动，已直接收尾。",
 			cancelled: "审查已取消\n已按你的操作停止",
 		},
 		failure: {
@@ -206,8 +204,6 @@ export const msg = defineMessages({
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint write failed; review stopped: ${reason}`,
 			cannotSeal: "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc.",
 			occupancyFailed: (reason: string) => `fire-review could not sync the occupancy signal: ${reason}`,
-			feedbackNotStarted: "fire-review feedback did not start a repair turn; review stopped.",
-			summaryNotStarted: "fire-review summary turn did not start; finishing without it.",
 			cancelled: "Review cancelled\nStopped by user",
 		},
 		failure: {
