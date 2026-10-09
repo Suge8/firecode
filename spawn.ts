@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevelValue } from "./config.js";
 import { msg } from "./messages.js";
+import { processShared } from "./process-shared.js";
 import { withSubsessionRole, type SubsessionRole } from "./role.js";
 
 const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
@@ -55,9 +56,8 @@ interface HeldSession {
 	releasing?: Promise<void>;
 }
 
-// 单写者登记必须进程唯一：宿主按文件重新求值模块图（见 role.ts），模块级集合在副本间互不可见。
-const WRITERS_KEY = Symbol.for("firecode.session-writers");
-const SESSION_WRITERS = ((globalThis as Record<symbol, unknown>)[WRITERS_KEY] ??= new Set<string>()) as Set<string>;
+// 单写者登记必须进程唯一，跨模块拷贝共享。
+const SESSION_WRITERS = processShared("session-writers", () => new Set<string>());
 
 interface PoolEnvironment {
 	modelRuntime?: ModelRuntime;

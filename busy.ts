@@ -6,6 +6,7 @@
  * 两个输入频道（在飞子代理数、审查占用）的名字与 payload 只在本文件定义，各有唯一发布者；读者一律经 watchBusy，不另订阅频道。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { processShared } from "./process-shared.js";
 
 /** 进程内事件总线：在飞子代理数变化时发布 `{ inFlight }`，激活/停用同步。 */
 export const WORKERS_CHANNEL = "firecode:workers";
@@ -57,18 +58,18 @@ interface BusyHandlers {
 	onSettled?(elapsed: number): void;
 }
 
-const HUBS = Symbol.for("firecode.busy");
+const HUBS = () => processShared("busy", () => new WeakMap<ExtensionAPI, BusyHandlers[]>());
 
 /**
  * 会话进行中的唯一判定与歇下边沿：上边框与轮次时钟都只订阅这里，不各自拼装。
- * 每个 pi 只有一份状态机，首个订阅者安装宿主事件，之后只追加订阅；登记挂在 globalThis 上，
+ * 每个 pi 只有一份状态机，首个订阅者安装宿主事件，之后只追加订阅；登记跨模块拷贝共享（process-shared.ts），
  * 宿主按文件加载模块副本时同一个 pi 仍只命中一份。
  * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界。在飞数归零与回合落定先后不定
  * （闲时前门投递在宿主记录这条消息后才算送达，见 deliver.ts），歇下必须在两个来源都满足的那一刻触发。
  * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
-	const hubs = ((globalThis as Record<symbol, unknown>)[HUBS] ??= new WeakMap()) as WeakMap<ExtensionAPI, BusyHandlers[]>;
+	const hubs = HUBS();
 	const subscribers = hubs.get(pi);
 	if (subscribers) {
 		subscribers.push(handlers);

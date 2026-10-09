@@ -2,30 +2,31 @@
 import { AssistantMessageComponent, CustomMessageComponent, ToolExecutionComponent, UserMessageComponent, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
 import { onFrame } from "../flame.js";
+import { processShared } from "../process-shared.js";
 import { ClickAnchor } from "./click-anchor.js";
 import { isMachineMessage, projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "./group-view.js";
 import { assistantFacts, captureTui, findChat, HostShapeError, isCardOpened, patchMethod, rowUiOf, scrollContentHeight, scrollViewOf, toolFacts } from "./host.js";
 import type { TurnClock } from "./turn-clock.js";
 
-const OWNER = Symbol.for("pi.firecode.tool-groups");
-const runtime = globalThis as typeof globalThis & { [OWNER]?: () => void };
+/** 宿主适配只有一个当前所有者，跨模块拷贝共享：reload 先卸旧再装新。 */
+const owner = () => processShared("tool-groups", () => ({ dispose: undefined as (() => void) | undefined }));
 
 interface GroupOptions {
 	clock: TurnClock;
 }
 
 export function installGroupPatch(ui: ExtensionUIContext, options: GroupOptions): () => void {
-	runtime[OWNER]?.();
+	owner().dispose?.();
 	let detach = () => {};
 	captureTui(ui, (tui) => {
 		detach = attach(tui, ui, options);
 	});
 	const dispose = () => {
-		if (runtime[OWNER] !== dispose) return;
+		if (owner().dispose !== dispose) return;
 		detach();
-		delete runtime[OWNER];
+		owner().dispose = undefined;
 	};
-	runtime[OWNER] = dispose;
+	owner().dispose = dispose;
 	return dispose;
 }
 
