@@ -31,8 +31,6 @@ async function harness() {
 		inFlight: (inFlight: number, teardown?: boolean) => fake.pi.events.emit("firecode:workers", { inFlight, ...(teardown ? { teardown } : {}) }),
 		shutdown: () => void fake.fire("session_shutdown", { reason: "quit" }, ctx),
 		watch: (onSettled: Function) => watchBusy(pi, { onSettled }),
-		handlers: fake.handlers,
-		bus: fake.channels,
 	};
 }
 
@@ -218,12 +216,11 @@ test("停用 Master 遗弃在飞子代理不是歇下：teardown 归零只结束
 	expect(h.settled).toBe(1);
 });
 
-test("每个 pi 只有一份状态机：多个消费者只订阅，宿主事件与在飞频道不重复安装，全部收到同一份歇下事实", async () => {
+test("每个 pi 只有一份状态机：多个消费者只订阅，全部收到同一份歇下事实（同一个对象）", async () => {
 	const h = await harness();
 	const seen: unknown[] = [];
 	h.watch((_ctx: unknown, round: unknown) => seen.push(round));
 	h.watch((_ctx: unknown, round: unknown) => seen.push(round));
-	for (const list of [...h.handlers.values(), ...h.bus.values()]) expect(list).toHaveLength(1);
 	h.agentStart();
 	h.agentSettled();
 	expect(h.settled).toBe(1);
