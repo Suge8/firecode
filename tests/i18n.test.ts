@@ -94,16 +94,22 @@ test("session：en 下 /quota 与 /tokens 输出英文", async () => {
 
 	const { registerQuota } = await loadFirecodeModule("session/quota.ts", { configJsonc }) as any;
 	const quota = fakePi();
-	registerQuota(quota.pi, (async (url: string) => Response.json(url.includes("anthropic")
+	const realFetch = globalThis.fetch;
+	globalThis.fetch = (async (url: string) => Response.json(url.includes("anthropic")
 		? { limits: [{ kind: "session", percent: 0 }, { kind: "weekly_all", percent: 37 }] }
-		: { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } } })) as typeof fetch);
+		: { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } } })) as typeof fetch;
+	registerQuota(quota.pi);
 	const notices: string[] = [];
 	const jwt = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "a" } })).toString("base64url")}.test`;
 	const models = ["openai-codex", "anthropic"].map((provider) => ({ provider, id: "test" }));
-	await quota.commands.get("quota").handler("", {
-		modelRegistry: { getAll: () => models, isUsingOAuth: () => true, getProviderAuth: async (provider: string) => ({ auth: { apiKey: provider === "anthropic" ? "t" : jwt } }) },
-		ui: { notify: (message: string) => notices.push(message) },
-	});
+	try {
+		await quota.commands.get("quota").handler("", {
+			modelRegistry: { getAll: () => models, isUsingOAuth: () => true, getProviderAuth: async (provider: string) => ({ auth: { apiKey: provider === "anthropic" ? "t" : jwt } }) },
+			ui: { notify: (message: string) => notices.push(message) },
+		});
+	} finally {
+		globalThis.fetch = realFetch;
+	}
 	expect(notices.at(-1)).toContain("Codex: 5h 80% left");
 	expect(notices.at(-1)).toContain("Claude: 5h 100% left | Weekly 63% left");
 	expect(notices.join("\n")).not.toMatch(CJK);

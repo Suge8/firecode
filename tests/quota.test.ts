@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { registerQuota } from "../session/quota.ts";
 import { fakePi } from "./fake-pi.ts";
 
@@ -13,11 +13,16 @@ const codex = { rate_limit: {
 } };
 const jwt = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } })).toString("base64url")}.test`;
 
+const realFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = realFetch; });
+
+/** 第三方额度接口以替换全局 fetch 的方式桩掉，用例结束后恢复。 */
 function setup(fetcher: typeof fetch, oauth = ["openai-codex", "anthropic"]) {
 	const fake = fakePi();
 	const messages: string[] = [];
 	const models = ["openai-codex", "anthropic"].map((provider) => ({ provider, id: "test" }));
-	registerQuota(fake.pi, fetcher);
+	globalThis.fetch = fetcher;
+	registerQuota(fake.pi);
 	const ctx = {
 		modelRegistry: {
 			getAll: () => models,
