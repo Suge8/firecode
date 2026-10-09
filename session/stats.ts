@@ -2,8 +2,9 @@
  * 会话 token / 成本统计：扫描 sessions 下的 jsonl，按模型汇总后用 Markdown 展示。
  * 源自 pi-token-stats (MIT, https://github.com/reaishijie/pi-token-stats)，已精简。
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { Dirent } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, Container, Markdown, Text, matchesKey } from "@earendil-works/pi-tui";
@@ -100,27 +101,21 @@ function add(target: Totals, usage: Usage, countRequest: boolean): void {
 	target.cost += usage.cost?.total ?? 0;
 }
 
-function sessionFiles(dir: string): string[] {
-	if (!existsSync(dir)) return [];
-
+async function sessionFiles(dir: string): Promise<string[]> {
 	const found: string[] = [];
 	const pending = [dir];
 	while (pending.length > 0) {
 		const current = pending.pop() as string;
-		let entries: string[];
+		let entries: Dirent[];
 		try {
-			entries = readdirSync(current);
+			entries = await readdir(current, { withFileTypes: true });
 		} catch {
 			continue;
 		}
 		for (const entry of entries) {
-			const path = join(current, entry);
-			try {
-				if (statSync(path).isDirectory()) pending.push(path);
-				else if (entry.endsWith(".jsonl")) found.push(path);
-			} catch {
-				// 会话文件可能在扫描过程中被轮转掉。
-			}
+			const path = join(current, entry.name);
+			if (entry.isDirectory()) pending.push(path);
+			else if (entry.name.endsWith(".jsonl")) found.push(path);
 		}
 	}
 	return found;
@@ -137,11 +132,12 @@ type Report = {
 	byModel: Map<string, Totals>;
 };
 
-function collect(days: number): Report {
+/** 逐文件让出事件循环：几千个会话文件扫下来不冻住界面。 */
+async function collect(days: number): Promise<Report> {
 	const to = Date.now();
 	const from = days === 0 ? undefined : to - days * DAY_MS;
 	const dir = join(getAgentDir(), "sessions");
-	const files = sessionFiles(dir);
+	const files = await sessionFiles(dir);
 	const report: Report = {
 		days,
 		from,
@@ -156,14 +152,17 @@ function collect(days: number): Report {
 	for (const file of files) {
 		let content: string;
 		try {
-			content = readFileSync(file, "utf8");
+			// 文件最后修改早于窗口起点，里面不会有窗口内的记录：不读。
+			if (from !== undefined && (await stat(file)).mtimeMs < from) continue;
+			content = await readFile(file, "utf8");
 		} catch {
 			continue;
 		}
 
 		let matched = false;
 		for (const line of content.split("\n")) {
-			if (!line.trim()) continue;
+			// 只有带 usage 的行才可能被计入，其余（工具输出等大行）不必解析。
+			if (!line.includes('"usage"')) continue;
 
 			let attributed: UsageAttribution | undefined;
 			try {
@@ -301,7 +300,7 @@ export function registerStats(pi: ExtensionAPI): void {
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg.stats.counting(days), "info");
 			}
-			await show(buildMarkdown(collect(days)), ctx);
+			await show(buildMarkdown(await collect(days)), ctx);
 		},
 	});
 }
