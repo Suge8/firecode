@@ -24,7 +24,7 @@
 
 ## Why FireCode
 
-- **Works out of the box.** The default config is the recommended one, in your language.
+- **Works out of the box.** The default config is the recommended one. The UI and the prompts follow your system language; comments in the config file are in English.
 - **Sub-agents under control.** Run them in parallel, pick a model per role, switch automatically on failure, step in any time.
 - **Hands-off review and delivery.** You don't babysit it. What reaches you has already passed review.
 - **An ultra-light core.** Built the Pi way: minimal, so your context stays lean.
