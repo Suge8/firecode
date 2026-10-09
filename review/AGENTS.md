@@ -25,8 +25,8 @@ AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill �
 `awaiting_fix` 把修复生命周期 `pending → running → completed` 写进 checkpoint；reload
 会把未完成的反馈重置为 pending 重投，只有 completed 才进入下一审查轮。反馈经根级 `deliver.ts` 投递（空闲时前门唤起，
 回合照常经过 `before_agent_start`），以消息送达为回执、没有计时器：deliver resolve 推进 pending → running，
-最终 `agent_end` 确认未以 error/aborted 结束才 completed，以 error/aborted 结束按用户取消收尾。宿主拒收时 deliver
-不 resolve，状态停在 pending，由下一个回合把这条信封补投进去（同 Master 事件）；等待期间 controller 的 `delivering` 标记挡住重复推进。
+最终 `agent_end` 确认未以 error/aborted 结束才 completed，以 error/aborted 结束按用户取消收尾。宿主在回合开始前拒收前门消息时 deliver
+不 resolve，状态停在 pending 并继续持有占用，用户下次发话后由那个回合把这条信封补投进去才解开（取舍与 Master 事件一致，已确认接受）；等待期间 controller 的 `delivering` 标记挡住重复推进。
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环
 禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；
