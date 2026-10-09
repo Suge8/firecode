@@ -126,10 +126,14 @@ export async function compactWithOpenAINative(
 	}
 }
 
+/** 最近一次压缩是原生压缩却没能重放：请求照宿主原样发出，压缩窗口里的旧历史不在上下文里。 */
+export type NativeReplayDeclined = { ok: false; reason: string; compactionId: string };
+
+/** undefined：没有原生压缩要重放（不是 OpenAI Responses 请求、没压缩过、最近一次压缩不是原生的）。 */
 export function replayOpenAINative(
 	payload: unknown,
 	ctx: ExtensionContext,
-): ResponsesRequestPayload | undefined {
+): { ok: true; payload: ResponsesRequestPayload } | NativeReplayDeclined | undefined {
 	const target = resolveNativeCompactionTarget(ctx, payload);
 	if (!target.ok || !target.target.payload) {
 		return undefined;
@@ -138,7 +142,10 @@ export function replayOpenAINative(
 	const branchEntries = ctx.sessionManager.getBranch();
 	const latestCompaction = resolveLatestNativeCompaction(branchEntries, target.target);
 	if (!latestCompaction.ok) {
-		return undefined;
+		const latest = branchEntries.findLast((entry) => entry.type === "compaction");
+		return latestCompaction.reason === "latest-native-compaction-mismatch" && latest
+			? { ok: false, reason: latestCompaction.reason, compactionId: latest.id }
+			: undefined;
 	}
 
 	const rewrite = rewriteNativeResponsesPayload({
@@ -147,5 +154,5 @@ export function replayOpenAINative(
 		branchEntries,
 		compactionEntry: latestCompaction.entry,
 	});
-	return rewrite.ok ? rewrite.payload : undefined;
+	return rewrite.ok ? rewrite : { ok: false, reason: rewrite.reason, compactionId: latestCompaction.entry.id };
 }
