@@ -42,6 +42,7 @@ export const msg = defineMessages({
 		},
 		truncatedWrite: "写入内容带 read 截断提示，说明拿的是截断后的半截文件：改文件用 edit，或分段读完整再写",
 		outcome: { aborted: "已中断", error: "请求失败" },
+		today: (date: string) => `今天是 ${date}。`,
 		envelope: {
 			watcher: "观察员",
 			sections: { reply: "回复：", error: "错误：", finalReply: "最终回复：", advice: "顾问意见：" },
@@ -90,6 +91,7 @@ export const msg = defineMessages({
 		},
 		truncatedWrite: "The content to write carries a read truncation notice, so it is a truncated half of the file: change the file with edit, or read it completely in chunks before writing",
 		outcome: { aborted: "Interrupted", error: "Request failed" },
+		today: (date: string) => `Today is ${date}.`,
 		envelope: {
 			watcher: "Watcher",
 			sections: { reply: "Reply:", error: "Error:", finalReply: "Final reply:", advice: "Advisor advice:" },

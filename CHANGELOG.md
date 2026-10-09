@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- The system prompt includes today's date, in the main session and in subagents. Pi removed the date upstream to keep the prompt cache stable; here it is its own prompt section, so a new day appends a one-line update instead of rewriting the cached conversation.
+
 ### Changed
 
 - Master's prompt and preset instructions are added as system prompt sections instead of replacing the whole system prompt. When SYSTEM.md, skills, AGENTS.md or tools change mid-session, Pi now appends an update instead of rewriting the cached conversation, so the prompt cache and earlier thinking are kept.
