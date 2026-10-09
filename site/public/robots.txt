@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://firecode.si/sitemap-index.xml

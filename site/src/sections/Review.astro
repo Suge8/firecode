@@ -1,0 +1,1039 @@
+---
+import markUrl from "../../../design/brand/mark.svg?url";
+import loopEn from "../../../design/promo/review-loop.mp4?url";
+import loopZh from "../../../design/promo/review-loop.zh.mp4?url";
+import posterEn from "../../../design/promo/review-loop-poster.jpg?url";
+import posterZh from "../../../design/promo/review-loop-poster.zh.jpg?url";
+import type { Lang } from "../i18n";
+import { copy } from "./Review.copy";
+
+interface Props {
+	lang: Lang;
+}
+const { lang } = Astro.props;
+const t = copy[lang];
+const video = lang === "zh" ? loopZh : loopEn;
+// 封面是第 2 轮审查通过那一帧（从同一段录屏截出）
+const poster = lang === "zh" ? posterZh : posterEn;
+
+// 第 1 轮有人判 FAIL 整轮就不过；第 2 轮全员 PASS
+const rounds = [
+	{ key: "r1", verdicts: ["FAIL", "FAIL", "PASS"] },
+	{ key: "r2", verdicts: ["PASS", "PASS", "PASS"] },
+] as const;
+const segments = (text: string) => text.split("`");
+// 中文按词组断行：Chrome 的 keep-all 只在空格处断，所以在标点后补零宽空格作为断点
+const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：；])/g, "$1\u200B") : text);
+---
+
+<section class="section review" id="review" aria-labelledby="review-title">
+	<div class="section-inner">
+		<h2 class="section-title" id="review-title">{t.title}</h2>
+		<p class="section-lede">{phrases(t.lede)}</p>
+	</div>
+
+	<div class="loop">
+		<div class="stage">
+			<div class="story">
+				<span class="rail" aria-hidden="true"><span class="rail-fill"></span></span>
+				<ol class="beats">
+					{
+						t.beats.map((beat) => (
+							<li class="beat">
+								<h3 class="item-title">{beat.title}</h3>
+								<p>{phrases(beat.body)}</p>
+							</li>
+						))
+					}
+				</ol>
+			</div>
+
+			<div class="console-wrap">
+				<div class="heat" aria-hidden="true">
+					{Array.from({ length: 10 }, () => <i />)}
+				</div>
+				<div class="calm" aria-hidden="true"></div>
+				<div class="console window">
+					<span class="tint tint-fail" aria-hidden="true"></span>
+					<span class="tint tint-pass" aria-hidden="true"></span>
+					<div class="window-bar">/fire-review</div>
+					<div class="body">
+						<div class="block" data-block="r1">
+							<p class="head">{t.round(1)}</p>
+							<ul class="models">
+								{
+									rounds[0].verdicts.map((verdict, i) => (
+										<li class="model">
+											<span class="who">{t.model} {i + 1}</span>
+											<span class="leader" aria-hidden="true"></span>
+											<span class="cell" data-verdict={verdict}>
+												<span class="pending">{t.reviewing}</span>
+												<span class="verdict">{verdict}</span>
+												{verdict === "FAIL" && <span class="sparks" aria-hidden="true" />}
+											</span>
+										</li>
+									))
+								}
+							</ul>
+							<p class="result fail"><span class="sign" aria-hidden="true">✕</span><b>{t.failed}</b><span class="detail">{phrases(t.finding)}</span></p>
+						</div>
+
+						<div class="block" data-block="fix">
+							<p class="head">↳ {t.fixing}</p>
+							<div class="diff">
+								<span class="file">duration.js</span>
+								<span class="del">- /(\d+)(h|m|s|ms)/g</span>
+								<span class="add">+ /(\d+)(ms|h|m|s)/g</span>
+								<span class="file">duration.test.js</span>
+								<span class="add">+ parseDuration("500ms") === 0.5</span>
+							</div>
+						</div>
+
+						<div class="block" data-block="r2">
+							<p class="head">{t.round(2)}</p>
+							<ul class="models">
+								{
+									rounds[1].verdicts.map((verdict, i) => (
+										<li class="model">
+											<span class="who">{t.model} {i + 1}</span>
+											<span class="leader" aria-hidden="true"></span>
+											<span class="cell" data-verdict={verdict}>
+												<span class="pending">{t.reviewing}</span>
+												<span class="verdict">{verdict}</span>
+											</span>
+										</li>
+									))
+								}
+							</ul>
+							<p class="result pass"><span class="flare" aria-hidden="true"></span><span class="sign" aria-hidden="true">✓</span><b>{t.passed}</b><span class="detail">{t.passedAfter}</span></p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<div class="section-inner">
+		<div class="proof">
+			<figure class="footage">
+				<div class="window">
+					<div class="window-bar">/fire-review</div>
+					<div class="frame">
+						<video src={video} poster={poster} preload="none" muted playsinline loop aria-label={t.videoLabel}></video>
+						<button type="button" class="play" aria-label={t.play} title={t.play}>
+							<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"></path></svg>
+						</button>
+					</div>
+				</div>
+				<figcaption>{phrases(t.video)}</figcaption>
+			</figure>
+			<div class="notes">
+				<div class="note">
+					<h3 class="item-title">{t.advisorTitle}</h3>
+					<p>{phrases(t.advisor)}</p>
+					<p class="decisions">
+						{t.decisions.map((decision, i) => [i > 0 && <span class="sep" aria-hidden="true"> · </span>, <span class="choice">{decision}</span>])}
+					</p>
+				</div>
+				<div class="note">
+					<h3 class="item-title">{t.manualTitle}</h3>
+					<p>{t.manual[0]}<code>/fire-review</code>{t.manual[1]}</p>
+				</div>
+			</div>
+		</div>
+
+		<div class="compare">
+			<h3 class="subtitle compare-title">{phrases(t.compare)}</h3>
+			<table>
+				<thead>
+					<tr>
+						{t.cols.map((col) => <th scope="col">{col}</th>)}
+					</tr>
+				</thead>
+				<tbody>
+					{
+						t.rows.map((row, i) => (
+							<tr class:list={{ us: i === 0 }}>
+								<th scope="row">
+									{i === 0 && <img src={markUrl} alt="" width="16" height="20" />}
+									<span class="name">{row.name}</span>
+									{row.cmd && <code>{row.cmd}</code>}
+									{row.note && <span class="note-tag">{row.note}</span>}
+								</th>
+								<td data-label={t.cols[1]}>{row.reviewers}</td>
+								<td data-label={t.cols[2]} class="gets">
+									{i === 0 ? (
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+									) : (
+										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" /></svg>
+									)}
+									<span>{segments(row.gets).map((part, j) => (j % 2 ? <code>{part}</code> : part))}</span>
+								</td>
+							</tr>
+						))
+					}
+				</tbody>
+			</table>
+		</div>
+	</div>
+</section>
+
+<script>
+	import { gsap, reducedMotion } from "../scroll";
+
+	const SPARKS_PER_FAIL = 14;
+	const DIM = 0.45;
+	const GHOST = 0.1;
+	const NARROW = "(max-width: 860px)";
+	// 手机上录屏字太小，只给封面和播放按钮，点开全屏看
+	const PHONE = "(max-width: 640px)";
+	// 中英两版录屏都在第 8 秒左右发起审查；首播从这里开始，开场的输入过程等循环回来再看
+	const FIRST_PLAY_AT = 8;
+	// 每一拍在时间轴上的起点，进度条与当前条目按它跳
+	const BEATS = [0, 3.6, 5.4];
+
+	const root = document.querySelector<HTMLElement>("#review")!;
+	const loop = root.querySelector<HTMLElement>(".loop")!;
+	const footage = root.querySelector<HTMLElement>(".footage")!;
+	const video = footage.querySelector("video")!;
+
+	if (reducedMotion || matchMedia(PHONE).matches) playOnClick(matchMedia(PHONE).matches);
+	else autoplay();
+	if (!reducedMotion) {
+		animateLoop();
+		revealCompare();
+	}
+
+	function start() {
+		if (video.currentTime === 0) video.currentTime = FIRST_PLAY_AT;
+		video.play().catch((error: DOMException) => {
+			if (error.name !== "AbortError") throw error;
+		});
+	}
+
+	// 只在视口内播放，离开就暂停
+	function autoplay() {
+		new IntersectionObserver(([entry]) => (entry.isIntersecting ? start() : video.pause()), { threshold: 0.35 }).observe(video);
+	}
+
+	// 减少动效或手机：只显示封面与播放按钮，用户点了才播；手机进全屏播放，退出全屏即停
+	function playOnClick(fullscreen: boolean) {
+		footage.toggleAttribute("data-manual", true);
+		video.addEventListener("play", () => footage.toggleAttribute("data-playing", true));
+		video.addEventListener("pause", () => footage.toggleAttribute("data-playing", false));
+		video.addEventListener("click", () => video.pause());
+		footage.querySelector(".play")!.addEventListener("click", () => {
+			if (fullscreen) enterFullscreen();
+			start();
+		});
+	}
+
+	function enterFullscreen() {
+		const leave = () => {
+			video.controls = false;
+			video.pause();
+		};
+		video.controls = true;
+		// iOS Safari 的 video 只有 webkitEnterFullscreen
+		const ios = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+		if (video.requestFullscreen) {
+			video.requestFullscreen().then(() =>
+				document.addEventListener("fullscreenchange", () => !document.fullscreenElement && leave(), { once: true }),
+			);
+			return;
+		}
+		ios.webkitEnterFullscreen?.();
+		video.addEventListener("webkitendfullscreen", leave, { once: true });
+	}
+
+	// 滚动推进闭环：第 1 轮并行审查 → FAIL 迸火星 → 修复 → 第 2 轮全员 PASS、火势收成余温、绿光落定
+	function animateLoop() {
+		loop.classList.add("is-live");
+		const narrow = matchMedia(NARROW).matches;
+		// 窄屏三拍叠在同一位置轮换，宽屏并列、未轮到的压暗
+		const dim = narrow ? 0 : DIM;
+		// 窄屏 FAIL 贴着屏幕右缘，火星只往左上飞
+		const [minAngle, maxAngle] = narrow ? [-170, -100] : [-150, -30];
+		const q = gsap.utils.selector(loop);
+		const beats = q(".beat");
+		const list = loop.querySelector<HTMLElement>(".beats")!;
+		const rail = loop.querySelector<HTMLElement>(".rail-fill")!;
+		const block = (key: string) => loop.querySelector<HTMLElement>(`[data-block="${key}"]`)!;
+		const r1 = block("r1");
+		const fix = block("fix");
+		const r2 = block("r2");
+		const lines = (el: HTMLElement) => [...el.querySelectorAll(".head, .model, .diff > span, .result")];
+
+		for (const host of q(".sparks")) {
+			for (let i = 0; i < SPARKS_PER_FAIL; i++) host.append(document.createElement("i"));
+		}
+
+		gsap.set(beats, { opacity: (i: number) => (i === 0 ? 1 : dim) });
+		// 未轮到的行先以骨架透出，终端不至于大半空着
+		gsap.set([...lines(r1), ...lines(fix), ...lines(r2)], { opacity: GHOST, y: 4 });
+		gsap.set(q(".pending"), { opacity: 1 });
+		gsap.set(q(".verdict"), { opacity: 0, scale: 0.5 });
+		gsap.set(q(".tint, .calm, .flare"), { opacity: 0 });
+		gsap.set(q(".heat"), { opacity: 0, scale: 0.6 });
+		gsap.set(q(".calm"), { scale: 0.8 });
+
+		// 进度条跳到当前拍：宽屏到该条目底边，窄屏三拍叠放时按拍数均分
+		let active = -1;
+		const syncBeat = () => {
+			const now = BEATS.findLastIndex((time) => tl.time() >= time);
+			if (now === active) return;
+			active = now;
+			beats.forEach((beat, i) => beat.toggleAttribute("aria-current", i === now));
+			const beat = beats[now] as HTMLElement;
+			const reach = narrow ? (now + 1) / beats.length : (beat.offsetTop + beat.offsetHeight) / list.offsetHeight;
+			rail.style.transform = `scaleY(${reach})`;
+		};
+
+		const tl = gsap.timeline({
+			defaults: { ease: "none" },
+			scrollTrigger: { trigger: loop, start: "top top", end: "bottom bottom", scrub: 0.6 },
+			onUpdate: syncBeat,
+		});
+
+		const enter = (targets: Element[], at: number) =>
+			tl.to(targets, { opacity: 1, y: 0, duration: 0.4, stagger: 0.2, ease: "power2.out" }, at);
+		const verdict = (cell: Element, at: number) => {
+			tl.to(cell.querySelector(".pending"), { opacity: 0, duration: 0.1 }, at - 0.15);
+			tl.to(cell.querySelector(".verdict"), { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(3)" }, at);
+			for (const spark of cell.querySelectorAll(".sparks i")) burst(spark, at);
+		};
+		const burst = (spark: Element, at: number) => {
+			const angle = gsap.utils.random(minAngle, maxAngle) * (Math.PI / 180);
+			const distance = gsap.utils.random(40, 140);
+			gsap.set(spark, { rotation: (angle * 180) / Math.PI + 90, opacity: 0 });
+			tl.fromTo(
+				spark,
+				{ x: 0, y: 0, opacity: 1, scaleY: 1.6 },
+				{
+					x: Math.cos(angle) * distance,
+					y: Math.sin(angle) * distance,
+					opacity: 0,
+					scaleY: 0.3,
+					duration: gsap.utils.random(0.7, 1.1),
+					ease: "power2.out",
+					immediateRender: false,
+				},
+				at + gsap.utils.random(0, 0.08),
+			);
+		};
+		// 窄屏叠放时先淡出上一拍再淡入下一拍，滚到中途也不会两段字叠在一起
+		const focus = (index: number) => {
+			const at = BEATS[index];
+			beats.forEach((beat, i) => {
+				if (i === index) tl.to(beat, { opacity: 1, duration: 0.3 }, narrow ? at + 0.15 : at);
+				else tl.to(beat, { opacity: dim, duration: narrow ? 0.15 : 0.3 }, at);
+			});
+		};
+		const cells = (el: HTMLElement) => [...el.querySelectorAll(".cell")];
+		const [, fixAt, passAt] = BEATS;
+
+		enter(lines(r1).slice(0, -1), 0);
+		cells(r1).forEach((cell, i) => verdict(cell, 1.6 + i * 0.3));
+		tl.to(q(".heat"), { opacity: 1, scale: 1, duration: 1.2, ease: "power2.out" }, 1.6);
+		tl.to(q(".tint-fail"), { opacity: 1, duration: 0.6 }, 1.6);
+		enter([r1.querySelector(".result")!], 2.6);
+
+		focus(1);
+		enter(lines(fix), fixAt + 0.2);
+		tl.to(q(".heat"), { opacity: 0.6, scale: 0.85, duration: 1.2 }, fixAt + 0.6);
+
+		focus(2);
+		enter(lines(r2).slice(0, -1), passAt + 0.2);
+		cells(r2).forEach((cell, i) => verdict(cell, passAt + 1.4 + i * 0.25));
+		tl.to(q(".heat"), { opacity: 0.25, scale: 0.7, duration: 1, ease: "power2.inOut" }, passAt + 1.4);
+		tl.to(q(".tint-fail"), { opacity: 0, duration: 0.6 }, passAt + 1.4);
+		tl.to(q(".tint-pass, .calm"), { opacity: 1, scale: 1, duration: 1, ease: "power2.out" }, passAt + 1.9);
+		enter([r2.querySelector(".result")!], passAt + 2.2);
+		const flare = r2.querySelector(".flare");
+		tl.to(flare, { opacity: 1, duration: 0.16, ease: "power2.out" }, passAt + 2.7);
+		tl.to(flare, { opacity: 0, duration: 0.16, ease: "power2.in" }, passAt + 2.86);
+		tl.to({}, { duration: 1 }, passAt + 3.2);
+		syncBeat();
+	}
+
+	function revealCompare() {
+		const compare = root.querySelector<HTMLElement>(".compare")!;
+		gsap.from(compare.querySelectorAll(".compare-title, tbody tr"), {
+			opacity: 0,
+			y: 18,
+			duration: 0.9,
+			stagger: 0.07,
+			ease: "expo.out",
+			scrollTrigger: { trigger: compare, start: "top 78%", once: true },
+		});
+	}
+</script>
+
+<style>
+	.review {
+		/* 信息小字：全局 --faint 在暗底上对比不足 */
+		--meta: #7a716a;
+		/* 火星与光晕会伸出终端，横向裁在区块内，不撑宽页面 */
+		overflow-x: clip;
+	}
+
+	:lang(zh) .section-lede,
+	:lang(zh) .beat p,
+	:lang(zh) .detail,
+	:lang(zh) figcaption,
+	:lang(zh) .note p,
+	:lang(zh) .compare-title {
+		word-break: keep-all;
+		overflow-wrap: anywhere;
+	}
+
+	/* ---------- 闭环舞台 ---------- */
+
+	.loop {
+		margin-top: clamp(48px, 7svh, 88px);
+	}
+
+	.loop.is-live {
+		height: 300svh;
+		margin-top: 0;
+	}
+
+	.stage {
+		display: grid;
+		grid-template-columns: minmax(0, 4fr) minmax(0, 7fr);
+		align-items: start;
+		align-content: start;
+		gap: clamp(32px, 6vw, 96px);
+		max-width: var(--page-max);
+		margin-inline: auto;
+	}
+
+	/* 钉住时顶对齐，顶部让出导航 */
+	.is-live .stage {
+		position: sticky;
+		top: 0;
+		height: 100svh;
+		padding-top: calc(var(--nav-h) + clamp(12px, 5svh, 56px));
+	}
+
+	.story {
+		position: relative;
+		padding-left: 22px;
+	}
+
+	.rail {
+		display: none;
+		position: absolute;
+		inset: 4px auto 4px 0;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--ring);
+	}
+
+	.is-live .rail {
+		display: block;
+	}
+
+	.rail-fill {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--accent);
+		transform-origin: top;
+		transform: scaleY(0);
+		transition: transform 300ms var(--ease-move);
+	}
+
+	.beats {
+		display: grid;
+		gap: 28px;
+		padding: 0;
+		list-style: none;
+	}
+
+	.beat p {
+		margin-top: 6px;
+		color: var(--muted);
+		font-size: var(--text-body);
+		line-height: 1.55;
+		text-wrap: pretty;
+	}
+
+	.console-wrap {
+		position: relative;
+		isolation: isolate;
+	}
+
+	.heat,
+	.calm {
+		position: absolute;
+		z-index: -1;
+		pointer-events: none;
+	}
+
+	/* 静态（无 JS、减少动效）呈现终态：火已熄、绿光落定 */
+	.heat {
+		opacity: 0.25;
+		transform: scale(0.7);
+		inset: 20% -12% -30%;
+		background: radial-gradient(closest-side, oklch(0.62 0.22 33 / 0.8), oklch(0.66 0.2 45 / 0.28) 50%, transparent);
+	}
+
+	/* 热浪里往上飘的余烬，随 .heat 的透明度一起熄灭 */
+	.heat i {
+		position: absolute;
+		bottom: 22%;
+		left: calc(var(--x) * 1%);
+		width: 3px;
+		height: 3px;
+		border-radius: 50%;
+		background: var(--accent-hot);
+		box-shadow: 0 0 8px var(--accent);
+		opacity: 0;
+	}
+
+	.is-live .heat i {
+		animation: ember 3.2s linear infinite;
+	}
+
+	.heat i:nth-child(1) { --x: 18; animation-delay: -0.4s; }
+	.heat i:nth-child(2) { --x: 27; animation-delay: -1.9s; }
+	.heat i:nth-child(3) { --x: 36; animation-delay: -1.1s; }
+	.heat i:nth-child(4) { --x: 44; animation-delay: -2.6s; }
+	.heat i:nth-child(5) { --x: 52; animation-delay: -0.8s; }
+	.heat i:nth-child(6) { --x: 59; animation-delay: -2.2s; }
+	.heat i:nth-child(7) { --x: 66; animation-delay: -1.5s; }
+	.heat i:nth-child(8) { --x: 73; animation-delay: -0.2s; }
+	.heat i:nth-child(9) { --x: 80; animation-delay: -2.9s; }
+	.heat i:nth-child(10) { --x: 86; animation-delay: -1.3s; }
+
+	@keyframes ember {
+		0% { opacity: 0; transform: translate(0, 0); }
+		15% { opacity: 1; }
+		100% { opacity: 0; transform: translate(14px, -46svh); }
+	}
+
+	.calm {
+		inset: 20% -12% -30%;
+		background: radial-gradient(closest-side, oklch(0.78 0.17 150 / 0.4), transparent);
+	}
+
+	/* 共享 .window 默认裁切溢出，这里放开让火星飞出窗外 */
+	.console {
+		position: relative;
+		overflow: visible;
+		font-variant-ligatures: none;
+		line-height: 1.65;
+	}
+
+	.tint {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		pointer-events: none;
+		opacity: 0;
+	}
+
+	.tint-fail {
+		box-shadow: inset 0 0 0 1px oklch(0.7 0.19 25 / 0.55);
+		background: linear-gradient(to bottom, oklch(0.6 0.2 25 / 0.07), transparent 60%);
+	}
+
+	.tint-pass {
+		opacity: 1;
+		box-shadow: inset 0 0 0 1px oklch(0.8 0.17 150 / 0.65);
+	}
+
+	.body {
+		display: grid;
+		gap: 18px;
+		padding: 12px 20px 22px;
+	}
+
+	.head {
+		color: var(--muted);
+	}
+
+	[data-block="fix"] .head {
+		color: var(--accent-hot);
+	}
+
+	.models {
+		display: grid;
+		padding: 0;
+		list-style: none;
+	}
+
+	.model {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: baseline;
+		gap: 12px;
+	}
+
+	.leader {
+		border-bottom: 1px dotted oklch(1 0 0 / 0.14);
+		translate: 0 -0.3em;
+	}
+
+	.who::before {
+		content: "";
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		margin: 0 12px 2px 2px;
+		border-radius: 50%;
+		background: var(--faint);
+		vertical-align: middle;
+	}
+
+	.cell {
+		position: relative;
+		display: grid;
+		justify-items: end;
+	}
+
+	.cell > * {
+		grid-area: 1 / 1;
+	}
+
+	.pending {
+		color: var(--meta);
+		opacity: 0;
+	}
+
+	.is-live .pending {
+		animation: pulse 1.4s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		50% { color: var(--fg); }
+	}
+
+	.verdict {
+		font-weight: 700;
+		letter-spacing: 0.06em;
+	}
+
+	[data-verdict="FAIL"] .verdict {
+		color: var(--fail);
+		text-shadow: 0 0 18px oklch(0.65 0.22 25 / 0.7);
+	}
+
+	[data-verdict="PASS"] .verdict {
+		color: var(--pass);
+	}
+
+	.sparks {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		pointer-events: none;
+	}
+
+	.sparks :global(i) {
+		position: absolute;
+		left: -1px;
+		top: -3.5px;
+		width: 2px;
+		height: 7px;
+		border-radius: 2px;
+		background: linear-gradient(var(--accent-hot), var(--fail));
+		box-shadow: 0 0 6px var(--accent);
+		opacity: 0;
+	}
+
+	.result {
+		position: relative;
+		display: grid;
+		grid-template-columns: auto auto minmax(0, 1fr);
+		column-gap: 10px;
+		margin-top: 8px;
+		padding: 8px 12px;
+		border-radius: 8px;
+	}
+
+	.detail {
+		text-wrap: pretty;
+	}
+
+	.flare {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		box-shadow: 0 0 24px oklch(0.8 0.17 150 / 0.35);
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.result.fail {
+		background: oklch(0.6 0.2 25 / 0.12);
+		color: oklch(0.86 0.06 25);
+	}
+
+	.result.fail .sign,
+	.result.fail b {
+		color: var(--fail);
+	}
+
+	.result.pass {
+		background: oklch(0.75 0.17 150 / 0.1);
+		color: var(--muted);
+	}
+
+	.result.pass .sign,
+	.result.pass b {
+		color: var(--pass);
+	}
+
+	.diff {
+		display: grid;
+		margin-top: 6px;
+		white-space: pre-wrap;
+	}
+
+	.diff .file {
+		color: var(--muted);
+	}
+
+	.diff .file:not(:first-child) {
+		margin-top: 6px;
+	}
+
+	.diff .del {
+		color: var(--fail);
+	}
+
+	.diff .add {
+		color: var(--pass);
+	}
+
+	/* ---------- 真实录屏与顾问 ---------- */
+
+	.proof {
+		max-width: 960px;
+		margin-top: clamp(72px, 10svh, 120px);
+	}
+
+	/* 录屏自带棕色外框和窗口标题栏，按源视频 1200×760 的像素裁到终端内容区（x 20–1180，y 56–740），
+	   外壳换成共享 .window；最宽 960px，不把源视频放大 */
+	.frame {
+		position: relative;
+		overflow: hidden;
+		aspect-ratio: 1160 / 684;
+	}
+
+	.play {
+		position: absolute;
+		inset: 0;
+		display: none;
+		place-items: center;
+		width: 100%;
+		border: 0;
+		background: none;
+		cursor: pointer;
+	}
+
+	.play::before {
+		content: "";
+		position: absolute;
+		width: 44px;
+		height: 44px;
+		border-radius: 50%;
+		background: oklch(0.16 0.01 50 / 0.82);
+		box-shadow: 0 0 0 1px oklch(0.75 0.16 55 / 0.45);
+		transition:
+			scale var(--duration-state) var(--ease-enter),
+			box-shadow var(--duration-state) var(--ease-enter);
+	}
+
+	.play svg {
+		position: relative;
+		width: 18px;
+		height: 18px;
+		margin-left: 3px;
+		color: var(--accent);
+	}
+
+	[data-manual]:not([data-playing]) .play {
+		display: grid;
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		.play:hover::before {
+			scale: 1.08;
+			box-shadow: 0 0 0 1px var(--accent);
+		}
+	}
+
+	.play:active::before {
+		scale: 0.92;
+	}
+
+	.frame video {
+		position: absolute;
+		top: calc(-56 / 684 * 100%);
+		left: calc(-20 / 1160 * 100%);
+		width: calc(1200 / 1160 * 100%);
+		max-width: none;
+		height: auto;
+	}
+
+	figcaption {
+		margin-top: 14px;
+		color: var(--muted);
+		font-size: 14px;
+	}
+
+	.notes {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 40px clamp(32px, 5vw, 72px);
+		margin-top: clamp(40px, 6svh, 64px);
+	}
+
+	.note p {
+		margin-top: 10px;
+		color: var(--muted);
+		line-height: 1.6;
+	}
+
+	.note code,
+	.gets code,
+	th code {
+		font-size: 0.9em;
+		color: var(--accent-hot);
+	}
+
+	.note .decisions {
+		color: var(--fg);
+		font-family: var(--font-mono);
+		font-size: 14px;
+	}
+
+	.decisions .sep {
+		color: var(--meta);
+	}
+
+	.decisions .choice {
+		white-space: nowrap;
+	}
+
+	/* ---------- 对比表 ---------- */
+
+	.compare {
+		margin-top: clamp(80px, 12svh, 140px);
+	}
+
+	:lang(zh) .compare-title {
+		font-stretch: 100%;
+		letter-spacing: -0.005em;
+		line-height: 1.3;
+	}
+
+	table {
+		display: block;
+		margin-top: clamp(40px, 6svh, 64px);
+		border-collapse: collapse;
+	}
+
+	thead,
+	tbody {
+		display: block;
+	}
+
+	tr {
+		display: grid;
+		grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr) minmax(0, 1.25fr);
+		align-items: baseline;
+		gap: 24px;
+		padding: 20px 24px;
+	}
+
+	thead th {
+		color: var(--meta);
+		font-size: 13px;
+		font-weight: 500;
+		text-align: start;
+	}
+
+	thead tr {
+		padding-block: 0 12px;
+	}
+
+	tbody tr:not(.us) + tr:not(.us) {
+		border-top: 1px solid var(--ring);
+	}
+
+	tbody th {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: 10px;
+		row-gap: 2px;
+		font-weight: 600;
+		text-align: start;
+	}
+
+	.note-tag {
+		color: var(--meta);
+		font-size: 14px;
+		font-weight: 400;
+	}
+
+	th code {
+		color: var(--muted);
+		font-weight: 400;
+	}
+
+	td {
+		color: var(--muted);
+		line-height: 1.5;
+	}
+
+	.gets {
+		display: flex;
+		gap: 12px;
+		color: var(--muted);
+	}
+
+	.gets svg {
+		flex: none;
+		width: 18px;
+		height: 18px;
+		translate: 0 3px;
+		color: var(--faint);
+	}
+
+	tr.us {
+		margin-bottom: 8px;
+		padding-block: 26px;
+		border-radius: 16px;
+		background: oklch(0.72 0.17 52 / 0.07);
+		box-shadow:
+			0 0 0 1px oklch(0.75 0.16 55 / 0.28),
+			0 30px 90px -50px var(--accent);
+	}
+
+	tr.us th {
+		font-size: 1.2rem;
+		font-weight: 680;
+	}
+
+	tr.us th img {
+		width: 16px;
+		height: auto;
+		translate: 0 2px;
+	}
+
+	tr.us td {
+		color: var(--fg);
+	}
+
+	tr.us .gets {
+		color: var(--fg);
+		font-size: 1.15rem;
+		font-weight: 620;
+	}
+
+	tr.us .gets svg {
+		width: 20px;
+		height: 20px;
+		translate: 0 2px;
+		color: var(--pass);
+	}
+
+	/* ---------- 窄屏 ---------- */
+
+	@media (max-width: 860px) {
+		.stage {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 20px;
+		}
+
+		.is-live .stage {
+			padding-top: calc(var(--nav-h) + 12px);
+		}
+
+		.beats {
+			gap: 20px;
+		}
+
+		/* 窄屏滚动时三拍叠在同一位置轮换，只显示当前一拍，把高度让给终端 */
+		.is-live .beats {
+			grid-template-areas: "beat";
+		}
+
+		.is-live .beat {
+			grid-area: beat;
+		}
+
+		.notes {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.result {
+			grid-template-columns: auto minmax(0, 1fr);
+		}
+
+		.result .detail {
+			grid-column: 2;
+		}
+
+		.body {
+			gap: 12px;
+			padding: 8px 14px 16px;
+		}
+
+		thead {
+			display: none;
+		}
+
+		tr {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 10px;
+			padding: 20px 4px;
+		}
+
+		tr.us {
+			padding: 22px 18px;
+		}
+
+		td::before {
+			content: attr(data-label);
+			display: block;
+			margin-bottom: 2px;
+			color: var(--meta);
+			font-size: 12.5px;
+			font-weight: 400;
+		}
+
+		.gets {
+			display: block;
+		}
+
+		.gets svg {
+			display: none;
+		}
+	}
+
+	/* 矮屏（如 360×640）：收紧终端行距与留白，整个终端留在一屏内 */
+	@media (max-width: 860px) and (max-height: 700px) {
+		.is-live .beat p {
+			display: none;
+		}
+
+		.console {
+			line-height: 1.5;
+		}
+
+		.body {
+			gap: 8px;
+		}
+
+		.result {
+			margin-top: 4px;
+			padding-block: 6px;
+		}
+	}
+</style>

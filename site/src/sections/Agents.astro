@@ -1,0 +1,1021 @@
+---
+import markUrl from "../../../design/brand/mark.svg?url";
+import emberUrl from "../../../design/promo/og-bg.jpg?url";
+import type { Lang } from "../i18n";
+import { copy, FALLBACK_INDEX, models, tallies, worker } from "./Agents.copy";
+
+interface Props {
+	lang: Lang;
+}
+const { lang } = Astro.props;
+const t = copy[lang];
+const names = tallies.map((d) => t.agent(d.dir.slice(0, -1)));
+// 文案里反引号包住的片段按代码着色：拆开后奇数位是代码
+const segments = (text: string) => text.split("`").map((part, i) => ({ part, code: i % 2 === 1 }));
+---
+
+<section class="section agents" id="agents" aria-labelledby="agents-title">
+	<div class="section-inner">
+		<h2 class="section-title" id="agents-title">{t.title}</h2>
+		<p class="section-lede">{t.lede}</p>
+	</div>
+
+	<div class="scene" style={`--ember: url(${emberUrl})`}>
+		<div class="ember" aria-hidden="true"></div>
+		<div class="scene-inner">
+			<div class="story">
+				<span class="rail" aria-hidden="true"><span class="rail-fill"></span></span>
+				<ol class="beats">
+					{
+						t.beats.map((beat) => (
+							<li class="beat">
+								<h3 class="item-title">{beat.title}</h3>
+								<p>{beat.body}</p>
+							</li>
+						))
+					}
+				</ol>
+			</div>
+
+			<figure class="window term" aria-label={t.terminalLabel}>
+				<div class="window-bar" aria-hidden="true"></div>
+				<div class="screen">
+					<p class="prompt"><span class="prompt-text">{t.task}</span></p>
+					<div class="talk">
+						<dl class="roster">
+							<div class="ln">
+								<dt>{t.role}</dt>
+								<dd>→ <span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span></dd>
+							</div>
+							<div class="ln">
+								<dt>{t.engineer}</dt>
+								<dd>→ <span class="model-primary">{models.engineer}</span></dd>
+							</div>
+						</dl>
+					</div>
+
+					<div class="stage">
+						<div class="panes">
+							{
+								tallies.map((d, i) => (
+									<div class="pane" data-fallback={i === FALLBACK_INDEX ? "" : undefined}>
+										<div class="pane-head">
+											<img class="pane-mark" src={markUrl} alt="" />
+											<b>{names[i]}</b>
+											<span class="dim role">{t.role}</span>
+											<span class="model">
+												<span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span>
+												{i === FALLBACK_INDEX && <span class="model-fallback">{models.fallback}</span>}
+											</span>
+										</div>
+										<span class="ln cmd">{t.countCmd(d.dir)}</span>
+										<span class="ln out">{t.files(d.files)}</span>
+										{i === FALLBACK_INDEX && <span class="ln fault">{t.fault}</span>}
+										{i === FALLBACK_INDEX && <span class="ln switch">{t.switched(models.fallback)}</span>}
+										<span class="ln cmd">{t.linesCmd(d.dir)}</span>
+										<span class="ln out">{t.lines(d.lines)}</span>
+										<span class="ln out">{t.largest(d.largest, d.largestLines)}</span>
+										<span class="ln done">{t.paneDone}</span>
+									</div>
+								))
+							}
+						</div>
+
+						<div class="result">
+							<table>
+								<thead>
+									<tr><th>{t.table.dir}</th><th>{t.table.files}</th><th>{t.table.lines}</th><th>{t.table.largest}</th></tr>
+								</thead>
+								<tbody>
+									{
+										tallies.map((d) => (
+											<tr>
+												<td class="code">{d.dir}</td>
+												<td>{d.files}</td>
+												<td>{d.lines}</td>
+												<td><span class="code">{d.largest}</span> ({d.largestLines})</td>
+											</tr>
+										))
+									}
+								</tbody>
+							</table>
+							<p class="closing">{t.closing}</p>
+						</div>
+
+						<div class="flames" aria-hidden="true">
+							{tallies.map(() => <img class="flame" src={markUrl} alt="" />)}
+						</div>
+					</div>
+
+					<div class="dock">
+						<div class="activity">
+							<ul class="rows-live">
+								{
+									names.map((name) => (
+										<li>
+											<span class="spin" aria-hidden="true">⣿</span>
+											<b>{name}</b>
+											<span class="dim">{t.role} · {t.thinking}</span>
+										</li>
+									))
+								}
+							</ul>
+							<p class="rows-done fade-end">
+								<span class="ok">✓</span>
+								<span class="chip">{t.allDone}</span>
+								<span class="dim">{names.join(" · ")}</span>
+							</p>
+						</div>
+						<div class="statusline">
+							<span class="word word-working">{t.working}</span>
+							<span class="word word-waiting">{t.waiting}</span>
+							<span class="word word-done ok">✓</span>
+							<span class="rule" aria-hidden="true"></span>
+							<span class="who">{t.master}</span>
+						</div>
+						<div class="input" aria-hidden="true"><span class="caret"></span></div>
+					</div>
+				</div>
+			</figure>
+		</div>
+	</div>
+
+	<div class="section-inner detail">
+		<div class="detail-copy">
+			<h3 class="subtitle">{t.detailTitle}</h3>
+			<p>{t.detailBody}</p>
+		</div>
+		<figure class="window term worker" aria-label={t.workerLabel}>
+			<div class="window-bar" aria-hidden="true"></div>
+			<div class="screen">
+				<p class="prompt">{t.followup}</p>
+				<div class="answer">
+					<p class="answer-head">{t.answer[0]}</p>
+					<ul>
+						{
+							t.answer.slice(1).map((item) => (
+								<li>{segments(item).map(({ part, code }) => (code ? <span class="code">{part}</span> : part))}</li>
+							))
+						}
+					</ul>
+				</div>
+				<div class="dock">
+					<div class="statusline">
+						<span class="ok">{t.workerDone}</span>
+						<span class="rule plain" aria-hidden="true"></span>
+						<b>{worker.name}</b>
+						<span class="dim">· {t.engineer}</span>
+					</div>
+					<p class="input-line"><span class="dim">›</span> {t.placeholder}<span class="caret" aria-hidden="true"></span></p>
+					<p class="hints dim fade-end">1/1 · {worker.model} · {t.hints.join(" · ")}</p>
+				</div>
+			</div>
+		</figure>
+	</div>
+</section>
+
+<script>
+	import { gsap, reducedMotion, ScrollTrigger } from "../scroll";
+
+	const SCROLL_VIEWPORTS = 2.6;
+	const FLAME_SIZE = 96;
+	// 火苗先横向分开再各自飞，避免同点出发时叠成一团
+	const FLAME_SPREAD = 90;
+	// 时间轴单位。每一拍的主要内容在拍点后 0.3 单位内出现
+	const BEATS = [0, 2.0, 4.0, 7.4];
+
+	const section = document.querySelector<HTMLElement>(".agents")!;
+	const scene = section.querySelector<HTMLElement>(".scene")!;
+
+	if (!reducedMotion) {
+		play();
+		revealWorker();
+	}
+
+	function play() {
+		scene.dataset.play = "";
+		const q = <T extends Element = HTMLElement>(selector: string) => gsap.utils.toArray<T>(selector, scene);
+		const stage = scene.querySelector<HTMLElement>(".stage")!;
+		const panes = q(".pane");
+		const marks = q(".pane-mark");
+		const flames = q(".flame");
+		const beats = q(".beat");
+		const fallbackPane = scene.querySelector<HTMLElement>(".pane[data-fallback]")!;
+
+		const prompt = splitChars(scene.querySelector(".prompt-text")!);
+		const closing = splitChars(scene.querySelector(".closing")!);
+
+		// 逐字敲出：等宽单行用 clip-path 按字数分步揭开，文字始终是完整的 DOM 文本
+		const typeLine = (el: HTMLElement, duration = 0.4) =>
+			gsap.fromTo(
+				el,
+				{ clipPath: "inset(0 100% 0 0)" },
+				{ clipPath: "inset(0 0% 0 0)", ease: `steps(${Math.max(1, [...el.textContent!].length)})`, duration },
+			);
+		const typeChars = (chars: Element[], duration: number) =>
+			gsap.fromTo(chars, { opacity: 0 }, { opacity: 1, duration: 0.001, stagger: duration / chars.length, ease: "none" });
+		const lineDuration = (ln: HTMLElement) => (ln.classList.contains("cmd") ? 0.35 : 0.12);
+
+		// 火苗飞向各窗格标题里的图标：用布局坐标（offset*），不受窗格自身的 transform 影响
+		const flight = (i: number) => {
+			const pane = panes[i];
+			const mark = marks[i];
+			return {
+				x: pane.offsetLeft + mark.offsetLeft + mark.offsetWidth / 2 - stage.clientWidth / 2,
+				y: pane.offsetTop + mark.offsetTop + mark.offsetHeight / 2 - stage.clientHeight / 2,
+				scale: mark.offsetWidth / FLAME_SIZE,
+			};
+		};
+		const showWord = (word: string, at: number) =>
+			tl.set(q(".word"), { display: "none" }, at).set(q(`.word-${word}`), { display: "inline" }, at);
+
+		const lines = (pane: HTMLElement) => gsap.utils.toArray<HTMLElement>(".ln", pane);
+		const tl = gsap.timeline({ defaults: { ease: "none" } });
+		BEATS.forEach((time, i) => tl.addLabel(`beat${i}`, time));
+
+		// 第一拍：指令一打完，角色路由与三个窗格空壳立刻就位；一团火分成三簇落进窗格标题，窗格随之点亮
+		const roster = q(".roster .ln");
+		tl.set(q(".word"), { display: "none" }, 0)
+			.set(q(".ln"), { clipPath: "inset(0 100% 0 0)" }, 0)
+			.set(marks, { opacity: 0 }, 0)
+			.set(q(".pane-head"), { opacity: 0 }, 0)
+			.set(q(".model-mark"), { scaleX: 0 }, 0)
+			.set(q(".model-fallback"), { opacity: 0 }, 0)
+			.set(q(".rows-live li"), { opacity: 0, y: 6 }, 0)
+			.set(q(".rows-done, .result, thead tr, tbody tr"), { opacity: 0 }, 0)
+			.add(typeChars(prompt, 0.6), 0)
+			.add(typeLine(roster[0], 0.3), 0.6)
+			.add(typeLine(roster[1], 0.3), 0.75)
+			.fromTo(panes, { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: 0.2, ease: "power2.out", stagger: 0.04 }, 0.6)
+			.fromTo(flames, { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 0.25, ease: "power2.out" }, 0.7)
+			.to(flames, { x: (i) => (i - 1) * FLAME_SPREAD, scale: 0.7, duration: 0.2, ease: "power2.inOut" }, 0.95)
+			.to(
+				flames,
+				{
+					x: (i) => flight(i).x,
+					y: (i) => flight(i).y,
+					scale: (i) => flight(i).scale,
+					duration: 0.6,
+					ease: "power3.inOut",
+					stagger: 0.05,
+				},
+				1.15,
+			)
+			.set(marks, { opacity: 1 }, 1.85)
+			.set(flames, { opacity: 0 }, 1.85)
+			.to(q(".pane-head"), { opacity: 1, duration: 0.15, stagger: 0.04 }, 1.75)
+			.to(q(".rows-live li"), { opacity: 1, y: 0, duration: 0.25, stagger: 0.06, ease: "power2.out" }, 1.75);
+		showWord("working", 0.6);
+		showWord("waiting", 1.8);
+
+		// 第二拍：调研员的模型在角色表与三个窗格里一起划线，各窗格开始干活
+		tl.to(q(".model-mark"), { scaleX: 1, duration: 0.3, ease: "power2.out", stagger: 0.04 }, "beat1")
+			.to(q(".model-mark"), { opacity: 0, duration: 0.2 }, "beat2");
+		panes.forEach((pane, i) => {
+			const [count, files, ...rest] = lines(pane);
+			const start = BEATS[1] + 0.3 + i * 0.12;
+			tl.add(typeLine(count, 0.4), start).add(typeLine(files, 0.12), start + 0.45);
+			if (pane === fallbackPane) return;
+			rest.forEach((ln, k) => tl.add(typeLine(ln, lineDuration(ln)), BEATS[2] + 0.2 + i * 0.15 + k * 0.35));
+		});
+
+		// 第三拍：出故障的那格报错、切到 fallback，接着干
+		const [, , fault, swap, ...after] = lines(fallbackPane);
+		tl.add(typeLine(fault, 0.3), "beat2")
+			.add(typeLine(swap, 0.4), "beat2+=0.45")
+			.to(fallbackPane.querySelector(".model-primary"), { opacity: 0, duration: 0.15 }, "beat2+=0.85")
+			.to(fallbackPane.querySelector(".model-fallback"), { opacity: 1, duration: 0.15 }, "beat2+=0.95");
+		after.forEach((ln, k) => tl.add(typeLine(ln, lineDuration(ln)), BEATS[2] + 1.3 + k * 0.4));
+
+		// 第四拍：窗格淡出的后半程汇总表就开始出现，两者交叠，中间不留空
+		tl.to(q(".rows-live li"), { opacity: 0, y: -6, duration: 0.2, stagger: 0.04 }, "beat3")
+			.to(q(".rows-done"), { opacity: 1, duration: 0.2 }, "beat3+=0.1")
+			.to(panes, { opacity: 0, y: -8, duration: 0.3, ease: "power2.out", stagger: 0.04 }, "beat3")
+			.set(q(".result"), { opacity: 1 }, "beat3+=0.2")
+			.to(q("thead tr, tbody tr"), { opacity: 1, duration: 0.15, stagger: 0.12 }, "beat3+=0.2")
+			.add(typeChars(closing, 0.5), "beat3+=0.8")
+			.to(q(".ember"), { opacity: 0.55, duration: 0.5 }, "beat3+=0.8")
+			.to({}, { duration: 0.4 });
+		showWord("working", BEATS[3] + 0.1);
+		showWord("done", BEATS[3] + 1.4);
+
+		// 当前拍：说明点亮，进度线跳到这一条的底边
+		const rail = scene.querySelector(".rail-fill");
+		const list = scene.querySelector<HTMLElement>(".beats")!;
+		let active = -1;
+		const setBeat = () => {
+			const now = BEATS.findLastIndex((time) => tl.time() >= time);
+			if (now === active) return;
+			active = now;
+			beats.forEach((li, i) => li.toggleAttribute("aria-current", i === now));
+			const li = beats[now];
+			gsap.to(rail, { scaleY: (li.offsetTop + li.offsetHeight) / list.offsetHeight, duration: 0.3, ease: "power2.out", overwrite: true });
+		};
+		setBeat();
+		tl.eventCallback("onUpdate", setBeat);
+
+		// 顶对齐钉住（顶部已让出导航高度）；整幕高过视口的极矮屏改为底边对齐，终端始终完整可见
+		const fits = scene.offsetHeight <= innerHeight;
+		ScrollTrigger.create({
+			trigger: scene,
+			animation: tl,
+			pin: true,
+			start: fits ? "top top" : "bottom bottom",
+			end: () => `+=${innerHeight * SCROLL_VIEWPORTS}`,
+			scrub: 0.6,
+			invalidateOnRefresh: true,
+		});
+	}
+
+	// 每个字包一层行内 span：不改变断行（SplitText 的 inline-block 会让中文整句不可断、英文词被拆开），复制出来仍是原文
+	function splitChars(el: Element) {
+		const chars = [...el.textContent!].map((char) => {
+			const span = document.createElement("span");
+			span.textContent = char;
+			return span;
+		});
+		el.replaceChildren(...chars);
+		return chars;
+	}
+
+	function revealWorker() {
+		const term = section.querySelector(".worker")!;
+		gsap.from(term.querySelectorAll(".prompt, .answer-head, .answer li, .dock"), {
+			opacity: 0,
+			y: 4,
+			duration: 0.5,
+			ease: "power2.out",
+			stagger: 0.08,
+			scrollTrigger: { trigger: term, start: "top 80%", once: true },
+		});
+	}
+</script>
+
+<style>
+	.agents {
+		--pane-bg: oklch(0.2 0.006 40);
+		--prompt-bg: oklch(0.24 0.03 50);
+		--code: oklch(0.74 0.17 335);
+		--teal: oklch(0.7 0.11 190);
+		--mono-line: 1.65;
+
+		overflow-x: clip;
+	}
+
+	/* 场景：说明列 + 终端。钉住时整幕在视口里居中；装饰火光不许撑出屏宽（钉住后 fixed 定位会逃出区块的裁切） */
+	.scene {
+		position: relative;
+		margin-top: clamp(48px, 8svh, 96px);
+		overflow-x: clip;
+	}
+
+	.scene[data-play] {
+		margin-top: 0;
+	}
+
+	/* 钉住时让出固定导航栏的高度；计入 offsetHeight，脚本据此判断整幕能否放进一屏 */
+	[data-play] .scene-inner {
+		padding-block: calc(var(--nav-h) + 12px) 12px;
+	}
+
+	.ember {
+		position: absolute;
+		inset: -10% 0;
+		z-index: -1;
+		background: var(--ember) right bottom / cover no-repeat;
+		mask-image: radial-gradient(closest-side, black 30%, transparent);
+		opacity: 0.55;
+		pointer-events: none;
+	}
+
+	[data-play] .ember {
+		opacity: 0.25;
+	}
+
+	.scene-inner {
+		max-width: var(--page-max);
+		margin-inline: auto;
+		display: grid;
+		grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+		gap: clamp(32px, 3.5vw, 48px);
+		align-items: start;
+	}
+
+	.story {
+		position: relative;
+		padding-left: 22px;
+	}
+
+	.rail {
+		display: none;
+		position: absolute;
+		inset: 4px auto 4px 0;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--ring);
+	}
+
+	.rail-fill {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--accent);
+		transform-origin: top;
+		transform: scaleY(0);
+	}
+
+	[data-play] .rail {
+		display: block;
+	}
+
+	.beats {
+		display: grid;
+		gap: 28px;
+		padding: 0;
+		list-style: none;
+	}
+
+	.beat p {
+		margin-top: 6px;
+		color: var(--muted);
+		font-size: var(--text-body);
+		line-height: 1.55;
+		text-wrap: pretty;
+	}
+
+	.beat > * {
+		transition: opacity 320ms var(--ease-enter);
+	}
+
+	[data-play] .beat > * {
+		opacity: 0.5;
+	}
+
+	[data-play] .beat[aria-current] > * {
+		opacity: 1;
+	}
+
+	/* 中文按词断行，不在词中间折 */
+	:lang(zh) .agents :is(.section-lede, .beat p, .detail-copy p) {
+		word-break: keep-all;
+		overflow-wrap: anywhere;
+	}
+
+	/* 终端：复刻 pi 的会话界面，文字都是网页文字 */
+	/* 外观来自共享 .window，这里只补行高与布局 */
+	.term {
+		min-width: 0;
+		line-height: var(--mono-line);
+	}
+
+	.screen {
+		display: grid;
+		gap: 12px;
+		padding: 8px 16px 12px;
+	}
+
+	.prompt {
+		padding: 2px 10px 2px 10px;
+		border-left: 3px solid var(--accent);
+		background: var(--prompt-bg);
+		color: var(--fg);
+	}
+
+	.talk {
+		display: grid;
+		padding-left: 4px;
+	}
+
+	.roster .ln {
+		display: flex;
+		gap: 1ch;
+	}
+
+	.roster dt {
+		min-width: 11ch;
+		color: var(--muted);
+	}
+
+	.roster dd {
+		color: var(--muted);
+	}
+
+	.roster .model-primary {
+		color: var(--teal);
+	}
+
+	.stage {
+		position: relative;
+		display: grid;
+		gap: 16px;
+	}
+
+	[data-play] .stage > :is(.panes, .result) {
+		grid-area: 1 / 1;
+	}
+
+	[data-play] .result {
+		align-self: center;
+	}
+
+	.panes {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.pane {
+		display: grid;
+		align-content: start;
+		padding: 10px 10px 12px;
+		border-radius: 10px;
+		background: var(--pane-bg);
+		box-shadow: 0 0 0 1px var(--ring);
+		min-width: 0;
+	}
+
+	.pane-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		column-gap: 8px;
+		margin-bottom: 6px;
+	}
+
+	.pane-mark {
+		width: 14px;
+		height: auto;
+		aspect-ratio: 2916 / 3552;
+	}
+
+	.pane-head b {
+		font-weight: 700;
+	}
+
+	.model {
+		position: relative;
+		display: inline-grid;
+		flex-basis: 100%;
+		justify-items: start;
+		color: var(--teal);
+	}
+
+	.model > span {
+		grid-area: 1 / 1;
+	}
+
+	.pane[data-fallback] .model-primary {
+		opacity: 0;
+	}
+
+	[data-play] .pane[data-fallback] .model-primary {
+		opacity: 1;
+	}
+
+	.model-primary {
+		position: relative;
+	}
+
+	/* 划线跟随模型名本身的宽度 */
+	.model-mark {
+		position: absolute;
+		inset: auto 0 -1px;
+		height: 2px;
+		background: var(--accent);
+		transform-origin: left center;
+		transform: scaleX(0);
+	}
+
+	.ln {
+		display: block;
+		width: fit-content;
+		max-width: 100%;
+		white-space: pre;
+		overflow: hidden;
+		text-overflow: clip;
+	}
+
+	.cmd {
+		color: var(--muted);
+	}
+
+	.out {
+		color: var(--fg);
+	}
+
+	.fault {
+		color: var(--fail);
+	}
+
+	.switch {
+		color: var(--accent-hot);
+	}
+
+	.done,
+	.ok {
+		color: var(--pass);
+	}
+
+	.dim {
+		color: var(--muted);
+	}
+
+	.result {
+		display: grid;
+		gap: 12px;
+		min-width: 0;
+	}
+
+	/* 边框画在各自单元格上（不合并），整行淡入淡出时不会先露出空表格线 */
+	table {
+		--line: 1px solid oklch(1 0 0 / 0.22);
+
+		width: 100%;
+		border-collapse: separate;
+		border-spacing: 0;
+		font-size: 14px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	th,
+	td {
+		padding: 6px 12px;
+		border-right: var(--line);
+		border-bottom: var(--line);
+		text-align: left;
+		white-space: nowrap;
+	}
+
+	th {
+		border-top: var(--line);
+	}
+
+	:is(th, td):first-child {
+		border-left: var(--line);
+	}
+
+	th {
+		font-weight: 700;
+	}
+
+	.code {
+		color: var(--code);
+	}
+
+	.closing {
+		color: var(--fg);
+	}
+
+	.flames {
+		display: none;
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+	}
+
+	[data-play] .flames {
+		display: block;
+	}
+
+	.flame {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		width: 96px;
+		height: auto;
+		aspect-ratio: 2916 / 3552;
+		margin: calc(96px * -3552 / 2916 / 2) 0 0 -48px;
+		filter: drop-shadow(0 0 16px oklch(0.7 0.2 45 / 0.55));
+		opacity: 0;
+	}
+
+	/* 底部：活动列表、嵌进边框的状态行、输入行 */
+	.dock {
+		display: grid;
+		gap: 2px;
+	}
+
+	.activity {
+		display: grid;
+		align-items: end;
+		min-height: calc(3em * var(--mono-line));
+	}
+
+	.activity > * {
+		grid-area: 1 / 1;
+	}
+
+	.rows-live {
+		padding: 0 0 0 4px;
+		list-style: none;
+	}
+
+	.rows-live li {
+		display: flex;
+		gap: 8px;
+		white-space: nowrap;
+	}
+
+	.rows-live {
+		visibility: hidden;
+	}
+
+	[data-play] .rows-live {
+		visibility: visible;
+	}
+
+	.spin {
+		color: var(--accent);
+		animation: pulse 1.2s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		50% {
+			opacity: 0.35;
+		}
+	}
+
+	.rows-done {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding-left: 4px;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+
+	/* 终端一行放不下时像宽度不够的终端那样截掉，末尾渐隐而不是硬切 */
+	.fade-end {
+		mask-image: linear-gradient(90deg, black calc(100% - 24px), transparent);
+	}
+
+	.chip {
+		padding: 0 6px;
+		border-radius: 3px;
+		background: oklch(1 0 0 / 0.1);
+		color: var(--fg);
+	}
+
+	.statusline {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.word {
+		display: none;
+		color: var(--fg);
+		font-weight: 600;
+		white-space: nowrap;
+	}
+
+	.word-done {
+		display: inline;
+	}
+
+	.rule {
+		flex: 1;
+		height: 1px;
+		background: linear-gradient(90deg, var(--accent) 0 28%, var(--teal) 28%);
+		opacity: 0.7;
+	}
+
+	.rule.plain {
+		background: var(--faint);
+	}
+
+	.who {
+		color: var(--accent);
+	}
+
+	.input {
+		height: calc(1em * var(--mono-line));
+		display: flex;
+		align-items: center;
+	}
+
+	.caret {
+		display: inline-block;
+		width: 0.6em;
+		height: 1.2em;
+		background: var(--fg);
+		animation: blink 1.06s steps(1) infinite;
+	}
+
+	@keyframes blink {
+		50% {
+			opacity: 0;
+		}
+	}
+
+	/* 点开子代理后的视图：同一套终端外观，网页文字重做截图里的收尾片段 */
+	.detail {
+		display: grid;
+		grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+		gap: clamp(32px, 4vw, 64px);
+		align-items: center;
+		margin-top: clamp(64px, 10svh, 120px);
+	}
+
+	.detail-copy p {
+		margin-top: 14px;
+		color: var(--muted);
+		font-size: var(--text-lede);
+		line-height: 1.6;
+		text-wrap: pretty;
+	}
+
+	.answer {
+		display: grid;
+		gap: 2px;
+		padding-left: 4px;
+		color: var(--fg);
+	}
+
+	.answer-head {
+		font-weight: 700;
+	}
+
+	.answer ul {
+		padding: 0;
+		list-style: none;
+	}
+
+	/* 续行与破折号后的文字对齐 */
+	.answer li {
+		padding-left: 2ch;
+		text-indent: -2ch;
+	}
+
+	.worker .dock {
+		margin-top: 12px;
+	}
+
+	.worker .statusline {
+		white-space: nowrap;
+	}
+
+	.input-line {
+		color: var(--muted);
+	}
+
+	.input-line .caret {
+		margin-left: 2px;
+		vertical-align: -0.2em;
+	}
+
+	.hints {
+		white-space: nowrap;
+		overflow: hidden;
+	}
+
+	@media (max-width: 960px) {
+		.scene-inner,
+		.detail {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.story {
+			padding-left: 0;
+		}
+
+		[data-play] .rail {
+			display: none;
+		}
+
+		[data-play] .beats {
+			gap: 0;
+		}
+
+		[data-play] .beat {
+			grid-area: 1 / 1;
+			opacity: 0;
+			transition: opacity 320ms var(--ease-enter);
+		}
+
+		[data-play] .beat[aria-current] {
+			opacity: 1;
+		}
+
+		/* 单栏时窗格竖排：三栏放不下命令行，省掉命令行与窗格里的角色名（活动列表里还有） */
+		.panes {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 8px;
+		}
+
+		.pane {
+			padding: 8px 10px;
+		}
+
+		.pane-head {
+			margin-bottom: 2px;
+		}
+
+		.model {
+			flex-basis: auto;
+		}
+
+		.cmd,
+		.pane .role {
+			display: none;
+		}
+	}
+
+	@media (max-width: 640px) {
+		.agents {
+			--mono-line: 1.45;
+		}
+
+		.scene-inner {
+			gap: 20px;
+		}
+
+		.screen {
+			padding-inline: 12px;
+			gap: 10px;
+		}
+
+		table {
+			font-size: 11.5px;
+		}
+
+		th,
+		td {
+			padding: 4px 6px;
+		}
+
+		/* 窄屏让表头换行，列宽由数据决定 */
+		th {
+			white-space: normal;
+			vertical-align: bottom;
+		}
+	}
+
+	/* 常见手机高度（如 390×844）：活动列表只留一行、行高收紧，让整幕钉在一屏里 */
+	@media (max-width: 640px) and (max-height: 900px) {
+		.agents {
+			--mono-line: 1.4;
+		}
+
+		[data-play] .rows-live li:nth-child(n + 2) {
+			display: none;
+		}
+
+		.activity {
+			min-height: calc(1em * var(--mono-line));
+		}
+	}
+
+	/* 矮屏手机（如 390×667）：再省掉角色表，字号再收一档 */
+	@media (max-width: 640px) and (max-height: 760px) {
+		/* 共享终端字号在矮屏上放不下整幕，只在这里再收一档 */
+		.scene .window {
+			font-size: 10.5px;
+		}
+
+		.scene-inner {
+			gap: 12px;
+		}
+
+		[data-play] .scene-inner {
+			padding-bottom: 6px;
+		}
+
+		.beat p {
+			font-size: 0.9rem;
+			line-height: 1.45;
+		}
+
+		.scene .screen {
+			gap: 7px;
+		}
+
+		.panes {
+			gap: 6px;
+		}
+
+		.pane {
+			padding-block: 6px;
+		}
+
+		[data-play] .talk {
+			display: none;
+		}
+
+		table {
+			font-size: 10.5px;
+		}
+
+		th,
+		td {
+			padding-inline: 5px;
+		}
+	}
+
+	/* 更矮的屏（如 360×640）：说明只留标题，四点内容区块导语里已经列过 */
+	@media (max-width: 640px) and (max-height: 700px) {
+		[data-play] .beat p {
+			display: none;
+		}
+	}
+</style>

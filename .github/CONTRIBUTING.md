@@ -23,6 +23,8 @@ bun run typecheck
 bun test
 ```
 
+The website in `site/` has its own dependencies and is built by Vercel on every push; check it locally with `cd site && bun install && bun run check && bun run build`.
+
 `typecheck` runs pi-mono's own `tsc` so the compiler version matches CI, and links `.pi-mono` (git-ignored) to the located checkout because `tsconfig.json` extends pi-mono's. It covers runtime code only; test files, `scripts/` and `evals/` are excluded because they need Bun types.
 
 ## Pull requests

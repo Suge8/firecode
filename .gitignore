@@ -4,3 +4,4 @@ coverage/
 .DS_Store
 config.jsonc
 .pi-mono
+.vercel

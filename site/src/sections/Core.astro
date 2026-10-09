@@ -1,0 +1,551 @@
+---
+import type { Lang } from "../i18n";
+import { copy } from "./Core.copy";
+
+interface Props {
+	lang: Lang;
+}
+const { lang } = Astro.props;
+const t = copy[lang];
+
+// 数据取自 README「核心极轻」表（2026 年 10 月实测）；min≠max 的是区间
+const rows = [
+	{ name: "FireCode", tools: "2", min: 926, max: 926 },
+	{ name: "omp", tools: "2", min: 3140, max: 3140 },
+	{ name: "Codex CLI", tools: "5–6", min: 4766, max: 9378 },
+	{ name: "pi-subagents", tools: "2–3", min: 4703, max: 23182 },
+];
+const SCALE = 25000;
+const TICKS = [0, 5, 10, 15, 20, 25];
+const ratio = Math.round(rows[3].max / rows[0].max);
+const fmt = new Intl.NumberFormat("en-US");
+const punch = t.punch.map((phrase) => phrase.replace("{n}", String(ratio)).split(/\[(.+?)\]/));
+// 条形里的字符纹理只作装饰：通用的工具定义 JSON 形状，表达“这里每一格都是字符”
+const texture = '{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},'.repeat(24);
+---
+
+<section class="section core" id="core" aria-labelledby="core-title">
+	<div class="section-inner">
+		<header class="head">
+			<h2 class="section-title" id="core-title">{t.title}</h2>
+			<p class="section-lede">{t.lede}</p>
+		</header>
+
+		<figure class="chart" aria-labelledby="core-caption">
+			<div class="row legend" aria-hidden="true">
+				<span class="name"></span>
+				<span class="tools">{t.headTools}</span>
+				<span class="track-head"></span>
+				<span class="value">{t.headChars}</span>
+			</div>
+			<div class="plot">
+			<span class="gridlines" aria-hidden="true"></span>
+			{
+				rows.map((row, index) => (
+					<div class:list={["row", { self: index === 0 }]} style={`--min:${row.min / SCALE};--max:${row.max / SCALE};--solid:${row.min / row.max}`}>
+						<span class="name">{row.name}</span>
+						<span class="tools">{t.tools(row.tools)}</span>
+						<span class="track" aria-hidden="true">
+							<span class="bar">
+								{/* FireCode 的条太窄，纹理会碎成乱码，只留纯色和光晕 */}
+								<span class="solid">{index > 0 && <span class="grain">{texture}</span>}</span>
+								{row.max > row.min && <span class="range" />}
+							</span>
+						</span>
+						<span class="value">
+							<span data-count={row.min}>{fmt.format(row.min)}</span>
+							{row.max > row.min && (
+								<>
+									<span class="dash">–</span>
+									<span data-count={row.max}>{fmt.format(row.max)}</span>
+								</>
+							)}
+						</span>
+					</div>
+				))
+			}
+			</div>
+			<div class="row axis" aria-hidden="true">
+				<span class="name"></span>
+				<span class="tools"></span>
+				<span class="ticks">
+					{TICKS.map((tick) => <span style={`--at:${(tick * 1000) / SCALE}`}>{tick === 0 ? "0" : `${tick}k`}</span>)}
+				</span>
+				<span class="value"></span>
+			</div>
+			<figcaption id="core-caption">{t.caption}</figcaption>
+		</figure>
+
+		<p class="subtitle punch">
+			{
+				punch.map((parts, index) => (
+					<>
+						{index > 0 && lang === "en" && " "}
+						<span>{parts.map((part, at) => (at % 2 ? <strong>{part}</strong> : part))}</span>
+					</>
+				))
+			}
+		</p>
+
+		<div class="also">
+			<h3 class="subtitle">{t.alsoTitle}</h3>
+			<dl>
+				<div>
+					<dt><code class="cmd"><span>/</span>fire-watch</code></dt>
+					<dd>{t.also.watch}</dd>
+				</div>
+				<div>
+					<dt><code class="cmd"><span>/</span>preset</code></dt>
+					<dd>{t.also.preset}</dd>
+				</div>
+				<div>
+					<dt><code class="cmd"><span>/</span>quota</code><code class="cmd"><span>/</span>tokens</code></dt>
+					<dd>{t.also.usage}</dd>
+				</div>
+				<div>
+					<dt><kbd>Ctrl</kbd><kbd>R</kbd></dt>
+					<dd>{t.also.rename}</dd>
+				</div>
+				<div>
+					<dt><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>S</kbd></dt>
+					<dd>{t.also.fast}</dd>
+				</div>
+				<div>
+					<dt><code class="cmd"><span>/</span>login</code></dt>
+					<dd>{t.also.login}</dd>
+				</div>
+			</dl>
+		</div>
+	</div>
+</section>
+
+<script>
+	import { gsap, reducedMotion } from "../scroll";
+
+	// HTML 里已是终态；只有允许动效时才从零播放一次
+	if (!reducedMotion) {
+		const core = document.querySelector<HTMLElement>("#core")!;
+		const fmt = new Intl.NumberFormat("en-US");
+		const count = (el: HTMLElement, duration: number) => {
+			const target = Number(el.dataset.count);
+			const state = { v: 0 };
+			el.textContent = "0";
+			return gsap.to(state, {
+				v: target,
+				duration,
+				ease: "power3.out",
+				onUpdate: () => (el.textContent = fmt.format(Math.round(state.v))),
+			});
+		};
+
+		const chart = core.querySelector<HTMLElement>(".chart")!;
+		const rows = gsap.utils.toArray<HTMLElement>(".row:not(.legend, .axis)", chart);
+		const tl = gsap.timeline({ scrollTrigger: { trigger: chart, start: "top 72%", once: true } });
+		// 整段入场压在 1.2 秒内：柱子 0.9 秒、数字 0.8 秒，结论稍晚一拍与柱子一同出现
+		tl.from(chart.querySelectorAll(".legend, .axis, figcaption"), { opacity: 0, duration: 0.4, ease: "power2.out" }, 0);
+		rows.forEach((row, index) => {
+			const at = 0.05 + index * 0.06;
+			const bar = row.querySelector(".bar")!;
+			const range = row.querySelector(".range");
+			const [low, high] = row.querySelectorAll<HTMLElement>("[data-count]");
+			tl.from(row.querySelectorAll(".name, .tools, .value"), { opacity: 0, y: 8, duration: 0.5, ease: "power3.out" }, at);
+			// 起止用同一单位才能插值；结束后清掉裁切，放出 FireCode 条形的光晕
+			tl.fromTo(bar, { clipPath: "inset(-24px 100% -24px 0%)" }, { clipPath: "inset(-24px 0% -24px 0%)", duration: 0.9, ease: "expo.out", clearProps: "clipPath" }, at);
+			tl.add(count(low, 0.8), at);
+			if (range && high) {
+				tl.from(range, { opacity: 0, duration: 0.4, ease: "power2.out" }, at + 0.3);
+				tl.add(count(high, 0.8), at + 0.1);
+			}
+		});
+
+		// 两位数不计数，直接淡入
+		tl.from(core.querySelector(".punch"), { opacity: 0, y: 8, duration: 0.5, ease: "power3.out" }, 0.35);
+
+		const also = core.querySelector<HTMLElement>(".also")!;
+		gsap.from(also.querySelectorAll("h3, dl > div"), {
+			opacity: 0,
+			y: 10,
+			duration: 0.7,
+			ease: "power3.out",
+			stagger: 0.06,
+			scrollTrigger: { trigger: also, start: "top 78%", once: true },
+		});
+	}
+</script>
+
+<style>
+	.core {
+		/* 标题区与「还有这些」共用一套两列栅格，介绍句对齐说明列 */
+		--side-cols: minmax(0, 1fr) minmax(0, 1.6fr);
+		--side-gap: 48px;
+		--trigger-col: 13rem;
+		--trigger-gap: 24px;
+		overflow: clip;
+	}
+
+	:lang(zh) :is(.section-lede, figcaption, .punch, dd) {
+		word-break: keep-all;
+	}
+
+	/* 对比图 */
+	.chart {
+		--name-col: 10.5rem;
+		--tools-col: 6.5rem;
+		--value-col: 13rem;
+		margin-top: clamp(56px, 9svh, 96px);
+	}
+
+	.row {
+		display: grid;
+		grid-template-columns: var(--name-col) var(--tools-col) minmax(0, 1fr) var(--value-col);
+		align-items: center;
+		column-gap: 24px;
+		padding-block: 14px;
+	}
+
+	.legend,
+	.axis {
+		padding-block: 0;
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+
+	.legend {
+		margin-bottom: 6px;
+		white-space: nowrap;
+	}
+
+	.name {
+		font-size: 17px;
+		font-weight: 560;
+		font-stretch: 108%;
+		letter-spacing: -0.01em;
+	}
+
+	.row .tools {
+		color: var(--muted);
+		font-size: 14px;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.value {
+		justify-self: end;
+		white-space: nowrap;
+		color: var(--muted);
+		font-size: clamp(1.35rem, 2.3vw, 2.1rem);
+		font-weight: 600;
+		font-stretch: 112%;
+		letter-spacing: -0.03em;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.legend .tools {
+		font-size: inherit;
+	}
+
+	.legend .value {
+		font-size: inherit;
+		font-weight: inherit;
+		font-stretch: inherit;
+		letter-spacing: 0;
+		color: inherit;
+	}
+
+	.dash {
+		margin-inline: 0.08em;
+		color: var(--faint);
+	}
+
+	.plot {
+		position: relative;
+	}
+
+	.plot > .row {
+		position: relative;
+	}
+
+	/* 整图一层网格线：每 5k 一条，含 0 与 25k，与下方刻度标签对齐 */
+	.gridlines {
+		--line: oklch(1 0 0 / 0.05);
+		position: absolute;
+		inset-block: 0 -4px;
+		left: calc(var(--name-col) + var(--tools-col) + 48px);
+		right: calc(var(--value-col) + 24px);
+		background:
+			repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 20%),
+			linear-gradient(to left, var(--line) 0 1px, transparent 1px);
+		pointer-events: none;
+	}
+
+	.track {
+		position: relative;
+		height: 46px;
+	}
+
+	.bar {
+		position: absolute;
+		inset-block: 0;
+		left: 0;
+		display: flex;
+		width: calc(var(--max) * 100%);
+		min-width: 3px;
+	}
+
+	.solid {
+		position: relative;
+		overflow: hidden;
+		flex: 0 0 calc(var(--solid) * 100%);
+		border-radius: 3px;
+		background: oklch(0.3 0.012 50);
+	}
+
+	.grain {
+		position: absolute;
+		inset: 3px 0 0 4px;
+		color: oklch(0.36 0.013 50);
+		font-family: var(--font-mono);
+		font-size: 9px;
+		line-height: 13px;
+		word-break: break-all;
+		user-select: none;
+	}
+
+	.range {
+		flex: 1;
+		margin-left: 2px;
+		border-radius: 3px;
+		background: repeating-linear-gradient(-45deg, oklch(0.3 0.012 50 / 0.85) 0 2px, var(--bg) 2px 7px);
+		box-shadow: inset 0 0 0 1px oklch(0.3 0.012 50);
+	}
+
+	.self .name,
+	.self .value {
+		color: var(--accent);
+	}
+
+	.self .solid {
+		background: var(--accent);
+		box-shadow:
+			0 0 18px oklch(0.72 0.19 50 / 0.75),
+			0 0 4px var(--accent-hot);
+	}
+
+	.self .value {
+		font-size: clamp(1.8rem, 3.4vw, 3.1rem);
+	}
+
+	.ticks {
+		position: relative;
+		height: 18px;
+		margin-top: 4px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.ticks span {
+		position: absolute;
+		left: calc(var(--at) * 100%);
+		translate: -50% 0;
+	}
+
+	figcaption {
+		margin-top: 22px;
+		color: var(--muted);
+		font-size: 13px;
+		line-height: 1.5;
+	}
+
+	.punch {
+		max-width: 32ch;
+		margin-top: clamp(64px, 10svh, 112px);
+	}
+
+	.punch strong {
+		color: var(--accent);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	/* 按短语换行，"pi-subagents" 不在连字符处断开 */
+	.punch > span {
+		display: inline-block;
+	}
+
+	:lang(zh) .punch {
+		max-width: none;
+	}
+
+	:lang(zh) .punch > span {
+		display: block;
+	}
+
+	/* 还附带的功能：像 --help 输出的命令清单 */
+	.also {
+		display: grid;
+		grid-template-columns: var(--side-cols);
+		gap: 32px var(--side-gap);
+		margin-top: clamp(112px, 18svh, 200px);
+	}
+
+	h3 {
+		/* 与第一行命令的内容顶部对齐（行的上内边距） */
+		margin-top: 13px;
+	}
+
+	dl > div {
+		display: grid;
+		grid-template-columns: var(--trigger-col) minmax(0, 1fr);
+		align-items: center;
+		column-gap: var(--trigger-gap);
+		padding-block: 13px;
+	}
+
+	dt {
+		min-height: 30px;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px 14px;
+	}
+
+	dt:has(kbd) {
+		gap: 5px;
+	}
+
+	dd {
+		color: var(--muted);
+		font-size: 16px;
+		line-height: 1.5;
+		text-wrap: balance;
+	}
+
+	.cmd {
+		color: var(--fg);
+		font-size: 15.5px;
+	}
+
+	.cmd span {
+		color: var(--accent);
+	}
+
+	kbd {
+		display: inline-grid;
+		place-items: center;
+		min-width: 26px;
+		height: 26px;
+		padding: 0 8px;
+		border-radius: 7px;
+		background: oklch(0.22 0.008 50);
+		box-shadow:
+			inset 0 -2px 0 oklch(0 0 0 / 0.45),
+			inset 0 1px 0 oklch(1 0 0 / 0.06),
+			0 0 0 1px var(--ring);
+		color: var(--fg);
+		font-size: 12.5px;
+		line-height: 1;
+	}
+
+	@media (max-width: 860px) {
+		.also {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		h3 {
+			margin-top: 0;
+		}
+
+		.gridlines {
+			left: 0;
+			right: 0;
+		}
+
+		.row {
+			grid-template-columns: auto minmax(0, 1fr) auto;
+			grid-template-areas:
+				"name tools value"
+				"track track track";
+			row-gap: 10px;
+			column-gap: 12px;
+			padding-block: 12px;
+		}
+
+		.name {
+			grid-area: name;
+		}
+
+		.tools {
+			grid-area: tools;
+		}
+
+		.value {
+			grid-area: value;
+		}
+
+		.track,
+		.ticks {
+			grid-area: track;
+		}
+
+		.track {
+			height: 30px;
+		}
+
+		.legend {
+			display: none;
+		}
+
+		.axis {
+			grid-template-areas: "track track track";
+		}
+
+		.axis .name,
+		.axis .tools,
+		.axis .value {
+			display: none;
+		}
+
+		.name {
+			font-size: 16px;
+		}
+
+		.row .tools {
+			font-size: 13px;
+		}
+
+		.value {
+			font-size: 1.3rem;
+		}
+
+		dl > div {
+			grid-template-columns: minmax(0, 1fr);
+			row-gap: 8px;
+			padding-block: 12px;
+		}
+	}
+	/* 柱宽太窄时代码纹理只剩碎字 */
+	@media (max-width: 640px) {
+		.grain {
+			display: none;
+		}
+	}
+
+	/* 窄屏把工具数挪到名字下一行，整段不断开 */
+	@media (max-width: 480px) {
+		.row {
+			grid-template-columns: minmax(0, 1fr) auto;
+			grid-template-areas:
+				"name value"
+				"tools value"
+				"track track";
+			row-gap: 2px;
+		}
+
+		.track {
+			margin-top: 8px;
+		}
+
+		.axis {
+			grid-template-areas: "track track";
+		}
+	}
+</style>

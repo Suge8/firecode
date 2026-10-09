@@ -1,0 +1,10 @@
+{
+	"$schema": "https://openapi.vercel.sh/vercel.json",
+	"framework": "astro",
+	"ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ../design ../README.md ../README.zh-CN.md",
+	"headers": [
+		{ "source": "/_astro/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+		{ "source": "/", "headers": [{ "key": "Vary", "value": "Accept" }] },
+		{ "source": "/zh/", "headers": [{ "key": "Vary", "value": "Accept" }] }
+	]
+}

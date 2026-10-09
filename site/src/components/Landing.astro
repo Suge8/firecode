@@ -1,0 +1,61 @@
+---
+import "@fontsource-variable/mona-sans/wdth.css";
+import "@fontsource/maple-mono/400.css";
+import "../styles/global.css";
+import iconUrl from "../../../design/brand/icon.svg?url";
+import ogEn from "../../../design/promo/og-1280x640.png?url";
+import ogZh from "../../../design/promo/og-1280x640.zh.png?url";
+import { site, type Lang } from "../i18n";
+import Nav from "./Nav.astro";
+import Hero from "../sections/Hero.astro";
+import Agents from "../sections/Agents.astro";
+import Review from "../sections/Review.astro";
+import Core from "../sections/Core.astro";
+import Closing from "../sections/Closing.astro";
+
+interface Props {
+	lang: Lang;
+}
+const { lang } = Astro.props;
+const t = site[lang];
+const canonical = new URL(t.home, Astro.site);
+// 分享卡片复用仓库里的社交分享图，从本站同源提供
+const ogImage = new URL(lang === "zh" ? ogZh : ogEn, Astro.site);
+---
+
+<!doctype html>
+<html lang={lang === "zh" ? "zh-CN" : "en"}>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{t.title}</title>
+		<meta name="description" content={t.description} />
+		<meta name="theme-color" content="#0c0a09" />
+		<link rel="icon" type="image/svg+xml" href={iconUrl} />
+		<link rel="canonical" href={canonical} />
+		<link rel="alternate" hreflang="en" href={new URL("/", Astro.site)} />
+		<link rel="alternate" hreflang="zh-CN" href={new URL("/zh/", Astro.site)} />
+		<link rel="alternate" hreflang="x-default" href={new URL("/", Astro.site)} />
+		<link rel="alternate" type="text/markdown" href={new URL("index.md", canonical)} />
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content={t.title} />
+		<meta property="og:description" content={t.description} />
+		<meta property="og:url" content={canonical} />
+		<meta property="og:site_name" content="FireCode" />
+		<meta property="og:locale" content={lang === "zh" ? "zh_CN" : "en_US"} />
+		<meta property="og:image" content={ogImage} />
+		<meta property="og:image:width" content="1280" />
+		<meta property="og:image:height" content="640" />
+		<meta name="twitter:card" content="summary_large_image" />
+	</head>
+	<body>
+		<Nav lang={lang} />
+		<main>
+			<Hero lang={lang} />
+			<Agents lang={lang} />
+			<Review lang={lang} />
+			<Core lang={lang} />
+			<Closing lang={lang} />
+		</main>
+	</body>
+</html>
