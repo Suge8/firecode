@@ -5,6 +5,7 @@ import {
 	cloneStructuredValue,
 	createNativeCompactionDetails,
 	createNativeCompactionResult,
+	isNativeCompactionDetails,
 	resolveLatestNativeCompaction,
 } from "./native-details.js";
 import { rewriteNativeResponsesPayload, serializeLiveTailToResponsesInput } from "./native-replay.js";
@@ -129,23 +130,28 @@ export async function compactWithOpenAINative(
 /** 最近一次压缩是原生压缩却没能重放：请求照宿主原样发出，压缩窗口里的旧历史不在上下文里。 */
 export type NativeReplayDeclined = { ok: false; reason: string; compactionId: string };
 
-/** undefined：没有原生压缩要重放（不是 OpenAI Responses 请求、没压缩过、最近一次压缩不是原生的）。 */
+/**
+ * undefined：没有原生压缩要重放（最近一次压缩不是原生的，或根本没压缩过）。
+ * 只要最近一次压缩是原生的，当前请求没能重放（换了模型或供应商、请求体对不上……）就必须报出来，不能折叠成 undefined。
+ */
 export function replayOpenAINative(
 	payload: unknown,
 	ctx: ExtensionContext,
 ): { ok: true; payload: ResponsesRequestPayload } | NativeReplayDeclined | undefined {
-	const target = resolveNativeCompactionTarget(ctx, payload);
-	if (!target.ok || !target.target.payload) {
+	const branchEntries = ctx.sessionManager.getBranch();
+	const latest = branchEntries.findLast((entry) => entry.type === "compaction");
+	if (!latest || !isNativeCompactionDetails(latest.details)) {
 		return undefined;
 	}
+	const declined = (reason: string): NativeReplayDeclined => ({ ok: false, reason, compactionId: latest.id });
 
-	const branchEntries = ctx.sessionManager.getBranch();
+	const target = resolveNativeCompactionTarget(ctx, payload);
+	if (!target.ok) {
+		return target.reason === "missing-model" ? undefined : declined(target.reason);
+	}
 	const latestCompaction = resolveLatestNativeCompaction(branchEntries, target.target);
-	if (!latestCompaction.ok) {
-		const latest = branchEntries.findLast((entry) => entry.type === "compaction");
-		return latestCompaction.reason === "latest-native-compaction-mismatch" && latest
-			? { ok: false, reason: latestCompaction.reason, compactionId: latest.id }
-			: undefined;
+	if (!latestCompaction.ok || !target.target.payload) {
+		return declined(latestCompaction.ok ? "unsupported-payload" : latestCompaction.reason);
 	}
 
 	const rewrite = rewriteNativeResponsesPayload({
@@ -154,5 +160,5 @@ export function replayOpenAINative(
 		branchEntries,
 		compactionEntry: latestCompaction.entry,
 	});
-	return rewrite.ok ? rewrite : { ok: false, reason: rewrite.reason, compactionId: latestCompaction.entry.id };
+	return rewrite.ok ? rewrite : declined(rewrite.reason);
 }

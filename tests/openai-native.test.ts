@@ -300,13 +300,13 @@ test("lone surrogates never reach the compaction request", async () => {
 	expect(calls[0].raw).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/iu);
 });
 
-test("fails open: a non-native or foreign latest compaction, an unsupported provider and a disabled switch leave Pi alone", async () => {
+test("fails open: the request goes out as Pi built it, and the user is told whenever a native compaction's history is left out", async () => {
 	const model = getModel("openai", "gpt-5-mini");
 	const other = getModel("openai", "gpt-5.5");
 	const anthropic = getModels("anthropic")[0];
 	const calls = stubFetch(compacted("enc"));
 
-	const legacy = harness({ model });
+	const legacy = harness({ model, hasUI: true });
 	const legacyKept = oldHistory(legacy.sm, model);
 	legacy.sm.appendCompaction("Legacy Pi summary", legacyKept, 100);
 	legacy.sm.appendMessage(user("after legacy"));
@@ -321,12 +321,26 @@ test("fails open: a non-native or foreign latest compaction, an unsupported prov
 	expect((await native.request()).result).toBeDefined();
 	expect((await native.request([], other)).result).toBeUndefined();
 	expect(native.notices).toEqual([["warning", expect.stringContaining("latest-native-compaction-mismatch")]]);
+	expect((await native.request([], other)).result).toBeUndefined();
+	expect(native.notices).toHaveLength(1);
+
+	// 换到不支持原生压缩的供应商：旧历史同样不在上下文里，同样提醒；同一次压缩只提醒一次。
+	const switched = harness({ model, hasUI: true });
+	await switched.compact(oldHistory(switched.sm, model));
+	switched.sm.appendMessage(user("after switching"));
+	expect((await switched.request([], anthropic)).result).toBeUndefined();
+	expect((await switched.request([], anthropic)).result).toBeUndefined();
+	expect(switched.notices).toEqual([["warning", expect.stringContaining("unsupported-provider")]]);
+	expect(calls).toHaveLength(2);
+
+	// 压缩不是原生的：没有原生历史可丢，不提醒。
+	expect(legacy.notices).toEqual([]);
 	expect(await native.compact(nativeKept, { current: other })).toBeUndefined();
 	expect(await native.compact(nativeKept, { current: anthropic })).toBeUndefined();
 
 	const off = harness({ model, openai: { nativeCompaction: false } });
 	expect(await off.compact(oldHistory(off.sm, model))).toBeUndefined();
-	expect(calls).toHaveLength(1);
+	expect(calls).toHaveLength(2);
 });
 
 test.each([
