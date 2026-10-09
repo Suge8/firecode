@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-09
+
 ### Added
 
 - The system prompt includes today's date, in the main session and in subagents. Pi removed the date upstream to keep the prompt cache stable; here it is its own prompt section, so a new day appends a one-line update instead of rewriting the cached conversation.
@@ -105,7 +107,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Suge8/firecode/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/Suge8/firecode/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Suge8/firecode/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Suge8/firecode/compare/v1.0.1...v1.0.2
