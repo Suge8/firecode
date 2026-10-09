@@ -1754,6 +1754,8 @@ async function setup(activate = true, options: {
 			},
 		},
 	};
+	// 与入口一致：会话进行中的状态机先于 Master 安装（入口最先注册轮记录器），Master 才拉得到起点。
+	(await loadFirecodeModule("busy.ts") as any).busyView(pi);
 	module.registerMaster(pi, {
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),

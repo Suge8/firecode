@@ -58,7 +58,12 @@ interface BusyHandlers {
 	onSettled?(elapsed: number): void;
 }
 
-const HUBS = () => processShared("busy", () => new WeakMap<ExtensionAPI, BusyHandlers[]>());
+/** 每个 pi 一份：订阅者与最近一次的视图（供拉取）。 */
+interface Hub {
+	subscribers: BusyHandlers[];
+	view: BusyView;
+}
+const hubs = () => processShared("busy", () => new WeakMap<ExtensionAPI, Hub>());
 
 /**
  * 会话进行中的唯一判定与歇下边沿：上边框与轮次时钟都只订阅这里，不各自拼装。
@@ -69,18 +74,28 @@ const HUBS = () => processShared("busy", () => new WeakMap<ExtensionAPI, BusyHan
  * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {
-	const hubs = HUBS();
-	const subscribers = hubs.get(pi);
-	if (subscribers) {
-		subscribers.push(handlers);
-		return;
-	}
-	const list = [handlers];
-	hubs.set(pi, list);
-	installBusy(pi, list);
+	hubOf(pi).subscribers.push(handlers);
 }
 
-function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): void {
+/**
+ * 当前会话进行中的快照（拉取，只在用到的那一刻读，不必为它订阅）。状态机在首次被引用时安装，只能看到安装之后的事件：
+ * 入口最先注册轮记录器（每个会话都有），所以其余功能拉取时一个事件都没漏。
+ */
+export function busyView(pi: ExtensionAPI): BusyView {
+	return hubOf(pi).view;
+}
+
+function hubOf(pi: ExtensionAPI): Hub {
+	let hub = hubs().get(pi);
+	if (!hub) {
+		hub = { subscribers: [], view: IDLE };
+		hubs().set(pi, hub);
+		installBusy(pi, hub);
+	}
+	return hub;
+}
+
+function installBusy(pi: ExtensionAPI, hub: Hub): void {
 	let agentRunning = false;
 	let inFlight = 0;
 	let review: BusyView["review"];
@@ -95,9 +110,10 @@ function installBusy(pi: ExtensionAPI, subscribers: readonly BusyHandlers[]): vo
 		const started = since;
 		if (!busy) since = undefined;
 		const view: BusyView = { agentRunning, inFlight, review, busy, since };
-		for (const subscriber of subscribers) subscriber.onChange?.(view);
+		hub.view = view;
+		for (const subscriber of hub.subscribers) subscriber.onChange?.(view);
 		if (busy || started === undefined || teardown) return;
-		for (const subscriber of subscribers) subscriber.onSettled?.(now - started);
+		for (const subscriber of hub.subscribers) subscriber.onSettled?.(now - started);
 	};
 	pi.on("session_shutdown", () => {
 		closed = true;
