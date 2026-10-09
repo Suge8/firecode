@@ -625,7 +625,7 @@ test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会�
 	await mkdir(dirname(sessionPath), { recursive: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const spawned = await harness.pool.spawn({
-		cwd: harness.cwd, model: faux.getModel(), thinking: "medium", tools: [], role: "worker",
+		cwd: harness.cwd, model: faux.getModel(), thinking: "medium", tools: [],
 		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
 		persistence: { type: "file", sessionPath },
 	});
@@ -1500,29 +1500,14 @@ test("v7 状态由所有者丢弃并告知旧进程不纳入新池", async () =>
 	}
 });
 
-test("显式 observer 角色不注册 Master 工具面", async () => {
-	const { registerFirecode } = await loadFirecodeModule("index.ts", {
-		configJsonc: JSON.stringify({
-			features: await featuresOnly("master"),
-			review: TEST_REVIEW_CONFIG,
-			master: { roles: { 工程师: TEST_ROLES.工程师 }, workerExcludeExtensions: [], autoActivate: true },
-		}),
-	}) as { registerFirecode(pi: unknown, role: string): void };
-	const fake = fakePi();
-	registerFirecode(fake.pi, "observer");
-	expect(fake.commands.has("fire-master")).toBe(false);
-	expect(fake.tools.has("subagents")).toBe(false);
-	expect(fake.handlers.has("tool_call")).toBe(true);
-});
-
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
 	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
 			features: await featuresOnly("header", "tools", "presets", "stats"),
 		}),
-	}) as { registerFirecode(pi: unknown, role: string): void };
+	}) as { registerFirecode(pi: unknown, subsession: boolean): void };
 	const fake = fakePi();
-	registerFirecode(fake.pi, "worker");
+	registerFirecode(fake.pi, true);
 	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
@@ -1548,14 +1533,14 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 			review: TEST_REVIEW_CONFIG,
 			master: { roles: TEST_ROLES },
 		}),
-	}) as { registerFirecode(pi: unknown, role: string): void };
-	const register = (role: string) => {
+	}) as { registerFirecode(pi: unknown, subsession: boolean): void };
+	const register = (subsession: boolean) => {
 		const fake = fakePi();
-		registerFirecode(fake.pi, role);
+		registerFirecode(fake.pi, subsession);
 		return fake;
 	};
 
-	const workerRegistration = register("worker");
+	const workerRegistration = register(true);
 	const ctx = { cwd };
 	expect(workerRegistration.commands.has("fire-master")).toBe(false);
 	expect(workerRegistration.tools.has("subagents")).toBe(false);
@@ -1571,7 +1556,7 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 	expect(await workerGuard({ toolName: "write", input: { path: join(tmpdir(), "fc-report", "notes.md") } }, ctx)).toBeUndefined();
 	expect(await workerGuard({ toolName: "write", input: { path: "/tmp/fc-report/notes.md" } }, ctx)).toBeUndefined();
 
-	const masterRegistration = register("main");
+	const masterRegistration = register(false);
 	expect(masterRegistration.commands.has("fire-master")).toBe(true);
 	expect(masterRegistration.tools.has("subagents")).toBe(true);
 });

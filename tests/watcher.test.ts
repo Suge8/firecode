@@ -419,13 +419,13 @@ test("Observer 创建中切换会话时释放迟到资源且不执行旧评估",
 test("子会话不带观察员，主会话带", async () => {
 	const configJsonc = JSON.stringify({ features: await featuresOnly("watcher"), watcher: WATCHER_CONFIG });
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc }) as any;
-	const commandsOf = (role: string) => {
+	const commandsOf = (subsession: boolean) => {
 		const fake = fakePi();
-		registerFirecode(fake.pi, role);
+		registerFirecode(fake.pi, subsession);
 		return [...fake.commands.keys()];
 	};
-	expect(commandsOf("main")).toEqual(["fire-watch"]);
-	for (const role of ["worker", "observer", "reviewer", "advisor"]) expect(commandsOf(role)).toEqual([]);
+	expect(commandsOf(false)).toEqual(["fire-watch"]);
+	expect(commandsOf(true)).toEqual([]);
 });
 
 function latestUserText(context: any): string {

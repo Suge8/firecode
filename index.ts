@@ -17,7 +17,7 @@ import { registerToolRendering } from "./tools/index.js";
 import { registerReview } from "./review/index.js";
 import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
-import { currentSubsessionRole, type SubsessionRole } from "./role.js";
+import { InProcessSessionPool, loadingSubsession } from "./spawn.js";
 import { registerWatcher } from "./watcher/index.js";
 import { registerRoundRecorder } from "./round.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
@@ -35,15 +35,13 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	statusbar: registerStatusBar,
 };
 
-/** 只属于交互主会话的功能：子会话（Worker、观察员、审查者）没有界面与命令入口，注册了只会白占资源。 */
+/** 只属于交互主会话的功能：子会话（Worker、观察员）没有界面与命令入口，注册了只会白占资源。 */
 const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats", "statusbar"]);
 
-type FirecodeSessionRole = "main" | SubsessionRole;
-
-export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
-	let seeding = seedForMainSession(role);
+/** subsession：Worker、观察员等子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。 */
+export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
+	let seeding = subsession ? undefined : seedConfigNotice();
 	const { config, problems, featuresBroken } = loadConfig();
-	const subsession = role !== "main";
 	const reviewEnabled = config.features.review !== false;
 	// 轮记录不属于任何可关的功能：每个会话（含子代理）都写，界面、Master 耗时与子代理视图都只读它。
 	registerRoundRecorder(pi);
@@ -54,11 +52,11 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 		register(pi);
 	}
 	// 子会话不带观察员：级联抑制是代码规则，不靠进程环境。
-	if (config.features.watcher !== false && !subsession) registerWatcher(pi);
+	if (config.features.watcher !== false && !subsession) registerWatcher(pi, { pool: subsessionPool() });
 	// 子会话里 Master 只注册 checkout 守卫，不注册命令、工具与生命周期。
 	if (config.features.master !== false) {
 		if (subsession) registerWorkerGuard(pi);
-		else registerMaster(pi);
+		else registerMaster(pi, { pool: subsessionPool() });
 	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
@@ -80,9 +78,13 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 
 type SeedNotice = { message: string; level: "info" | "error" };
 
+/** Worker 与观察员的池：子会话注册的是本模块这一份 FireCode，与主会话同版本。 */
+function subsessionPool(): InProcessSessionPool {
+	return new InProcessSessionPool({ firecode: (pi) => registerFirecode(pi, true) });
+}
+
 /** 主会话加载时补默认配置，必须先于 loadConfig；子会话不写盘。提示留到 session_start 有 UI 时显示。 */
-function seedForMainSession(role: FirecodeSessionRole): SeedNotice | undefined {
-	if (role !== "main") return undefined;
+function seedConfigNotice(): SeedNotice | undefined {
 	try {
 		return seedConfig()
 			? { message: msg.startup.seeded(CONFIG_PATH), level: "info" }
@@ -93,6 +95,8 @@ function seedForMainSession(role: FirecodeSessionRole): SeedNotice | undefined {
 	}
 }
 
+/** 宿主从磁盘加载的入口。子会话里宿主另读的这份不注册：池已注册主会话那一份。 */
 export default function firecode(pi: ExtensionAPI): void {
-	registerFirecode(pi, currentSubsessionRole() ?? "main");
+	if (loadingSubsession()) return;
+	registerFirecode(pi);
 }

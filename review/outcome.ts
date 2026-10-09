@@ -26,7 +26,7 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 	let latest: ReviewOutcome | undefined;
 	let damage: string | undefined;
 	// session 尾行可能正写到一半；跳过损坏行并保留最近一条可验证记录，
-	// 不能让截断尾行抹掉已有结果。
+	// 不能让截断尾行抹掉已有结果。其他版本写的 checkpoint 与 checkpoint.ts 读取时一样按没有处理。
 	for (const [index, line] of content.split(/\r?\n/u).entries()) {
 		if (!line.trim()) continue;
 		let entry: unknown;
@@ -36,8 +36,7 @@ export function readReviewOutcome(sessionPath: string): ReviewOutcome {
 			damage ??= msg.failure.badJsonLine(index + 1);
 			continue;
 		}
-		if (isCheckpointEntry(entry) && !isValidCheckpoint(entry.data)) damage ??= msg.failure.badCheckpoint;
-		else latest = outcomeOfEntry(entry) ?? latest;
+		latest = outcomeOfEntry(entry) ?? latest;
 	}
 	if (!latest) return damage ? { status: "error", message: damage } : { status: "none" };
 	return latest;

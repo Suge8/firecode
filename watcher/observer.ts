@@ -31,7 +31,6 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 	let advice: string | undefined;
 	const spawned = await options.pool.spawn({
 		cwd: options.cwd,
-		role: "observer",
 		model: options.model,
 		thinking: options.thinking,
 		tools: OBSERVER_TOOLS,

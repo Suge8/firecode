@@ -11,7 +11,7 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null }) as any;
 	const fake = fakePi();
 
-	registerFirecode(fake.pi, "worker");
+	registerFirecode(fake.pi, true);
 
 	expect([...fake.commands.keys()]).toEqual([]);
 	expect([...fake.shortcuts.keys()]).toEqual([]);
@@ -193,13 +193,13 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 
 // 每个用例用不同的 extraFiles 拿独立的临时 Agent 目录：播种会写盘，不能和共用「无配置」副本的用例互相污染。
 let seedCase = 0;
-async function seedHarness(options: { configJsonc: string | null; role?: string; hasUI?: boolean; beforeRegister?: (configPath: string) => Promise<void> }) {
+async function seedHarness(options: { configJsonc: string | null; subsession?: boolean; hasUI?: boolean; beforeRegister?: (configPath: string) => Promise<void> }) {
 	const loadOptions = { configJsonc: options.configJsonc, extraFiles: { ["seed-case-" + ++seedCase]: "" } };
 	const { registerFirecode } = await loadFirecodeModule("index.ts", loadOptions) as any;
 	const { CONFIG_PATH } = await loadFirecodeModule("config-file.ts", loadOptions) as { CONFIG_PATH: string };
 	await options.beforeRegister?.(CONFIG_PATH);
 	const fake = fakePi({ registerProvider() {} });
-	registerFirecode(fake.pi, options.role ?? "main");
+	registerFirecode(fake.pi, options.subsession ?? false);
 	const notices: [string, string][] = [];
 	const sessionStart = () => fake.fire("session_start", {}, {
 		mode: "tui",
@@ -257,7 +257,7 @@ test("配置文件已存在（含内容有问题）时绝不覆盖", async () =>
 });
 
 test("子会话不写盘", async () => {
-	const { CONFIG_PATH, sessionStart } = await seedHarness({ configJsonc: null, role: "worker" });
+	const { CONFIG_PATH, sessionStart } = await seedHarness({ configJsonc: null, subsession: true });
 
 	await sessionStart();
 

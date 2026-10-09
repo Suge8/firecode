@@ -27,8 +27,10 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 	const { pi: api, tools, entryRenderers } = fakePi();
 	toolsModule.registerToolRendering(api);
 	if (withMaster) {
-		const { registerMaster } = await loadFirecodeModule("master/index.ts");
-		registerMaster(api);
+		const [{ registerMaster }, { InProcessSessionPool }] = await Promise.all([
+			loadFirecodeModule("master/index.ts"), loadFirecodeModule("spawn.ts"),
+		]);
+		registerMaster(api, { pool: new InProcessSessionPool() });
 	}
 	const chat = new tui.Container();
 	const root = new tui.Container();

@@ -9,7 +9,7 @@ import {
 import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
-import { InProcessSessionPool } from "../spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import {
 	adviceMessage,
@@ -25,7 +25,7 @@ import { renderTurn } from "./transcript.js";
 const CONTEXT_RESET_PERCENT = 70;
 
 interface WatcherDependencies {
-	pool?: InProcessSessionPool;
+	pool: InProcessSessionPool;
 	createObserver?: typeof createObserver;
 }
 
@@ -37,7 +37,7 @@ interface WatcherRuntime {
 	observer?: Observer;
 }
 
-export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependencies = {}): void {
+export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependencies): void {
 	registerWatcherCardRenderer(pi);
 	const loaded = loadConfig().watcher;
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
@@ -49,7 +49,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 		return;
 	}
 	const config = loaded.config;
-	const pool = dependencies.pool ?? new InProcessSessionPool();
+	const pool = dependencies.pool;
 	const spawnObserver = dependencies.createObserver ?? createObserver;
 	let runtime: WatcherRuntime | undefined;
 	let reviewActive = false;

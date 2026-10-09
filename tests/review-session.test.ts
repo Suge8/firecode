@@ -38,7 +38,6 @@ async function runner() {
 const config = { model: "provider/model", thinking: "high", tools: ["read", "bash", "write", "edit"], timeoutMs: 1_000 };
 const base = (pool: unknown) => ({
 	pool,
-	role: "reviewer",
 	config,
 	prompt: { system: "policy", user: "evidence" },
 	cwd: process.cwd(),
@@ -55,7 +54,6 @@ describe("review in-process session", () => {
 		const result = await runReviewSession(base(runtime.pool));
 		expect(result).toEqual({ kind: "output", text: body });
 		expect(runtime.pool.options).toMatchObject({
-			role: "reviewer",
 			tools: ["read", "bash"],
 			contextFiles: false,
 			isolated: true,

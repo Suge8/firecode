@@ -32,7 +32,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道（在飞子代理数、审查占用） | |
 | `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
 | `process-shared.ts` | 跨模块拷贝共享的进程唯一状态（宿主会重新求值模块图，模块级变量互不相通） | |
-| `spawn.ts` `role.ts` | 全插件唯一的进程内子会话入口（Master、Review、Watcher 共用）与子会话角色标记 | |
+| `spawn.ts` | 全插件唯一的进程内子会话入口（Master、Review、Watcher 共用）；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
 | `format.ts` | 共享的宽度/文本格式化 | |
 | `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置、openai 节读写、provider 共用的唯一对象判定） | |
