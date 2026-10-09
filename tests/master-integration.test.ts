@@ -95,6 +95,7 @@ test("指挥官提示词作为系统提示段注入，附上已配置的角色�
 	const harness = await setup();
 	const prompt = await harness.systemPrompt("自定义系统提示");
 	expect(prompt.startsWith("自定义系统提示\n\n")).toBe(true);
+	expect(prompt).toContain("委派是工具不是职责");
 	expect(prompt.endsWith("\n\n角色表：工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）。")).toBe(true);
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
 	await harness.command("");
