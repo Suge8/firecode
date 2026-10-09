@@ -12,20 +12,28 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
-import type {
-	ActiveCheck,
-	ActiveReviewer,
-	AdvisorResult,
-	PendingRound,
-	RepairState,
-	ReviewRound,
-	ReviewState,
-	ReviewerResult,
-	SummaryState,
+import {
+	ADVISOR_VERDICTS,
+	PHASES,
+	REPAIR_STATUSES,
+	REVIEWER_STATUSES,
+	ROUND_RESULTS,
+	STOP_REASONS,
+	SUMMARY_KINDS,
+	SUMMARY_STATUSES,
+	type ActiveCheck,
+	type ActiveReviewer,
+	type AdvisorResult,
+	type PendingRound,
+	type RepairState,
+	type ReviewRound,
+	type ReviewState,
+	type ReviewerResult,
+	type SummaryState,
 } from "./state.js";
 
-export const CHECKPOINT_TYPE = "firecode-review-checkpoint";
-export const REFUSAL_TYPE = "firecode-review-refusal";
+const CHECKPOINT_TYPE = "firecode-review-checkpoint";
+const REFUSAL_TYPE = "firecode-review-refusal";
 
 /** 命令入口拒绝启动的记录：无 UI 的会话（Worker）里这是拒绝原因唯一的读取通道，id 让读取方区分每一次拒绝。 */
 export function recordRefusal(pi: ExtensionAPI, message: string): void {
@@ -33,12 +41,11 @@ export function recordRefusal(pi: ExtensionAPI, message: string): void {
 }
 
 export function refusalOf(entry: unknown): { id: string; message: string } | undefined {
-	if (typeof entry !== "object" || entry === null) return undefined;
-	const { type, customType, data } = entry as Record<string, unknown>;
-	if (type !== "custom" || customType !== REFUSAL_TYPE || typeof data !== "object" || data === null) return undefined;
-	const { id, message } = data as Record<string, unknown>;
+	if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== REFUSAL_TYPE || !isRecord(entry.data)) return undefined;
+	const { id, message } = entry.data;
 	return typeof id === "string" && typeof message === "string" ? { id, message } : undefined;
 }
+
 const VERSION = 5;
 
 /** 写入凭证：同一场审查内 Run ID 不变，靠单调递增的 seq 识别陈旧写者。 */
@@ -55,33 +62,12 @@ export class CheckpointConflictError extends Error {
 }
 
 /** 只读会话访问（checkpoint 读/写前的 CAS 读取）。 */
-export interface CheckpointReadContext {
+interface CheckpointReadContext {
 	sessionManager: { getBranch(): unknown[] };
 }
 
-const PHASES = new Set([
-	"idle",
-	"queued",
-	"reviewing",
-	"needs_fix",
-	"awaiting_fix",
-	"summarizing",
-	"settled",
-]);
-const ROUND_RESULTS = new Set([
-	"passed",
-	"failed",
-	"error",
-	"stopped",
-	"cancelled",
-	"timed_out",
-]);
-const REVIEWER_STATUSES = new Set(["running", "passed", "failed", "error"]);
-const ADVISOR_VERDICTS = new Set(["continue", "stop", "narrow"]);
-const STOP_REASONS = new Set(["user", "shutdown", "timeout"]);
-const REPAIR_STATUSES = new Set(["pending", "awaiting_start", "running", "completed"]);
-const SUMMARY_KINDS = new Set(["passed", "max_rounds", "advisor_stop"]);
-const SUMMARY_STATUSES = new Set(["pending", "awaiting_start", "running"]);
+/** 落盘的 checkpoint：领域状态 + 版本 + 写入序号。 */
+type Checkpoint = ReviewState & { version: typeof VERSION; seq: number };
 
 /**
  * 键白名单由领域类型派生：satisfies 要求逐字段列全，
@@ -172,8 +158,8 @@ function isNonNegativeInt(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function oneOf(value: unknown, allowed: ReadonlySet<string>): value is string {
-	return isString(value) && allowed.has(value);
+function oneOf(value: unknown, allowed: readonly string[]): value is string {
+	return isString(value) && allowed.includes(value);
 }
 
 function hasOnlyKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -273,7 +259,7 @@ function isValidSummary(value: unknown): boolean {
 }
 
 /** 一次性整体校验 checkpoint；结构或版本不符返回 false（调用方直接丢弃）。 */
-export function isValidCheckpoint(value: unknown): boolean {
+export function isValidCheckpoint(value: unknown): value is Checkpoint {
 	if (!isRecord(value)) return false;
 	if (!hasOnlyKeys(value, CHECKPOINT_KEYS)) return false;
 	if (!isNonNegativeInt(value.seq) || value.seq < 1) return false;
@@ -317,7 +303,7 @@ function toCheckpoint(state: ReviewState) {
 
 /** 读当前分支上最近一个 checkpoint；无、损坏或版本不匹配都返回 undefined。 */
 export function readCheckpoint(ctx: CheckpointReadContext): ReviewState | undefined {
-	return latestData(ctx) as ReviewState | undefined;
+	return latestData(ctx);
 }
 
 /** 会话记录里的 checkpoint 条目（数据未必有效）。 */
@@ -325,7 +311,7 @@ export function isCheckpointEntry(value: unknown): value is { data: unknown } {
 	return isRecord(value) && value.type === "custom" && value.customType === CHECKPOINT_TYPE && "data" in value;
 }
 
-function latestData(ctx: CheckpointReadContext): unknown {
+function latestData(ctx: CheckpointReadContext): Checkpoint | undefined {
 	const entries = ctx.sessionManager.getBranch();
 	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index];
@@ -336,7 +322,7 @@ function latestData(ctx: CheckpointReadContext): unknown {
 
 /** 读最近一条 checkpoint 的写入凭证；无则 null。 */
 export function readStamp(ctx: CheckpointReadContext): CheckpointStamp | null {
-	const data = latestData(ctx) as CheckpointStamp | undefined;
+	const data = latestData(ctx);
 	return data ? { runId: data.runId, seq: data.seq } : null;
 }
 

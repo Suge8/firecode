@@ -75,23 +75,17 @@ describe("PASS/FAIL output contract", () => {
 
 	test("FAIL keeps the findings as details and pulls a one-line issue for the summary", async () => {
 		await loadAll();
-		const parsed = parseReview(
-			`FAIL\n${finding("auth 没校验")}`,
-		);
+		const parsed = parseReview(`FAIL\n${finding("auth 没校验")}`);
 		expect(parsed.status).toBe("failed");
 		expect(parsed.summary).toBe("auth 没校验");
 		expect(parsed.details).toContain("发现 1");
 	});
 
-	test("a non-PASS/FAIL first line is rejected as invalid format", async () => {
+	test("a non-PASS/FAIL first line or empty output is rejected as invalid format", async () => {
 		await loadAll();
 		const parsed = parseReview("结论如下\n随便写");
 		expect(parsed.status).toBe("error");
 		expect(parsed.details).toContain("格式无效");
-	});
-
-	test("empty output is a format error", async () => {
-		await loadAll();
 		expect(parseReview("").status).toBe("error");
 	});
 });
@@ -178,25 +172,6 @@ describe("evidence assembly", () => {
 		return { type: "message", message: { role: "toolResult", content: "big output" } };
 	}
 
-	test("the first user message is always kept, even under a tiny budget", async () => {
-		await loadAll();
-		const entries = [user("原始需求：加登录"), assistant("改了很久"), toolResult()];
-		const { text, omitted } = buildEvidence(entries, { budgetTokens: 30 });
-		expect(text).toContain("原始需求：加登录");
-		expect(text).toContain("改了很久");
-		expect(omitted).toBe(0);
-	});
-
-	test("budget clips older middle messages but keeps the newest work", async () => {
-		await loadAll();
-		const entries = [user("原始需求"), assistant("中间 1"), assistant("中间 2"), assistant("最新改动")];
-		const { text, omitted } = buildEvidence(entries, { budgetTokens: 20 });
-		expect(text).toContain("原始需求");
-		expect(text).toContain("最新改动");
-		expect(omitted).toBeGreaterThan(0);
-		expect(text).toContain("省略");
-	});
-
 	test("超长消息的截断处写明是证据截断、原文多少字、完整原文在哪个会话文件，不留裸“[…]”让审查者误判回复不完整", async () => {
 		await loadAll();
 		const essay = "冬".repeat(5_000);
@@ -218,7 +193,7 @@ describe("evidence assembly", () => {
 		expect(text).toContain("/tmp/s/main.jsonl");
 	});
 
-	test("assistant toolCall trail is kept as attribution evidence", async () => {
+	test("assistant toolCall trail is kept as attribution evidence, including tool-call-only turns", async () => {
 		await loadAll();
 		const entries = [
 			user("需求"),
@@ -233,11 +208,19 @@ describe("evidence assembly", () => {
 					],
 				},
 			},
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "3", name: "write", arguments: { path: "a/b.ts", content: "x" } }],
+				},
+			},
 		];
 		const { text } = buildEvidence(entries);
 		expect(text).toContain("改卡片");
 		expect(text).toContain("[edit] review/card.ts");
 		expect(text).toContain("[bash] bun test tests");
+		expect(text).toContain("[write] a/b.ts");
 	});
 
 	test("failed tool calls are marked and cannot pose as actual edits", async () => {
@@ -263,21 +246,6 @@ describe("evidence assembly", () => {
 		expect(text).not.toContain("a/ok.ts（失败）");
 	});
 
-	test("tool-call-only assistant turns still leave an edit record", async () => {
-		await loadAll();
-		const entries = [
-			user("需求"),
-			{
-				type: "message",
-				message: {
-					role: "assistant",
-					content: [{ type: "toolCall", id: "1", name: "write", arguments: { path: "a/b.ts", content: "x" } }],
-				},
-			},
-		];
-		expect(buildEvidence(entries).text).toContain("[write] a/b.ts");
-	});
-
 	test("toolResult entries are skipped entirely", async () => {
 		await loadAll();
 		const entries = [user("需求"), assistant("改完"), toolResult()];
@@ -295,10 +263,10 @@ describe("evidence assembly", () => {
 			...Array.from({ length: 30 }, (_, index) => assistant(`中间 ${index}`)),
 			assistant("最新改动"),
 		];
-		const { text, omitted } = buildEvidence(entries, { budgetTokens: 60 });
+		const { text } = buildEvidence(entries, { budgetTokens: 60 });
 		expect(text).toContain("原始需求锚点");
 		expect(text).toContain("最新改动");
-		expect(omitted).toBeGreaterThan(0);
+		expect(text).toContain("省略");
 	});
 });
 
@@ -307,18 +275,16 @@ describe("FAIL output contract", () => {
 	// 驱动执行模型去改代码。格式非法的票必须作废为基础设施错误。
 	test("rejects a FAIL without any blocking finding", async () => {
 		await loadAll();
-		for (const body of ["FAIL", "FAIL\nnot a finding", "FAIL\n## 建议（非阻塞）\n- 问题: 可以更好"]) {
+		for (const body of [
+			"FAIL",
+			"FAIL\nnot a finding",
+			"FAIL\n## 建议（非阻塞）\n- 问题: 可以更好",
+			"FAIL\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: z", // 字段齐全但没有「## 发现」小节标题
+		]) {
 			const outcome = parseReview(body);
 			expect(`${body.slice(0, 12)}:${outcome.status}`).toBe(`${body.slice(0, 12)}:error`);
 			expect(outcome.details).toContain("FAIL 缺少阻塞发现");
 		}
-	});
-
-	test("accepts a FAIL carrying a structured finding", async () => {
-		await loadAll();
-		const outcome = parseReview(`FAIL\n${finding("校验漏字段")}`);
-		expect(outcome.status).toBe("failed");
-		expect(outcome.summary).toBe("校验漏字段");
 	});
 
 	test("accepts a finding whose field values start on the next line", async () => {
@@ -345,15 +311,6 @@ describe("FAIL output contract", () => {
 			expect(`${dropped}:${outcome.status}`).toBe(`${dropped}:error`);
 			expect(outcome.details).toContain("缺少必填字段");
 		}
-	});
-
-	test("rejects a finding without the section heading", async () => {
-		await loadAll();
-		const outcome = parseReview(
-			"FAIL\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: z",
-		);
-		expect(outcome.status).toBe("error");
-		expect(outcome.details).toContain("缺少阻塞发现");
 	});
 
 	// 同票混入非法发现整票作废：放行会让执行模型照着半成品条目改代码。

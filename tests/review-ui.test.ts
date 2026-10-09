@@ -12,7 +12,11 @@ describe("review editor lock", () => {
 	async function lock(previous?: unknown, bindings = keys) {
 		const { ReviewUi } = await loadFirecodeModule("review/ui.js") as any;
 		const installed: unknown[] = [];
-		const ctx = { ui: { getEditorComponent: () => previous, setEditorComponent: (next: unknown) => installed.push(next) } };
+		const ctx = {
+			hasUI: true,
+			sessionManager: { getSessionName: () => undefined, getCwd: () => "/tmp/project" },
+			ui: { setTitle: () => {}, getEditorComponent: () => previous, setEditorComponent: (next: unknown) => installed.push(next) },
+		};
 		const cancelled: string[] = [];
 		const ui = new ReviewUi();
 		ui.show(ctx, 1, true, () => cancelled.push("cancel"));

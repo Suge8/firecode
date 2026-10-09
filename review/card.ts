@@ -41,7 +41,7 @@ function paintMark(details: CardDetails, theme: Theme): string {
 	return color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(color, details.icon);
 }
 
-export type CardDetails = {
+type CardDetails = {
 	version: typeof VERSION;
 	kind: CardData["kind"];
 	title: string;
@@ -51,7 +51,7 @@ export type CardDetails = {
 };
 
 /** 一次性整体校验结果卡 payload；结构不符返回 false（渲染器降级 content 纯文本）。 */
-export function isValidCardDetails(value: unknown): value is CardDetails {
+function isValidCardDetails(value: unknown): value is CardDetails {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
 	if (Object.keys(record).length !== 6) return false;
@@ -64,7 +64,7 @@ export function isValidCardDetails(value: unknown): value is CardDetails {
 	return typeof record.icon === "string";
 }
 
-export interface BuiltCard {
+interface BuiltCard {
 	content: string;
 	details: CardDetails;
 }
