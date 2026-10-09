@@ -57,12 +57,10 @@ export function termPattern(pick: (terms: Terms) => string): string {
 /** 审查输出里“## 建议（非阻塞）”标题行（整行，两种语言都认）：审查者解析与状态机拆建议区共用这一条。 */
 export const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
 
-/** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题。 */
+/** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题（审查者按输出契约只写 PASS/FAIL）。 */
 export const REDUNDANT_VERDICT_LINES: ReadonlySet<string> = new Set([
 	"PASS",
 	"FAIL",
-	"通过",
-	"未通过",
 	...ALL_TERMS.flatMap((terms) => [terms.passed, terms.failed]),
 ]);
 
