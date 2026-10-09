@@ -20,8 +20,9 @@ const CONFIG = "extensions/firecode/config.jsonc";
 function parseAtom(atom: string): { provider: string; model: string; thinking: string } {
 	const first = atom.indexOf("/");
 	const last = atom.lastIndexOf("/");
-	if (first < 1 || last === first) throw new Error(`--model 须是 provider/model/thinking：${atom}`);
-	return { provider: atom.slice(0, first), model: atom.slice(first + 1, last), thinking: atom.slice(last + 1) };
+	const parsed = { provider: atom.slice(0, first), model: atom.slice(first + 1, last), thinking: atom.slice(last + 1) };
+	if (last === first || Object.values(parsed).some((part) => !part)) throw new Error(`--model 须是 provider/model/thinking：${atom}`);
+	return parsed;
 }
 
 /** 用户的 settings 与 config.jsonc 各存一份，把其中的模型全部换成 atom。 */
