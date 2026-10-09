@@ -189,7 +189,7 @@ export function detachedTui(tui: TUI, requestRender: () => void): TUI {
 }
 
 /** 镜像建组件要的外部来源：工具行的 TUI 句柄与工作目录、工具渲染定义、自定义消息与自定义记录的渲染器、主题。 */
-export interface MirrorSources {
+interface MirrorSources {
 	ui: TUI;
 	cwd: string;
 	theme: Theme;

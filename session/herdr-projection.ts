@@ -9,7 +9,7 @@
  * 恢复命令（`pi --session <会话文件>`）随状态上报：自定义 source 拿不到官方会话恢复，herdr 重启后靠它把会话接回原 pane。
  *
  * 只保留最新意图：事件只改 desired，发送循环每次拿当前 desired 与已送达的对比，只送差异；失败重试一次，其后由下一事件补发。
- * herdr 之外、非 TUI 模式或 Master Worker 内自我禁用。
+ * herdr 之外与非 TUI 模式自我禁用；子会话由入口直接不注册。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type BusyView, watchBusy } from "../busy.js";

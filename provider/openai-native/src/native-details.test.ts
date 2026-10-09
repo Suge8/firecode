@@ -3,7 +3,7 @@ import {
 	NATIVE_COMPACTION_STRATEGY,
 	isNativeCompactionDetails,
 	resolveLatestNativeCompaction,
-} from "./native-details";
+} from "./native-details.js";
 
 test("recognizes a native compaction checkpoint", () => {
 	const details = {

@@ -5,7 +5,7 @@ const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
 
 export type TextVerbosity = (typeof TEXT_VERBOSITIES)[number];
 
-export type OpenAIProviderSettings = {
+type OpenAIProviderSettings = {
 	textVerbosity?: TextVerbosity;
 	priority?: true;
 };
@@ -15,7 +15,7 @@ export type OpenAINativeSettings = {
 	providers: Record<string, OpenAIProviderSettings>;
 };
 
-export type LoadedOpenAINativeSettings = {
+type LoadedOpenAINativeSettings = {
 	settings: OpenAINativeSettings;
 	warnings: string[];
 };

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import {
+	featuresOnly,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
 	PI_CODING_AGENT_URL,
@@ -415,10 +416,16 @@ test("Observer 创建中切换会话时释放迟到资源且不执行旧评估",
 	expect(harness.notes()).toEqual([{ note: "新 owner 的建议", turnIndex: 2 }]);
 });
 
-test("Worker 会话内不注册观察员", async () => {
-	const harness = await setup({ worker: true });
-	expect(harness.registeredCommands).toEqual([]);
-	expect(harness.registeredEvents).toEqual([]);
+test("子会话不带观察员，主会话带", async () => {
+	const configJsonc = JSON.stringify({ features: await featuresOnly("watcher"), watcher: WATCHER_CONFIG });
+	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc }) as any;
+	const commandsOf = (role: string) => {
+		const fake = fakePi();
+		registerFirecode(fake.pi, role);
+		return [...fake.commands.keys()];
+	};
+	expect(commandsOf("main")).toEqual(["fire-watch"]);
+	for (const role of ["worker", "observer", "reviewer", "advisor"]) expect(commandsOf(role)).toEqual([]);
 });
 
 function latestUserText(context: any): string {
@@ -437,7 +444,6 @@ function advise(note: string) {
 
 async function setup(options: {
 	watcher?: Record<string, unknown> | null;
-	worker?: boolean;
 	features?: Record<string, unknown>;
 	createObserver?: (...args: any[]) => Promise<any>;
 	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
@@ -474,7 +480,7 @@ async function setup(options: {
 		}],
 	});
 	if (!modelRuntime.hasConfiguredAuth(fauxModel.provider)) throw new Error("测试 Faux 模型认证未载入");
-	const pool = new spawnModule.InProcessSessionPool({ agentDir, modelRuntime, resolveModel: async () => fauxModel });
+	const pool = new spawnModule.InProcessSessionPool({ modelRuntime, resolveModel: async () => fauxModel });
 	const watcher = options.watcher === undefined ? WATCHER_CONFIG : options.watcher;
 	const module = await loadFirecodeModule("watcher/index.js", {
 		configJsonc: JSON.stringify({
@@ -485,7 +491,7 @@ async function setup(options: {
 	}) as any;
 
 	const fake = fakePi();
-	const { handlers, commands, sent: messages, userMessages } = fake;
+	const { commands, sent: messages, userMessages } = fake;
 	const notices: string[] = [];
 	let idle = false;
 	const statuses = new Map<string, string>();
@@ -546,7 +552,7 @@ async function setup(options: {
 	module.registerWatcher(pi, {
 		pool,
 		...(options.createObserver ? { createObserver: options.createObserver } : {}),
-	}, options.worker === true);
+	});
 	const emit = (name: string, event: any, ctx = context.ctx) => fake.fire(name, event, ctx);
 	await emit("session_start", { type: "session_start", reason: "startup" });
 	return {
@@ -560,8 +566,6 @@ async function setup(options: {
 			const [, headline, note] = String(message.content).split("\n");
 			return { note, turnIndex: Number(/第 (\d+) 回合/u.exec(headline)?.[1]) };
 		}),
-		registeredCommands: [...commands.keys()],
-		registeredEvents: [...handlers.keys()],
 		pi,
 		emit,
 		context,

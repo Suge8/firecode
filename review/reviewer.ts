@@ -2,7 +2,7 @@
 import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult, ReviewerStatus } from "./state.js";
-import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
+import type { ReviewModelConfig, ReviewSessionResult, ReviewSessionRunner } from "./session.js";
 
 interface RunReviewerOptions {
 	index: number;
@@ -67,9 +67,7 @@ export function parseReviewOutput(text: string): ParseOutcome {
 	return invalidFormat(firstLine.trim() || msg.reviewer.empty);
 }
 
-function processFailure(
-	result: { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; message: string } | { kind: "empty" },
-): ParseOutcome {
+function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>): ParseOutcome {
 	const details =
 		result.kind === "aborted" ? ""
 		: result.kind === "timeout" ? msg.reviewer.timeout

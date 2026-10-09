@@ -11,9 +11,9 @@ import { masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
-import type { WorkerRef } from "./state.js";
+import { modelAtomText, type WorkerRef } from "./state.js";
 
-export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
+const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 /** Worker 跟随指挥官是否启用 codemode；on/only 由 Worker 会话读到的同一份 settings 决定，不另传。 */
 const CODEMODE_TOOL = "codemode";
 const FAULT_SUMMARY_WIDTH = 80;
@@ -36,6 +36,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		role: "worker",
 		model,
 		thinking: worker.thinking,
+		// evals/delegation/variant.ts 的 --workers-codemode 按这一行的原文做替换；改写这一行要同步改它的 WORKER_CODEMODE_FROM。
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
@@ -62,7 +63,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
 		if (event.type === "tool_execution_end") live.currentTools.delete(event.toolCallId);
 		if (event.type === "entry_appended") live.reviewProgress = reviewProgressOf(event.entry) ?? live.reviewProgress;
-		if (event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "entry_appended") active.scheduleRoster();
+		if (event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "entry_appended") active.schedulePublish();
 	});
 }
 
@@ -301,10 +302,6 @@ function nextFallback(role: MasterRole, worker: WorkerRef): ModelAtom | undefine
 	let index = chain.findIndex((atom) => atom.model === worker.model && atom.thinking === worker.thinking);
 	if (index < 0) index = chain.findIndex((atom) => atom.model === worker.model);
 	return chain[index + 1];
-}
-
-export function modelAtomText(atom: Pick<ModelAtom, "model" | "thinking">): string {
-	return `${atom.model}/${atom.thinking}`;
 }
 
 /** 首次续派前置的现场核对提示。 */

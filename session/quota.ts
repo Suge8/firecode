@@ -67,7 +67,6 @@ async function query(
 	provider: QuotaProvider,
 	registry: ExtensionContext["modelRegistry"],
 	signal: AbortSignal,
-	fetcher: typeof fetch,
 ): Promise<string> {
 	try {
 		const model = registry.getAll().find((model) => model.provider === provider.id);
@@ -78,7 +77,7 @@ async function query(
 		const headers = new Headers({ Authorization: `Bearer ${token}`, Accept: "application/json" });
 		if (provider.id === "anthropic") headers.set("anthropic-beta", "oauth-2025-04-20");
 		else headers.set("ChatGPT-Account-Id", codexAccountId(token));
-		const response = await fetcher(provider.url, {
+		const response = await fetch(provider.url, {
 			headers, signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
 		});
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -94,7 +93,7 @@ async function query(
 	}
 }
 
-export function registerQuota(pi: ExtensionAPI, fetcher: typeof fetch = fetch): void {
+export function registerQuota(pi: ExtensionAPI): void {
 	let inFlight: AbortController | undefined;
 	pi.registerCommand("quota", {
 		description: msg.quota.commandDescription,
@@ -107,7 +106,7 @@ export function registerQuota(pi: ExtensionAPI, fetcher: typeof fetch = fetch): 
 			const { ui, modelRegistry } = ctx;
 			ui.notify(msg.quota.querying, "info");
 			try {
-				const results = await Promise.all(PROVIDERS.map((provider) => query(provider, modelRegistry, owner.signal, fetcher)));
+				const results = await Promise.all(PROVIDERS.map((provider) => query(provider, modelRegistry, owner.signal)));
 				if (inFlight !== owner) return;
 				const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
 				ui.notify(msg.quota.report(time, results), "info");

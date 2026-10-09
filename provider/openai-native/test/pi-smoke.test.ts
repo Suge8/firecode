@@ -11,11 +11,7 @@ describe("pi-openai-native", () => {
 		const agentDir = path.join(isolated, "agent");
 		const configDir = path.join(agentDir, "extensions", "firecode");
 		mkdirSync(configDir, { recursive: true });
-		const template = readFileSync(path.join(extensionDir, "config.example.jsonc"), "utf8");
-		writeFileSync(
-			path.join(configDir, "config.jsonc"),
-			template.replace(/("openaiNative"\s*:\s*)false/, "$1true"),
-		);
+		writeFileSync(path.join(configDir, "config.jsonc"), readFileSync(path.join(extensionDir, "config.example.jsonc")));
 		try {
 			const result = spawnSync("pi", ["--no-extensions", "-e", extensionDir, "--help"], {
 				encoding: "utf8",

@@ -15,7 +15,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../review/occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
 import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
 import { msg } from "./messages.js";
@@ -96,8 +96,10 @@ class Shell {
 		this.settled = record && { record, at };
 	}
 
+	private readonly fg = (color: Parameters<Theme["fg"]>[0], text: string): string => this.theme?.fg(color, text) ?? text;
+
 	top(): TopParts {
-		const { busy, settled, review, theme } = this;
+		const { busy, settled, review } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: [], glow: 0,
@@ -106,29 +108,28 @@ class Shell {
 		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
 			const word = activityWord(busy);
-			parts.word = word && (this.theme?.fg("text", word) ?? "");
-			parts.elapsed = this.theme?.fg("muted", formatDuration(Date.now() - busy.since)) ?? "";
+			parts.word = word && this.fg("text", word);
+			parts.elapsed = this.fg("muted", formatDuration(Date.now() - busy.since));
 			parts.glow = 1;
-		} else if (settled && theme) {
+		} else if (settled) {
 			const { record } = settled;
 			const since = settled.at === undefined ? Infinity : Date.now() - settled.at;
 			const text = OUTCOME_TEXT[record.round.outcome];
 			parts.mark = settleMark(text ? "failed" : "done", since);
 			// 与摘要行同一写法：终态字样、耗时、均速之间都是“ · ”；终态字样不随窄屏退让。
 			parts.elapsed = [
-				...(text ? [theme.fg("error", text)] : []),
-				...roundTexts(record.round).map((part) => theme.fg("muted", part)),
-				...record.earlier.map((part) => theme.fg("warning", part)),
-			].join(theme.fg("dim", " · "));
+				...(text ? [this.fg("error", text)] : []),
+				...roundTexts(record.round).map((part) => this.fg("muted", part)),
+				...record.earlier.map((part) => this.fg("warning", part)),
+			].join(this.fg("dim", " · "));
 			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
 		}
-		if (review && theme) parts.review = reviewTiers(review(), theme);
+		if (review) parts.review = reviewTiers(review(), (text) => this.fg("error", text));
 		return parts;
 	}
 
 	bottom(ctx: ExtensionContext, thinking: string): BottomParts {
-		const theme = this.theme;
-		const fg = (color: Parameters<Theme["fg"]>[0], text: string) => theme?.fg(color, text) ?? text;
+		const { fg } = this;
 		const model = ctx.model;
 		const usage = ctx.getContextUsage();
 		const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
@@ -152,14 +153,14 @@ function activityWord(busy: BusyView): string {
 }
 
 /** 审查进度的退让档：`审查 第2轮 1/3 · 1 阻断` → 丢阻断数 → 丢票数或阶段，“审查 第N轮”留到最后；字形始终在。 */
-function reviewTiers(progress: ReviewProgress | undefined, theme: Theme): string[] {
+function reviewTiers(progress: ReviewProgress | undefined, error: (text: string) => string): string[] {
 	const gold = (text: string) => paint(HEAT_COLORS.gold, text);
 	const mark = reviewMark(phaseOf(2));
 	const head = `${mark} ${gold(msg.review)}`;
 	if (!progress) return [head];
 	const named = progress.round > 0 ? `${head}${gold(` ${msg.reviewRound(progress.round)}`)}` : head;
 	const body = gold(progress.stage === "reviewing" ? `${progress.passed}/${progress.total}` : msg.reviewStage[progress.stage]);
-	const blocked = progress.stage === "reviewing" && progress.blocked ? `${gold(" · ")}${theme.fg("error", msg.reviewBlocked(progress.blocked))}` : "";
+	const blocked = progress.stage === "reviewing" && progress.blocked ? `${gold(" · ")}${error(msg.reviewBlocked(progress.blocked))}` : "";
 	const tiers = [`${named} ${body}${blocked}`, `${named} ${body}`, named];
 	return tiers.filter((tier, index) => tier !== tiers[index - 1]);
 }

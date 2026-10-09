@@ -95,47 +95,33 @@ async function rewriteImports(directory: string): Promise<void> {
 	}
 }
 
+type LoadOptions = { configJsonc?: string | null; extraFiles?: Record<string, string> };
+
 /** 与 loadFirecodeModule 同一份副本里某个模块的绝对路径：供测试写进子会话扩展文件，让子会话加载同一份代码。 */
-export async function firecodeModulePath(
-	entry: string,
-	options: { configJsonc?: string | null; replacements?: Record<string, string>; extraFiles?: Record<string, string> } = {},
-): Promise<string> {
-	return join(await copyFor(entry, options), entry);
+export async function firecodeModulePath(entry: string, options: LoadOptions = {}): Promise<string> {
+	return join(await copyFor(options), entry);
 }
 
 /**
  * 加载插件内某个模块，例如 `tools/index.ts`、`session/presets.ts`。
  * `configJsonc` 可覆写或移除测试 Agent 目录里的运行配置，用于验证配置边界。
  */
-export async function loadFirecodeModule(
-	entry: string,
-	options: {
-		configJsonc?: string | null;
-		replacements?: Record<string, string>;
-		extraFiles?: Record<string, string>;
-	} = {},
-): Promise<Record<string, unknown>> {
-	const directory = await copyFor(entry, options);
-	return import(`${pathToFileURL(join(directory, entry)).href}?test=${Date.now()}-${Math.random()}`);
+export async function loadFirecodeModule(entry: string, options: LoadOptions = {}): Promise<Record<string, unknown>> {
+	const directory = await copyFor(options);
+	const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
+	return import(`${pathToFileURL(join(directory, sourceEntry)).href}?test=${Date.now()}-${Math.random()}`);
 }
 
-function copyFor(
-	entry: string,
-	options: { configJsonc?: string | null; replacements?: Record<string, string>; extraFiles?: Record<string, string> },
-): Promise<string> {
-	const sourceEntry = entry.endsWith(".js") ? `${entry.slice(0, -3)}.ts` : entry;
+function copyFor(options: LoadOptions): Promise<string> {
 	// undefined（默认测试配置）与 null（没有运行配置）必须分开：JSON 会把两者都写成 null。
 	const config = options.configJsonc === undefined ? { default: true } : { text: options.configJsonc };
-	const key = JSON.stringify([config, options.extraFiles, options.replacements && [sourceEntry, options.replacements]]);
+	const key = JSON.stringify([config, options.extraFiles]);
 	let copy = copies.get(key);
-	if (!copy) copies.set(key, copy = prepareCopy(sourceEntry, options));
+	if (!copy) copies.set(key, copy = prepareCopy(options));
 	return copy;
 }
 
-async function prepareCopy(
-	sourceEntry: string,
-	options: { configJsonc?: string | null; replacements?: Record<string, string>; extraFiles?: Record<string, string> },
-): Promise<string> {
+async function prepareCopy(options: LoadOptions): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-test-"));
 	shared.push(directory);
 	await copyFirecodeSource(directory);
@@ -159,10 +145,6 @@ async function prepareCopy(
 		configModule,
 		configSource.replace(getAgentDirImport, `const getAgentDir = () => ${JSON.stringify(agentDir)};`),
 	);
-	for (const [oldText, newText] of Object.entries(options.replacements ?? {})) {
-		const path = join(directory, sourceEntry);
-		await writeFile(path, (await readFile(path, "utf8")).replace(oldText, newText));
-	}
 	return directory;
 }
 

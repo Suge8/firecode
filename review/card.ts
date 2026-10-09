@@ -12,6 +12,7 @@ import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works
 import { Box, type Component, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, paint } from "../flame.js";
 import { formatDuration } from "../format.js";
+import { isRecord } from "../jsonc.js";
 import { msg, REDUNDANT_VERDICT_LINES, termPattern } from "./messages.js";
 import { shortModel, type CardData } from "./state.js";
 
@@ -41,7 +42,7 @@ function paintMark(details: CardDetails, theme: Theme): string {
 	return color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(color, details.icon);
 }
 
-export type CardDetails = {
+type CardDetails = {
 	version: typeof VERSION;
 	kind: CardData["kind"];
 	title: string;
@@ -51,7 +52,7 @@ export type CardDetails = {
 };
 
 /** 一次性整体校验结果卡 payload；结构不符返回 false（渲染器降级 content 纯文本）。 */
-export function isValidCardDetails(value: unknown): value is CardDetails {
+function isValidCardDetails(value: unknown): value is CardDetails {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
 	if (Object.keys(record).length !== 6) return false;
@@ -64,7 +65,7 @@ export function isValidCardDetails(value: unknown): value is CardDetails {
 	return typeof record.icon === "string";
 }
 
-export interface BuiltCard {
+interface BuiltCard {
 	content: string;
 	details: CardDetails;
 }
@@ -130,9 +131,7 @@ function plainContent(content: string | (string | unknown)[]): string {
 }
 
 function plainPart(part: unknown): string {
-	return typeof part === "object" && part !== null && "text" in part
-		? String((part as { text: unknown }).text)
-		: "";
+	return isRecord(part) && "text" in part ? String(part.text) : "";
 }
 
 // ---- 卡构建：content 给 LLM（纯文本事实），details 给渲染（本地化成品行）----

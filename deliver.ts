@@ -18,7 +18,7 @@ import { textOf } from "./format.js";
 const ENVELOPE_TAGS = ["firecode_master_event", "firecode_watcher", "firecode_review"] as const;
 export type EnvelopeTag = (typeof ENVELOPE_TAGS)[number];
 
-export interface ParsedEnvelope {
+interface ParsedEnvelope {
 	tag: EnvelopeTag;
 	body: string;
 }

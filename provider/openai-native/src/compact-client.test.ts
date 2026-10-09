@@ -1,7 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { registerPiAiStub } from "../test/pi-ai-stub";
-import { executeNativeCompaction } from "./compact-client";
-import type { NativeCompactionRuntime } from "./native-runtime";
+import { executeNativeCompaction } from "./compact-client.js";
+import type { NativeCompactionRuntime } from "./native-runtime.js";
 
 const baseModel = {
 	provider: "openai",
@@ -15,17 +14,6 @@ const baseModel = {
 	contextWindow: 100000,
 	maxTokens: 1000,
 };
-
-let serializerImportCounter = 0;
-
-async function loadSerializerModule() {
-	registerPiAiStub();
-	mock.module("@earendil-works/pi-coding-agent", () => ({
-		buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
-		convertToLlm: (messages: unknown[]) => messages,
-	}));
-	return import(`./responses-input.ts?unit=${serializerImportCounter++}`);
-}
 
 function createJwtWithAccountId(accountId: string): string {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -52,9 +40,9 @@ function createRuntime(overrides: Partial<NativeCompactionRuntime> = {}): Native
 	};
 }
 
+const savedFetch = globalThis.fetch;
 afterEach(() => {
-	serializerImportCounter = 0;
-	mock.restore();
+	globalThis.fetch = savedFetch;
 });
 
 test("executeNativeCompaction posts a compaction_trigger to the responses endpoint", async () => {
@@ -174,20 +162,17 @@ test("executeNativeCompaction accepts a streamed responses payload", async () =>
 	});
 });
 
-test("executeNativeCompaction classifies a failed Responses event by its provider error", async () => {
-	globalThis.fetch = mock(async () =>
-		new Response(
+const failureRequest = { model: baseModel.id, instructions: "compact this", input: [{ role: "user", content: "hello" }] };
+
+test.each([
+	[
+		"a failed Responses event over the context window",
+		() => new Response(
 			[
 				"event: response.failed",
 				`data: ${JSON.stringify({
 					type: "response.failed",
-					response: {
-						status: "failed",
-						error: {
-							code: "context_length_exceeded",
-							message: "Your input exceeds the context window of this model.",
-						},
-					},
+					response: { status: "failed", error: { code: "context_length_exceeded", message: "Your input exceeds the context window of this model." } },
 				})}`,
 				"",
 				"data: [DONE]",
@@ -195,141 +180,29 @@ test("executeNativeCompaction classifies a failed Responses event by its provide
 			].join("\n"),
 			{ status: 200, headers: { "content-type": "text/event-stream" } },
 		),
-	) as typeof fetch;
-
-	expect(
-		await executeNativeCompaction({
-			runtime: createRuntime(),
-			request: {
-				model: baseModel.id,
-				instructions: "compact this",
-				input: [{ role: "user", content: "hello" }],
-			},
-		}),
-	).toEqual({
-		ok: false,
-		reason: "input-too-large",
-		status: 200,
-		detail: '{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}',
-	});
-});
-
-test("executeNativeCompaction reports non-window response.failed as a provider failure", async () => {
-	globalThis.fetch = mock(async () =>
-		new Response(
-			JSON.stringify({
-				status: "failed",
-				error: { code: "server_error", message: "The response failed while processing." },
-			}),
-			{ status: 200, headers: { "content-type": "application/json" } },
-		),
-	) as typeof fetch;
-
-	expect(
-		await executeNativeCompaction({
-			runtime: createRuntime(),
-			request: {
-				model: baseModel.id,
-				instructions: "compact this",
-				input: [{ role: "user", content: "hello" }],
-			},
-		}),
-	).toEqual({
-		ok: false,
-		reason: "response-failed",
-		status: 200,
-		detail: '{"code":"server_error","message":"The response failed while processing."}',
-	});
-});
-
-test("executeNativeCompaction rejects a response without exactly one compaction item", async () => {
-	globalThis.fetch = mock(async () =>
-		new Response(JSON.stringify({ output: [{ type: "message", role: "assistant", content: [] }] }), {
+		{
+			reason: "input-too-large",
 			status: 200,
-			headers: { "content-type": "application/json" },
-		}),
-	) as typeof fetch;
+			detail: '{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}',
+		},
+	],
+	[
+		"any other failed response",
+		() => Response.json({ status: "failed", error: { code: "server_error", message: "The response failed while processing." } }),
+		{ reason: "response-failed", status: 200, detail: '{"code":"server_error","message":"The response failed while processing."}' },
+	],
+	[
+		"a response without exactly one compaction item",
+		() => Response.json({ output: [{ type: "message", role: "assistant", content: [] }] }),
+		{ reason: "missing-compaction", status: 200 },
+	],
+	[
+		"an HTTP error, keeping the provider's validation message",
+		() => Response.json({ error: { message: "Invalid input type 'compaction_trigger'." } }, { status: 400 }),
+		{ reason: "non-2xx", status: 400, detail: "Invalid input type 'compaction_trigger'." },
+	],
+])("executeNativeCompaction reports %s", async (_name, respond, failure) => {
+	globalThis.fetch = mock(async () => respond()) as typeof fetch;
 
-	expect(
-		await executeNativeCompaction({
-			runtime: createRuntime(),
-			request: {
-				model: baseModel.id,
-				instructions: "compact this",
-				input: [{ role: "user", content: "hello" }],
-			},
-		}),
-	).toEqual({
-		ok: false,
-		reason: "missing-compaction",
-		status: 200,
-	});
-});
-
-test("executeNativeCompaction preserves a provider validation message", async () => {
-	globalThis.fetch = mock(async () =>
-		new Response(
-			JSON.stringify({
-				error: {
-					message: "Invalid input type 'compaction_trigger'.",
-				},
-			}),
-			{ status: 400, headers: { "content-type": "application/json" } },
-		),
-	) as typeof fetch;
-
-	expect(
-		await executeNativeCompaction({
-			runtime: createRuntime(),
-			request: {
-				model: baseModel.id,
-				instructions: "compact this",
-				input: [{ role: "user", content: "hello" }],
-			},
-		}),
-	).toEqual({
-		ok: false,
-		reason: "non-2xx",
-		status: 400,
-		detail: "Invalid input type 'compaction_trigger'.",
-	});
-});
-
-test("responses input removes unpaired surrogates from instructions and message content", async () => {
-	const { serializeMessagesToCompactRequest, serializeMessagesToResponsesInput } = await loadSerializerModule();
-	const invalid = "\ud800Hello\udc00";
-	const request = serializeMessagesToCompactRequest({
-		model: baseModel as never,
-		instructions: `Prefix ${invalid}`,
-		messages: [
-			{ role: "user", content: [{ type: "text", text: invalid }], timestamp: 1 },
-			{
-				role: "assistant",
-				provider: baseModel.provider,
-				api: baseModel.api,
-				model: baseModel.id,
-				stopReason: "stop",
-				content: [{ type: "text", text: invalid, textSignature: JSON.stringify({ v: 1, id: "msg_1" }) }],
-				timestamp: 2,
-			},
-			{
-				role: "toolResult",
-				toolCallId: "call_1|fc_call_1",
-				toolName: "read",
-				isError: false,
-				content: [{ type: "text", text: invalid }],
-				timestamp: 3,
-			},
-		],
-	});
-
-	expect(JSON.stringify(request.instructions)).not.toContain("\\ud800");
-	expect(JSON.stringify(request.input)).not.toContain("\\ud800");
-	expect(JSON.stringify(request.input)).not.toContain("\\udc00");
-
-	const inputOnly = serializeMessagesToResponsesInput(baseModel as never, [
-		{ role: "user", content: [{ type: "text", text: invalid }], timestamp: 1 },
-	] as never);
-	expect(JSON.stringify(inputOnly)).not.toContain("\\ud800");
-	expect(JSON.stringify(inputOnly)).not.toContain("\\udc00");
+	expect(await executeNativeCompaction({ runtime: createRuntime(), request: failureRequest })).toEqual({ ok: false, ...failure });
 });

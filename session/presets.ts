@@ -79,6 +79,9 @@ export function registerPresets(pi: ExtensionAPI): void {
 		);
 	};
 
+	const unknownPreset = (name: string, ctx: ExtensionContext, level: "warning" | "error") =>
+		ctx.ui.notify(msg.presets.unknown(name, Object.keys(presets).join(", ") || msg.presets.noneAvailable), level);
+
 	const activePreset = () => (activeName === undefined ? undefined : presets[activeName]);
 
 	/** 预设状态写进当前分支（与宿主的模型记录同一棵树），null 表示没有预设；重开会话按它恢复。 */
@@ -222,8 +225,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 				return;
 			}
 			if (!presets[name]) {
-				const available = Object.keys(presets).join(", ") || msg.presets.noneAvailable;
-				ctx.ui.notify(msg.presets.unknown(name, available), "error");
+				unknownPreset(name, ctx, "error");
 				return;
 			}
 			await applyPreset(name, ctx);
@@ -257,12 +259,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 		reset();
 		const flag = pi.getFlag("preset");
 		if (typeof flag === "string" && flag) {
-			if (presets[flag]) {
-				await applyPreset(flag, ctx);
-			} else {
-				const available = Object.keys(presets).join(", ") || msg.presets.noneAvailable;
-				ctx.ui.notify(msg.presets.unknown(flag, available), "warning");
-			}
+			if (presets[flag]) await applyPreset(flag, ctx);
+			else unknownPreset(flag, ctx, "warning");
 		} else restore(ctx);
 		updateStatus(ctx);
 	});
@@ -271,8 +269,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 	function restore(ctx: ExtensionContext): void {
 		const record = ctx.sessionManager
 			.getBranch()
-			.filter((entry: { type: string; customType?: string }) => entry.type === "custom" && entry.customType === STATE_ENTRY)
-			.pop() as { data?: { name: string | null } } | undefined;
+			.findLast((entry: { type: string; customType?: string }) => entry.type === "custom" && entry.customType === STATE_ENTRY) as
+			{ data?: { name: string | null } } | undefined;
 		const name = record?.data?.name;
 		if (!name) return;
 		const preset = presets[name];

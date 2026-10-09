@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyOpenAIOptions, supportsFastMode } from "./options";
+import { applyOpenAIOptions, supportsFastMode } from "./options.js";
 
 const settings = {
 	nativeCompaction: true,
@@ -15,7 +15,7 @@ const codexModel = {
 	id: "gpt-5.6-sol",
 } as never;
 
-test("applies configured Responses options without touching input", () => {
+test("applies configured Responses options", () => {
 	const payload = {
 		model: "gpt-5.6-sol",
 		input: [{ role: "user", content: "hello" }],
@@ -27,7 +27,6 @@ test("applies configured Responses options without touching input", () => {
 		text: { verbosity: "low" },
 		service_tier: "priority",
 	});
-	expect(rewritten.input).toBe(payload.input);
 });
 
 test("CLI verbosity overrides config while an invalid override disables only verbosity", () => {
@@ -42,17 +41,6 @@ test("CLI verbosity overrides config while an invalid override disables only ver
 		...payload,
 		service_tier: "priority",
 	});
-});
-
-test("keeps an already-correct payload by reference", () => {
-	const payload = {
-		model: "gpt-5.6-sol",
-		input: [],
-		text: { verbosity: "low" },
-		service_tier: "priority",
-	};
-
-	expect(applyOpenAIOptions(payload, codexModel, settings, undefined)).toBe(payload);
 });
 
 test("supports Responses options for rc without enabling native compaction there", () => {

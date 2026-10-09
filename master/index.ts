@@ -9,17 +9,16 @@ import { loadConfig, type MasterRole } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
-import { registerWorkerGuard } from "./guard.js";
 import {
 	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
-import { armInterruptReminder, modelAtomText } from "./run.js";
+import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import { InProcessSessionPool } from "./spawn.js";
-import { THINKING_LEVELS } from "./state.js";
+import { modelAtomText, THINKING_LEVELS } from "./state.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
@@ -38,9 +37,7 @@ interface MasterDependencies {
 	wakeQuietMs?: number;
 }
 
-export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}, worker = false): void {
-	// Worker 会话里只注册 checkout 守卫，不注册命令、工具与生命周期。
-	if (worker) return registerWorkerGuard(pi);
+export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
 	const all = loadConfig();
 	const loaded = all.master;
 	const prompts = loadMasterPrompts();

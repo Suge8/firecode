@@ -22,9 +22,8 @@ import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
 import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
 import { msg } from "./messages.js";
-import { modelAtomText } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
-import type { WorkerRef } from "./state.js";
+import { modelAtomText, type WorkerRef } from "./state.js";
 
 /** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
 const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;
@@ -62,23 +61,19 @@ interface WorkerViewSource {
 
 /** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。 */
 export async function openWorkerView(active: MasterRuntime, name: string): Promise<void> {
-	if (viewOpen) return;
-	viewOpen = true;
+	if (active.viewOpen) return;
+	active.viewOpen = true;
 	try {
 		await active.ctx.ui.custom<void>(
 			(tui, theme, keybindings, done) => new WorkerView(runtimeSource(active), name, tui, theme, keybindings, done),
 			{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" } },
 		);
 	} finally {
-		viewOpen = false;
+		active.viewOpen = false;
 	}
 }
-let viewOpen = false;
-const runtimeDrafts = new WeakMap<MasterRuntime, Map<string, string>>();
 
 function runtimeSource(active: MasterRuntime): WorkerViewSource {
-	let drafts = runtimeDrafts.get(active);
-	if (!drafts) runtimeDrafts.set(active, drafts = new Map());
 	return {
 		facts: () => active.activityFacts(),
 		worker: (name) => active.store.find(name),
@@ -88,7 +83,7 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 		send: async (name, prompt) => {
 			await ACTION_HANDLERS.send(active, { worker: name, prompt, origin: "view" }, active.ctx);
 		},
-		drafts,
+		drafts: active.viewDrafts,
 	};
 }
 

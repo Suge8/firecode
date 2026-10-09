@@ -15,8 +15,9 @@ import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
 import { registerReview } from "./review/index.js";
+import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
-import { currentSubsessionRole } from "./master/role.js";
+import { currentSubsessionRole, type SubsessionRole } from "./master/role.js";
 import { registerWatcher } from "./watcher/index.js";
 import { registerRoundRecorder } from "./round-recorder.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
@@ -37,7 +38,7 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 /** 只属于交互主会话的功能：子会话（Worker、观察员、审查者）没有界面与命令入口，注册了只会白占资源。 */
 const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats", "statusbar"]);
 
-type FirecodeSessionRole = "main" | "worker" | "observer" | "reviewer" | "advisor";
+type FirecodeSessionRole = "main" | SubsessionRole;
 
 export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "main"): void {
 	let seeding = seedForMainSession(role);
@@ -52,8 +53,13 @@ export function registerFirecode(pi: ExtensionAPI, role: FirecodeSessionRole = "
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);
 	}
-	if (config.features.watcher !== false) registerWatcher(pi, {}, subsession);
-	if (config.features.master !== false) registerMaster(pi, {}, subsession);
+	// 子会话不带观察员：级联抑制是代码规则，不靠进程环境。
+	if (config.features.watcher !== false && !subsession) registerWatcher(pi);
+	// 子会话里 Master 只注册 checkout 守卫，不注册命令、工具与生命周期。
+	if (config.features.master !== false) {
+		if (subsession) registerWorkerGuard(pi);
+		else registerMaster(pi);
+	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。

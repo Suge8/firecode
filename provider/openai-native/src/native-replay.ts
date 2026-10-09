@@ -6,18 +6,18 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
-import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details";
+import { cloneStructuredValue, type NativeCompactionEntry } from "./native-details.js";
 import { isRecord } from "../../../jsonc.js";
-import type { ResponsesRequestPayload } from "./native-runtime";
+import type { ResponsesRequestPayload } from "./native-runtime.js";
 import {
 	hasAnchoredToolAdditions,
 	serializeMessagesToResponsesInput,
 	type ResponsesInputContentItem,
 	type ResponsesInputItem,
 	type ResponsesInputMessageItem,
-} from "./responses-input";
+} from "./responses-input.js";
 
-export type NativeReplayFailureReason =
+type NativeReplayFailureReason =
 	| "compaction-boundary-not-found"
 	| "first-kept-entry-not-found"
 	| "unsupported-instructions"
@@ -26,7 +26,7 @@ export type NativeReplayFailureReason =
 	| "unsupported-tool-additions"
 	| "expected-pi-replay-mismatch";
 
-export type NativeReplayResult =
+type NativeReplayResult =
 	| { ok: true; payload: ResponsesRequestPayload }
 	| { ok: false; reason: NativeReplayFailureReason };
 
@@ -96,6 +96,18 @@ function areEquivalentValues(left: unknown, right: unknown): boolean {
 		areEquivalentValues(leftKeys, rightKeys) &&
 		leftKeys.every((key) => areEquivalentValues(left[key], right[key]))
 	);
+}
+
+/**
+ * 比对只用来确认“宿主请求体的条目划分”与自己的序列化一致，送出的尾部原样取自宿主请求体，所以条目 id 的写法不参与比对：
+ * 宿主对无签名助手文本、外来工具调用的 id 有自己的归一化规则，逐项照抄只会在跨供应商会话里让重放整段放弃。
+ */
+function withoutItemIds(items: readonly unknown[]): unknown[] {
+	return items.map((item) => {
+		if (!isRecord(item)) return item;
+		const { id: _id, call_id: _callId, ...rest } = item;
+		return rest;
+	});
 }
 
 function toBranchSummaryMessage(entry: BranchSummaryEntry): AgentMessage {
@@ -221,7 +233,10 @@ export function rewriteNativeResponsesPayload<TApi extends Api>(args: {
 	// 请求末尾可能还有提供方追加的提示；其余部分必须逐项等于宿主重放。
 	const bodyEnd = leadingInput.length + bodyInput.length;
 	const trailingInput = args.payload.input.slice(bodyEnd);
-	const bodyMatches = areEquivalentValues(args.payload.input.slice(0, bodyEnd), [...leadingInput, ...bodyInput]);
+	const bodyMatches = areEquivalentValues(
+		withoutItemIds(args.payload.input.slice(0, bodyEnd)),
+		withoutItemIds([...leadingInput, ...bodyInput]),
+	);
 	if (!bodyMatches || !trailingInput.every(isPromptEnvelopeItem)) {
 		return { ok: false, reason: "expected-pi-replay-mismatch" };
 	}

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { fakePi } from "./fake-pi.ts";
 import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
@@ -7,6 +7,7 @@ let dispose: (() => void) | undefined;
 afterEach(async () => {
 	dispose?.();
 	dispose = undefined;
+	setSystemTime();
 });
 
 const FLAME = "[\u2800-\u28ff]";
@@ -17,8 +18,8 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
 		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"), loadFirecodeModule("tools/turn-clock.ts"),
 	]);
-	let now = 0;
-	const clock = new (clockModule.TurnClock as any)(() => now);
+	setSystemTime(new Date(0));
+	const clock = new (clockModule.TurnClock as any)();
 	host.initTheme("dark");
 	const { pi: api, tools, entryRenderers } = fakePi();
 	toolsModule.registerToolRendering(api);
@@ -61,9 +62,19 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 	const click = (y: number, width = 100) => chat.handleMouse({ type: "click", button: "left", x: 5, y, width, height: chat.render(width).length, shift: false, alt: false, ctrl: false });
 	const originalRender = chat.render;
 	dispose = module.installGroupPatch(ui, { clock });
-	const setNow = (value: number) => { now = value; };
+	const setNow = (value: number) => setSystemTime(new Date(value));
+	/** 宿主的整行单色文本（提示、状态行）：前面先插一个 Spacer。 */
+	const note = (color: string, text: string) => {
+		chat.addChild(new tui.Spacer(1));
+		chat.addChild(new tui.Text(ui.theme.fg(color, text), 1, 0));
+	};
+	const blankAssistant = () => {
+		const message = new host.AssistantMessageComponent(undefined, true, host.getMarkdownTheme());
+		chat.addChild(message);
+		return message;
+	};
 	/** 宿主在歇下时把轮记录作为 CustomEntry 加进聊天树：Container(Spacer, 渲染器组件)，这里只模拟宿主的壳。 */
-	const settle = (elapsed: number, outcome = "complete", at = now, tps?: number) => {
+	const settle = (elapsed: number, outcome = "complete", at = Date.now(), tps?: number) => {
 		const entry = new tui.Container();
 		entry.addChild(new tui.Spacer(1));
 		entry.addChild((entryRenderers.get("firecode-round") as Function)({ data: { elapsed, outcome, ...(tps ? { tps } : {}) }, timestamp: new Date(at).toISOString() }, { expanded: false }, ui.theme));
@@ -72,7 +83,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		chat.addChild(entry);
 		root.requestRender();
 	};
-	return { clock, setNow, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	return { clock, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -166,11 +177,7 @@ test("摘要优先显示运行项，工具失败不计数、不画红叉，切�
 
 test("用户消息之间的整段过程折成一行：图片、中途正文与模型收件折入，段尾回复可见，展开态按原序", async () => {
 	const s = await scene();
-	const assistant = () => {
-		const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-		s.chat.addChild(message);
-		return message;
-	};
+	const assistant = s.blankAssistant;
 	s.complete(s.tool("read", { path: "a.ts" }));
 	const image = s.tool("read", { path: "shot.png" });
 	image.updateResult({ content: [{ type: "text", text: "image payload" }, { type: "image", data: "", mimeType: "image/png" }], isError: false });
@@ -253,8 +260,7 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	const s = await scene();
 	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
 	feed(s, true);
-	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(assistant);
+	const assistant = s.blankAssistant();
 	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
 	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
@@ -309,8 +315,7 @@ test("思考期间异常和截断诊断不会被思考折叠吞掉", async () =>
 	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
 	feed(s, true);
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
-	const assistant = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(assistant);
+	const assistant = s.blankAssistant();
 	const content = [{ type: "thinking", thinking: "不应直接显示的思考" }];
 	assistant.updateContent({ role: "assistant", content, stopReason: "pending" }, true);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -390,13 +395,9 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 
 test("宿主的单色提示与状态行折入段内并计数，错误与混色文本仍是边界", async () => {
 	const s = await scene();
-	const note = (color: string, text: string) => {
-		s.chat.addChild(new s.tui.Spacer(1));
-		s.chat.addChild(new s.tui.Text(s.ui.theme.fg(color, text), 1, 0));
-	};
+	const note = s.note;
 	s.complete(s.tool("read", { path: "a.ts" }));
-	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(reply);
+	const reply = s.blankAssistant();
 	reply.updateContent({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "修好了" }] }, false);
 	note("warning", "Cache miss after 8m idle: 63k tokens re-billed");
 	note("warning", "Anthropic dropped 23 thinking blocks: prefix_binding_mismatch");
@@ -451,8 +452,7 @@ function hostUser(s: any, text: string) {
 }
 
 function assistant(s: any, content: unknown[], stopReason = "stop") {
-	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(message);
+	const message = s.blankAssistant();
 	message.updateContent({ role: "assistant", stopReason, content }, false);
 	return message;
 }
@@ -499,7 +499,7 @@ test("空闲路径的信封用户消息不切段；展开后它与忙时 CustomM
 	expect(expanded.join("\n")).not.toMatch(/当前任务/);
 });
 
-test("review 结果卡在展开态同样是一行 ↳，点击展开原生卡片", async () => {
+test("review 结果卡在展开态同样是一行 ↳，点击展开原生卡片，全局档位切换后复位", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
@@ -510,6 +510,12 @@ test("review 结果卡在展开态同样是一行 ↳，点击展开原生卡片
 	expect(s.lines().join("\n")).not.toContain("[firecode-review-card]");
 	s.click(s.lines().findIndex((line: string) => line.trim() === row));
 	expect(s.lines().join("\n")).toContain("[firecode-review-card]");
+	// 被点开的卡片也随 ctrl+o 的全局档位切换复位。
+	s.ui.setToolsExpanded(false);
+	s.lines();
+	s.ui.setToolsExpanded(true);
+	expect(s.lines().join("\n")).not.toContain("[firecode-review-card]");
+	expect(s.lines().map((line: string) => line.trim())).toContain(row);
 });
 
 test("轮记录是会话里的零行记录：摘要行落定读它显示整段耗时与终态，自己不占行，重载后依然有数；其后的宿主提示照常折入", async () => {
@@ -595,26 +601,6 @@ test("折叠态中间回复取最近 3 条首句，更早的折成 +N 条，最�
 	expect(lines.join("\n")).not.toContain("细节");
 });
 
-test("点击某一轮摘要只展开这一轮，ctrl+o 的全局档位不变", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
-	s.complete(s.tool("read", { path: "first.ts" }));
-	s.settle(1_000, "complete", 0);
-	s.setNow(60_000);
-	s.chat.addChild(new s.host.UserMessageComponent("第二问"));
-	s.complete(s.tool("read", { path: "second.ts" }));
-	const summaryAt = (nth: number) => s.lines().map((line: string, index: number) => [line, index] as const)
-		.filter(([line]) => /^✓/.test(line))[nth][1];
-	expect(s.lines().join("\n")).not.toMatch(/first\.ts|second\.ts/);
-
-	s.click(summaryAt(0));
-	expect(s.lines().join("\n")).toContain("first.ts");
-	expect(s.lines().join("\n")).not.toContain("second.ts");
-	expect(s.ui.getToolsExpanded()).toBe(false);
-	s.click(summaryAt(0));
-	expect(s.lines().join("\n")).not.toContain("first.ts");
-});
-
 test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全部展开/全部折叠", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("第一问"));
@@ -630,6 +616,7 @@ test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全�
 	// 点开第一轮 → ctrl+o 全局展开 → 再 ctrl+o 全局折叠：被点开的那一轮也折回去。
 	s.click(summaryAt(0));
 	expect(shown()).toEqual(["first.ts"]);
+	expect(s.ui.getToolsExpanded()).toBe(false);
 	s.ui.setToolsExpanded(true);
 	expect(shown()).toEqual(["first.ts", "second.ts"]);
 	s.ui.setToolsExpanded(false);
@@ -644,21 +631,6 @@ test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全�
 	expect(shown()).toEqual([]);
 	s.ui.setToolsExpanded(true);
 	expect(shown()).toEqual(["first.ts", "second.ts"]);
-});
-
-test("被点开的机器消息卡也随全局档位切换复位", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	s.complete(s.tool("read", { path: "a.ts" }));
-	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-review-card", content: "<firecode_review>\n审查通过\n共 2 轮，全部通过\n</firecode_review>", display: true, timestamp: 0 }));
-	s.ui.setToolsExpanded(true);
-	s.click(s.lines().findIndex((line: string) => line.trim().startsWith("↳ 审查通过")));
-	expect(s.lines().join("\n")).toContain("[firecode-review-card]");
-	s.ui.setToolsExpanded(false);
-	s.lines();
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().join("\n")).not.toContain("[firecode-review-card]");
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 审查通过 共 2 轮，全部通过");
 });
 
 /** 把会话进行中的事实喂给轮次时钟；歇下边沿由 busy.ts 触发、tools 写入轮记录（见 scene 的 settle）。 */
@@ -702,19 +674,6 @@ test("纯文字轮也有落定行：有轮记录就画，显示耗时与均速�
 	expect(lines.indexOf("✗ 已中断 · 3.0s")).toBeLessThan(lines.indexOf("答到一半"));
 });
 
-test("review 的信封消息归入过程不切段", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, "<firecode_review>\n第 1 轮未通过，请修复。\n</firecode_review>");
-	s.complete(s.tool("read", { path: "b.ts" }));
-	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(lines.filter((line: string) => /^✓$/.test(line))).toHaveLength(1);
-	expect(lines.join("\n")).not.toContain("firecode_review");
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ 第 1 轮未通过，请修复。");
-});
-
 test("中间回复与子代理结果行都经首句规则预览（规则本身见 format.test）", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
@@ -730,10 +689,9 @@ test("中间回复与子代理结果行都经首句规则预览（规则本身�
 
 test("异常提醒：宿主提示原文按宽裁剪；多条提示取首条；工具失败不影响标记", async () => {
 	const s = await scene();
-	const note = (text: string) => { s.chat.addChild(new s.tui.Spacer(1)); s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", text), 1, 0)); };
 	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
-	note("Cache miss after 8m idle: 63k tokens re-billed");
-	note("Anthropic dropped 23 thinking blocks");
+	s.note("warning", "Cache miss after 8m idle: 63k tokens re-billed");
+	s.note("warning", "Anthropic dropped 23 thinking blocks");
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ ⚠ Cache miss after 8m idle: 63k tokens re-billed\s*$/);
 	const narrow = s.lines(30).filter(Boolean)[0];
 	expect(narrow).toMatch(/^✓ ⚠ Cache m/);
@@ -785,24 +743,12 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要只�
 	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });
 
-test("用户消息竖条不把 OSC 133 语义提示标记挤到行中：标记必须留在行首", async () => {
-	// 终端（libghostty 等）把行中的 133;A 当 fresh-line 执行 CR+LF，会把后半行写到下一行留下残影。
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("第一段\n\n第二段"));
-	assistant(s, [{ type: "text", text: "收到" }]);
-	expect(s.chat.render(60).join("\n")).toContain("▌");
-	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
-	expect(marked.length).toBeGreaterThan(0);
-	for (const line of marked) expect(line).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/);
-});
-
 test("纯文字轮从开始到歇下摘要行一直在原位：思考中 → 回复中 → 落定，回复不跳", async () => {
 	const s = await scene();
 	hostUser(s, "你好");
 	s.setNow(1000);
 	feed(s, true, 0, 1000);
-	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(reply);
+	const reply = s.blankAssistant();
 	const frame = () => s.lines(60).map((line: string) => line.trimEnd());
 	const summaryAt = (lines: string[]) => lines.findIndex((line) => /^(?:✓|✗|[⠀-⣿])/.test(line));
 
@@ -841,8 +787,7 @@ test("当前动作只说正在发生的事：工具都完成后等模型是思�
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 读取 \\./a\\.ts$`));
 	s.complete(read);
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 思考中$`));
-	const reply = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
-	s.chat.addChild(reply);
+	const reply = s.blankAssistant();
 	reply.updateContent({ role: "assistant", stopReason: "pending", content: [{ type: "text", text: "读完了，正在" }] }, true);
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 回复中$`));
 });
@@ -1158,10 +1103,7 @@ test("内容不足一屏时点开一轮、展开后超出视口：被点的摘�
 
 test("宿主对 ctrl+o 的回显“Tool output: expanded/collapsed”不进对话；其余宿主状态行照常折入", async () => {
 	const s = await scene();
-	const note = (color: string, text: string) => {
-		s.chat.addChild(new s.tui.Spacer(1));
-		s.chat.addChild(new s.tui.Text(s.ui.theme.fg(color, text), 1, 0));
-	};
+	const note = s.note;
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
 	assistant(s, [{ type: "text", text: "好了" }]);
@@ -1257,7 +1199,7 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 	}
 });
 
-test("用户消息竖条上下不保留宿主的底色内边距空行：竖条从第一行正文开始、到最后一行正文结束，前后是普通间隔", async () => {
+test("用户消息竖条上下不保留宿主的底色内边距空行（竖条从第一行正文开始、到最后一行正文结束，前后是普通间隔），OSC 133 语义提示标记留在行首", async () => {
 	const s = await scene();
 	hostUser(s, "第一段\n\n第二段");
 	s.complete(s.tool("read", { path: "a.ts" }));
@@ -1271,4 +1213,9 @@ test("用户消息竖条上下不保留宿主的底色内边距空行：竖条�
 	expect(plain[last + 1]).toBe("");
 	// OSC 133 语义标记仍在消息的第一行行首。
 	expect(raw[first]).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/u);
+	// 终端（libghostty 等）把行中的 133;A 当 fresh-line 执行 CR+LF，会把后半行写到下一行留下残影：所有带标记的行，标记都在行首。
+	assistant(s, [{ type: "text", text: "收到" }]);
+	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
+	expect(marked.length).toBeGreaterThan(0);
+	for (const line of marked) expect(line).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/);
 });

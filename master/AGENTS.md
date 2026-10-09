@@ -6,8 +6,8 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `index.ts` | 注册入口：激活与停用、命令、两个工具与生命周期 |
-| `runtime.ts` | 一个指挥官会话的运行时：档案 store、按名字索引的 Worker 运行时事实表（live）、活动列表投影；`current`/`commit` 是 await 后唯一的重读与写回点 |
+| `index.ts` | 注册入口：激活与停用、命令、两个工具与生命周期；运行时旋钮（续跑提醒时限、合并唤醒窗口）的默认值 |
+| `runtime.ts` | 一个指挥官会话的运行时：档案 store、按名字索引的 Worker 运行时事实表（live）、活动列表投影、全过程视图的草稿与开关；`current`/`commit` 是 await 后唯一的重读与写回点，`schedulePublish` 是在飞数与名册的唯一发布点 |
 | `outbox.ts` | 事件发件箱：pending/ack 持久化、合并投递、重试、耗时行与在飞数计算 |
 | `run.ts` | 回合编排：打开会话、跑回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视、中断续跑提醒 |
 | `actions.ts` | 七个命令动作的处理函数，表驱动分发 |
@@ -15,7 +15,9 @@
 | `roster.ts` | 子代理名册：活动列表的投影，发布给同进程的其他扩展 |
 | `guard.ts` | Worker 会话里唯一注册的 edit/write 守卫：只放行当前 checkout 与系统临时目录 |
 | `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
-| `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
+| `state.ts` `event-format.ts` `activity-list.ts` | 档案格式（含模型原子文字）、事件产文、活动列表 |
+| `event-card.ts` | 事件卡渲染：默认每事件一行标题，展开看完整信封正文 |
+| `prompt.ts` `role.ts` | 提示词读取与拼装；子会话角色标记（`spawn.ts` 设置，决定 FireCode 在子会话里注册什么） |
 | `messages.ts` | 本目录全部界面与模型可见文案（中英）；信封分节与耗时词汇不在这里，读根 `messages.ts` 的 `envelope` |
 | `worker-view.ts` | 子代理全过程视图：点活动列表一行打开全屏浮层，用过程组投影看完整记录并可补话 |
 
@@ -58,19 +60,19 @@ Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派
 
 ## 在飞数发布
 
-Master 是在飞子代理数的唯一发布者（定义见 `outbox.ts`、`busy.ts` 头注释）；herdr 侧边栏的 working 由 `session/herdr-projection.ts` 经 `watchBusy` 读这个数得出，Master 不接触 herdr。
+Master 是在飞子代理数的唯一发布者（定义见 `outbox.ts` 的 `inFlight`、`busy.ts` 头注释）；herdr 侧边栏的 working 由 `session/herdr-projection.ts` 经 `watchBusy` 读这个数得出，Master 不接触 herdr。
 
 ## 名册发布
 
-同进程的其他扩展（如 CuePad 桥）想知道子代理在做什么，订阅 `pi.events` 的 `firecode:subagents` 频道：payload `{ workers: SubagentInfo[] }` 是整份名册（按启动序，字段见 `roster.ts`：角色、模型、思考档、状态、在做什么的一句话、本次运行开始与落定时刻），内容变了才发，停用或会话关闭发空名册。读者只读这份投影，不读档案、会话文件或 `subagents/` 目录。状态取活动列表的分组（`workerPhase` 一处判定；“卡住”并入 `running`，它靠计时才成立，名册不发时间驱动的变化）；动作文字是界面语言的原句。时刻是 `Date.now()` 毫秒，读者自己算时长。名册由 `MasterRuntime.scheduleRoster` 在同一同步段内合并发布，调用点是 `render`、`markIdle`、`beginRun` 与子代理的工具/审查事件。
+同进程的其他扩展（如 CuePad 桥）想知道子代理在做什么，订阅 `pi.events` 的 `firecode:subagents` 频道：payload `{ workers: SubagentInfo[] }` 是整份名册（按启动序，字段见 `roster.ts`：角色、模型、思考档、状态、在做什么的一句话、本次运行开始与落定时刻），内容变了才发，停用或会话关闭发空名册。读者只读这份投影，不读档案、会话文件或 `subagents/` 目录。状态取活动列表的分组（`workerPhase` 一处判定；“卡住”并入 `running`，它靠计时才成立，名册不发时间驱动的变化）；动作文字是界面语言的原句。时刻是 `Date.now()` 毫秒，读者自己算时长。名册与在飞数由 `MasterRuntime.schedulePublish` 在同一同步段内合并发布，调用点是 `render`、`markIdle`、`beginRun` 与子代理的工具/审查事件。
 
 ## 投递与义务
 
-落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，合并窗口见 `index.ts`。事件正文末尾的“本次运行”耗时见 `outbox.ts`、`event-format.ts`；“当前任务 X”是给指挥官的时间信号——Opus 5.5 据已用时间安排并行（官方提示指南“Time signals for multiagent harnesses”），只追加在事件正文内，不触碰投递路径。
+落定事件先以 pending entry 写入主会话，再经根级 `deliver.ts` 投递，成功后写 ack；reload 重投 pending 与 ack 的差集。并发落定合并成一条消息，合并窗口见 `index.ts`（安静窗口）与 `outbox.ts`（最长等待）。事件正文末尾的“本次运行”耗时见 `outbox.ts`、`event-format.ts`；“当前任务 X”是给指挥官的时间信号——Opus 5.5 据已用时间安排并行（官方提示指南“Time signals for multiagent harnesses”），只追加在事件正文内，不触碰投递路径。
 
 **视图起的运行**：运行时表里每次运行带一个来源（`RunOrigin`），不另起状态机。用户在全过程视图里给空闲子代理补话起的运行来源为 view：指挥官没在等它，所以不计入在飞数——主会话不因它进入进行中、不产生主会话轮记录；落定事件仍交给指挥官（它必须知道子代理状态变了），但经 `deliver.ts` 的 `inform` 只告知不唤醒（pending 里带 `inform`，reload 重投同样不唤醒；与唤醒事件同批时随那一批唤醒送达）。指挥官在这次运行进行中又 send 给同一子代理时来源转为 master，它从此在等；视图补进指挥官起的运行只记原话、不改来源。发落、审查义务与失败行规则不变。
 
-事件正文只在 `event-format.ts` 产文（标题、分节、失败口径、耗时行格式）；展示卡没有独立数据，`tools/machine.ts` 从信封正文解析标题、错误分节与“耗时：本次运行”行（中文界面的字样；英文界面是 `Error:`、`Elapsed: This run`）。分节与耗时词汇两侧都读根 `messages.ts` 的 `envelope`，不各写一份；标题里“名字是第一个空格前的词”这条两种语言都成立，改格式两侧同步，`tests/tool-groups.test.ts` 用真实产文守这条链路。给模型的指令（续派或收口、审查义务）只放在标题之后的正文；被中断的正文只在有审查义务时提审查义务；待续跑只发给会话重载打断的回合，并说明是重载打断。
+事件正文只在 `event-format.ts` 产文（标题、分节、失败口径、耗时行格式）；展示卡没有独立数据，`tools/machine.ts` 从信封正文解析标题、错误分节与“耗时：本次运行”行（中文界面的字样；英文界面是 `Error:`、`Elapsed: This run`）。分节与耗时词汇两侧都读根 `messages.ts` 的 `envelope`，不各写一份；标题里“名字是第一个空格前的词”这条两种语言都成立，改格式两侧同步，`tests/machine.test.ts` 与 `tests/i18n-master.test.ts` 用真实产文守这条链路。给模型的指令（续派或收口、审查义务）只放在标题之后的正文；被中断的正文只在有审查义务时提审查义务；待续跑只发给会话重载打断的回合，并说明是重载打断。
 
 `review:true` 是持久化到票上的审查义务，不自动开审；它在 `send`、reload、中断和失败后保留并阻止 `ack`，由审查通过或质量裁决停止消除。`kill` 随整票删除义务。不在落定时自动开审：模型停下可能是在提问或交半成品，落定不等于完成；义务不灭归代码，送审时机归指挥官。
 

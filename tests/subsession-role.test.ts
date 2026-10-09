@@ -4,11 +4,12 @@ import { loadFirecodeModule } from "./loader";
 // pi 的扩展加载器（jiti，moduleCache: false）在子会话 cwd 变化或宿主 reload 后会重新
 // 求值整个模块图：spawn 侧与子会话入口可能各持一份 role.ts 拷贝。角色标记必须跨拷贝
 // 可见，否则 watcher/master 会以 "main" 角色级联注册进 Worker 会话。
+// 同一路径加 query 在 Bun 里仍是同一个模块实例，所以用不同的 extraFiles 拿两份独立的目录副本。
 test("子会话角色跨模块拷贝可见", async () => {
-	const spawnSide = (await loadFirecodeModule("master/role.js")) as {
+	const spawnSide = (await loadFirecodeModule("master/role.js", { extraFiles: { "copy-spawn": "" } })) as {
 		withSubsessionRole: (role: string, run: () => Promise<unknown>) => Promise<unknown>;
 	};
-	const freshCopy = (await loadFirecodeModule("master/role.js")) as {
+	const freshCopy = (await loadFirecodeModule("master/role.js", { extraFiles: { "copy-fresh": "" } })) as {
 		currentSubsessionRole: () => string | undefined;
 	};
 	const seen = await spawnSide.withSubsessionRole("worker", async () => freshCopy.currentSubsessionRole());

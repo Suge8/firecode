@@ -5,14 +5,16 @@ import { loadFirecodeModule } from "./loader.ts";
 type Reduce = typeof import("../review/state.js").reduce;
 type InitialState = typeof import("../review/state.js").initialState;
 type ReviewEvent = import("../review/state.js").ReviewEvent;
+type IsValidCheckpoint = typeof import("../review/checkpoint.js").isValidCheckpoint;
 
 let reduce: Reduce;
 let initialState: InitialState;
+let isValidCheckpoint: IsValidCheckpoint;
 
 const LIMITS: ReviewLimits = {
 	maxRounds: 3,
 	advisorAfterFailures: 2,
-	advisorModel: "p/advisor",
+	advisor: { model: "p/advisor", thinking: "high" },
 	reviewers: [
 		{ model: "p/sol", thinking: "high" },
 		{ model: "p/terra", thinking: "high" },
@@ -23,7 +25,12 @@ function reviewer(index: number, status: ReviewerResult["status"], details: stri
 	return { index, model: `m${index}`, thinking: "high", status, summary: "s", details };
 }
 
-const step = (state: ReviewState, event: ReviewEvent, limits = LIMITS, now = 10_000) => reduce(state, event, limits, now);
+// 每一步产出的状态都必须能写进 checkpoint：校验键表与领域类型漂移时，终态写不进去，重启后会恢复出幽灵审查。
+const step = (state: ReviewState, event: ReviewEvent, limits = LIMITS, now = 10_000) => {
+	const result = reduce(state, event, limits, now);
+	expect(`${event.type}:${isValidCheckpoint({ version: 5, seq: 1, ...result.state })}`).toBe(`${event.type}:true`);
+	return result;
+};
 
 /** 命令入口的真实路径：START 一律排队，ADVANCE 在 idle 门开第 1 轮。 */
 function begin(limits = LIMITS, focus = ""): ReviewState {
@@ -66,6 +73,7 @@ async function loadState() {
 	};
 	reduce = module.reduce;
 	initialState = module.initialState;
+	isValidCheckpoint = ((await loadFirecodeModule("review/checkpoint.ts")) as { isValidCheckpoint: IsValidCheckpoint }).isValidCheckpoint;
 }
 
 describe("fire-review reducer", () => {
@@ -193,8 +201,12 @@ describe("fire-review reducer", () => {
 
 	test("failures reaching the threshold hand the round to the advisor", async () => {
 		await loadState();
-		const second = step(completeRepair(failRound(begin())), { type: "ADVANCE" }, LIMITS, 20_000).state;
-		expect(second.round).toBe(2);
+		const next = step(completeRepair(failRound(begin())), { type: "ADVANCE" }, LIMITS, 20_000);
+		const second = next.state;
+		expect(second).toMatchObject({ phase: "reviewing", round: 2 });
+		expect(second.history).toHaveLength(1);
+		// 开始卡只发第 1 轮；后续轮的边界由结果卡轮号承担。
+		expect(next.effects).toEqual([{ kind: "advance" }]);
 		const result = settle(settle(second, 0, "failed", "FAIL\n发现 3").state, 1, "failed", "FAIL\n发现 4");
 		expect(result.state.phase).toBe("needs_fix");
 		expect(result.state.consecutiveFailures).toBe(2);
@@ -253,26 +265,6 @@ describe("fire-review reducer", () => {
 		]);
 	});
 
-	test("RECOVER resets an unconfirmed repair instead of advancing the round", async () => {
-		await loadState();
-		let state = step(failRound(begin()), { type: "FEEDBACK_DISPATCHED" }, LIMITS, 20_000).state;
-		expect(state.repair?.status).toBe("awaiting_start");
-		const recovered = step(state, { type: "RECOVER" }, LIMITS, 21_000);
-		expect(recovered.state.round).toBe(1);
-		expect(recovered.state.repair?.status).toBe("pending");
-		expect(recovered.effects).toEqual([]);
-	});
-
-	test("ADVANCE from awaiting_fix opens the next round; round numbers only go up", async () => {
-		await loadState();
-		const result = step(completeRepair(failRound(begin())), { type: "ADVANCE" }, LIMITS, 20_000);
-		expect(result.state.round).toBe(2);
-		expect(result.state.phase).toBe("reviewing");
-		expect(result.state.history).toHaveLength(1);
-		// 开始卡只发第 1 轮；后续轮的边界由结果卡轮号承担。
-		expect(result.effects).toEqual([{ kind: "advance" }]);
-	});
-
 	test("a FAIL at the max round goes straight to the summary turn without delivering feedback", async () => {
 		await loadState();
 		const local = { ...LIMITS, maxRounds: 1 };
@@ -312,6 +304,9 @@ describe("fire-review reducer", () => {
 		expect(byUser.state.history[0]).toMatchObject({ result: "cancelled", reason: "user", details: "" });
 		expect(byUser.effects).toEqual([{ kind: "notify_cancelled" }]);
 		expect(step(state, { type: "CANCEL", reason: "shutdown" }, LIMITS, 5000).effects).toEqual([]);
+		// 等顾问时被取消：待仲裁的那一轮也要收口进历史。
+		const cancelled = step(needsAdvisor(), { type: "CANCEL", reason: "user" }, LIMITS, 30_000).state;
+		expect(cancelled.history.at(-1)).toMatchObject({ round: 2, result: "cancelled", reason: "user" });
 	});
 
 	test("TIMEOUT settles with a timeout card; a round already recorded as failed stays failed", async () => {

@@ -6,7 +6,7 @@ import { type ClipSide, clip, formatDuration, oneLine } from "../format.js";
 import { sizeColor } from "../theme.js";
 
 /** pi 公共出口未导出 ThemeBg：从 Theme.bg 的参数派生，避免依赖内部路径。 */
-type ThemeBg = Parameters<Theme["bg"]>[0];
+export type ThemeBg = Parameters<Theme["bg"]>[0];
 
 const HOME = homedir();
 const ELLIPSIS = "…";

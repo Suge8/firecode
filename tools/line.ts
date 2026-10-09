@@ -5,6 +5,7 @@ import { type Component, visibleWidth, wrapTextWithAnsi } from "@earendil-works/
 import { type ClipSide, clip, oneLine } from "../format.js";
 import {
 	type Part,
+	type ThemeBg,
 	clipParts,
 	durationPart,
 	paint,
@@ -32,7 +33,6 @@ const STATUS = {
 } as const satisfies Record<string, Status>;
 
 type Status = { glyph: string; color: ThemeColor; bg?: ThemeBg };
-type ThemeBg = Parameters<Theme["bg"]>[0];
 
 /** renderCall / renderResult 之间共享的行状态。 */
 export type RowState = {

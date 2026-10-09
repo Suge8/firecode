@@ -64,7 +64,7 @@ export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefine
 }
 
 function checkpointOf(entry: unknown): ReviewState | undefined {
-	return isCheckpointEntry(entry) && isValidCheckpoint(entry.data) ? entry.data as ReviewState : undefined;
+	return isCheckpointEntry(entry) && isValidCheckpoint(entry.data) ? entry.data : undefined;
 }
 
 function outcomeOf(latest: ReviewState): ReviewOutcome {
