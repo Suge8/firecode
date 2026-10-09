@@ -11,6 +11,7 @@ import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "../spawn.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { subagentInfos, type SubagentInfo } from "./roster.js";
 import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
 
@@ -127,7 +128,7 @@ export class MasterRuntime {
 	render(): void {
 		if (this.closedValue) return;
 		this.schedulePublish();
-		this.ctx.ui.setStatus("master", MASTER_IDENTITY);
+		this.ctx.ui.setStatus(STATUS_KEYS.master, MASTER_IDENTITY);
 		this.list?.sync();
 	}
 
@@ -257,7 +258,7 @@ export class MasterRuntime {
 		this.outbox.close();
 		this.list?.dispose();
 		this.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
-		this.ctx.ui.setStatus("master", undefined);
+		this.ctx.ui.setStatus(STATUS_KEYS.master, undefined);
 	}
 
 	private unobserve(live: WorkerLive): void {

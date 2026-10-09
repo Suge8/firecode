@@ -17,6 +17,7 @@ import { type BusyView, IDLE, type ReviewProgress, watchBusy } from "../busy.js"
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { type BranchEntry, latestTurnRecord, OUTCOME_TEXT, roundTexts, type TurnRecord, watchRoundRecorded } from "../round.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 import { promptRename } from "./rename.js";
@@ -59,9 +60,6 @@ const THINKING_COLORS: Record<string, ThemeColor> = {
 	max: "thinkingMax",
 };
 
-const FAST_STATUS = "pi-openai-native-fast";
-/** session/presets.ts 发布的生效预设名（已着色）。 */
-const PRESET_STATUS = "preset";
 /** 落定后暖光渐隐的时长；落定结果本身一直留到下一轮开始。 */
 const GLOW_FADE_MS = 1_000;
 
@@ -113,7 +111,7 @@ class Shell {
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: [], glow: 0,
-			watcher: status("watcher"), master: status("master"),
+			watcher: status(STATUS_KEYS.watcher), master: status(STATUS_KEYS.master),
 		};
 		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
@@ -146,10 +144,10 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
-			preset: this.statuses().get(PRESET_STATUS) ?? "",
+			preset: this.statuses().get(STATUS_KEYS.preset) ?? "",
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(THINKING_COLORS[thinking], `/${thinking}`) : "",
-			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
+			fast: this.statuses().has(STATUS_KEYS.fast) ? fg("warning", "Fast") : "",
 			percent: fg(contextColor(percent), percent == null ? "?" : `${percent.toFixed(1)}%`),
 			capacity: fg("dim", `/${formatTokens(window)}`),
 		};
