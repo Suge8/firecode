@@ -12,6 +12,7 @@
 | `run.ts` | 回合编排：打开会话、跑回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视、中断续跑提醒 |
 | `actions.ts` | 七个命令动作的处理函数，表驱动分发 |
 | `list-view.ts` | 工具行、池快照展开与 status 文本，纯投影 |
+| `roster.ts` | 子代理名册：活动列表的投影，发布给同进程的其他扩展 |
 | `guard.ts` | Worker 会话里唯一注册的 edit/write 守卫：只放行当前 checkout 与系统临时目录 |
 | `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
 | `state.ts` `event-format.ts` `activity-list.ts` | 档案格式、事件产文、活动列表 |
@@ -58,6 +59,10 @@ Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派
 ## 在飞数发布
 
 Master 是在飞子代理数的唯一发布者（定义见 `outbox.ts`、`busy.ts` 头注释）；herdr 侧边栏的 working 由 `session/herdr-projection.ts` 经 `watchBusy` 读这个数得出，Master 不接触 herdr。
+
+## 名册发布
+
+同进程的其他扩展（如 CuePad 桥）想知道子代理在做什么，订阅 `pi.events` 的 `firecode:subagents` 频道：payload `{ workers: SubagentInfo[] }` 是整份名册（按启动序，字段见 `roster.ts`：角色、模型、思考档、状态、在做什么的一句话、本次运行开始与落定时刻），内容变了才发，停用或会话关闭发空名册。读者只读这份投影，不读档案、会话文件或 `subagents/` 目录。状态取活动列表的分组（`workerPhase` 一处判定；“卡住”并入 `running`，它靠计时才成立，名册不发时间驱动的变化）；动作文字是界面语言的原句。时刻是 `Date.now()` 毫秒，读者自己算时长。名册由 `MasterRuntime.scheduleRoster` 在同一同步段内合并发布，调用点是 `render`、`markIdle`、`beginRun` 与子代理的工具/审查事件。
 
 ## 投递与义务
 

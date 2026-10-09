@@ -11,6 +11,7 @@ import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "./spawn.js";
+import { subagentInfos, type SubagentInfo } from "./roster.js";
 import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
 
 /** 注册时定下、跨会话不变的配置与依赖。 */
@@ -27,6 +28,8 @@ export interface MasterSetup {
 	wakeQuietMs: number;
 	/** 在飞子代理数的唯一发布口（跨会话保持上次发布值以便配对）。 */
 	publishInFlight(count: number): void;
+	/** 子代理名册的唯一发布口（内容没变不发）。 */
+	publishRoster(workers: SubagentInfo[]): void;
 	/** 本段会话进行中的起点（busy.ts 的 since，与上边框计时同一事实）；歇下时为 undefined。 */
 	sessionSince(): number | undefined;
 }
@@ -84,6 +87,7 @@ export class MasterRuntime {
 	/** 最近取出的启动序；接着档案里已有的最大值，恢复后新 start 仍排在后面。 */
 	private launchSeq: number;
 	private list?: ActivityList;
+	private rosterScheduled = false;
 	private closedValue = false;
 	private readonly stopReleaseWatch: () => void;
 	/** 子代理会话被接上订阅（冷启动或重开）时通知：全过程视图据此在第一条事件之前接上自己的订阅。 */
@@ -115,12 +119,23 @@ export class MasterRuntime {
 		if (this.closedValue) throw new Error(msg.runtime.replaced);
 	}
 
-	/** 事实变化后的唯一重绘入口：在飞数、边框身份与活动列表。 */
+	/** 事实变化后的唯一重绘入口：在飞数、名册、边框身份与活动列表。 */
 	render(): void {
 		if (this.closedValue) return;
 		this.outbox.scheduleInFlight();
+		this.scheduleRoster();
 		this.ctx.ui.setStatus("master", MASTER_IDENTITY);
 		this.list?.sync();
+	}
+
+	/** 名册变化（状态之外还有当前动作、审查进度、落定时刻）后调用：同一同步段合并成一次发布。 */
+	scheduleRoster(): void {
+		if (this.rosterScheduled) return;
+		this.rosterScheduled = true;
+		queueMicrotask(() => {
+			this.rosterScheduled = false;
+			if (!this.closedValue) this.setup.publishRoster(subagentInfos(this.activityFacts(), Date.now()));
+		});
 	}
 
 	/** 新的一轮（人类输入）开始：活动列表的展开收起。 */
@@ -186,6 +201,7 @@ export class MasterRuntime {
 		live.currentTools.clear();
 		live.reviewProgress = undefined;
 		this.setup.pool.markIdle(worker.sessionPath);
+		this.scheduleRoster();
 	}
 
 	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒作废。 */
@@ -196,6 +212,7 @@ export class MasterRuntime {
 		live.runStartedAt = Date.now();
 		live.viewPrompts = [];
 		live.origin = origin;
+		this.scheduleRoster();
 	}
 
 	/** 每个 Worker 只挂一个会话订阅；换了会话（释放后重开）才重挂。 */

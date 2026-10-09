@@ -62,6 +62,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
 		if (event.type === "tool_execution_end") live.currentTools.delete(event.toolCallId);
 		if (event.type === "entry_appended") live.reviewProgress = reviewProgressOf(event.entry) ?? live.reviewProgress;
+		if (event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "entry_appended") active.scheduleRoster();
 	});
 }
 
