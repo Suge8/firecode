@@ -1,0 +1,200 @@
+:root {
+	color-scheme: dark;
+
+	/* 颜色 */
+	--bg: #0c0a09;
+	--surface: #141110;
+	--terminal: #171515;
+	--fg: #f5f1ec;
+	--muted: #988d84;
+	--faint: #5c544e;
+	--accent: #ff7a0f;
+	--accent-hot: #ffb547;
+	--ember: #c2410c;
+	--pass: #4ade80;
+	--fail: #f87171;
+	--ring: oklch(1 0 0 / 0.09);
+	--hover: oklch(1 0 0 / 0.06);
+
+	/* 字体：中文落到 Noto Sans SC（按字符分片加载，只下载用到的） */
+	--font-sans: "Mona Sans Variable", "Noto Sans SC Variable", "PingFang SC", system-ui, sans-serif;
+	--font-mono: "Maple Mono", "Noto Sans SC Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+	/* 字阶：标题用 Mona Sans 的宽度轴。全站只有这几档：首屏与收尾大标题 display、区块标题 title、
+	   区块内小标题 subtitle、条目标题 item；字重分别固定为 680 / 640 / 620 / 620 */
+	--text-display: clamp(2.6rem, 6vw, 5.75rem);
+	--text-title: clamp(2rem, 4.4vw, 3.9rem);
+	--text-subtitle: clamp(1.6rem, 2.6vw, 2.3rem);
+	--text-item: 1.2rem;
+	--text-lede: clamp(1.02rem, 1.3vw, 1.2rem);
+	--stretch-display: 112%;
+
+	/* 终端窗口：全站所有终端外观（演示终端、录屏外框）共用 .window / .window-bar */
+	--radius-window: 14px;
+	--text-term: 13px;
+
+	/* 版式 */
+	--page-max: 1200px;
+	--gutter: clamp(20px, 4vw, 48px);
+	--section-space: clamp(96px, 12svh, 160px);
+	/* 导航高度：钉住段顶部至少让出 calc(var(--nav-h) + 12px)，往回滚时导航重现不压内容 */
+	--nav-h: 70px;
+	--text-body: 1rem;
+
+	/* 动效 */
+	--ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+	--ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+	--duration-state: 160ms;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+}
+
+html {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+img,
+video,
+svg,
+canvas {
+	display: block;
+	max-width: 100%;
+}
+
+code,
+kbd,
+pre {
+	font-family: var(--font-mono);
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+/* 区块共用骨架：外层负责上下留白，内层限宽 */
+.section {
+	position: relative;
+	padding-block: var(--section-space);
+	padding-inline: var(--gutter);
+}
+
+.section-inner {
+	max-width: var(--page-max);
+	margin-inline: auto;
+}
+
+.section-title {
+	font-size: var(--text-title);
+	font-weight: 640;
+	font-stretch: var(--stretch-display);
+	line-height: 1.04;
+	letter-spacing: -0.035em;
+	text-wrap: balance;
+}
+
+.subtitle {
+	font-size: var(--text-subtitle);
+	font-weight: 620;
+	font-stretch: var(--stretch-display);
+	line-height: 1.12;
+	letter-spacing: -0.025em;
+	text-wrap: balance;
+}
+
+.item-title {
+	font-size: var(--text-item);
+	font-weight: 620;
+	line-height: 1.3;
+	letter-spacing: -0.01em;
+}
+
+.window {
+	overflow: hidden;
+	border-radius: var(--radius-window);
+	background: var(--terminal);
+	box-shadow:
+		0 0 0 1px var(--ring),
+		0 30px 80px -24px oklch(0 0 0 / 0.75);
+	font-family: var(--font-mono);
+	font-size: var(--text-term);
+}
+
+/* 标题栏：左侧三色圆点，可放一个居中的等宽标题 */
+.window-bar {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 36px;
+	padding-inline: 72px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.window-bar::before {
+	content: "";
+	position: absolute;
+	left: 14px;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: #ff5f58;
+	box-shadow:
+		16px 0 0 #ffbd2e,
+		32px 0 0 #28c840;
+}
+
+.section-lede {
+	max-width: 58ch;
+	margin-top: 20px;
+	color: var(--muted);
+	font-size: var(--text-lede);
+	line-height: 1.6;
+	text-wrap: pretty;
+}
+
+:lang(zh) :is(.section-title, h1) {
+	font-stretch: 100%;
+	letter-spacing: -0.01em;
+	line-height: 1.15;
+}
+
+@media (max-width: 640px) {
+	:root {
+		--text-term: 12px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-delay: 0ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}

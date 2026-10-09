@@ -1,0 +1,149 @@
+---
+import { INSTALL, site, type Lang } from "../i18n";
+
+// 安装命令与复制按钮；Hero 与 Closing 共用。复制逻辑用事件委托只挂一次，导航里的“安装”按钮也走它：
+// 任何带 data-copy-install 的按钮都会复制命令、置 data-state="done"，并把 data-copied 写进紧随其后的 aria-live 节点
+interface Props {
+	lang: Lang;
+	class?: string;
+}
+const { lang, class: className } = Astro.props;
+const t = site[lang];
+---
+
+<div class:list={["install", className]}>
+	<code><span class="prompt" aria-hidden="true">$</span>{INSTALL}</code>
+	<button type="button" class="copy" aria-label={t.copy} title={t.copy} data-copy-install data-copied={t.copied}>
+		<svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+		<svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+	</button>
+	<span class="sr-only" aria-live="polite"></span>
+</div>
+
+<script>
+	import { INSTALL } from "../i18n";
+
+	const COPIED_MS = 1600;
+	const timers = new WeakMap<HTMLButtonElement, number>();
+
+	document.addEventListener("click", async (event) => {
+		const button = (event.target as Element).closest<HTMLButtonElement>("[data-copy-install]");
+		if (!button) return;
+		const live = button.nextElementSibling!;
+		await navigator.clipboard.writeText(INSTALL);
+		button.dataset.state = "done";
+		live.textContent = button.dataset.copied!;
+		clearTimeout(timers.get(button));
+		timers.set(
+			button,
+			window.setTimeout(() => {
+				delete button.dataset.state;
+				live.textContent = "";
+			}, COPIED_MS),
+		);
+	});
+</script>
+
+<style>
+	.install {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 8px 8px 20px;
+		border-radius: 17px;
+		background: var(--terminal);
+		box-shadow: 0 0 0 1px oklch(1 0 0 / 0.14);
+		transition: box-shadow var(--duration-state) var(--ease-enter);
+	}
+
+	code {
+		font-family: var(--font-mono);
+		font-size: 16px;
+		white-space: nowrap;
+	}
+
+	.prompt {
+		margin-right: 12px;
+		color: var(--accent);
+	}
+
+	.copy {
+		display: grid;
+		place-items: center;
+		width: 36px;
+		height: 36px;
+		padding: 0;
+		border: 0;
+		border-radius: 9px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		transition:
+			color var(--duration-state) var(--ease-enter),
+			background-color var(--duration-state) var(--ease-enter),
+			scale 100ms var(--ease-enter);
+	}
+
+	.copy:active {
+		scale: 0.92;
+		background: var(--hover);
+	}
+
+	.copy svg {
+		grid-area: 1 / 1;
+		width: 18px;
+		height: 18px;
+		transition:
+			opacity var(--duration-state) var(--ease-enter),
+			scale var(--duration-state) var(--ease-enter);
+	}
+
+	.copy .icon-check {
+		color: var(--pass);
+		opacity: 0;
+		scale: 0.6;
+	}
+
+	.copy[data-state="done"] .icon-check {
+		opacity: 1;
+		scale: 1;
+	}
+
+	.copy[data-state="done"] .icon-copy {
+		opacity: 0;
+		scale: 0.6;
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		.install:hover {
+			box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent);
+		}
+
+		.copy:hover {
+			color: var(--fg);
+			background: var(--hover);
+		}
+	}
+
+	@media (pointer: coarse) {
+		.install {
+			padding-block: 4px;
+			padding-right: 4px;
+		}
+
+		.copy {
+			width: 44px;
+			height: 44px;
+		}
+	}
+
+	@media (max-width: 420px) {
+		code {
+			font-size: 14px;
+		}
+
+		.prompt {
+			margin-right: 8px;
+		}
+	}
+</style>

@@ -1,0 +1,78 @@
+import type { Lang } from "../i18n";
+
+// gets 里用反引号包住的片段渲染成代码；"re\u2011review" 用不断行连字符，窄屏不在连字符处断开
+type Row = { name: string; cmd?: string; note?: string; reviewers: string; gets: string };
+
+// 闭环演示里的发现与修复取自 design/promo/review-loop 的真实录屏
+export const copy = {
+	en: {
+		title: "Fully automatic review and delivery.",
+		lede: "Just tell the commander what you want. On important or hard tasks it starts an adversarial review on its own, and only hands you the result once it passes.",
+		beats: [
+			{ title: "Your models review in parallel", body: "Any number of them, adversarially. A single FAIL sends the whole round back." },
+			{ title: "Every problem goes back to be fixed", body: "The agent fixes each finding at its root, and the next round starts on its own." },
+			{ title: "Reviewed again until it passes", body: "What reaches you is code that meets the bar and does what you asked." },
+		],
+		model: "Model",
+		reviewing: "Reviewing",
+		round: (n: number) => `Round ${n}`,
+		failed: "Review failed",
+		finding: 'parseDuration("500ms") → 30000s, expected 0.5',
+		fixing: "Round 1 · fixing",
+		passed: "Review passed",
+		passedAfter: "after 2 rounds",
+		video: "A real run: round 1 fails, the agent fixes it, round 2 passes",
+		videoLabel: "Recording of /fire-review: round 1 fails, the agent fixes it, round 2 passes",
+		advisorTitle: "Stuck? An advisor decides",
+		advisor: "If rounds keep failing, an advisor model reads the findings and rules on what happens next:",
+		decisions: ["Continue fixing", "Narrow scope", "Stop fixing"],
+		manualTitle: "Or start it yourself",
+		manual: ["Run ", " any time."],
+		compare: "Fixed and re\u2011reviewed code, not a list of problems",
+		play: "Play the recording",
+		cols: ["Tool", "Reviewers", "What you get"],
+		rows: <Row[]>[
+			{ name: "FireCode", reviewers: "Any number of models, reviewing adversarially", gets: "Fixed code that passed re\u2011review" },
+			{ name: "Claude Code", cmd: "/code-review", reviewers: "Several agents, Claude models only", gets: "A findings list; `--fix` applies it as-is" },
+			{ name: "Codex", cmd: "/review", reviewers: "One reviewer on your session's model", gets: "A findings list, no code changes" },
+			{ name: "Open Code Review", note: "Alibaba", reviewers: "One model, file by file", gets: "A findings list to fix yourself" },
+			{ name: "PR-Agent / Qodo", reviewers: "Specialist agents, one model", gets: "Comments and suggestions" },
+			{ name: "multi-model-review", note: "Pi", reviewers: "Several model families", gets: "One combined verdict" },
+		],
+	},
+	zh: {
+		title: "审查交付全自动",
+		lede: "你只管告诉指挥官要做什么。遇到重要、难的任务，它会自动发起对抗审查，审查通过了才交给你。",
+		beats: [
+			{ title: "你配置的模型并行挑问题", body: "数量不限，对抗审查。只要有一票 FAIL，整轮就打回。" },
+			{ title: "挑出的问题打回去修", body: "代理逐条从根上修，修完自动进入下一轮。" },
+			{ title: "修完再审，直到通过", body: "交到你手里的，是质量过关、满足需求的代码。" },
+		],
+		model: "模型",
+		reviewing: "审查中",
+		round: (n: number) => `第 ${n} 轮`,
+		failed: "审查未通过",
+		finding: 'parseDuration("500ms") 得 30000 秒，应为 0.5',
+		fixing: "第 1 轮 · 修复中",
+		passed: "审查通过",
+		passedAfter: "共 2 轮",
+		video: "真实录屏：第 1 轮没过，代理修好后第 2 轮通过",
+		videoLabel: "/fire-review 录屏：第 1 轮没过，代理修好后第 2 轮通过",
+		advisorTitle: "卡住了，顾问来拿主意",
+		advisor: "反复审不过时，顾问模型会看完所有发现，裁定下一步：",
+		decisions: ["继续修复", "收窄范围", "停止修复"],
+		manualTitle: "也可以手动发起",
+		manual: ["随时执行 ", " 即可。"],
+		compare: "交给你的是修好、复审通过的代码，不是问题清单",
+		play: "播放录屏",
+		cols: ["工具", "审查者", "交到你手里的是"],
+		rows: <Row[]>[
+			{ name: "FireCode", reviewers: "任意多个模型对抗审查", gets: "修好、复审通过的代码" },
+			{ name: "Claude Code", cmd: "/code-review", reviewers: "多个代理，只用 Claude 模型", gets: "问题清单；`--fix` 可照清单直接改" },
+			{ name: "Codex", cmd: "/review", reviewers: "一个审查者，用当前会话的模型", gets: "问题清单，不改代码" },
+			{ name: "Open Code Review", note: "阿里", reviewers: "同一个模型，逐文件审", gets: "问题清单，要你自己修" },
+			{ name: "PR-Agent / Qodo", reviewers: "分工代理，同一个模型", gets: "评论和修改建议" },
+			{ name: "multi-model-review", note: "Pi", reviewers: "多家模型", gets: "一份汇总结论" },
+		],
+	},
+} satisfies Record<Lang, unknown>;

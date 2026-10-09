@@ -1,0 +1,241 @@
+---
+import bgUrl from "../../../design/promo/og-bg.jpg?url";
+import logoUrl from "../../../design/brand/logo-dark.svg?url";
+import Install from "../components/Install.astro";
+import { NPM, REPO, type Lang } from "../i18n";
+import { copy } from "./Closing.copy";
+
+interface Props {
+	lang: Lang;
+}
+const { lang } = Astro.props;
+const t = copy[lang];
+const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
+---
+
+<section class="closing" id="closing" aria-labelledby="closing-title" style={`--bg-image:url(${bgUrl})`}>
+	<div class="glow" aria-hidden="true"></div>
+	<div class="call">
+		<h2 id="closing-title">{t.title.map((line) => <span>{line}</span>)}</h2>
+		<Install lang={lang} class="closing-install" />
+		<p class="lede">{t.lede.map((line) => <span>{line} </span>)}</p>
+	</div>
+
+	<div class="wordmark" aria-hidden="true" style={`--logo:url(${logoUrl})`}></div>
+	<footer class="foot">
+		<nav aria-label="FireCode">
+			<a href={REPO}>GitHub</a>
+			<a href={NPM}>npm</a>
+			<a href={contributing}>{t.contributing}</a>
+		</nav>
+		<small>{t.license}</small>
+	</footer>
+</section>
+
+<script>
+	import { gsap, reducedMotion } from "../scroll";
+	import { SplitText } from "gsap/SplitText";
+
+	if (!reducedMotion) {
+		gsap.registerPlugin(SplitText);
+		const closing = document.querySelector<HTMLElement>("#closing")!;
+		const title = closing.querySelector<HTMLElement>("h2")!;
+
+		SplitText.create(title, {
+			type: "lines",
+			mask: "lines",
+			autoSplit: true,
+			onSplit: (self) =>
+				gsap.from(self.lines, {
+					yPercent: 110,
+					duration: 1.1,
+					ease: "expo.out",
+					stagger: 0.09,
+					scrollTrigger: { trigger: title, start: "top 85%", once: true },
+				}),
+		});
+
+		gsap
+			.timeline({ scrollTrigger: { trigger: closing, start: "top 60%", once: true } })
+			.from(closing.querySelectorAll(".closing-install, .lede"), { opacity: 0, y: 14, duration: 0.9, ease: "power3.out", stagger: 0.1 }, 0.35)
+			.from(closing.querySelector(".glow"), { opacity: 0, scale: 1.08, duration: 1.8, ease: "power2.out" }, 0);
+
+		gsap.fromTo(
+			closing.querySelector(".wordmark"),
+			{ yPercent: 35 },
+			{ yPercent: 0, ease: "none", scrollTrigger: { trigger: closing, start: "top bottom", end: "bottom bottom", scrub: true } },
+		);
+	}
+</script>
+
+<style>
+	.closing {
+		position: relative;
+		isolation: isolate;
+		--foot-h: 72px;
+		overflow: clip;
+		padding: clamp(80px, 12svh, 140px) var(--gutter) 0;
+		background: var(--bg);
+	}
+
+	/*
+	 * og-bg 的火团在原图约 81% 横向处：图按宽铺满一个比区块宽的层，再把火团平移到正中。
+	 * 火团右侧只剩 19% 图宽，横向渐隐半径不超过它，否则露出图片右边缘。
+	 * 渐隐用多段缓动曲线；单段线性径向渐变在暗部会出同心色带。
+	 */
+	.glow {
+		position: absolute;
+		/* 火光止于页脚之上，页脚落在纯底色上 */
+		inset-block: 0 var(--foot-h);
+		left: 50%;
+		z-index: -1;
+		width: max(150%, 1100px);
+		translate: -81% 0;
+		background: var(--bg-image) 0 100% / 100% auto no-repeat;
+		opacity: 0.8;
+		/* 滤色叠加：原图的近黑处比页面底色更暗，正常叠加会在渐隐边缘留下暗环 */
+		mix-blend-mode: screen;
+		mask-image: linear-gradient(#000 72%, transparent), radial-gradient(
+			ellipse 18% 62% at 81% 64%,
+			#000 0%,
+			oklch(0 0 0 / 0.86) 24%,
+			oklch(0 0 0 / 0.62) 42%,
+			oklch(0 0 0 / 0.36) 60%,
+			oklch(0 0 0 / 0.15) 78%,
+			oklch(0 0 0 / 0.04) 90%,
+			transparent 100%
+		);
+		mask-composite: intersect;
+		transform-origin: 81% 100%;
+	}
+
+	.call {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+	}
+
+	h2 {
+		font-size: var(--text-display);
+		font-weight: 650;
+		font-stretch: var(--stretch-display);
+		line-height: 1;
+		letter-spacing: -0.045em;
+	}
+
+	/* 固定按短语分行，不交给浏览器拆散 */
+	/* 与首屏 h1 同一套字阶，收尾不比首屏大 */
+	h2 {
+		font-size: var(--text-display);
+		font-weight: 680;
+		font-stretch: var(--stretch-display);
+		line-height: 0.98;
+		letter-spacing: -0.038em;
+	}
+
+	/* 固定按短语分行，每行不再折断 */
+	h2 > span {
+		display: block;
+		white-space: nowrap;
+	}
+
+	:lang(zh) h2 {
+		font-size: min(calc(var(--text-display) * 0.88), 11vw);
+		font-stretch: 100%;
+		letter-spacing: -0.02em;
+		line-height: 1.12;
+	}
+
+	.closing :global(.closing-install) {
+		margin-top: clamp(36px, 6svh, 56px);
+	}
+
+	.lede {
+		max-width: 44ch;
+		margin-top: 22px;
+		color: var(--muted);
+		font-size: var(--text-lede);
+		line-height: 1.6;
+	}
+
+	/* 两句各占一行 */
+	.lede > span {
+		display: block;
+	}
+
+	:lang(zh) .lede {
+		word-break: keep-all;
+	}
+
+	.foot {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0 32px;
+		width: 100%;
+		max-width: var(--page-max);
+		min-height: var(--foot-h);
+		margin-inline: auto;
+		color: var(--muted);
+		font-size: 14px;
+	}
+
+	nav {
+		display: flex;
+		gap: 4px;
+		margin-left: -10px;
+	}
+
+	nav a {
+		display: inline-flex;
+		align-items: center;
+		padding: 8px 10px;
+		border-radius: 8px;
+		transition:
+			color var(--duration-state) var(--ease-enter),
+			background-color var(--duration-state) var(--ease-enter);
+	}
+
+	nav a:active {
+		color: var(--fg);
+		background: var(--hover);
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		nav a:hover {
+			color: var(--fg);
+			background: var(--hover);
+		}
+	}
+
+	@media (pointer: coarse) {
+		nav a {
+			min-height: 44px;
+		}
+	}
+
+	small {
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	/* 巨型字标压在火上，暖色不发灰；整块露出，下面接页脚 */
+	.wordmark {
+		width: min(100%, 1400px);
+		aspect-ratio: 1257 / 270;
+		margin: clamp(72px, 12svh, 140px) auto 24px;
+		background: oklch(0.75 0.15 50 / 0.06);
+		mask: var(--logo) center / contain no-repeat;
+		pointer-events: none;
+	}
+	/* 手机上收窄宽度轴与字号，"Works out of the box." 在 360 宽整行放得下 */
+	@media (max-width: 480px) {
+		:lang(en) h2 {
+			font-size: min(var(--text-display), 8.4vw);
+			font-stretch: 104%;
+			letter-spacing: -0.03em;
+		}
+	}
+</style>

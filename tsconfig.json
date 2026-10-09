@@ -25,6 +25,7 @@
 		"scripts",
 		"tests",
 		"evals",
+		"site",
 		"**/*.test.ts",
 		"provider/openai-native/test"
 	]
