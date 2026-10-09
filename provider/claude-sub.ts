@@ -55,7 +55,7 @@ function detectClaudeCodeVersion(): string {
 	return FALLBACK_CLAUDE_CODE_VERSION;
 }
 
-const claudeCodeVersion = detectClaudeCodeVersion();
+let detectedVersion: string | undefined;
 
 function firstUserText(messages: unknown): string {
 	const list = Array.isArray(messages) ? messages : [];
@@ -63,7 +63,7 @@ function firstUserText(messages: unknown): string {
 	return isRecord(firstUser) ? textOf(firstUser.content) : "";
 }
 
-function versionSuffix(messageText: string): string {
+function versionSuffix(messageText: string, claudeCodeVersion: string): string {
 	const sampled = [4, 7, 20].map((index) => messageText[index] ?? "0").join("");
 	return createHash("sha256")
 		.update(`${BILLING_SALT}${sampled}${claudeCodeVersion}`)
@@ -71,8 +71,8 @@ function versionSuffix(messageText: string): string {
 		.slice(0, 3);
 }
 
-function buildBillingHeader(messages: unknown): string {
-	const version = `${claudeCodeVersion}.${versionSuffix(firstUserText(messages))}`;
+function buildBillingHeader(messages: unknown, claudeCodeVersion: string): string {
+	const version = `${claudeCodeVersion}.${versionSuffix(firstUserText(messages), claudeCodeVersion)}`;
 	return `${BILLING_PREFIX} cc_version=${version}; cc_entrypoint=cli; cch=00000;`;
 }
 
@@ -94,6 +94,8 @@ function lastTwoMessages(branch: SessionEntry[]): [SessionEntry | undefined, Ses
 }
 
 export function registerClaudeSub(pi: ExtensionAPI): void {
+	// 探测同步起 `claude --version` 子进程：只在功能开启时做，且整个进程只做一次（子会话也会注册本功能）。
+	const claudeCodeVersion = (detectedVersion ??= detectClaudeCodeVersion());
 	pi.registerProvider("anthropic", {
 		headers: {
 			"user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
@@ -109,7 +111,7 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 		const blocks = Array.isArray(system) ? system : [];
 		if (blocks.some((block) => isTextBlock(block) && block.text.startsWith(BILLING_PREFIX))) return;
 
-		const header: TextBlock = { type: "text", text: buildBillingHeader(messages) };
+		const header: TextBlock = { type: "text", text: buildBillingHeader(messages, claudeCodeVersion) };
 		return { ...payload, system: [header, ...blocks] };
 	});
 
