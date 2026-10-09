@@ -4,7 +4,7 @@ import { parseLanguage } from "./i18n.js";
 import { isRecord } from "./jsonc.js";
 import { msg } from "./messages.js";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevelValue = (typeof THINKING_LEVELS)[number];
 
 /**

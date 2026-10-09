@@ -1,4 +1,4 @@
-/** master/ 与 spawn 的文案：事件产文、活动列表、子代理视图、命令与工具说明、错误。信封里与折叠界面共用的词汇在根 messages.ts 的 envelope。 */
+/** master/ 的文案：事件产文、活动列表、子代理视图、命令与工具说明、错误。信封里与折叠界面共用的词汇在根 messages.ts 的 envelope。 */
 import { defineMessages } from "../i18n.js";
 
 const plural = (count: number, one: string, many: string) => (count === 1 ? one : many);
@@ -88,6 +88,7 @@ export const msg = defineMessages({
 			finishing: (name: string) => `${name} 回合正在收尾，稍后再 send`,
 			notDelivered: (name: string) => `${name} 的回合已结束，补充说明未送达，请重新 send`,
 			mainNotSaved: "主会话尚未落盘，无法创建子代理会话目录",
+			noSessionPath: "无法为子代理预分配 Pi session 路径",
 			cwdAbsolute: "cwd 必须是已存在的绝对目录",
 			cwdMissing: (path: string) => `cwd 不存在：${path}`,
 			cwdGone: (name: string, cwd: string) => `${name} 的 cwd 已不存在：${cwd}；send 请带 cwd 指向新检出`,
@@ -122,13 +123,6 @@ export const msg = defineMessages({
 			missing: (name: string) => `子代理不存在：${name}`,
 			pathTaken: (path: string) => `sessionPath 已被占用：${path}`,
 			pathChange: (name: string) => `子代理 ${name} 不能更换 sessionPath`,
-		},
-		spawn: {
-			modelNotFound: (id: string) => `找不到模型：${id}；子会话只能使用内置 provider 或 models.json 里的模型`,
-			held: (path: string) => `sessionPath 已有进程内会话持有：${path}`,
-			missingFile: (path: string) => `无法恢复子代理：会话文件不存在：${path}`,
-			extensionErrors: (errors: string) => `子会话扩展加载失败：${errors}`,
-			noSessionPath: "无法为子代理预分配 Pi session 路径",
 		},
 		list: {
 			status: { working: "工作", idle: "空闲", reviewing: "审查" },
@@ -254,6 +248,7 @@ export const msg = defineMessages({
 			finishing: (name: string) => `The turn of ${name} is wrapping up; send again shortly`,
 			notDelivered: (name: string) => `The turn of ${name} has ended and the follow-up was not delivered; send again`,
 			mainNotSaved: "The main session has not been saved to disk yet, so the Worker session directory cannot be created",
+			noSessionPath: "Cannot preallocate a Pi session path for the Worker",
 			cwdAbsolute: "cwd must be an existing absolute directory",
 			cwdMissing: (path: string) => `cwd does not exist: ${path}`,
 			cwdGone: (name: string, cwd: string) => `The cwd of ${name} no longer exists: ${cwd}; pass cwd to send to point it at a new checkout`,
@@ -288,13 +283,6 @@ export const msg = defineMessages({
 			missing: (name: string) => `Worker does not exist: ${name}`,
 			pathTaken: (path: string) => `sessionPath is already taken: ${path}`,
 			pathChange: (name: string) => `Worker ${name} cannot change its sessionPath`,
-		},
-		spawn: {
-			modelNotFound: (id: string) => `Model not found: ${id}; sub-sessions can only use built-in providers or models in models.json`,
-			held: (path: string) => `sessionPath is already held by an in-process session: ${path}`,
-			missingFile: (path: string) => `Cannot resume the Worker: session file does not exist: ${path}`,
-			extensionErrors: (errors: string) => `Failed to load extensions in the sub-session: ${errors}`,
-			noSessionPath: "Cannot preallocate a Pi session path for the Worker",
 		},
 		list: {
 			status: { working: "working", idle: "idle", reviewing: "reviewing" },

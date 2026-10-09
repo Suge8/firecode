@@ -32,14 +32,14 @@
 - **审查判定**（Outcome）→ `review/outcome.ts`；避免：裁决（那是顾问的词）
 - **修复回合**（Repair）→ checkpoint `repair`；指单个回合，多轮整体叫修复循环；避免：返工
 - **总结回合**（Summary Turn）→ checkpoint `summary`；避免：收尾报告、总结卡（卡指结果卡）
-- **占用信号**（Occupancy）→ `review/occupancy.ts`；避免：审查状态
+- **占用信号**（Occupancy）→ `busy.ts`（`OCCUPANCY_CHANNEL`）；避免：审查状态
 - **herdr 投影**（Herdr Projection）→ `session/herdr-projection.ts`；会话在 herdr 里的身份、状态与恢复命令；避免：herdr 集成（那是 herdr 官方的 Pi 扩展，必须卸载）、显示投影
 
 ## 终端展示
 
 - **轮**（Turn）→ `tools/group-view.ts`；一次人类输入及其后全部过程；避免：回合（那是模型的一次请求循环）
-- **轮记录**（Round Record）→ `tools/round.ts`；不等于整张工单完成；避免：收尾行、处理段统计、总结回合
-- **均速**（Rate）→ `busy.ts`；避免：请求均速、生成速度、字符速度
+- **轮记录**（Round Record）→ `round.ts`；不等于整张工单完成；避免：收尾行、处理段统计、总结回合
+- **均速**（Rate）→ `round.ts`；避免：请求均速、生成速度、字符速度
 - **过程组**（Process Group）→ `tools/group-view.ts`；避免：工具组（它还含思考）
 - **组摘要**（Group Summary）→ `tools/turn-summary.ts`；避免：完整结果、过程列表
 - **过程列表**（Process List）：一轮展开后的列表；避免：完整展开、第三档

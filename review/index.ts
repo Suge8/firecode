@@ -19,7 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type ReviewConfig } from "../config.js";
 import { readPrompt } from "../i18n.js";
-import { InProcessSessionPool } from "../master/spawn.js";
+import { InProcessSessionPool } from "../spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,
@@ -32,7 +32,7 @@ import {
 } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { ReviewUi } from "./ui.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "./occupancy.js";
+import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress, type ReviewStage } from "../busy.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt } from "./prompt.js";
 import { runAdvisor } from "./advisor.js";

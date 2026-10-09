@@ -1,9 +1,9 @@
 /** subagents 七个命令动作：每个动作一个处理函数，表驱动分发。 */
 import { existsSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { MasterRole } from "../config.js";
+import { dirname, isAbsolute } from "node:path";
+import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import { THINKING_LEVELS, type MasterRole } from "../config.js";
 import { textOf } from "../format.js";
 import { readReviewOutcome } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
@@ -12,8 +12,7 @@ import {
 	monitorAndSettleReview, observeWorker, openWorkerSession, resumeCheckPrompt, reviewRunId, runWorker, spawnWorker,
 } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
-import { preallocateWorkerSession } from "./spawn.js";
-import { THINKING_LEVELS, WORKER_NAME, type WorkerRef } from "./state.js";
+import { WORKER_NAME, type WorkerRef } from "./state.js";
 
 export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const;
 export type Action = (typeof ACTIONS)[number];
@@ -25,6 +24,13 @@ type Handler = (active: MasterRuntime, params: Params, ctx: ExtensionContext) =>
 const MAX_IN_FLIGHT = 15;
 
 export const ACTION_HANDLERS: Record<Action, Handler> = { start, send, interrupt, review, tail, ack, kill };
+
+/** 为新子代理在主会话目录下的 subagents/ 预分配会话文件路径（不会出现在 /resume）；路径是档案身份的唯一事实源。 */
+function preallocateWorkerSession(mainSessionPath: string, cwd: string): string {
+	const sessionPath = SessionManager.create(cwd, `${dirname(mainSessionPath)}/subagents`).getSessionFile();
+	if (!sessionPath) throw new Error(msg.action.noSessionPath);
+	return sessionPath;
+}
 
 async function kill(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = targetOf(active, params);

@@ -6,10 +6,10 @@ import { loadFirecodeModule } from "./loader";
 // 可见，否则 watcher/master 会以 "main" 角色级联注册进 Worker 会话。
 // 同一路径加 query 在 Bun 里仍是同一个模块实例，所以用不同的 extraFiles 拿两份独立的目录副本。
 test("子会话角色跨模块拷贝可见", async () => {
-	const spawnSide = (await loadFirecodeModule("master/role.js", { extraFiles: { "copy-spawn": "" } })) as {
+	const spawnSide = (await loadFirecodeModule("role.js", { extraFiles: { "copy-spawn": "" } })) as {
 		withSubsessionRole: (role: string, run: () => Promise<unknown>) => Promise<unknown>;
 	};
-	const freshCopy = (await loadFirecodeModule("master/role.js", { extraFiles: { "copy-fresh": "" } })) as {
+	const freshCopy = (await loadFirecodeModule("role.js", { extraFiles: { "copy-fresh": "" } })) as {
 		currentSubsessionRole: () => string | undefined;
 	};
 	const seen = await spawnSide.withSubsessionRole("worker", async () => freshCopy.currentSubsessionRole());

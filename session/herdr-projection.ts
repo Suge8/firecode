@@ -14,7 +14,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type BusyView, watchBusy } from "../busy.js";
 import { formatModelName } from "../format.js";
-import { herdrPaneEnv, herdrRequest } from "../herdr-client.js";
+import { herdrPaneEnv, herdrRequest } from "./herdr-client.js";
 import { msg } from "./messages.js";
 
 const SOURCE = "firecode";

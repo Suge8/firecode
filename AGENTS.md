@@ -4,8 +4,11 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 对抗性审查、默认激活的 `/fire-master` 多 Agent 主控与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 只做一件事：按 `config.features` 逐个调 `registerX(pi)`。每个 register 封闭自己的运行
-状态，关掉任何一个不影响其余；跨模块接缝只有十条：`tools/machine.ts` 的审查卡预览读 `review/messages.ts` 的字段名（与生产端同源，两种语言都认），Master 只读调 `review/outcome.ts`，Master 复用 `tools/line.ts` 纯渲染组件画自己的工具行，Review 与 Watcher 经
-`master/spawn.ts` 起子会话，Watcher 订阅 review 发布的占用频道判静默，statusbar 订阅同一占用频道显示审查进度（频道名与 payload 只在 `review/occupancy.ts` 定义），轮记录器、statusbar、tools 与 herdr 投影（`session/herdr-projection.ts`）经 `busy.ts` 的 `watchBusy` 读 Master 发布的在飞子代理数并消费同一个“会话歇下”边沿，Master 与 Watcher 的卡片复用 `tools/machine.ts` 的信封一行投影（信封格式由根级 `deliver.ts` 拥有），statusbar 的落定态经 `tools/round.ts` 的 `latestTurnRecord` 读轮记录（与摘要行同一合成规则），Master 的“本次运行”耗时与子代理视图经 `roundFromEntry` 读子代理会话里的轮记录。
+状态，关掉任何一个不影响其余。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+
+- 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数（Master 发布）与审查占用（review 发布）的频道在 `busy.ts`，读者一律经 `watchBusy`（订阅）或 `busyView`（拉取）；轮记录写入后的通知在 `round.ts`（`watchRoundRecorded`）；`firecode:subagents` 名册（`master/roster.ts`）是给同进程其他扩展的对外接口。
+- 信封格式归 `deliver.ts`；信封分节词在根 `messages.ts` 的 `envelope`，审查卡字段名在 `review/messages.ts` 的 `terms`，生产端与折叠界面（`tools/machine.ts`）读同一份。
+- Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
 
 ## 模块
 
@@ -20,16 +23,17 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（自带 Responses 序列化，宿主转换器不对扩展开放；以 `tests/openai-native.test.ts` 对照宿主） | |
-| `round-recorder.ts` | 轮记录器：歇下时写轮记录；不属于任何可关的功能，主会话与每个子代理会话都注册 | |
+| `round.ts` | 轮记录：测量（终态、均速）、持久化格式、合成规则、读取与字样，以及歇下时写记录的记录器；记录器不属于任何可关的功能，主会话与每个子代理会话都注册（宿主渲染适配在 `tools/round.ts`） | |
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回）；同样每个会话都注册 | |
 | `today.ts` | 系统提示的日期段，每个会话都注册 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖，`cd site && bun run build`），推送 main 由 Vercel 自动部署，只在 `site/`、`design/` 或 README 变化时构建；品牌素材直接引用根下 `design/`，给 Agent 的 Markdown 与 `llms.txt` 构建时从 README 生成 | |
 | `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言共用） | |
-| `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及相关频道 | |
-| `herdr-client.ts` | herdr socket 短连接客户端，只有 herdr 投影使用 | |
-| `activity.ts` | 子代理活动列表的单行布局，只有 `master/activity-list.ts` 使用 | |
-| `format.ts` `theme.ts` | 共享的宽度/文本格式化与品牌配色、阈值分级 | |
+| `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道（在飞子代理数、审查占用） | |
+| `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
+| `process-shared.ts` | 跨模块拷贝共享的进程唯一状态（宿主会重新求值模块图，模块级变量互不相通） | |
+| `spawn.ts` `role.ts` | 全插件唯一的进程内子会话入口（Master、Review、Watcher 共用）与子会话角色标记 | |
+| `format.ts` | 共享的宽度/文本格式化 | |
 | `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置、openai 节读写、provider 共用的唯一对象判定） | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置，并给出 review/master/watcher 每节能否启动的判定 | |

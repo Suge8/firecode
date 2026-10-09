@@ -4,8 +4,8 @@
  */
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { WORKERS_CHANNEL, type WorkersPayload, watchBusy } from "../busy.js";
-import { loadConfig, type MasterRole } from "../config.js";
+import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
+import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
@@ -17,8 +17,8 @@ import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
 import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
-import { InProcessSessionPool } from "./spawn.js";
-import { modelAtomText, THINKING_LEVELS } from "./state.js";
+import { InProcessSessionPool } from "../spawn.js";
+import { modelAtomText } from "./state.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
@@ -60,9 +60,6 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		publishedRoster = key;
 		pi.events.emit(SUBAGENTS_CHANNEL, { workers } satisfies SubagentsPayload);
 	};
-	// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
-	let sessionSince: number | undefined;
-	watchBusy(pi, { onChange: (view) => { sessionSince = view.since; } });
 	const setup: MasterSetup = {
 		pi,
 		pool: dependencies.pool ?? new InProcessSessionPool(),
@@ -74,7 +71,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
 		publishInFlight,
 		publishRoster,
-		sessionSince: () => sessionSince,
+		// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
+		sessionSince: () => busyView(pi).since,
 	};
 	let runtime: MasterRuntime | undefined;
 	registerMasterEventRenderer(pi);

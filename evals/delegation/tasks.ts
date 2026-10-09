@@ -83,7 +83,7 @@ export const T7_TRUTH: Array<{ id: number; desc: string; pattern: RegExp }> = [
 	{ id: 10, desc: "evidence.ts 轨迹只取 path/command，codemode 的 code 参数看不到，经 codemode 的编辑归因不到", pattern: /codemode.{0,30}(code|编辑|归因)/ },
 	{ id: 11, desc: "证据为空且下一行是旧措辞“需要运行的验证命令”时被当成证据正文，空证据发现被放行", pattern: /需要运行的验证命令|空证据/ },
 	{ id: 12, desc: "任意 agent_start 都被当成修复回合开始（awaiting_start → running，不核对来源）", pattern: /awaiting_start|任意.{0,6}agent_start/ },
-	{ id: 13, desc: "master/spawn.ts 的 bindExtensions 抛错时不释放已创建的会话（review/ 之外）", pattern: /bindExtensions/ },
+	{ id: 13, desc: "spawn.ts 的 bindExtensions 抛错时不释放已创建的会话（review/ 之外）", pattern: /bindExtensions/ },
 	{ id: 14, desc: "回合互锁后新旧票混在同一轮里结算", pattern: /互锁|新旧票/ },
 	{ id: 15, desc: "进程内多个会话共用同一个 herdr 占用标签", pattern: /占用标签|herdr.{0,30}(标签|label)/ },
 	{ id: 16, desc: "取消/超时的轮记录 details 为空，Master 只拿到枚举名", pattern: /枚举名|details.{0,20}空/ },

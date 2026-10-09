@@ -5,7 +5,7 @@
 
 ## 观察会话
 
-只经 `master/spawn.ts` 创建：memory 持久化（观察过程不落盘、无 checkpoint）、只读工具
+只经根级 `spawn.ts` 创建：memory 持久化（观察过程不落盘、无 checkpoint）、只读工具
 read/grep/find/ls、系统提示整体替换、注入 contextFiles。`prompts/watch.{zh,en}.md` 是提示词唯一事实源（两版等价，改一边同步另一边），不在此复述；
 它的四段（角色克制、关注面、输出契约、证据纪律）缺一不可。
 
@@ -21,7 +21,7 @@ read/grep/find/ls、系统提示整体替换、注入 contextFiles。`prompts/wa
 写入类参数的正文（只留字符数），`context: "full"` 才带上。渲染直接吃宿主的 `TurnEndEvent` 类型，不得改回
 手写结构型：字段名对不上时增量会静默变空。
 
-fire-review 活跃期（订阅 review 发布的占用频道，定义在 `review/occupancy.ts`）零评估，增量留到审查结束合并处理。主会话
+fire-review 活跃期（读 `watchBusy` 视图的 `review`）零评估，增量留到审查结束合并处理。主会话
 compaction、会话切换或观察会话自身上下文超过阈值时，丢弃观察会话与未评估增量，从当前尾部重新入场，
 不回放历史。重新入场会更换 runtime owner：在途评估看的是旧现场，它的建议被丢弃，它的故障也不会关掉观察员；
 迟到创建的观察会话立即释放。

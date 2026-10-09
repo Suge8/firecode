@@ -317,8 +317,8 @@ test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲�
 test("报告现场时序：最后一个子代理在指挥官空闲时返回，整段只歇下一次，且在唤醒回合落定之后", async () => {
 	const harness = await setup(true, { holdWake: true });
 	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
-	const rounds: any[] = [];
-	watchBusy(harness.pi, { onSettled: (_ctx: unknown, round: unknown) => rounds.push(round) });
+	const rounds: number[] = [];
+	watchBusy(harness.pi, { onSettled: (elapsed: number) => rounds.push(elapsed) });
 	try {
 		at(0);
 		// 指挥官回合派出子代理后歇着等。
@@ -346,7 +346,7 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 		harness.idle = true;
 		await harness.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
 		await harness.emit("agent_settled", {});
-		expect(rounds).toEqual([{ elapsed: 376_000, outcome: "complete" }]);
+		expect(rounds).toEqual([376_000]);
 	} finally {
 		await harness.command("");
 	}
@@ -598,7 +598,7 @@ test("非显式中断的 aborted 终态落定明确原因", async () => {
 
 test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失文件明确失败", async () => {
 	const harness = await setup();
-	const module = await loadFirecodeModule("master/spawn.js") as any;
+	const module = await loadFirecodeModule("spawn.js") as any;
 	const sessionPath = join(directory!, "sessions", "subagents", "worker.jsonl");
 	await mkdir(dirname(sessionPath), { recursive: true });
 	const options = {
@@ -1615,7 +1615,7 @@ async function setup(activate = true, options: {
 	await mkdir(extensions);
 	if (options.workerRecorder !== false)
 		await writeFile(join(extensions, "round-recorder.ts"),
-			`export { registerRoundRecorder as default } from ${JSON.stringify(await firecodeModulePath("round-recorder.ts"))};`);
+			`export { registerRoundRecorder as default } from ${JSON.stringify(await firecodeModulePath("round.ts"))};`);
 	if (options.inputGate)
 		await writeFile(join(extensions, "input-gate.ts"), `export default function(pi) {
 			pi.on("input", async (event) => {
@@ -1641,7 +1641,7 @@ async function setup(activate = true, options: {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const spawnModule = await loadFirecodeModule("master/spawn.js");
+	const spawnModule = await loadFirecodeModule("spawn.js");
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(agentDir, "auth.json"),
 		modelsPath: join(agentDir, "models.json"),
@@ -1754,6 +1754,8 @@ async function setup(activate = true, options: {
 			},
 		},
 	};
+	// 与入口一致：会话进行中的状态机先于 Master 安装（入口最先注册轮记录器），Master 才拉得到起点。
+	(await loadFirecodeModule("busy.ts") as any).busyView(pi);
 	module.registerMaster(pi, {
 		pool,
 		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),

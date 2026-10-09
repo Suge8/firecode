@@ -14,12 +14,15 @@ const FLAME = "[\u2800-\u28ff]";
 
 async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 	const { withMaster = false } = options;
-	const [host, tui, module, toolsModule, clockModule] = await Promise.all([
+	const [host, tui, module, toolsModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
-		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"), loadFirecodeModule("tools/turn-clock.ts"),
+		loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/index.ts"),
 	]);
 	setSystemTime(new Date(0));
-	const clock = new (clockModule.TurnClock as any)();
+	// 会话进行中的快照由测试直接喂（生产里取自 busy.ts）。
+	let busy: Record<string, unknown> = { agentRunning: false, inFlight: 0, review: undefined, busy: false };
+	const groupOptions = { busy: () => busy };
+	const feedBusy = (view: Record<string, unknown>) => { busy = view; };
 	host.initTheme("dark");
 	const { pi: api, tools, entryRenderers } = fakePi();
 	toolsModule.registerToolRendering(api);
@@ -61,7 +64,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 	const lines = (width = 100) => chat.render(width).map(stripVTControlCharacters);
 	const click = (y: number, width = 100) => chat.handleMouse({ type: "click", button: "left", x: 5, y, width, height: chat.render(width).length, shift: false, alt: false, ctrl: false });
 	const originalRender = chat.render;
-	dispose = module.installGroupPatch(ui, { clock });
+	dispose = module.installGroupPatch(ui, groupOptions);
 	const setNow = (value: number) => setSystemTime(new Date(value));
 	/** 宿主的整行单色文本（提示、状态行）：前面先插一个 Spacer。 */
 	const note = (color: string, text: string) => {
@@ -83,7 +86,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		chat.addChild(entry);
 		root.requestRender();
 	};
-	return { clock, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	return { options: groupOptions, feedBusy, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -237,9 +240,8 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	dispose = undefined;
 	expect(Container.prototype.addChild).toBe(addChild);
 	const module = await loadFirecodeModule("tools/grouping.ts");
-	const options = { clock: s.clock };
-	const oldDispose = module.installGroupPatch(s.ui, options);
-	dispose = module.installGroupPatch(s.ui, options);
+	const oldDispose = module.installGroupPatch(s.ui, s.options);
+	dispose = module.installGroupPatch(s.ui, s.options);
 	oldDispose();
 	s.complete(s.tool("read", { path: "a" }));
 	s.complete(s.tool("read", { path: "b" }));
@@ -633,9 +635,9 @@ test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全�
 	expect(shown()).toEqual(["first.ts", "second.ts"]);
 });
 
-/** 把会话进行中的事实喂给轮次时钟；歇下边沿由 busy.ts 触发、tools 写入轮记录（见 scene 的 settle）。 */
+/** 把会话进行中的事实喂给投影；歇下边沿由 busy.ts 触发、记录器写入轮记录（见 scene 的 settle）。 */
 const feed = (s: any, agentRunning: boolean, inFlight = 0, since?: number) =>
-	s.clock.sync({ agentRunning, inFlight, busy: agentRunning || inFlight > 0, since });
+	s.feedBusy({ agentRunning, inFlight, review: undefined, busy: agentRunning || inFlight > 0, since });
 
 test("运行中的摘要只有当前动作不跳计时，子代理结果到达时短暂高亮已返回随后回到当前动作，落定后定格本段时长", async () => {
 	const s = await scene();

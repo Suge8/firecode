@@ -14,16 +14,16 @@
 | `list-view.ts` | 工具行、池快照展开与 status 文本，纯投影 |
 | `roster.ts` | 子代理名册：活动列表的投影，发布给同进程的其他扩展 |
 | `guard.ts` | Worker 会话里唯一注册的 edit/write 守卫：只放行当前 checkout 与系统临时目录 |
-| `spawn.ts` | 全插件唯一的子会话入口：模型解析、单写者登记与热会话生命周期 |
 | `state.ts` `event-format.ts` `activity-list.ts` | 档案格式（含模型原子文字）、事件产文、活动列表 |
 | `event-card.ts` | 事件卡渲染：默认每事件一行标题，展开看完整信封正文 |
-| `prompt.ts` `role.ts` | 提示词读取与拼装；子会话角色标记（`spawn.ts` 设置，决定 FireCode 在子会话里注册什么） |
+| `prompt.ts` | 提示词读取与拼装 |
+| `activity.ts` | 活动列表的单行布局，只有 `activity-list.ts` 使用 |
 | `messages.ts` | 本目录全部界面与模型可见文案（中英）；信封分节与耗时词汇不在这里，读根 `messages.ts` 的 `envelope` |
 | `worker-view.ts` | 子代理全过程视图：点活动列表一行打开全屏浮层，用过程组投影看完整记录并可补话 |
 
 Worker 是主进程内的 SDK 子会话而非独立进程：reload 会中断在飞回合（JSONL 与审查义务保留、可续派），换来父进程退出即全停、无幽灵进程与跨进程对账。池只管 Worker 生命周期与结果回传，不建 Goal、Task、任务板或消息总线；多个 Worker 可并行写同一 checkout，没有写租约，集成与验证归指挥官。
 
-所有子会话只经 `spawn.ts` 创建：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
+所有子会话只经根级 `spawn.ts` 创建（Master、Review、Watcher 各持一个池，生命周期互不牵连；子会话角色标记在根 `role.ts`，决定 FireCode 在子会话里注册什么）：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
 系统提示、上下文文件与持久化，并以显式角色控制 FireCode 的子会话注册。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在模型解析时不可见。这份 ModelRuntime 同时交给池里建出的每个子会话，所以某个子会话里扩展注册的 provider 对同池其他子会话也可见（宿主跨会话复用服务也是如此）。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。
 
 Worker 档案是 v9：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子，`launch` 记录启动序；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记，`disposition` 只记录落定事件是否待发落。非 v9 的旧档案由 `MasterStore` 丢弃并告知，不迁移。`MasterStore` 是档案唯一所有者，载入时就把在飞状态收敛为 `idle + interruptedAt`（保留会话与审查义务），激活时再补挂续跑提醒。首次续派会前置现场核对提示。

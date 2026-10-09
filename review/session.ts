@@ -1,6 +1,6 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevelValue } from "../config.js";
-import type { InProcessSessionPool } from "../master/spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import type { PromptLayers } from "./prompt.js";
 import { textOf } from "../format.js";
 

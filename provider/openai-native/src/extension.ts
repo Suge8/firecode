@@ -1,9 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../../../jsonc.js";
+import { STATUS_KEYS } from "../../../status-keys.js";
 import { msg } from "../../messages.js";
 import { loadOpenAINativeSettings, togglePriority, type OpenAINativeSettings } from "./config.js";
 import { compactWithOpenAINative, declineDisabledReplay, replayOpenAINative } from "./native-compaction.js";
-import { applyOpenAIOptions, FAST_STATUS_KEY, fastModeEnabled, supportsFastMode } from "./options.js";
+import { applyOpenAIOptions, fastModeEnabled, supportsFastMode } from "./options.js";
 
 const VERBOSITY_FLAG = "verbosity";
 
@@ -12,7 +13,7 @@ function updateFastStatus(ctx: ExtensionContext, settings: OpenAINativeSettings)
 		return;
 	}
 	ctx.ui.setStatus(
-		FAST_STATUS_KEY,
+		STATUS_KEYS.fast,
 		fastModeEnabled(ctx.model, settings) ? ctx.ui.theme.fg("warning", "⚡ fast") : undefined,
 	);
 }
@@ -93,7 +94,7 @@ export default function openAINativeExtension(
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.hasUI) {
-			ctx.ui.setStatus(FAST_STATUS_KEY, undefined);
+			ctx.ui.setStatus(STATUS_KEYS.fast, undefined);
 		}
 	});
 }

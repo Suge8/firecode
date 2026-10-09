@@ -12,7 +12,7 @@
 作废 ctx，迟到回调看到空 controller 直接返回（曾因全局单例握着被 kill 的 Worker 的死 ctx，看门狗到点连环抛错杀掉整个 pi 进程）。
 `registerReview` 返回的 `settled()` 只供测试排空该会话的迁移队列。
 
-reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 `master/spawn.ts` 的池释放时同样先收到 quit 再 dispose。checkpoint 的键白名单由领域类型 `satisfies` 派生：
+reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被根级 `spawn.ts` 的池释放时同样先收到 quit 再 dispose。checkpoint 的键白名单由领域类型 `satisfies` 派生：
 字段增删不同步会编译失败，这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线；枚举取值（相、轮结果、顾问裁决等）在 `state.ts` 里是常量数组，类型、checkpoint 校验与顾问解析都读它，不另抄一份。
 
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`
@@ -75,7 +75,7 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 ## 占用信号
 
-审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见 `occupancy.ts`），review 是唯一发布者，不接触 herdr。
+审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见根 `busy.ts`，读者一律经 `watchBusy`），review 是唯一发布者，不接触 herdr。
 `busy.ts` 把它算进“会话进行中”，herdr 投影据此报 working 并带“对抗审查进行中”标签（不报 blocked：审查期间不需要用户决定任何事，
 blocked 会触发需要关注的通知）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障不影响审查。
 

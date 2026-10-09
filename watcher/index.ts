@@ -6,10 +6,11 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
-import { InProcessSessionPool } from "../master/spawn.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload } from "../review/occupancy.js";
+import { InProcessSessionPool } from "../spawn.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import {
 	adviceMessage,
 	registerWatcherCardRenderer,
@@ -58,7 +59,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 		runtime = undefined;
 		owner.observer?.dispose();
 		owner.observer = undefined;
-		owner.ctx.ui.setStatus("watcher", undefined);
+		owner.ctx.ui.setStatus(STATUS_KEYS.watcher, undefined);
 	};
 	const resetObserver = (owner = runtime) => {
 		if (!owner || runtime !== owner) return;
@@ -74,7 +75,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	const activate = (ctx: ExtensionContext): WatcherRuntime => {
 		const owner = { ctx, pending: [], lastTurnIndex: 0, evaluating: false };
 		runtime = owner;
-		ctx.ui.setStatus("watcher", ctx.ui.theme.fg("dim", msg.statusLabel));
+		ctx.ui.setStatus(STATUS_KEYS.watcher, ctx.ui.theme.fg("dim", msg.statusLabel));
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
@@ -157,11 +158,14 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	});
 
 	// fire-review 活跃期静默：不与对抗审查的反馈打架，增量留着审查完合并评估。
-	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
-		reviewActive = (data as OccupancyPayload).active;
-		const active = runtime;
-		if (reviewActive || !active || active.evaluating || !active.pending.length) return;
-		void evaluate(active);
+	watchBusy(pi, {
+		onChange: (view) => {
+			const wasActive = reviewActive;
+			reviewActive = view.review !== undefined;
+			const active = runtime;
+			if (!wasActive || reviewActive || !active || active.evaluating || !active.pending.length) return;
+			void evaluate(active);
+		},
 	});
 
 	// 主会话压缩：旧增量已不再对应主会话现场，观察员从当前尾部重新入场而不回放。

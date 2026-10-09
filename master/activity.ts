@@ -6,8 +6,8 @@
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { clip } from "./format.js";
-import { HEAT_COLORS, paint } from "./flame.js";
+import { clip } from "../format.js";
+import { HEAT_COLORS, paint } from "../flame.js";
 
 /** 动作文字至少留这么宽才值得显示（一个字加省略号）。 */
 const MIN_ACTION_WIDTH = 4;
