@@ -89,7 +89,7 @@ bun run typecheck
 ```
 
 `tests/loader.ts` 从 `PATH` 中的开发版 `pi` 定位 pi-mono；非开发版安装通过 `PI_PACKAGES_DIR` 指向其
-`packages/`。loader 把当前仓库复制到临时目录并改写宿主包导入，供需要运行时值的用例使用。
+`packages/`。loader 把当前仓库复制到临时目录并改写宿主包导入（整仓只复制一次，每份不同配置的副本用硬链接铺出，模块实例按路径互相隔离），供需要运行时值的用例使用。
 `bun run typecheck` 用同一个定位结果：把 `.pi-mono`（已忽略）链到 pi-mono 根，`tsconfig.json` 继承其 tsconfig（宿主包路径映射只在 pi-mono 一处），
 再调用它自带的 `tsc`。只检查运行时代码，测试、`scripts/` 与 `evals/` 因需要 Bun 类型而排除。
 `pi-smoke` 用例启动真实 `pi` 并按 package.json 加载 `dist/`，先 `bun run build`。

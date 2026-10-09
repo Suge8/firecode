@@ -4,7 +4,6 @@ import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ReviewerResult } from "../review/state.js";
 import { fakePi } from "./fake-pi.ts";
 import { loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
@@ -114,10 +113,6 @@ function makePi(sessionManager: MockSessionManager) {
 		get emitted() { return fake.emitted.map(([name, data]) => ({ name, data })); },
 	};
 	return { pi: fake.pi, registered };
-}
-
-function reviewer(index: number, status: ReviewerResult["status"], details: string): ReviewerResult {
-	return { index, model: `m${index}`, thinking: "high", status, summary: "s", details };
 }
 
 async function loadReviewWithVerdict(
