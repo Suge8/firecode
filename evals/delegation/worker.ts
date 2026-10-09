@@ -8,28 +8,14 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, symli
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { PI_PACKAGES } from "../../tests/loader.ts";
-import { citedTruth, fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
+import { citedTruth, e2eScript, fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
 import { finalText, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, startPi, USER_AGENT_DIR, WORK } from "./lib.ts";
+import { auditPrompt, TMP_NOTE, taskById } from "./tasks.ts";
 
 const OUT = join(WORK, "worker");
 const VARIANT = "worker";
 const MINUTE = 60_000;
-const TMP_NOTE = " 需要临时文件时只能放在环境变量 TMPDIR 指向的目录里。";
-const audit = (scope: string) => "审计这个仓库的 " + scope + "：找真实缺陷——代码行为与各目录 AGENTS.md、代码注释和命名所表达的契约不符，或会导致错误结果、状态错乱、数据丢失的逻辑错误。给我一份带文件:行号和触发条件的清单，按严重度排序，不要改任何代码。" + TMP_NOTE;
 
-// bash 的 ${...} 与模板字符串冲突，脚本按行拼。
-const E2E = [
-	"#!/bin/bash",
-	"cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet quota-query herdr-label compaction)",
-	"failed=()",
-	'for c in ${cases[@]}; do',
-	'	echo "[e2e] $c ..."; sleep 12',
-	'	case "$c" in review-fail|compaction) echo "[e2e] $c FAIL: expected settled got timeout"; failed+=("$c");; *) echo "[e2e] $c PASS";; esac',
-	"done",
-	'echo "[e2e] 失败：${failed[*]:-无}"',
-	'[ ${#failed[@]} -eq 0 ]',
-	"",
-].join("\n");
 const DEPLOY = [
 	"#!/bin/bash",
 	'cd "$(dirname "$0")/.."',
@@ -51,13 +37,13 @@ interface Task {
 }
 
 const TASKS: Record<string, Task> = {
-	"audit-master": { group: "audit", fixture: "t9", prompt: audit("master/ 目录和根目录的 format.ts"), timeoutMin: 40, scope: (f) => f.startsWith("master/") || f === "format.ts" },
-	"audit-misc": { group: "audit", fixture: "t9", prompt: audit("session/、statusbar/、watcher/ 三个目录"), timeoutMin: 40, scope: (f) => /^(session|statusbar|watcher)\//.test(f) },
-	research: { group: "research", fixture: "base", timeoutMin: 30, prompt: "联网调研一下：现在 Node/Bun 生态里能在终端渲染 Markdown 的库有哪些（至少 8 个，pi-tui 自带的不算）。逐个查最新版本、最近一次发布时间、依赖数量、是否支持表格和代码高亮，最后给对比表和你的推荐。" + TMP_NOTE },
-	"wait-e2e": { group: "wait", fixture: "base", timeoutMin: 15, setup: { "scripts/e2e.sh": E2E }, prompt: "把 scripts/e2e.sh 完整跑一遍（全套大约 2 分半），告诉我哪些场景挂了、各自的失败输出。", verdict: (f) => /review-fail/.test(f) && /compaction/.test(f) },
+	"audit-master": { group: "audit", fixture: "t9", prompt: auditPrompt("master/ 目录和根目录的 format.ts"), timeoutMin: 40, scope: (f) => f.startsWith("master/") || f === "format.ts" },
+	"audit-misc": { group: "audit", fixture: "t9", prompt: auditPrompt("session/、statusbar/、watcher/ 三个目录"), timeoutMin: 40, scope: (f) => /^(session|statusbar|watcher)\//.test(f) },
+	research: { group: "research", fixture: "base", timeoutMin: 30, prompt: `${taskById("t3-research").prompt} ${TMP_NOTE}` },
+	"wait-e2e": { group: "wait", fixture: "base", timeoutMin: 15, setup: { "scripts/e2e.sh": e2eScript(12) }, prompt: "把 scripts/e2e.sh 完整跑一遍（全套大约 2 分半），告诉我哪些场景挂了、各自的失败输出。", verdict: (f) => /review-fail/.test(f) && /compaction/.test(f) },
 	"wait-deploy": { group: "wait", fixture: "base", timeoutMin: 15, setup: { "scripts/deploy.sh": DEPLOY }, prompt: "跑 scripts/deploy.sh 发起部署（它在后台跑、立即返回，日志写到仓库根的 deploy.log，大约 2 分钟后出现 DEPLOY OK 或 DEPLOY FAILED 终态行）。等到终态后告诉我结果；失败就给出失败原因原文。不要尝试修复。", verdict: (f) => /0042_add_index/.test(f) && /8812/.test(f) },
 	"impl-duration": { group: "impl", fixture: "base", timeoutMin: 25, prompt: "format.ts 的 formatDuration 超过 24 小时现在显示成 25h30m，改成 1d1h30m（天以上照样省略为 0 的单位）；补测试并跑通对应测试文件。", verdict: (_, repo) => durationCorrect(repo) },
-	"impl-quota": { group: "impl", fixture: "base", timeoutMin: 25, prompt: "给 session/quota.ts 的供应商查询加 8 秒超时：超时算该家失败、报超时原因，不影响另一家的结果；补测试并跑通。" },
+	"impl-quota": { group: "impl", fixture: "base", timeoutMin: 25, prompt: taskById("t8-single").prompt },
 };
 
 /** 隐藏验收：不看 Worker 自己写的测试，直接按需求调它改过的 formatDuration。 */

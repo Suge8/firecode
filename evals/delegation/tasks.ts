@@ -14,8 +14,11 @@ export interface Task {
 	serial?: boolean;
 }
 
-const T9_AUDIT =
-	"审计这个仓库的 master/、tools/、review/、session/、statusbar/、watcher/ 六个目录和根目录的 format.ts：找真实缺陷——代码行为与各目录 AGENTS.md、代码注释和命名所表达的契约不符，或会导致错误结果、状态错乱、数据丢失的逻辑错误。给我一份带文件:行号和触发条件的清单，按严重度排序，不要改任何代码。需要临时文件时只能放在环境变量 TMPDIR 指向的目录里。";
+/** Worker 爱用写死的 /tmp 路径，要求它只用 TMPDIR。 */
+export const TMP_NOTE = "需要临时文件时只能放在环境变量 TMPDIR 指向的目录里。";
+export const auditPrompt = (scope: string) =>
+	`审计这个仓库的 ${scope}：找真实缺陷——代码行为与各目录 AGENTS.md、代码注释和命名所表达的契约不符，或会导致错误结果、状态错乱、数据丢失的逻辑错误。给我一份带文件:行号和触发条件的清单，按严重度排序，不要改任何代码。${TMP_NOTE}`;
+const T9_AUDIT = auditPrompt("master/、tools/、review/、session/、statusbar/、watcher/ 六个目录和根目录的 format.ts");
 
 const MINUTES = 60;
 
