@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Other extensions in the same process can subscribe to the `firecode:subagents` event channel for the sub-agent roster: role, model, state, what each is doing in one line, and run start/settle times. It is the same projection as the activity list (see `master/AGENTS.md`).
+
 ## [1.1.0] - 2026-10-09
 
 ### Added

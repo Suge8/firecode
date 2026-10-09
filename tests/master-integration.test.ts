@@ -320,6 +320,26 @@ test("Master 是在飞子代理数的唯一发布者：数量变化发布计数�
 	expect(counts()).toEqual([1, 0, 1, 0]);
 });
 
+test("名册发布在 firecode:subagents：角色、模型、状态、在做什么与时刻，停用时发空名册", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage(fauxToolCall("read", { path: "AGENTS.md" }), { stopReason: "toolUse" }), fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "roster", prompt: "读取约束", role: "工程师", thinking: "low" });
+	await settled;
+	await Bun.sleep(0);
+	const rosters = () => harness.emitted.filter(([channel]) => channel === "firecode:subagents").map(([, payload]) => payload.workers);
+	const running = rosters().flat().find((worker: any) => worker.action.includes("AGENTS.md"));
+	expect(running).toMatchObject({ name: "roster", role: "工程师", model: "test/worker", thinking: "low", state: "running" });
+	expect(typeof running.startedAt).toBe("number");
+	expect(running).not.toHaveProperty("settledAt");
+	const last = rosters().at(-1)![0];
+	expect(last).toMatchObject({ name: "roster", state: "done", action: "完成", startedAt: running.startedAt });
+	expect(last.settledAt).toBeGreaterThanOrEqual(running.startedAt);
+
+	await harness.command("");
+	expect(rosters().at(-1)).toEqual([]);
+});
+
 test("子代理落定后，结果事件交给指挥官之前仍算在飞：闲时前门唤醒要等唤醒回合开始才归零（宿主 sendUserMessage 不等回合）", async () => {
 	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
@@ -874,7 +894,7 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 		isIdle: () => true,
 	};
 	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
-	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {} }, ctx);
+	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {}, publishRoster() {} }, ctx);
 	active.store.upsert({
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
 	});

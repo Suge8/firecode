@@ -22,7 +22,7 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "status" | "sessionPath" | "cwd" | "launch">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "model" | "thinking" | "status" | "sessionPath" | "cwd" | "launch">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewRoundProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
@@ -92,36 +92,62 @@ export type RowKind = "failed" | "interrupted" | "stuck" | "running" | "review" 
 /** 有行在动（耗时仍在走）的分组：需要动画时钟。 */
 export const ANIMATING_KINDS: ReadonlySet<RowKind> = new Set(["stuck", "running", "review"]);
 
-/** 一个子代理的行状态：所在分组与这一行（标记、动作、耗时）。index 是它在 facts.workers 里的位置（决定火苗相位）。 */
-export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row } {
+/**
+ * 一个子代理此刻的相位：所在分组、动作文字与时刻。纯事实不带着色——活动列表的行与 `subagentInfos`（外部扩展读的名册）共用这一处，
+ * 分组与动作只在这里判定一次。`settledAt` 是落定时刻；`silentMinutes` 只在卡住时有。
+ */
+export interface WorkerPhase {
+	kind: RowKind;
+	action: string;
+	startedAt?: number;
+	settledAt?: number;
+	silentMinutes?: number;
+}
+
+export function workerPhase(facts: ActivityFacts, index: number, now: number): WorkerPhase {
 	const worker = facts.workers[index];
 	const path = worker.sessionPath;
-	const phase = phaseOf(index);
-	const start = facts.runStartedAt.get(path);
-	const base = { name: worker.name, role: worker.role, elapsed: start === undefined ? "" : duration(now - start) };
+	const startedAt = facts.runStartedAt.get(path);
 	if (worker.status === "working") {
-		const silent = now - Math.max(start ?? now, facts.lastOutputAt.get(path) ?? 0);
+		const silent = now - Math.max(startedAt ?? now, facts.lastOutputAt.get(path) ?? 0);
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
 		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
-		if (silent >= STUCK_MS)
-			// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
-			return { kind: "stuck", row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), action, note: silentNote(Math.floor(silent / MINUTE_MS)) } };
-		return { kind: "running", row: { ...base, mark: flame(1, phase), action } };
+		if (silent >= STUCK_MS) return { kind: "stuck", action, startedAt, silentMinutes: Math.floor(silent / MINUTE_MS) };
+		return { kind: "running", action, startedAt };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
-		const action = progress ? msg.activity.reviewRound(progress.round, progress.settled, progress.total) : msg.activity.reviewing;
-		return { kind: "review", row: { ...base, mark: reviewMark(phase), action, tone: "review" } };
+		return { kind: "review", startedAt, action: progress ? msg.activity.reviewRound(progress.round, progress.settled, progress.total) : msg.activity.reviewing };
 	}
 	const fact = facts.settled.get(path);
-	// 组名已经说了“空闲”，展开行只列谁。
-	if (!fact) return { kind: "idle", row: { ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), action: "", settled: true } };
-	const settledRow = { ...base, elapsed: start === undefined ? "" : duration(fact.at - start), settled: true };
-	if (fact.kind === "done") return { kind: "done", row: { ...settledRow, mark: DONE_MARK, action: fact.note ?? msg.activity.returned } };
-	if (fact.kind === "interrupted")
-		return { kind: "interrupted", row: { ...settledRow, mark: theme.fg("warning", INTERRUPTED_GLYPH), action: msg.activity.interrupted, tone: "warning" } };
-	return { kind: "failed", row: { ...settledRow, mark: FAILED_MARK, action: fact.note ?? msg.activity.failed, tone: "failed" } };
+	if (!fact) return { kind: "idle", action: "" };
+	const settled = { startedAt, settledAt: fact.at };
+	if (fact.kind === "done") return { kind: "done", action: fact.note ?? msg.activity.returned, ...settled };
+	if (fact.kind === "interrupted") return { kind: "interrupted", action: msg.activity.interrupted, ...settled };
+	return { kind: "failed", action: fact.note ?? msg.activity.failed, ...settled };
+}
+
+/** 一个子代理的行状态：所在分组与这一行（标记、动作、耗时）。index 是它在 facts.workers 里的位置（决定火苗相位）。 */
+export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row } {
+	const worker = facts.workers[index];
+	const phase = phaseOf(index);
+	const { kind, action, startedAt, settledAt, silentMinutes } = workerPhase(facts, index, now);
+	const base = { name: worker.name, role: worker.role, action, elapsed: startedAt === undefined ? "" : duration(now - startedAt) };
+	switch (kind) {
+		// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
+		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(silentMinutes!) } };
+		case "running": return { kind, row: { ...base, mark: flame(1, phase) } };
+		case "review": return { kind, row: { ...base, mark: reviewMark(phase), tone: "review" } };
+		// 组名已经说了“空闲”，展开行只列谁。
+		case "idle": return { kind, row: { ...base, elapsed: "", mark: theme.fg("dim", IDLE_GLYPH), settled: true } };
+		default: {
+			const settled = { ...base, elapsed: startedAt === undefined ? "" : duration(settledAt! - startedAt), settled: true };
+			if (kind === "done") return { kind, row: { ...settled, mark: DONE_MARK } };
+			if (kind === "interrupted") return { kind, row: { ...settled, mark: theme.fg("warning", INTERRUPTED_GLYPH), tone: "warning" } };
+			return { kind, row: { ...settled, mark: FAILED_MARK, tone: "failed" } };
+		}
+	}
 }
 
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {

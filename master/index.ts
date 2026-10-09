@@ -17,6 +17,7 @@ import { msg } from "./messages.js";
 import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
 import { armInterruptReminder, modelAtomText } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
+import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import { InProcessSessionPool } from "./spawn.js";
 import { THINKING_LEVELS } from "./state.js";
 
@@ -54,6 +55,14 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		publishedInFlight = count;
 		pi.events.emit(WORKERS_CHANNEL, { inFlight: count, ...(teardown ? { teardown: true as const } : {}) } satisfies WorkersPayload);
 	};
+	// 子代理名册的唯一发布者；停用发空名册，读者据此清掉。
+	let publishedRoster = "[]";
+	const publishRoster = (workers: SubagentInfo[]) => {
+		const key = JSON.stringify(workers);
+		if (key === publishedRoster) return;
+		publishedRoster = key;
+		pi.events.emit(SUBAGENTS_CHANNEL, { workers } satisfies SubagentsPayload);
+	};
 	// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
 	let sessionSince: number | undefined;
 	watchBusy(pi, { onChange: (view) => { sessionSince = view.since; } });
@@ -67,6 +76,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
 		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
 		publishInFlight,
+		publishRoster,
 		sessionSince: () => sessionSince,
 	};
 	let runtime: MasterRuntime | undefined;
@@ -94,6 +104,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		active?.close();
 		// 遗弃在飞子代理不是歇下：带 teardown 归零，busy.ts 只结束本段。
 		publishInFlight(0, true);
+		publishRoster([]);
 		await setup.pool.disposeAll();
 		setTools(false);
 	};
