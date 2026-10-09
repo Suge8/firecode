@@ -22,9 +22,9 @@ export const REVIEWER_STATUSES = ["running", "passed", "failed", "error"] as con
 export const ROUND_RESULTS = ["passed", "failed", "error", "stopped", "cancelled", "timed_out"] as const;
 export const ADVISOR_VERDICTS = ["continue", "stop", "narrow"] as const;
 export const STOP_REASONS = ["user", "shutdown", "timeout"] as const;
-export const REPAIR_STATUSES = ["pending", "awaiting_start", "running", "completed"] as const;
+export const REPAIR_STATUSES = ["pending", "running", "completed"] as const;
 export const SUMMARY_KINDS = ["passed", "max_rounds", "advisor_stop"] as const;
-export const SUMMARY_STATUSES = ["pending", "awaiting_start", "running"] as const;
+export const SUMMARY_STATUSES = ["pending", "running"] as const;
 
 export type Phase = (typeof PHASES)[number];
 export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
@@ -134,10 +134,8 @@ export type ReviewEvent =
 	| { type: "ADVISOR_SKIPPED" }
 	| { type: "INFRASTRUCTURE_ERROR"; details: string }
 	| { type: "ADVANCE" }
-	| { type: "FEEDBACK_DISPATCHED" }
 	| { type: "REPAIR_STARTED" }
 	| { type: "REPAIR_COMPLETED" }
-	| { type: "SUMMARY_DISPATCHED" }
 	| { type: "SUMMARY_STARTED" }
 	| { type: "SUMMARY_SETTLED" }
 	| { type: "CANCEL"; reason: "user" | "shutdown" }
@@ -204,16 +202,12 @@ export function reduce(
 			return onInfrastructureError(state, event.details, now);
 		case "ADVANCE":
 			return onAdvance(state, limits, now);
-		case "FEEDBACK_DISPATCHED":
-			return updateRepairStatus(state, "pending", "awaiting_start", now);
 		case "REPAIR_STARTED":
-			return updateRepairStatus(state, "awaiting_start", "running", now);
+			return updateRepairStatus(state, "pending", "running", now);
 		case "REPAIR_COMPLETED":
 			return updateRepairStatus(state, "running", "completed", now);
-		case "SUMMARY_DISPATCHED":
-			return updateSummaryStatus(state, "pending", "awaiting_start", now);
 		case "SUMMARY_STARTED":
-			return updateSummaryStatus(state, "awaiting_start", "running", now);
+			return updateSummaryStatus(state, "pending", "running", now);
 		case "SUMMARY_SETTLED":
 			return onSummarySettled(state, now);
 		case "CANCEL":

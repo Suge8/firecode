@@ -1,7 +1,7 @@
 /**
  * /fire-review 的界面接管：esc 取消的只读编辑器与终端标题。
  *
- * 审查进度不在这里画：它经占用频道（occupancy.ts）发布，由输入框外壳嵌进上边框，界面只此一处。
+ * 审查进度不在这里画：它经占用频道（busy.ts）发布，由输入框外壳嵌进上边框，界面只此一处。
  * Working 指示的可见性归输入框外壳（statusbar）统一管理，这里不碰。
  */
 import { basename } from "node:path";

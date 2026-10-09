@@ -1,20 +1,18 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ModelAtom } from "../config.js";
+import { THINKING_LEVELS, type ModelAtom, type ThinkingLevelValue } from "../config.js";
 import { msg } from "./messages.js";
 
 const STATE_VERSION = 9;
 export const WORKER_NAME = /^[a-z][a-z0-9_-]{0,31}$/u;
 
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type WorkerThinking = (typeof THINKING_LEVELS)[number];
 export type WorkerStatus = "working" | "idle" | "reviewing";
 
 export interface WorkerRef {
 	name: string;
 	role: string;
 	model: string;
-	thinking: WorkerThinking;
+	thinking: ThinkingLevelValue;
 	status: WorkerStatus;
 	sessionPath: string;
 	cwd?: string;
@@ -141,7 +139,7 @@ function isWorker(value: unknown): value is WorkerRef {
 		typeof record.name !== "string" || !WORKER_NAME.test(record.name) ||
 		typeof record.role !== "string" || !record.role ||
 		typeof record.model !== "string" || !record.model ||
-		typeof record.thinking !== "string" || !THINKING_LEVELS.includes(record.thinking as WorkerThinking) ||
+		typeof record.thinking !== "string" || !THINKING_LEVELS.includes(record.thinking as ThinkingLevelValue) ||
 		(record.status !== "working" && record.status !== "idle" && record.status !== "reviewing") ||
 		typeof record.sessionPath !== "string" || !record.sessionPath
 	) return false;

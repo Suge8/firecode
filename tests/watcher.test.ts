@@ -111,7 +111,7 @@ test("用户 esc 中断过的现场照常投递，投递选项不变", async () 
 test("fire-review 活跃期零评估，结束后合并补上", async () => {
 	const harness = await setup();
 	advise("两个回合一起看到的");
-	harness.pi.events.emit("firecode:review", { active: true });
+	harness.pi.events.emit("firecode:review", { active: true, progress: () => undefined });
 	await harness.turnEnd(2, "审查中的改动");
 	await harness.turnEnd(3, "又一个回合");
 	await Bun.sleep(20);
@@ -458,7 +458,7 @@ async function setup(options: {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const spawnModule = await loadFirecodeModule("master/spawn.js") as any;
+	const spawnModule = await loadFirecodeModule("spawn.js") as any;
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(agentDir, "auth.json"),
 		modelsPath: join(agentDir, "models.json"),

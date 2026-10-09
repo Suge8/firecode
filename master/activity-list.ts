@@ -4,7 +4,7 @@
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } from "../activity.js";
+import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } from "./activity.js";
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
 import { clip, formatDuration } from "../format.js";
 import { toolActionText } from "../tools/actions.js";

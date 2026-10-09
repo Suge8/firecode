@@ -10,14 +10,14 @@ import {
 	type KeybindingsManager,
 	type MessageStartEvent,
 	type Theme,
+	type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { type BusyView, IDLE, OUTCOME_TEXT, roundTexts, watchBusy } from "../busy.js";
+import { type BusyView, IDLE, type ReviewProgress, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { OCCUPANCY_CHANNEL, type OccupancyPayload, type ReviewProgress } from "../review/occupancy.js";
-import { contextColor, thinkingColor } from "../theme.js";
-import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
+import { type BranchEntry, latestTurnRecord, OUTCOME_TEXT, roundTexts, type TurnRecord, watchRoundRecorded } from "../round.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 import { promptRename } from "./rename.js";
@@ -46,32 +46,41 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 	return (incoming && userTitle(incoming)) || msg.newSession;
 }
 
-const FAST_STATUS = "pi-openai-native-fast";
-/** session/presets.ts 发布的生效预设名（已着色）。 */
-const PRESET_STATUS = "preset";
+/** 上下文占用的分级色：低占用保持灰色，接近既有阈值才警告。 */
+const contextColor = (percent: number | null | undefined): ThemeColor =>
+	percent == null ? "muted" : percent >= 75 ? "error" : percent >= 50 ? "warning" : "dim";
+
+const THINKING_COLORS: Record<string, ThemeColor> = {
+	off: "thinkingOff",
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
+};
+
 /** 落定后暖光渐隐的时长；落定结果本身一直留到下一轮开始。 */
 const GLOW_FADE_MS = 1_000;
 
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
 	title = msg.newSession;
-	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数。 */
+	/** busy.ts 的会话进行中快照：起点、指挥官是否在跑、在飞子代理数、审查进度访问器。 */
 	busy: BusyView = IDLE;
 	/**
 	 * 最近一轮的落定事实（分支轮记录按与摘要行同一条规则合成）与落定时刻，留到下一轮开始。
 	 * 只在轮记录写入、开会话、切分支时算一次，绘制只读它：读分支是整条回溯。at 为空是开会话时恢复的，不播落定过渡。
 	 */
 	settled: { record: TurnRecord; at?: number } | undefined;
-	/** 审查占用期间的进度访问器（review 经占用频道发布）；undefined 表示没有审查。 */
-	review: (() => ReviewProgress | undefined) | undefined;
 	statuses: () => ReadonlyMap<string, string> = () => new Map();
 	theme: Theme | undefined;
 	requestRender = () => {};
 	private stopClock: (() => void) | undefined;
 
-	/** 时钟只在有动效要播时订阅：回合进行、落定过渡或审查进行。 */
+	/** 时钟只在有动效要播时订阅：会话进行中（含审查）或落定过渡。 */
 	syncClock(): void {
-		const need = this.review !== undefined || this.busy.busy || (this.settled?.at !== undefined && settling(Date.now() - this.settled.at));
+		const need = this.busy.busy || (this.settled?.at !== undefined && settling(Date.now() - this.settled.at));
 		if (need && !this.stopClock) this.stopClock = onFrame(() => { this.syncClock(); this.requestRender(); });
 		if (!need && this.stopClock) { this.stopClock(); this.stopClock = undefined; }
 	}
@@ -82,7 +91,6 @@ class Shell {
 		this.requestRender = () => {};
 		this.busy = IDLE;
 		this.settled = undefined;
-		this.review = undefined;
 	}
 
 	sync(view: BusyView): void {
@@ -99,11 +107,11 @@ class Shell {
 	private readonly fg = (color: Parameters<Theme["fg"]>[0], text: string): string => this.theme?.fg(color, text) ?? text;
 
 	top(): TopParts {
-		const { busy, settled, review } = this;
+		const { busy, settled } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
 			mark: "", word: "", elapsed: "", review: [], glow: 0,
-			watcher: status("watcher"), master: status("master"),
+			watcher: status(STATUS_KEYS.watcher), master: status(STATUS_KEYS.master),
 		};
 		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
@@ -124,7 +132,7 @@ class Shell {
 			].join(this.fg("dim", " · "));
 			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
 		}
-		if (review) parts.review = reviewTiers(review(), (text) => this.fg("error", text));
+		if (busy.review) parts.review = reviewTiers(busy.review(), (text) => this.fg("error", text));
 		return parts;
 	}
 
@@ -136,10 +144,10 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
-			preset: this.statuses().get(PRESET_STATUS) ?? "",
+			preset: this.statuses().get(STATUS_KEYS.preset) ?? "",
 			model: fg("text", formatModelName(model?.id)),
-			think: model?.reasoning ? fg(thinkingColor(thinking as never), `/${thinking}`) : "",
-			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
+			think: model?.reasoning ? fg(THINKING_COLORS[thinking], `/${thinking}`) : "",
+			fast: this.statuses().has(STATUS_KEYS.fast) ? fg("warning", "Fast") : "",
 			percent: fg(contextColor(percent), percent == null ? "?" : `${percent.toFixed(1)}%`),
 			capacity: fg("dim", `/${formatTokens(window)}`),
 		};
@@ -220,16 +228,10 @@ export function registerStatusBar(pi: ExtensionAPI): void {
 		shell.syncClock();
 		shell.requestRender();
 	};
-	pi.events.on(ROUND_RECORDED_CHANNEL, () => showRecord(Date.now()));
+	watchRoundRecorded(pi, () => showRecord(Date.now()));
 	pi.on("session_tree", (_event, ctx) => {
 		updateTitle(ctx);
 		showRecord();
-	});
-	pi.events.on(OCCUPANCY_CHANNEL, (data) => {
-		const occupancy = data as OccupancyPayload;
-		shell.review = occupancy.active ? occupancy.progress : undefined;
-		shell.syncClock();
-		shell.requestRender();
 	});
 	pi.on("session_start", (_event, ctx) => {
 		updateTitle(ctx);

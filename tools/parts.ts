@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { type ClipSide, clip, formatDuration, oneLine } from "../format.js";
-import { sizeColor } from "../theme.js";
 
 /** pi 公共出口未导出 ThemeBg：从 Theme.bg 的参数派生，避免依赖内部路径。 */
 export type ThemeBg = Parameters<Theme["bg"]>[0];
@@ -105,7 +104,7 @@ export function commandParts(command: string): Part[] {
 
 export function sizePart(chars: number | undefined): Part | undefined {
 	if (chars === undefined || chars < SIZE_MIN_CHARS) return undefined;
-	return { text: `${(chars / 1000).toFixed(1)}k`, color: sizeColor(chars) };
+	return { text: `${(chars / 1000).toFixed(1)}k`, color: chars >= 50_000 ? "error" : chars >= 10_000 ? "warning" : "dim" };
 }
 
 export function durationPart(durationMs: number | undefined): Part | undefined {

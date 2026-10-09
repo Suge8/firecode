@@ -4,7 +4,7 @@
  */
 import type { Model } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
-import type { InProcessSessionPool } from "../master/spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import type { ThinkingLevelValue } from "../config.js";
 import { readPrompt } from "../i18n.js";
 import { msg } from "./messages.js";

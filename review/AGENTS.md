@@ -12,7 +12,7 @@
 作废 ctx，迟到回调看到空 controller 直接返回（曾因全局单例握着被 kill 的 Worker 的死 ctx，看门狗到点连环抛错杀掉整个 pi 进程）。
 `registerReview` 返回的 `settled()` 只供测试排空该会话的迁移队列。
 
-reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 `master/spawn.ts` 的池释放时同样先收到 quit 再 dispose。checkpoint 的键白名单由领域类型 `satisfies` 派生：
+reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被根级 `spawn.ts` 的池释放时同样先收到 quit 再 dispose。checkpoint 的键白名单由领域类型 `satisfies` 派生：
 字段增删不同步会编译失败，这是校验漂移（曾导致终态写不进去、重启后恢复出幽灵审查）的唯一防线；枚举取值（相、轮结果、顾问裁决等）在 `state.ts` 里是常量数组，类型、checkpoint 校验与顾问解析都读它，不另抄一份。
 
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover`
@@ -22,17 +22,17 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被 
 AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill 与会话关闭一起拖死；卡死的审查者会话在
 进程里惰性留到 TCP 层放弃。
 
-`awaiting_fix` 把修复生命周期 `pending → awaiting_start → running → completed` 写进 checkpoint；reload
-会重投未确认完成的反馈，只有 completed 才进入下一审查轮。宿主 `sendMessage` 返回 void，因此反馈用
-`agent_start` 确认启动、最终 `agent_end` 确认未以 error/aborted 结束，不靠同步 try/catch 猜异步结果。
+`awaiting_fix` 把修复生命周期 `pending → running → completed` 写进 checkpoint；reload
+会把未完成的反馈重置为 pending 重投，只有 completed 才进入下一审查轮。反馈经根级 `deliver.ts` 投递（空闲时前门唤起，
+回合照常经过 `before_agent_start`），以消息送达为回执、没有计时器：deliver resolve 推进 pending → running，
+最终 `agent_end` 确认未以 error/aborted 结束才 completed，以 error/aborted 结束按用户取消收尾。宿主在回合开始前拒收前门消息时 deliver
+不 resolve，状态停在 pending 并继续持有占用，用户下次发话后由那个回合把这条信封补投进去才解开（取舍与 Master 事件一致，已确认接受）；等待期间 controller 的 `delivering` 标记挡住重复推进。
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环
-禁令的总结提示（followUp + triggerTurn，agent_start 回执、agent_end 收尾），总结回合结束才落 `settled`；
+禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；
 总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）
-不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程；details 保持原始卡片数据。
+不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程（空闲时它们是前门送达的用户消息，显示为折叠的一行 ↳）；details 保持原始卡片数据。给审查者的证据（`sessionEntries`）过滤掉审查自己的信封：自定义消息与整条由审查信封构成的用户消息都不进证据。
 占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
-
-已知暴露：修复反馈与总结提示的 followUp 唤起仍走宿主侧门（跳过 before_agent_start，#33 上游缺陷），修复回合内扩展注入的段会被撤下再补回；因 display:false 的隐形投递无前门等价物，接受此暴露待上游修复，不在插件侧绕行。
 
 `outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` /
 `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。事故终态的 `reason` 取该轮
@@ -75,7 +75,7 @@ live 外观一致，渲染器永不抛异常（details 校验失败降级 conten
 
 ## 占用信号
 
-审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见 `occupancy.ts`），review 是唯一发布者，不接触 herdr。
+审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见根 `busy.ts`，读者一律经 `watchBusy`），review 是唯一发布者，不接触 herdr。
 `busy.ts` 把它算进“会话进行中”，herdr 投影据此报 working 并带“对抗审查进行中”标签（不报 blocked：审查期间不需要用户决定任何事，
 blocked 会触发需要关注的通知）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障不影响审查。
 

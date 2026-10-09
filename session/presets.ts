@@ -12,6 +12,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { type Preset, loadConfig } from "../config.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
 
 const CLEAR_ITEM = msg.presets.clearItem;
@@ -74,7 +75,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	const updateStatus = (ctx: ExtensionContext) => {
 		const active = activePreset();
 		ctx.ui.setStatus(
-			"preset",
+			STATUS_KEYS.preset,
 			activeName && (active?.tools?.length || active?.instructions) ? ctx.ui.theme.fg("accent", title(activeName)) : undefined,
 		);
 	};

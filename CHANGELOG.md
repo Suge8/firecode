@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- `/fire-review` fix requests and the closing summary are now delivered like Master events: each shows as one folded review line in the process view, and the fix round keeps FireCode's system prompt sections instead of dropping them and appending the Master prompt again afterwards. A review that was still in progress when you upgrade is discarded; start it again.
+
 ## [1.2.0] - 2026-10-09
 
 ### Added

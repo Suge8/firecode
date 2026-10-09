@@ -1,32 +1,31 @@
 import { expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { contextColor } from "../theme.js";
 import { fakePi } from "./fake-pi.ts";
 import { PI_TUI_URL, loadFirecodeModule } from "./loader.ts";
 
 const FLAME3 = "[\u2800-\u28ff]{3}";
 
-/** 会话分支里的人类消息与轮记录（生产中轮记录由 tools 在歇下边沿写入）。 */
+/** 会话分支里的人类消息与轮记录（生产中轮记录由记录器在歇下边沿写入）。 */
 const humanEntry = (text: string) => ({ type: "message", message: { role: "user", content: text } });
 const roundEntry = (data: Record<string, unknown>) =>
 	({ type: "custom", customType: "firecode-round", data, timestamp: new Date().toISOString() });
 
-/** tools 写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
+/** 记录器写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
 const ROUND_RECORDED = "firecode:round-recorded";
 
-/** 像 tools 一样订阅同一个歇下边沿：把轮记录写进分支，再发布“已写入”。 */
+/** 装上真正的记录器：它写进会话的轮记录落进分支，再发布“已写入”。 */
 async function recordRounds(pi: any, branch: unknown[]) {
-	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
-	watchBusy(pi, { onSettled: (_ctx: unknown, round: Record<string, unknown>) => {
-		branch.push(roundEntry(round));
-		pi.events.emit(ROUND_RECORDED);
-	} });
+	const { registerRoundRecorder } = await loadFirecodeModule("round.ts") as any;
+	pi.appendEntry = (customType: string, data: Record<string, unknown>) => { branch.push(roundEntry(data)); };
+	registerRoundRecorder(pi);
 }
 
 interface MountOptions {
 	moduleOptions?: Parameters<typeof loadFirecodeModule>[1];
 	model?: { id: string; reasoning: boolean; contextWindow: number };
-	percent?: number;
+	percent?: number | null;
+	/** footer 主题：默认不着色；着色用例换成会标出颜色名的替身。 */
+	theme?: { fg: (color: string, text: string) => string };
 	name?: () => string | undefined;
 	branch?: () => unknown[];
 	statuses?: Map<string, string>;
@@ -41,12 +40,12 @@ async function mount(options: MountOptions = {}) {
 	const statuses = options.statuses ?? new Map<string, string>();
 	let footer: any;
 	let editor: any;
-	const theme = { fg: (_color: string, text: string) => text };
+	const theme = options.theme ?? { fg: (_color: string, text: string) => text };
 	const model = options.model ?? { id: "test-model", reasoning: false, contextWindow: 200_000 };
 	const ctx = {
 		isIdle: () => true,
 		model,
-		getContextUsage: () => ({ percent: options.percent ?? 1, contextWindow: model.contextWindow }),
+		getContextUsage: () => ({ percent: options.percent === undefined ? 1 : options.percent, contextWindow: model.contextWindow }),
 		sessionManager: { getSessionName: options.name ?? (() => undefined), getBranch: options.branch ?? (() => []) },
 		ui: {
 			setWorkingVisible() {},
@@ -160,12 +159,17 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
 });
 
-test("上下文低占用保持灰色，仅接近既有阈值时警告", () => {
-	expect(contextColor(0)).toBe("dim");
-	expect(contextColor(49.9)).toBe("dim");
-	expect(contextColor(50)).toBe("warning");
-	expect(contextColor(75)).toBe("error");
-	expect(contextColor(undefined)).toBe("muted");
+test("上下文低占用保持灰色，仅接近既有阈值时警告", async () => {
+	const colorOf = async (percent: number | null) => {
+		const host = await mount({ percent, theme: { fg: (color, text) => `<${color}>${text}` } });
+		host.start();
+		return /<(\w+)>(?:[\d.]+%|\?)/u.exec(host.bottom(120))?.[1];
+	};
+	expect(await colorOf(0)).toBe("dim");
+	expect(await colorOf(49.9)).toBe("dim");
+	expect(await colorOf(50)).toBe("warning");
+	expect(await colorOf(75)).toBe("error");
+	expect(await colorOf(null)).toBe("muted");
 });
 
 test("输入框边框按宽度退让：下边框先省容量、再让预设名、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
@@ -312,19 +316,21 @@ async function shellWithBusy() {
 	const { fake, ctx, statuses, start } = host;
 	start();
 	const feed = (globalThis as any).__fcBusyFeed;
+	let progress: Record<string, unknown> | undefined;
 	return {
 		statuses,
 		branch,
 		branchReads: () => branchReads,
 		start,
-		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
-		/** 歇下边沿：像 tools 一样把这一段的轮记录写进分支，再通知外壳。 */
+		/** review: true 即审查持有；进度由 review() 设置，外壳每次绘制才读它。 */
+		view: ({ review, ...view }: Record<string, unknown>) =>
+			feed.onChange({ agentRunning: false, inFlight: 0, ...view, review: review ? () => progress : undefined }),
+		/** 歇下边沿：像记录器一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
-			feed.onSettled?.(ctx, round);
 			branch.push(roundEntry(round));
 			fake.pi.events.emit(ROUND_RECORDED);
 		},
-		review: (progress: Record<string, unknown>) => fake.pi.events.emit("firecode:review", { active: true, progress: () => progress }),
+		review: (next: Record<string, unknown>) => { progress = next; },
 		top: (width = 110) => host.top(width),
 		bottom: (width = 110) => host.bottom(width),
 	};

@@ -30,7 +30,7 @@ export function initGit(dir: string): void {
 	git("commit", "-q", "-m", "eval fixture");
 }
 
-/** 每次运行一个独立的仓库副本与 TMPDIR；HERDR_* 去掉，避免回写用户自己的 herdr pane。 */
+/** 每次运行一个独立的仓库副本与 TMPDIR。 */
 export function prepareRun(dir: string, fixture: string): { repo: string; tmp: string } {
 	rmSync(dir, { recursive: true, force: true });
 	const repo = join(dir, "repo");
@@ -40,16 +40,19 @@ export function prepareRun(dir: string, fixture: string): { repo: string; tmp: s
 	return { repo, tmp };
 }
 
+/**
+ * 子进程不继承任何 PI_* 与 HERDR_*：前者含外层 pi 给工具设的会话变量（PI_SESSION_FILE、PI_MODEL 等）和个人设置（PI_CACHE_RETENTION），
+ * 会让不同人跑出的结果不可比；后者会让子进程回写用户自己的 herdr pane。评测需要的 PI_* 在下面显式给出。
+ */
 export function startPi(args: string[], o: { variant: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string> }): ChildProcess {
 	const env: Record<string, string | undefined> = {
-		...process.env,
+		...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(PI|HERDR)_/u.test(key))),
 		PI_CODING_AGENT_DIR: join(WORK, "variants", o.variant, "agent"),
 		PI_OFFLINE: "1",
 		PI_TELEMETRY: "0",
 		TMPDIR: o.tmp,
 		...o.env,
 	};
-	for (const key of Object.keys(env)) if (key.startsWith("HERDR_")) delete env[key];
 	const [cmd, base] = piCommand();
 	return spawn(cmd, [...base, ...args], { cwd: o.cwd, env, detached: true, stdio: [o.stdin, "pipe", "pipe"] });
 }
