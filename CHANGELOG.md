@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Other extensions in the same process can subscribe to the `firecode:subagents` event channel for the sub-agent roster: role, model, state, what each is doing in one line, and run start/settle times. It is the same projection as the activity list (see `master/AGENTS.md`).
 
+### Changed
+
+- `/tokens` scans session files without freezing the interface and only parses lines that carry usage, so it returns faster on large session histories.
+- The Claude subscription adapter checks the installed Claude Code version once per process, and only when the adapter is enabled.
+
+### Fixed
+
+- OpenAI native compaction no longer silently drops earlier history when the kept messages include turns from other providers (for example Claude or xAI); the compacted window is replayed as expected. When it truly cannot be replayed — after switching to a provider without native compaction, or after turning `nativeCompaction` off — FireCode shows a warning once instead of losing the history silently.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
