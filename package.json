@@ -1,6 +1,6 @@
 {
   "name": "pi-firecode",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "A modular Pi extension for terminal UI, session workflows, adversarial review, and delegated agents",
   "type": "module",
   "license": "MIT",
