@@ -480,7 +480,7 @@ async function setup(options: {
 		}],
 	});
 	if (!modelRuntime.hasConfiguredAuth(fauxModel.provider)) throw new Error("测试 Faux 模型认证未载入");
-	const pool = new spawnModule.InProcessSessionPool({ agentDir, modelRuntime, resolveModel: async () => fauxModel });
+	const pool = new spawnModule.InProcessSessionPool({ modelRuntime, resolveModel: async () => fauxModel });
 	const watcher = options.watcher === undefined ? WATCHER_CONFIG : options.watcher;
 	const module = await loadFirecodeModule("watcher/index.js", {
 		configJsonc: JSON.stringify({
