@@ -66,17 +66,17 @@ function hostInput(model: any, messages: unknown[], leadingInPayload: boolean): 
 	});
 }
 
-type Setup = { model: any; openai?: Record<string, unknown>; systemPrompt?: string; hasUI?: boolean };
+type Setup = { model: any; openai?: Record<string, unknown>; systemPrompt?: string; hasUI?: boolean; sm?: any };
 
 /** 在真实会话上装配扩展；返回会话、两个宿主钩子的调用入口与通知记录。 */
-function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "INSTRUCTIONS", hasUI = false }: Setup) {
+function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "INSTRUCTIONS", hasUI = false, sm = undefined }: Setup) {
 	const directory = mkdtempSync(join(tmpdir(), "firecode-openai-native-"));
 	directories.push(directory);
 	const configPath = join(directory, "config.jsonc");
 	writeFileSync(configPath, JSON.stringify({ openai }));
 	const fake = fakePi();
 	openAINativeExtension(fake.pi, configPath, "ctrl+shift+s");
-	const sm = SessionManager.inMemory(directory);
+	sm ??= SessionManager.inMemory(directory);
 	const notices: [string, string][] = [];
 	const ctx = (current = model) => ({
 		cwd: directory,
@@ -338,9 +338,18 @@ test("fails open: the request goes out as Pi built it, and the user is told when
 	expect(await native.compact(nativeKept, { current: other })).toBeUndefined();
 	expect(await native.compact(nativeKept, { current: anthropic })).toBeUndefined();
 
-	const off = harness({ model, openai: { nativeCompaction: false } });
+	// 开关关着：不压缩、不改写，没有压缩过也不提醒；
+	const off = harness({ model, openai: { nativeCompaction: false }, hasUI: true });
 	expect(await off.compact(oldHistory(off.sm, model))).toBeUndefined();
 	expect(calls).toHaveLength(2);
+	expect((await off.request()).result).toBeUndefined();
+	expect(off.notices).toEqual([]);
+
+	// 但会话里已有原生压缩（之后才关的开关）时，旧历史不在上下文里，同样提醒一次。
+	const disabled = harness({ model, openai: { nativeCompaction: false }, hasUI: true, sm: native.sm });
+	expect((await disabled.request()).result).toBeUndefined();
+	expect((await disabled.request()).result).toBeUndefined();
+	expect(disabled.notices).toEqual([["warning", expect.stringContaining("nativeCompaction-disabled")]]);
 });
 
 test.each([

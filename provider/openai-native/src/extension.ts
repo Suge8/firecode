@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isRecord } from "../../../jsonc.js";
 import { msg } from "../../messages.js";
 import { loadOpenAINativeSettings, togglePriority, type OpenAINativeSettings } from "./config.js";
-import { compactWithOpenAINative, replayOpenAINative } from "./native-compaction.js";
+import { compactWithOpenAINative, declineDisabledReplay, replayOpenAINative } from "./native-compaction.js";
 import { applyOpenAIOptions, FAST_STATUS_KEY, fastModeEnabled, supportsFastMode } from "./options.js";
 
 const VERBOSITY_FLAG = "verbosity";
@@ -78,7 +78,7 @@ export default function openAINativeExtension(
 	});
 	// 先重放原生压缩窗口，再叠加 verbosity / priority：选项只改请求字段，不碰 input。
 	pi.on("before_provider_request", (event, ctx) => {
-		const replay = settings.nativeCompaction ? replayOpenAINative(event.payload, ctx) : undefined;
+		const replay = settings.nativeCompaction ? replayOpenAINative(event.payload, ctx) : declineDisabledReplay(ctx);
 		if (replay && !replay.ok && warnedCompactionId !== replay.compactionId) {
 			warnedCompactionId = replay.compactionId;
 			const message = `pi-openai-native: could not replay the native compaction (${replay.reason}); history before the last compaction is not in context.`;

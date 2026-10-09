@@ -130,6 +130,17 @@ export async function compactWithOpenAINative(
 /** 最近一次压缩是原生压缩却没能重放：请求照宿主原样发出，压缩窗口里的旧历史不在上下文里。 */
 export type NativeReplayDeclined = { ok: false; reason: string; compactionId: string };
 
+function latestNativeCompaction(ctx: ExtensionContext) {
+	const latest = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "compaction");
+	return latest && isNativeCompactionDetails(latest.details) ? latest : undefined;
+}
+
+/** 开关关着不重放；但最近一次压缩是原生的话，它的窗口里的旧历史同样不在上下文里。 */
+export function declineDisabledReplay(ctx: ExtensionContext): NativeReplayDeclined | undefined {
+	const latest = latestNativeCompaction(ctx);
+	return latest && { ok: false, reason: "nativeCompaction-disabled", compactionId: latest.id };
+}
+
 /**
  * undefined：没有原生压缩要重放（最近一次压缩不是原生的，或根本没压缩过）。
  * 只要最近一次压缩是原生的，当前请求没能重放（换了模型或供应商、请求体对不上……）就必须报出来，不能折叠成 undefined。
@@ -138,11 +149,11 @@ export function replayOpenAINative(
 	payload: unknown,
 	ctx: ExtensionContext,
 ): { ok: true; payload: ResponsesRequestPayload } | NativeReplayDeclined | undefined {
-	const branchEntries = ctx.sessionManager.getBranch();
-	const latest = branchEntries.findLast((entry) => entry.type === "compaction");
-	if (!latest || !isNativeCompactionDetails(latest.details)) {
+	const latest = latestNativeCompaction(ctx);
+	if (!latest) {
 		return undefined;
 	}
+	const branchEntries = ctx.sessionManager.getBranch();
 	const declined = (reason: string): NativeReplayDeclined => ({ ok: false, reason, compactionId: latest.id });
 
 	const target = resolveNativeCompactionTarget(ctx, payload);
