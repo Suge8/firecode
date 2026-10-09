@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type BusyView, IDLE } from "../busy.js";
 import { onFrame } from "../flame.js";
 import { clip } from "../format.js";
 import { ClickAnchor, type Scroller } from "../tools/click-anchor.js";
@@ -18,7 +19,6 @@ import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../to
 import { toolDefinitions } from "../tools/index.js";
 import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
-import { TurnClock } from "../tools/turn-clock.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
 import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
@@ -89,12 +89,13 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 }
 
 /**
- * 一个子代理记录：宿主组件镜像（轮记录随分支进来，投影按它分轮）、这个子代理自己的轮次时钟、热会话时的事件订阅，
+ * 一个子代理记录：宿主组件镜像（轮记录随分支进来，投影按它分轮）、这个子代理自己的“进行中”事实、热会话时的事件订阅，
  * 以及视图在它上面的状态（逐轮展开、全部展开档位、滚动与点击锚定），切走切回原样。
  */
 class WorkerRecord {
 	readonly mirror: ChatMirror;
-	readonly clock = new TurnClock();
+	/** 这个子代理此刻在不在跑：投影的“进行中”事实，只来自它自己的会话事件。 */
+	busy: BusyView = IDLE;
 	readonly overrides = new Set<object>();
 	expanded = false;
 	/** 正文的第一行；undefined 表示跟随末尾。 */
@@ -152,7 +153,7 @@ class WorkerRecord {
 	}
 
 	private sync(running: boolean): void {
-		this.clock.sync({ agentRunning: running, inFlight: 0, busy: running, review: undefined, ...(running ? { since: Date.now() } : {}) });
+		this.busy = running ? { ...IDLE, agentRunning: true, busy: true, since: Date.now() } : IDLE;
 	}
 }
 
@@ -304,7 +305,7 @@ export class WorkerView implements Component, Focusable {
 	private env(record: WorkerRecord): ProjectionEnv {
 		return {
 			ui: { theme: this.theme, getToolsExpanded: () => record.expanded },
-			clock: record.clock, headless: this.headless,
+			busy: () => record.busy, headless: this.headless,
 			toggleRow: (row) => {
 				row.setExpanded(!(row as unknown as { expanded: boolean }).expanded);
 				this.tui.requestRender();

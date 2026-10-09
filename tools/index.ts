@@ -14,7 +14,7 @@ import {
 	type ExtensionAPI,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { watchBusy } from "../busy.js";
+import { busyView } from "../busy.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
 import { toolTarget } from "./actions.js";
@@ -23,7 +23,6 @@ import { msg } from "./messages.js";
 import { ROUND_ENTRY } from "../round.js";
 import { renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
-import { TurnClock } from "./turn-clock.js";
 
 function createTools(cwd: string) {
 	return { read: createReadTool(cwd), bash: createBashTool(cwd), edit: createEditTool(cwd), write: createWriteTool(cwd) };
@@ -92,16 +91,13 @@ function buildDefinitions() {
 
 export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
-	// 时钟只投影 busy.ts 的唯一状态机；拆会话会重载扩展，不跨会话复用。
-	const clock = new TurnClock();
 	// 轮记录由根级轮记录器写（每个会话都有）；这里只把它渲染成零行标记，供摘要行读。
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
-	watchBusy(pi, { onChange: (view) => clock.sync(view) });
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
 		clearDurations();
-		dispose = installGroupPatch(ctx.ui, { clock });
+		dispose = installGroupPatch(ctx.ui, { busy: () => busyView(pi) });
 		ctx.ui.setToolsExpanded(false);
 	});
 	pi.on("session_shutdown", () => {

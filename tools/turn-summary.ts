@@ -10,7 +10,9 @@ import { clip } from "../format.js";
 import { CHAT_GUTTER } from "./line.js";
 import { msg } from "./messages.js";
 import { OUTCOME_TEXT, type Round, roundTexts } from "../round.js";
-import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
+
+/** 子代理结果到达后摘要行高亮多久。 */
+export const ARRIVAL_FLASH_MS = 2500;
 
 export interface SummaryView {
 	/** 折入段内的首条宿主提示原文（缓存、丢思考、压缩计费）。 */

@@ -6,7 +6,7 @@
 | `host.ts` | 宿主适配的唯一处：私有字段读取（逐点校验形状）、原型补丁、聊天容器定位与 TUI 句柄获取；形状不符抛 `HostShapeError`；另含 `ChatMirror`，供不在主聊天里的投影（子代理全过程视图）造同一套组件，`detachedTui` 给这类投影的工具行一个独立 TUI 句柄，主会话分组补丁不把它们当自己的行 |
 | `grouping.ts` | 安装渲染/鼠标投影，分离全局展示与单工具正文；发现聊天容器时自检形状，不符就不安装并提示，渲染中途不符整体退回原生 |
 | `group-view.ts` | 从原组件顺序派生轮、过程组与折叠/展开投影（轮界、摘要行、中间回复规则见其注释） |
-| `turn-summary.ts` `turn-clock.ts` | 摘要行渲染；时钟只把 `busy.ts` 的会话进行中事实投影到各轮，不记时长 |
+| `turn-summary.ts` | 摘要行渲染；会话进行中的事实由投影环境的 `busy()` 拉取（主会话取 `busy.ts` 的 `busyView`，子代理视图取自己的会话事件），不记时长 |
 | `round.ts` | 轮记录的宿主适配：把 entry 渲染成零行标记组件，投影按能力识别；记录的格式、测量、读取与一轮多条的合成规则（`combineRounds`）在根 `round.ts`，摘要行与输入框外壳都经它读，resume 后仍有数 |
 | `machine.ts` | 信封机器消息的一行投影，卡片与展开态共用；分节标记与耗时行词汇读根 `messages.ts` 的 `envelope`，与生产端（`master/event-format.ts`）同源；审查卡的字段名读 `review/messages.ts` 的 `terms`，两种语言都认 |
 | `assistant-view.ts` | 思考/正文投影，封装宿主助手组件的内部结构，不重建 Markdown |

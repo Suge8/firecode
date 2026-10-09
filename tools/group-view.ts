@@ -21,8 +21,8 @@ import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { msg } from "./messages.js";
 import { combineRounds, type Round } from "../round.js";
 import { roundOf } from "./round.js";
-import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
-import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
+import type { BusyView } from "../busy.js";
+import { ARRIVAL_FLASH_MS, Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
 function actionLine(component: Component | undefined): ActionLine | undefined {
 	return component && "actionWord" in component && typeof component.actionWord === "string"
@@ -118,7 +118,7 @@ function scan(segment: readonly Component[], activity: AssistantActivity | undef
 		const entries = machineEntriesOf(item);
 		for (const entry of entries ?? []) if (entry.failed && entry.worker) failed.add(entry.worker);
 		const settled = entries?.findLast((entry) => entry.duration);
-		const age = settled ? env.clock.arrivalAge(item) : Infinity;
+		const age = settled ? arrivalAge(item, env) : Infinity;
 		if (settled && age < ARRIVAL_FLASH_MS) arrival = { text: settled.title, failed: settled.alarm, age };
 		if (item instanceof ToolExecutionComponent && toolFacts(item).isPartial) running.push(toolFacts(item));
 	}
@@ -138,7 +138,16 @@ function actionOf(tool: ToolFacts | undefined, activity: AssistantActivity | und
 			: { word: tool.toolDefinition?.label ?? tool.toolName, target: toolTargetText(tool.toolName, tool.args, tool.cwd) };
 	}
 	if (activity) return { word: msg.activity[activity] };
-	return env.clock.agentRunning ? { word: msg.activity.thinking } : undefined;
+	return env.busy().agentRunning ? { word: msg.activity.thinking } : undefined;
+}
+
+/** 机器消息首次出现的时刻：只有运行中出现的才算“新到达”，恢复的历史永远是旧的。 */
+const FIRST_SEEN = new WeakMap<object, number>();
+
+/** 机器消息距首次出现多久。 */
+function arrivalAge(item: object, env: ProjectionEnv): number {
+	if (!FIRST_SEEN.has(item)) FIRST_SEEN.set(item, env.busy().busy ? Date.now() : -Infinity);
+	return Date.now() - FIRST_SEEN.get(item)!;
 }
 
 /** 机器消息：展开态一行 ↳，点击切换完整正文（信封用户消息）或原生卡片（CustomMessage）。 */
@@ -232,7 +241,8 @@ type ProjectionUI = Pick<ExtensionUIContext, "theme" | "getToolsExpanded">;
 
 export interface ProjectionEnv {
 	ui: ProjectionUI;
-	clock: TurnClock;
+	/** 会话进行中的快照（拉取）：哪一轮开着、指挥官回合是否在跑、机器消息是否刚到。落定后的耗时与终态来自聊天树里的轮记录。 */
+	busy: () => BusyView;
 	toggleRow: (row: ToolRow) => void;
 	/** 相对全局档位被点击翻转过的键：该轮的人类用户消息，或被点开的机器消息本身；全局档位变化时清空。 */
 	isOpen: (key: object) => boolean;
@@ -280,10 +290,9 @@ export function projectProcessGroups(source: readonly Component[], env: Projecti
 	let animating = false;
 	let turn = env.headless;
 	let segment: Component[] = [];
-	env.clock.track([...openers].at(-1) ?? env.headless);
 	const flush = (final: boolean) => {
 		// 进行中的轮在第一个助手组件到来之前也有摘要行（思考中）。
-		if (!segment.length && !(final && env.clock.live(turn))) return;
+		if (!segment.length && !(final && env.busy().busy)) return;
 		const view = renderSegment(segment, turn, final, isProcess, env);
 		nodes.push(...view.nodes);
 		animating ||= view.animating;
@@ -335,7 +344,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	// 逐轮点击只是相对全局档位的覆盖：全局折叠时点开，全局展开时折起。
 	const open = globalOpen !== env.isOpen(turn);
 	const facts = scan(segment, reply?.activity, env);
-	const live = final && env.clock.live(turn);
+	const live = final && env.busy().busy;
 	// 进行中的轮一律有摘要行：纯文字轮从开始到歇下都占着这一行，回复不跳。
 	const hasSummary = live || segment.some(hasSubstance);
 	const round = live ? undefined : facts.round;

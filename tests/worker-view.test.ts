@@ -62,9 +62,9 @@ async function open(options: {
 	workers: Worker[]; sessions: Record<string, ReturnType<typeof hotSession>>; name?: string;
 	send?: (name: string, prompt: string) => Promise<void>; facts?: Facts; drafts?: Map<string, string>; rows?: number;
 }) {
-	const [host, tui, view, grouping, clockModule] = await Promise.all([
+	const [host, tui, view, grouping] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
-		loadFirecodeModule("master/worker-view.ts"), loadFirecodeModule("tools/grouping.ts"), loadFirecodeModule("tools/turn-clock.ts"),
+		loadFirecodeModule("master/worker-view.ts"), loadFirecodeModule("tools/grouping.ts"),
 	]) as any[];
 	host.initTheme("dark");
 	Text = tui.Text;
@@ -81,7 +81,7 @@ async function open(options: {
 	disposeGroups = grouping.installGroupPatch({
 		theme, getToolsExpanded: () => false, setToolsExpanded() {}, notify(message: string) { throw new Error(message); },
 		setWidget(_key: string, factory?: (tui: unknown) => unknown) { factory?.(reference); },
-	}, { clock: new clockModule.TurnClock() });
+	}, { busy: () => ({ agentRunning: false, inFlight: 0, review: undefined, busy: false }) });
 	const sessionListeners = new Set<(name: string) => void>();
 	const removedListeners = new Set<(name: string) => void>();
 	const sent: [string, string][] = [];
