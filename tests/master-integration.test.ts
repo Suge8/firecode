@@ -1542,25 +1542,25 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
 	await mkdir(cwd);
-	const module = await loadFirecodeModule("master/index.js", {
+	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
-			features: { master: true, review: false },
+			features: await featuresOnly("master"),
 			review: TEST_REVIEW_CONFIG,
 			master: { roles: TEST_ROLES },
 		}),
-	}) as any;
-	const register = (worker = false) => {
-		const { pi, handlers, commands, tools } = fakePi();
-		module.registerMaster(pi, {}, worker);
-		return { handlers, commands, tools };
+	}) as { registerFirecode(pi: unknown, role: string): void };
+	const register = (role: string) => {
+		const fake = fakePi();
+		registerFirecode(fake.pi, role);
+		return fake;
 	};
 
-	const workerRegistration = register(true);
+	const workerRegistration = register("worker");
 	const ctx = { cwd };
-	expect(workerRegistration.commands.size).toBe(0);
-	expect(workerRegistration.tools.size).toBe(0);
-	expect(workerRegistration.handlers.has("session_start")).toBe(false);
-	const workerGuard = workerRegistration.handlers.get("tool_call")?.[0];
+	expect(workerRegistration.commands.has("fire-master")).toBe(false);
+	expect(workerRegistration.tools.has("subagents")).toBe(false);
+	// 守卫之外的 tool_call 处理器（截断写入拦截）对这些输入不出声，fire 取到的就是守卫的裁决。
+	const workerGuard = (event: unknown, context: unknown) => workerRegistration.fire("tool_call", event, context);
 	const outside = join(homedir(), "firecode-guard-probe", "outside.ts");
 	expect(await workerGuard({ toolName: "write", input: { path: outside } }, ctx)).toEqual({
 		block: true,
@@ -1571,10 +1571,9 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 	expect(await workerGuard({ toolName: "write", input: { path: join(tmpdir(), "fc-report", "notes.md") } }, ctx)).toBeUndefined();
 	expect(await workerGuard({ toolName: "write", input: { path: "/tmp/fc-report/notes.md" } }, ctx)).toBeUndefined();
 
-	const masterRegistration = register();
+	const masterRegistration = register("main");
 	expect(masterRegistration.commands.has("fire-master")).toBe(true);
 	expect(masterRegistration.tools.has("subagents")).toBe(true);
-	expect(masterRegistration.handlers.get("tool_call")).toBeUndefined();
 });
 
 async function setup(activate = true, options: {
