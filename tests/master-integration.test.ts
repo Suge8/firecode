@@ -1864,14 +1864,7 @@ async function setup(activate = true, options: {
 		modelRuntime,
 		commandTool: tools.get("subagents"),
 		listTool: tools.get("subagents_list"),
-		systemPrompt: async (initial: string) => {
-			let event = { systemPrompt: initial };
-			for (const handler of fake.handlers.get("before_agent_start") ?? []) {
-				const result = await handler(event, ctx);
-				if (result?.systemPrompt) event = { systemPrompt: result.systemPrompt };
-			}
-			return event.systemPrompt;
-		},
+		systemPrompt: (initial: string) => fake.systemPrompt(initial, ctx),
 		renderResult: (result: any, expanded: boolean) => tools.get("subagents_list").renderResult(
 			result,
 			{ expanded },

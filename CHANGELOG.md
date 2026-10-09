@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Master's prompt and preset instructions are added as system prompt sections instead of replacing the whole system prompt. When SYSTEM.md, skills, AGENTS.md or tools change mid-session, Pi now appends an update instead of rewriting the cached conversation, so the prompt cache and earlier thinking are kept.
+
 ## [1.0.4] - 2026-10-09
 
 ### Changed
