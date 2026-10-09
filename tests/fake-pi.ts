@@ -60,7 +60,6 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 	return {
 		pi,
 		handlers,
-		channels,
 		commands,
 		tools,
 		shortcuts,

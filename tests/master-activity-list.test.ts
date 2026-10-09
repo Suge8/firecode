@@ -277,8 +277,6 @@ test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两
 	expect(narrow).toMatch(/^ {2}\S slow\s+5(?: 分钟|m )无输出\s*$/u);
 });
 
-/** 胶囊：计数两侧各一格空白，铺工具行同族的中性暗底。 */
-const CHIP = (text: string) => `{toolPendingBg}${text}{/toolPendingBg}`;
 const chipOf = (line: string) => line.match(/\{toolPendingBg\}(.*?)\{\/toolPendingBg\}/u)?.[1].replace(/<\/?\w+>/gu, "");
 
 test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧各一格空白），后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有下划线、… 与箭头", async () => {

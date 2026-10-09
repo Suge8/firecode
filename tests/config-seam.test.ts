@@ -212,7 +212,7 @@ async function seedHarness(options: { configJsonc: string | null; role?: string;
 }
 
 test("扩展加载时配置缺失：主会话写入随包模板，本次会话即按新配置生效，提示只出现一次", async () => {
-	const { CONFIG_PATH, fake, notices, sessionStart } = await seedHarness({ configJsonc: null });
+	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
 	await sessionStart();
