@@ -338,7 +338,7 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	// 进行中的轮一律有摘要行：纯文字轮从开始到歇下都占着这一行，回复不跳。
 	const hasSummary = live || segment.some(hasSubstance);
 	const round = live ? undefined : facts.round;
-	const sinceEnd = round && env.clock.now() - round.at;
+	const sinceEnd = round && Date.now() - round.at;
 	const nodes: Component[] = [];
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({

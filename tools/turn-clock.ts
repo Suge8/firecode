@@ -12,8 +12,6 @@ export class TurnClock {
 	private lastKey?: object;
 	private readonly arrivals = new WeakMap<object, number>();
 
-	constructor(readonly now: () => number = Date.now) {}
-
 	sync(view: BusyView): void {
 		this.busy = view;
 	}
@@ -35,7 +33,7 @@ export class TurnClock {
 
 	/** 机器消息距首次出现多久；只有运行中出现的才算“新到达”，恢复的历史永远是旧的。 */
 	arrivalAge(item: object): number {
-		if (!this.arrivals.has(item)) this.arrivals.set(item, this.busy.busy ? this.now() : -Infinity);
-		return this.now() - this.arrivals.get(item)!;
+		if (!this.arrivals.has(item)) this.arrivals.set(item, this.busy.busy ? Date.now() : -Infinity);
+		return Date.now() - this.arrivals.get(item)!;
 	}
 }
