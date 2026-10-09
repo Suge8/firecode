@@ -10,7 +10,7 @@ import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from 
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import { openWorkerView } from "./worker-view.js";
-import type { InProcessSessionPool } from "./spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { subagentInfos, type SubagentInfo } from "./roster.js";
 import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
 

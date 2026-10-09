@@ -1,4 +1,4 @@
-/** 根目录模块的文案：配置问题、启动提示、写入拦截、轮记录的终态字样，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
+/** 根目录模块的文案：配置问题、启动提示、子会话入口的报错、写入拦截、轮记录的终态字样，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
 import { defineMessages } from "./i18n.js";
 
 export const msg = defineMessages({
@@ -39,6 +39,12 @@ export const msg = defineMessages({
 			problems: (problems: string[]) => `FireCode 配置有问题：${problems.join("；")}`,
 			seeded: (path: string) => `已生成配置：${path}，按需修改模型后重启生效`,
 			seedFailed: (path: string, reason: string) => `无法生成配置：${path}（${reason}）`,
+		},
+		spawn: {
+			modelNotFound: (id: string) => `找不到模型：${id}；子会话只能使用内置 provider 或 models.json 里的模型`,
+			held: (path: string) => `sessionPath 已有进程内会话持有：${path}`,
+			missingFile: (path: string) => `无法恢复子代理：会话文件不存在：${path}`,
+			extensionErrors: (errors: string) => `子会话扩展加载失败：${errors}`,
 		},
 		truncatedWrite: "写入内容带 read 截断提示，说明拿的是截断后的半截文件：改文件用 edit，或分段读完整再写",
 		outcome: { aborted: "已中断", error: "请求失败" },
@@ -92,6 +98,12 @@ export const msg = defineMessages({
 			problems: (problems: string[]) => `FireCode config has problems: ${problems.join("; ")}`,
 			seeded: (path: string) => `Config generated: ${path}. Adjust the models as needed, then restart for it to take effect`,
 			seedFailed: (path: string, reason: string) => `Could not generate config: ${path} (${reason})`,
+		},
+		spawn: {
+			modelNotFound: (id: string) => `Model not found: ${id}; sub-sessions can only use built-in providers or models in models.json`,
+			held: (path: string) => `sessionPath is already held by an in-process session: ${path}`,
+			missingFile: (path: string) => `Cannot resume the Worker: session file does not exist: ${path}`,
+			extensionErrors: (errors: string) => `Failed to load extensions in the sub-session: ${errors}`,
 		},
 		truncatedWrite: "The content to write carries a read truncation notice, so it is a truncated half of the file: change the file with edit, or read it completely in chunks before writing",
 		outcome: { aborted: "Interrupted", error: "Request failed" },

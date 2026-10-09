@@ -9,7 +9,7 @@ import {
 import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
-import { InProcessSessionPool } from "../master/spawn.js";
+import { InProcessSessionPool } from "../spawn.js";
 import {
 	adviceMessage,
 	registerWatcherCardRenderer,

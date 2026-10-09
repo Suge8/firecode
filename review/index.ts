@@ -19,7 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type ModelAtom, type ReviewConfig } from "../config.js";
 import { readPrompt } from "../i18n.js";
-import { InProcessSessionPool } from "../master/spawn.js";
+import { InProcessSessionPool } from "../spawn.js";
 import { buildCard, CARD_TYPE, registerCardRenderer } from "./card.js";
 import {
 	beginCheckpoint,

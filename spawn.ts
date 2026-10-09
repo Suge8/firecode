@@ -12,9 +12,9 @@ import {
 	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevelValue } from "./config.js";
 import { msg } from "./messages.js";
 import { withSubsessionRole, type SubsessionRole } from "./role.js";
-import type { WorkerThinking } from "./state.js";
 
 const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
 /** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
@@ -28,7 +28,7 @@ interface SpawnSessionOptions {
 	cwd: string;
 	model: Model<any>;
 	role: SubsessionRole;
-	thinking: WorkerThinking;
+	thinking: ThinkingLevelValue;
 	tools: string[];
 	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
 	customTools?: ToolDefinition[];
@@ -209,12 +209,6 @@ export class InProcessSessionPool {
 		if (held.timer) clearTimeout(held.timer);
 		held.timer = undefined;
 	}
-}
-
-export function preallocateWorkerSession(mainSessionPath: string, cwd: string): string {
-	const sessionPath = SessionManager.create(cwd, `${dirname(mainSessionPath)}/subagents`).getSessionFile();
-	if (!sessionPath) throw new Error(msg.spawn.noSessionPath);
-	return sessionPath;
 }
 
 function makeSessionManager(persistence: SessionPersistence, cwd: string): SessionManager {

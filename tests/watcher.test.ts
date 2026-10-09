@@ -458,7 +458,7 @@ async function setup(options: {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const spawnModule = await loadFirecodeModule("master/spawn.js") as any;
+	const spawnModule = await loadFirecodeModule("spawn.js") as any;
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(agentDir, "auth.json"),
 		modelsPath: join(agentDir, "models.json"),

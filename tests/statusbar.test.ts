@@ -1,6 +1,5 @@
 import { expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { contextColor } from "../theme.js";
 import { fakePi } from "./fake-pi.ts";
 import { PI_TUI_URL, loadFirecodeModule } from "./loader.ts";
 
@@ -24,7 +23,9 @@ async function recordRounds(pi: any, branch: unknown[]) {
 interface MountOptions {
 	moduleOptions?: Parameters<typeof loadFirecodeModule>[1];
 	model?: { id: string; reasoning: boolean; contextWindow: number };
-	percent?: number;
+	percent?: number | null;
+	/** footer 主题：默认不着色；着色用例换成会标出颜色名的替身。 */
+	theme?: { fg: (color: string, text: string) => string };
 	name?: () => string | undefined;
 	branch?: () => unknown[];
 	statuses?: Map<string, string>;
@@ -39,12 +40,12 @@ async function mount(options: MountOptions = {}) {
 	const statuses = options.statuses ?? new Map<string, string>();
 	let footer: any;
 	let editor: any;
-	const theme = { fg: (_color: string, text: string) => text };
+	const theme = options.theme ?? { fg: (_color: string, text: string) => text };
 	const model = options.model ?? { id: "test-model", reasoning: false, contextWindow: 200_000 };
 	const ctx = {
 		isIdle: () => true,
 		model,
-		getContextUsage: () => ({ percent: options.percent ?? 1, contextWindow: model.contextWindow }),
+		getContextUsage: () => ({ percent: options.percent === undefined ? 1 : options.percent, contextWindow: model.contextWindow }),
 		sessionManager: { getSessionName: options.name ?? (() => undefined), getBranch: options.branch ?? (() => []) },
 		ui: {
 			setWorkingVisible() {},
@@ -158,12 +159,17 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
 });
 
-test("上下文低占用保持灰色，仅接近既有阈值时警告", () => {
-	expect(contextColor(0)).toBe("dim");
-	expect(contextColor(49.9)).toBe("dim");
-	expect(contextColor(50)).toBe("warning");
-	expect(contextColor(75)).toBe("error");
-	expect(contextColor(undefined)).toBe("muted");
+test("上下文低占用保持灰色，仅接近既有阈值时警告", async () => {
+	const colorOf = async (percent: number | null) => {
+		const host = await mount({ percent, theme: { fg: (color, text) => `<${color}>${text}` } });
+		host.start();
+		return /<(\w+)>(?:[\d.]+%|\?)/u.exec(host.bottom(120))?.[1];
+	};
+	expect(await colorOf(0)).toBe("dim");
+	expect(await colorOf(49.9)).toBe("dim");
+	expect(await colorOf(50)).toBe("warning");
+	expect(await colorOf(75)).toBe("error");
+	expect(await colorOf(null)).toBe("muted");
 });
 
 test("输入框边框按宽度退让：下边框先省容量、再让预设名、再裁标题、最后裁模型，Fast 与百分比保留", async () => {

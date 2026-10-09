@@ -10,12 +10,12 @@ import {
 	type KeybindingsManager,
 	type MessageStartEvent,
 	type Theme,
+	type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, type ReviewProgress, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
-import { contextColor, thinkingColor } from "../theme.js";
 import { type BranchEntry, latestTurnRecord, OUTCOME_TEXT, roundTexts, type TurnRecord, watchRoundRecorded } from "../round.js";
 import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
@@ -44,6 +44,20 @@ function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["messa
 	}
 	return (incoming && userTitle(incoming)) || msg.newSession;
 }
+
+/** 上下文占用的分级色：低占用保持灰色，接近既有阈值才警告。 */
+const contextColor = (percent: number | null | undefined): ThemeColor =>
+	percent == null ? "muted" : percent >= 75 ? "error" : percent >= 50 ? "warning" : "dim";
+
+const THINKING_COLORS: Record<string, ThemeColor> = {
+	off: "thinkingOff",
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
+};
 
 const FAST_STATUS = "pi-openai-native-fast";
 /** session/presets.ts 发布的生效预设名（已着色）。 */
@@ -134,7 +148,7 @@ class Shell {
 			title: fg("muted", this.title),
 			preset: this.statuses().get(PRESET_STATUS) ?? "",
 			model: fg("text", formatModelName(model?.id)),
-			think: model?.reasoning ? fg(thinkingColor(thinking as never), `/${thinking}`) : "",
+			think: model?.reasoning ? fg(THINKING_COLORS[thinking], `/${thinking}`) : "",
 			fast: this.statuses().has(FAST_STATUS) ? fg("warning", "Fast") : "",
 			percent: fg(contextColor(percent), percent == null ? "?" : `${percent.toFixed(1)}%`),
 			capacity: fg("dim", `/${formatTokens(window)}`),

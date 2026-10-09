@@ -598,7 +598,7 @@ test("非显式中断的 aborted 终态落定明确原因", async () => {
 
 test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失文件明确失败", async () => {
 	const harness = await setup();
-	const module = await loadFirecodeModule("master/spawn.js") as any;
+	const module = await loadFirecodeModule("spawn.js") as any;
 	const sessionPath = join(directory!, "sessions", "subagents", "worker.jsonl");
 	await mkdir(dirname(sessionPath), { recursive: true });
 	const options = {
@@ -1641,7 +1641,7 @@ async function setup(activate = true, options: {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = registerFauxProvider();
 	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
-	const spawnModule = await loadFirecodeModule("master/spawn.js");
+	const spawnModule = await loadFirecodeModule("spawn.js");
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(agentDir, "auth.json"),
 		modelsPath: join(agentDir, "models.json"),
