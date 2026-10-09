@@ -68,7 +68,7 @@ test("审查者按 en 提示词写的输出契约被解析；校验报错、证�
 
 	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;
 	const entry = (role: string, content: string) => ({ type: "message", message: { role, content } });
-	const { text } = buildEvidence([entry("user", "write"), entry("assistant", "x".repeat(5_000))], { sessionFile: "/tmp/s/main.jsonl" });
+	const text = buildEvidence([entry("user", "write"), entry("assistant", "x".repeat(5_000))], { sessionFile: "/tmp/s/main.jsonl" });
 	expect(text).toContain("## User");
 	expect(text).toContain("evidence truncated: this message has 5000 characters");
 	expect(text).toContain("/tmp/s/main.jsonl");

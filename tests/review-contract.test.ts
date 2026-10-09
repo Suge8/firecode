@@ -175,7 +175,7 @@ describe("evidence assembly", () => {
 	test("超长消息的截断处写明是证据截断、原文多少字、完整原文在哪个会话文件，不留裸“[…]”让审查者误判回复不完整", async () => {
 		await loadAll();
 		const essay = "冬".repeat(5_000);
-		const { text } = buildEvidence([user("写一篇散文"), assistant(essay)], { sessionFile: "/tmp/s/main.jsonl" });
+		const text = buildEvidence([user("写一篇散文"), assistant(essay)], { sessionFile: "/tmp/s/main.jsonl" });
 		expect(text).not.toContain("[…]");
 		expect(text).toContain("证据截断");
 		expect(text).toContain("5000 字");
@@ -185,7 +185,7 @@ describe("evidence assembly", () => {
 	test("超长命令的轨迹行截断同样写明原文长度与会话文件路径", async () => {
 		await loadAll();
 		const command = `echo ${"x".repeat(400)}`;
-		const { text } = buildEvidence([user("需求"), {
+		const text = buildEvidence([user("需求"), {
 			type: "message",
 			message: { role: "assistant", content: [{ type: "toolCall", id: "1", name: "bash", arguments: { command } }] },
 		}], { sessionFile: "/tmp/s/main.jsonl" });
@@ -216,7 +216,7 @@ describe("evidence assembly", () => {
 				},
 			},
 		];
-		const { text } = buildEvidence(entries);
+		const text = buildEvidence(entries);
 		expect(text).toContain("改卡片");
 		expect(text).toContain("[edit] review/card.ts");
 		expect(text).toContain("[bash] bun test tests");
@@ -240,7 +240,7 @@ describe("evidence assembly", () => {
 			{ type: "message", message: { role: "toolResult", toolCallId: "ok", isError: false, content: "done" } },
 			{ type: "message", message: { role: "toolResult", toolCallId: "bad", isError: true, content: "oldText not found" } },
 		];
-		const { text } = buildEvidence(entries);
+		const text = buildEvidence(entries);
 		expect(text).toContain("[edit] a/bad.ts（失败）");
 		expect(text).toContain("[edit] a/ok.ts");
 		expect(text).not.toContain("a/ok.ts（失败）");
@@ -249,7 +249,7 @@ describe("evidence assembly", () => {
 	test("toolResult entries are skipped entirely", async () => {
 		await loadAll();
 		const entries = [user("需求"), assistant("改完"), toolResult()];
-		const { text } = buildEvidence(entries);
+		const text = buildEvidence(entries);
 		expect(text).not.toContain("big output");
 	});
 
@@ -263,7 +263,7 @@ describe("evidence assembly", () => {
 			...Array.from({ length: 30 }, (_, index) => assistant(`中间 ${index}`)),
 			assistant("最新改动"),
 		];
-		const { text } = buildEvidence(entries, { budgetTokens: 60 });
+		const text = buildEvidence(entries, { budgetTokens: 60 });
 		expect(text).toContain("原始需求锚点");
 		expect(text).toContain("最新改动");
 		expect(text).toContain("省略");

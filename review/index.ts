@@ -569,7 +569,7 @@ async function startReviewers(rt: ReviewRuntime, active: Controller, signal: Abo
 	const prompt = buildReviewPrompt(readPrompt(PROMPTS, "review"), {
 		scope: msg.command.scope,
 		focus: state.focus,
-		evidence: evidence.text,
+		evidence,
 		history: state.history,
 		round: state.round,
 	});
