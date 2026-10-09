@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
@@ -114,11 +117,18 @@ test("session：en 下 /quota 与 /tokens 输出英文，herdr 标签与预设�
 	registerStats(stats.pi);
 	const printed: string[] = [];
 	const log = console.log;
+	// 会话目录指向空临时目录：否则会扫开发者本机真实的全部会话。
+	const agentDir = mkdtempSync(join(tmpdir(), "firecode-i18n-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	console.log = (line: string) => void printed.push(line);
 	try {
 		await stats.commands.get("tokens").handler("7", { mode: "print", hasUI: false });
 	} finally {
 		console.log = log;
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 	expect(printed.join("\n")).toContain("# Token usage");
 	expect(printed.join("\n")).not.toMatch(CJK);
