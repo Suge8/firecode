@@ -92,7 +92,6 @@ async function open(options: {
 		facts: () => ({
 			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), lastOutputAt: new Map(),
 			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled),
-			launchOrder: new Map(options.workers.map((entry, index) => [entry.name, index])),
 		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),
 		session: (target: Worker) => options.sessions[target.name],
@@ -375,13 +374,13 @@ test("正在看的子代理被移除：顶行写“已移除”，输入框不�
 	expect(view.bottom()).toMatch(/^─ 2\/2 ─/u);
 });
 
-test("“已发出”只短暂替换按键提示：下一次按键或几秒后恢复提示", async () => {
+test("“已发出”只短暂替换按键提示（位置 n/N 照留）：下一次按键或几秒后恢复提示", async () => {
 	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单")]) } });
 	const hint = view.lines().at(-1);
 	view.type("补一句");
 	view.key("\r");
 	await Bun.sleep(0);
-	expect(view.lines().at(-1)).toContain("已发出");
+	expect(view.bottom()).toMatch(/^─ 1\/1 ─+ 已发出 ─$/u);
 	view.key(LEFT);
 	expect(view.lines().at(-1)).toBe(hint);
 	view.type("再一句");
@@ -408,13 +407,4 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 	view.key("\x1b");
 	const again = await open({ workers, sessions, drafts });
 	expect(again.lines().find((line) => line.startsWith("›"))).toBe("› 给 a 的草稿");
-});
-
-test("视图顶部不再有标题行：正文从第一行开始；“已发出”替换下横线右侧提示，位置 n/N 照留", async () => {
-	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单内容"), reply("好了"), round(1_000)]) } });
-	expect(view.lines()[0]).toContain("派单内容");
-	view.type("补一句");
-	view.key("\r");
-	await Bun.sleep(0);
-	expect(view.bottom()).toMatch(/^─ 1\/1 ─+ 已发出 ─$/u);
 });

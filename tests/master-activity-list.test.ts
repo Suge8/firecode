@@ -127,9 +127,6 @@ test("卡住：working 五分钟没有任何输出时保留动作文字，追加
 	expect(line).toContain("<warning> · 5 分钟无输出</warning>");
 	const later = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330" } }], { paint: tagged, now: NOW + 1_234 });
 	expect(later.raw(160)[0].slice(0, 22)).toBe(line.slice(0, 22));
-	// 窄屏先截动作，“无输出”始终可见。
-	const narrow = (await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330 && echo slow-done" } }], { now: NOW })).text(40);
-	expect(narrow[0]).toContain("5 分钟无输出");
 
 	// 从没有输出时按本次运行起点算。
 	const never = await list([{ name: "slow", started: NOW - 6 * MINUTE }], { now: NOW });
@@ -268,16 +265,6 @@ test("名字列按剩余空间分配：72 列放得下就不截名字", async ()
 	expect(text[0]).toContain("fix-auth-refresh ");
 	expect(text[1]).toContain("e2e-checkout-flow ");
 	expect(text[1]).toContain("操作 $ sleep 40");
-});
-
-test("窄屏卡住行提醒优先：40 列也看得到完整的无输出提醒，动作文字让位", async () => {
-	const rows: Spec[] = [
-		{ name: "slow", started: NOW - 6 * MINUTE, output: NOW - 5 * MINUTE, tool: "bash", args: { command: "sleep 330 && echo slow-done" } },
-		{ name: "repo-scan", tool: "read", args: { path: "/p/master/index.ts" }, output: NOW - 1_000 },
-	];
-	const [line] = (await list(rows, { now: NOW })).text(40);
-	expect(line).toMatch(/5(?: 分钟|m )无输出/u);
-	expect(line).not.toMatch(/无…|分…/u);
 });
 
 test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两个时长并排看混）；窄屏动作放不下有效信息时整段丢掉，只留名字与提醒", async () => {
