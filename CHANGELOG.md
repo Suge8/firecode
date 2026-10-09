@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-09
+
 ### Added
 
 - Other extensions in the same process can subscribe to the `firecode:subagents` event channel for the sub-agent roster: role, model, state, what each is doing in one line, and run start/settle times. It is the same projection as the activity list (see `master/AGENTS.md`).
@@ -120,7 +122,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Suge8/firecode/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Suge8/firecode/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/Suge8/firecode/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Suge8/firecode/compare/v1.0.2...v1.0.3
