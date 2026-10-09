@@ -36,6 +36,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		role: "worker",
 		model,
 		thinking: worker.thinking,
+		// evals/delegation/variant.ts 的 --workers-codemode 按这一行的原文做替换；改写这一行要同步改它的 WORKER_CODEMODE_FROM。
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
