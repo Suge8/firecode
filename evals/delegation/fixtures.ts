@@ -1,5 +1,5 @@
 // 按需生成被审计的仓库。真值（T9 植入缺陷、t7 缺陷清单）绑定在固定提交上，所以 fixture 不跟随当前 HEAD。
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitArchive, initGit, WORK } from "./lib.ts";
 import type { FixtureKind } from "./tasks.ts";
@@ -17,15 +17,15 @@ export function citedTruth<T extends { file: string; line: number }>(truth: T[],
 	return truth.filter((t) => cites.some((c) => (t.file.endsWith(c.file) || c.file.endsWith(t.file)) && c.lines.some((l) => Math.abs(l - t.line) <= LINE_SLACK)));
 }
 
-const E2E = `#!/bin/bash
-# 端到端套件：12 个场景串行，每个约 75 秒，全套约 15 分钟。
+/** 假的端到端套件：12 个场景串行，每个睡 secondsPerCase 秒；review-fail 与 compaction 两个失败。 */
+export const e2eScript = (secondsPerCase: number) => `#!/bin/bash
 cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet quota-query herdr-label compaction)
 failed=()
 for c in \${cases[@]}; do
 	echo "[e2e] $c ..."
-	sleep 75
+	sleep ${secondsPerCase}
 	case "$c" in
-		review-fail|compaction) echo "[e2e] $c FAIL"; failed+=("$c");;
+		review-fail|compaction) echo "[e2e] $c FAIL: expected settled got timeout"; failed+=("$c");;
 		*) echo "[e2e] $c PASS";;
 	esac
 done
@@ -72,7 +72,7 @@ function removeTests(dir: string): void {
 function buildBase(dest: string): void {
 	gitArchive(FIXTURE_REF, dest);
 	mkdirSync(join(dest, "scripts"), { recursive: true });
-	writeFileSync(join(dest, "scripts/e2e.sh"), E2E, { mode: 0o755 });
+	writeFileSync(join(dest, "scripts/e2e.sh"), e2eScript(75), { mode: 0o755 });
 }
 
 /** 去掉测试、无历史可查、植入缺陷；真值（含行号）写到 T9_TRUTH_FILE。 */
@@ -89,15 +89,18 @@ function buildT9(dest: string): void {
 	writeFileSync(T9_TRUTH_FILE, JSON.stringify(truth, null, 1));
 }
 
+/** 先建在临时目录再改名：目录存在就意味着建完了，同时起的两个脚本不会拿到建了一半的 fixture。 */
 export function fixtureDir(kind: FixtureKind): string {
 	const dest = join(FIXTURES, kind);
 	if (existsSync(dest)) return dest;
+	const building = `${dest}.building-${process.pid}`;
 	try {
-		(kind === "base" ? buildBase : buildT9)(dest);
-		initGit(dest);
+		(kind === "base" ? buildBase : buildT9)(building);
+		initGit(building);
+		renameSync(building, dest);
 	} catch (error) {
-		rmSync(dest, { recursive: true, force: true });
-		throw error;
+		rmSync(building, { recursive: true, force: true });
+		if (!existsSync(dest)) throw error;
 	}
 	return dest;
 }
