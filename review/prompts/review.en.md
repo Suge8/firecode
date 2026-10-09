@@ -21,8 +21,8 @@ Requirement anchor: the first user message is the original request; later user m
 
 Blocking candidates (High/Medium):
 - Logic defects: wrong assumptions, missed edge cases, missing error handling, races
-- Fake or insufficient tests: new logic uncovered, weak assertions, hardcoded bypass of real logic
-- Acceptance-test integrity: the implementation commit modified acceptance tests (assertions, cases, special-cased inputs); acceptance tests are implementation-coupled or tautological and verify the implementation rather than the requirement; the red run did not fail for "not yet implemented"
+- False or insufficient verification: the checks do not exercise the changed behavior, assertions are too weak, hard-coded values bypass the real logic
+- Verification integrity: an acceptance criterion has no result from a check run in this task, or the check never actually ran; unit or integration tests that merely restate the implementation were added; assertions, cases or special-cased inputs were changed to make a check pass
 - Engineering principles (Medium): a second source for the same fact, rule, or config; fallbacks, dead code, or stale notes kept for old paths; patching the symptom while the root cause stands; a new layer or abstraction that does not absorb existing duplication; new or touched tests that fail the better-test value gate
 - Key delivery claims you verified to be false
 - Regression risk: changes break existing behavior

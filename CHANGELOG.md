@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Master's final review and `/fire-review` no longer expect test-first acceptance tests. They check that every acceptance criterion has a result from a check run in the task, and flag unit or integration tests that only restate the implementation. This follows the implement skill, which now verifies by running checks instead of writing tests first.
+
 ## [1.0.3] - 2026-10-09
 
 ### Fixed
