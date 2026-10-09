@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // 跑到完成：pi --mode rpc 保持进程，发一条请求，等主会话与全部 Worker 都歇下（主会话出现 firecode-round）。
 //   bun run.ts <变体[,变体…]> [--tasks t3-research,t7-audit,t9-big] [--runs 3] [--concurrency 2]
-//                [--budget 30] [--exclude-tools codemode] [--force]
+//                [--budget 30] [--force]
 // 作业按“第几次 → 任务 → 变体”交错排队，变体之间尽量同批。serial 任务（t3/t7）走单独一条串行通道，
 // 与其它任务并行，所以总并发 = --concurrency + 1。--budget 是本次调用的美元上限：超过即杀掉所有在跑的并停止排队，
 // 已完成的结果保留，重跑会续上。
@@ -20,7 +20,7 @@ const { values, positionals } = parseArgs({
 	allowPositionals: true,
 	options: {
 		tasks: { type: "string", default: "t3-research,t7-audit,t9-big" }, runs: { type: "string", default: "3" }, concurrency: { type: "string", default: "2" },
-		budget: { type: "string" }, "exclude-tools": { type: "string" }, force: { type: "boolean" },
+		budget: { type: "string" }, force: { type: "boolean" },
 	},
 });
 const variants = parseList(positionals[0]);
@@ -45,8 +45,7 @@ async function runOne(task: Task, variant: string, run: number): Promise<void> {
 	const id = `${variant}/${task.id}-${run}`;
 	const dir = join(WORK, "runs", variant, `${task.id}-${run}`);
 	const { repo, tmp } = prepareRun(dir, fixtureDir(task.fixture));
-	const excluded = values["exclude-tools"] ? ["--exclude-tools", values["exclude-tools"]] : [];
-	const child = startPi(["--mode", "rpc", ...excluded, "--session-dir", join(dir, "sessions")], { variant, cwd: repo, tmp, stdin: "pipe" });
+	const child = startPi(["--mode", "rpc", "--session-dir", join(dir, "sessions")], { variant, cwd: repo, tmp, stdin: "pipe" });
 	child.stderr!.on("data", (chunk: Buffer) => appendFileSync(join(dir, "stderr.txt"), chunk));
 	let sessionFile = "";
 	const agentStarts: number[] = [];

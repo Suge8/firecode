@@ -7,7 +7,7 @@
 
 - 真实调用模型，**花真钱**；t3 要联网。需要 `bun`、`git`。
 - `pi`：默认用 PATH 里的；设了 `PI_PACKAGES_DIR`（与 `tests/loader.ts` 同一个变量，指向 pi-mono 的 `packages/`）就改跑那份源码的 `coding-agent/src/cli.ts`。
-- 你自己的 Agent 目录（`PI_CODING_AGENT_DIR`，没设则 `~/.pi/agent`）里要有认证、设置、模型表，以及 `extensions/firecode/config.jsonc`（Master 激活、角色表）。变体的临时 Agent 目录只把这些**符号链接**回去，不复制凭据；默认模型、codemode only 等设置沿用你的。
+- 你自己的 Agent 目录（`PI_CODING_AGENT_DIR`，没设则 `~/.pi/agent`）里要有认证、设置、模型表，以及 `extensions/firecode/config.jsonc`（Master 激活、角色表）。变体的临时 Agent 目录只把这些**符号链接**回去，不复制凭据；默认模型、codemode only 等设置沿用你的（`--model` 时 settings 与 config.jsonc 改为各存一份，见下）。`worker.ts` 的 impl 验收还要能定位 pi-mono 源码（同 `tests/loader.ts`）。
 - 被测代码取**已提交**的内容（`git archive`）；未提交的提示词改动用 `--prompt-file`。评测任务是中文，变体替换的是 `master.zh.md`：配置的 `language` 须为 `zh`（或系统语言为中文），否则变体加载的是未被替换的英文提示词。
 - 工作目录 `$EVAL_DIR`，默认 `<系统临时目录>/firecode-delegation-eval`：变体、fixture、全部运行记录都在这里，仓库里不留任何产物。
 
@@ -19,6 +19,7 @@
 bun $D/variant.ts A                                     # 变体 A：当前 HEAD 的代码与提示词
 bun $D/variant.ts B --prompt-ref 74d9c01                # 同一份代码，只换提示词（取某个提交里的 master.zh.md）
 bun $D/variant.ts C --prompt-file /path/to/master.md    # 或取文件；--cut '原文' 再删掉其中一段（须恰好出现一次）
+bun $D/variant.ts H --model anthropic/claude-haiku-5-5/low   # 主会话与全部角色、审查、观察员都换成这个原子（冒烟用，见下）
 
 bun $D/decide.ts A                                      # 首步决策（一次一个变体）：t1–t8 各 2 次，到决策即止
 bun $D/decide.ts A --tasks t4-longwait --runs 1         # 只跑某几条
@@ -31,7 +32,9 @@ bun $D/blind.ts                                         # 盲评导出，见下
 bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 ```
 
-`variant.ts --code-ref <提交>` 指定被测的 firecode 代码（默认 HEAD）；`--workers-codemode` 把 Worker 固定为启用 codemode（改的是变体副本里的 `master/run.ts`，配合 `run.ts --exclude-tools codemode` 测“指挥官不开 codemode”）。两个变体只差一处提示词时，用 `diff` 比较各自 `$EVAL_DIR/variants/<名>/firecode/master/prompts/master.zh.md` 确认。
+`variant.ts --code-ref <提交>` 指定被测的 firecode 代码（默认 HEAD）。`--model` 把变体的 settings（默认模型，并去掉 `enabledModels`：默认模型不在范围里时宿主会改用范围里的第一个）和 config.jsonc（角色表去 fallback、审查只留一个审查者、观察员）里的模型全部换成给定原子，其余沿用你的。两个变体只差一处提示词时，用 `diff` 比较各自 `$EVAL_DIR/variants/<名>/firecode/master/prompts/master.zh.md` 确认。
+
+**便宜地验证脚本能跑通**（不测质量）：用上面的 `--model` 变体跑 `decide.ts H --runs 1`、`run.ts H --tasks t3-research --runs 1 --budget 3`、`worker.ts <同一个原子> --runs 1`，再依次 `summary.ts`、`blind.ts`、`check.ts`。Haiku low 这一套约 $0.6。要走到“指挥官派 Worker”的路径，用 `--prompt-file` 在提示词末尾加一句“调研一律派调研员”。
 
 `run.ts` 其余参数：`--tasks`（默认 t3-research,t7-audit,t9-big，可加 t9-hand）、`--runs`（默认 3）、`--concurrency`（默认 2）、`--force`。已 settled 的结果会跳过，被预算打断的重跑会续上。`decide.ts` 参数：`--steps`（脚本数上限，超过判亲手，默认 5）、`--timeout`（秒，默认 300）。
 
