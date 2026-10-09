@@ -66,17 +66,17 @@ function hostInput(model: any, messages: unknown[], leadingInPayload: boolean): 
 	});
 }
 
-type Setup = { model: any; openai?: Record<string, unknown>; systemPrompt?: string; hasUI?: boolean };
+type Setup = { model: any; openai?: Record<string, unknown>; systemPrompt?: string; hasUI?: boolean; sm?: any };
 
 /** 在真实会话上装配扩展；返回会话、两个宿主钩子的调用入口与通知记录。 */
-function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "INSTRUCTIONS", hasUI = false }: Setup) {
+function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "INSTRUCTIONS", hasUI = false, sm = undefined }: Setup) {
 	const directory = mkdtempSync(join(tmpdir(), "firecode-openai-native-"));
 	directories.push(directory);
 	const configPath = join(directory, "config.jsonc");
 	writeFileSync(configPath, JSON.stringify({ openai }));
 	const fake = fakePi();
 	openAINativeExtension(fake.pi, configPath, "ctrl+shift+s");
-	const sm = SessionManager.inMemory(directory);
+	sm ??= SessionManager.inMemory(directory);
 	const notices: [string, string][] = [];
 	const ctx = (current = model) => ({
 		cwd: directory,
@@ -184,7 +184,7 @@ for (const { provider, id, folded } of MODELS) {
 	});
 
 	test(`${provider}/${id}: tools added mid-conversation ${folded ? "are folded into the prompt" : "cannot be replayed, so the request is left to the host"}`, async () => {
-		const h = harness({ model });
+		const h = harness({ model, hasUI: true });
 		const kept = oldHistory(h.sm, model);
 		stubFetch(compacted("enc"));
 		await h.compact(kept);
@@ -193,10 +193,38 @@ for (const { provider, id, folded } of MODELS) {
 		h.sm.appendMessage(user("use the new tool"));
 
 		const { result } = await h.request();
+		await h.request();
 
 		expect(result === undefined).toBe(!folded);
+		// 放弃重放时旧历史不在上下文里：提醒用户，且同一次压缩只提醒一次。
+		expect(h.notices).toEqual(folded ? [] : [["warning", expect.stringContaining("unsupported-tool-additions")]]);
 	});
 }
+
+test("a kept window holding another provider's messages still replays, ids notwithstanding", async () => {
+	const model = getModel("openai", "gpt-6.1-sol");
+	const h = harness({ model, hasUI: true });
+	h.sm.appendMessage(system({ content: "Base prompt" }));
+	const kept = h.sm.appendMessage(user("old question"));
+	h.sm.appendMessage(assistant({ provider: "xai", api: "openai-completions", id: "grok-4.6" }, [
+		{ type: "thinking", thinking: "Foreign reasoning summary.", thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_xai", summary: [], encrypted_content: "xai-encrypted" }) },
+		{ type: "text", text: "Reading the repository." },
+		{ type: "toolCall", id: "toolu_01.weird:id", name: "read", arguments: { path: "README.md" } },
+	], "toolUse"));
+	h.sm.appendMessage(toolResult("toolu_01.weird:id", "Repository contents."));
+	h.sm.appendMessage(assistant({ provider: "anthropic", api: "anthropic-messages", id: "claude" }, [{ type: "text", text: "Unsigned answer." }]));
+	const calls = stubFetch(compacted("enc"));
+	const result = await h.compact(kept);
+	newTurns(h.sm, model);
+
+	const { payload, messages, result: rewritten } = await h.request();
+
+	const keptLength = hostInput(model, messages.slice(0, messages.findIndex((message: any) => message.content?.[0]?.text === "new question")), true).length;
+	expect(calls).toHaveLength(1);
+	expect(h.notices).toEqual([]);
+	expect(rewritten.input).toEqual([payload.input[0], ...result.compaction.details.compactedWindow, ...payload.input.slice(keptLength)]);
+	expect(JSON.stringify(rewritten.input)).not.toContain("Unsigned answer.");
+});
 
 test("another provider's opaque reasoning never reaches the compaction request, its visible text does", async () => {
 	const model = getModel("openai", "gpt-5-mini");
@@ -272,32 +300,56 @@ test("lone surrogates never reach the compaction request", async () => {
 	expect(calls[0].raw).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/iu);
 });
 
-test("fails open: a non-native or foreign latest compaction, an unsupported provider and a disabled switch leave Pi alone", async () => {
+test("fails open: the request goes out as Pi built it, and the user is told whenever a native compaction's history is left out", async () => {
 	const model = getModel("openai", "gpt-5-mini");
 	const other = getModel("openai", "gpt-5.5");
 	const anthropic = getModels("anthropic")[0];
 	const calls = stubFetch(compacted("enc"));
 
-	const legacy = harness({ model });
+	const legacy = harness({ model, hasUI: true });
 	const legacyKept = oldHistory(legacy.sm, model);
 	legacy.sm.appendCompaction("Legacy Pi summary", legacyKept, 100);
 	legacy.sm.appendMessage(user("after legacy"));
 	expect(await legacy.compact(legacyKept)).toBeUndefined();
 	expect((await legacy.request()).result).toBeUndefined();
 
-	const native = harness({ model });
+	const native = harness({ model, hasUI: true });
 	const nativeKept = oldHistory(native.sm, model);
 	await native.compact(nativeKept);
 	expect(calls).toHaveLength(1);
 	native.sm.appendMessage(user("after native"));
 	expect((await native.request()).result).toBeDefined();
 	expect((await native.request([], other)).result).toBeUndefined();
+	expect(native.notices).toEqual([["warning", expect.stringContaining("latest-native-compaction-mismatch")]]);
+	expect((await native.request([], other)).result).toBeUndefined();
+	expect(native.notices).toHaveLength(1);
+
+	// 换到不支持原生压缩的供应商：旧历史同样不在上下文里，同样提醒；同一次压缩只提醒一次。
+	const switched = harness({ model, hasUI: true });
+	await switched.compact(oldHistory(switched.sm, model));
+	switched.sm.appendMessage(user("after switching"));
+	expect((await switched.request([], anthropic)).result).toBeUndefined();
+	expect((await switched.request([], anthropic)).result).toBeUndefined();
+	expect(switched.notices).toEqual([["warning", expect.stringContaining("unsupported-provider")]]);
+	expect(calls).toHaveLength(2);
+
+	// 压缩不是原生的：没有原生历史可丢，不提醒。
+	expect(legacy.notices).toEqual([]);
 	expect(await native.compact(nativeKept, { current: other })).toBeUndefined();
 	expect(await native.compact(nativeKept, { current: anthropic })).toBeUndefined();
 
-	const off = harness({ model, openai: { nativeCompaction: false } });
+	// 开关关着：不压缩、不改写，没有压缩过也不提醒；
+	const off = harness({ model, openai: { nativeCompaction: false }, hasUI: true });
 	expect(await off.compact(oldHistory(off.sm, model))).toBeUndefined();
-	expect(calls).toHaveLength(1);
+	expect(calls).toHaveLength(2);
+	expect((await off.request()).result).toBeUndefined();
+	expect(off.notices).toEqual([]);
+
+	// 但会话里已有原生压缩（之后才关的开关）时，旧历史不在上下文里，同样提醒一次。
+	const disabled = harness({ model, openai: { nativeCompaction: false }, hasUI: true, sm: native.sm });
+	expect((await disabled.request()).result).toBeUndefined();
+	expect((await disabled.request()).result).toBeUndefined();
+	expect(disabled.notices).toEqual([["warning", expect.stringContaining("nativeCompaction-disabled")]]);
 });
 
 test.each([

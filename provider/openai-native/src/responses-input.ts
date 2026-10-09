@@ -16,8 +16,8 @@ import type {
 } from "@earendil-works/pi-ai";
 /**
  * Pi 会话消息 → OpenAI Responses input。宿主的转换器（pi-ai 的 api/openai-responses-shared）不在扩展运行时的模块白名单里，只能自带一份；
- * tests/openai-native.test.ts 以宿主自己的转换结果为准逐项比对。与宿主不一致的写法（无签名的助手文本 id、外来工具调用 id 的归一化）
- * 会让重放比对失败而放弃重放，请求照宿主原样发出。
+ * tests/openai-native.test.ts 以宿主自己的转换结果为准逐项比对。条目划分或内容与宿主不一致（条目 id 不算）会让重放比对失败，
+ * 放弃重放并提醒用户：请求照宿主原样发出，压缩窗口里的旧历史不在上下文里。
  */
 type AssistantPhase = "commentary" | "final_answer";
 
