@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -9,13 +10,13 @@ import {
 	ModelRuntime,
 	SessionManager,
 	type AgentSession,
+	type ExtensionFactory,
 	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevelValue } from "./config.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
-import { withSubsessionRole, type SubsessionRole } from "./role.js";
 
 const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
 /** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
@@ -28,7 +29,6 @@ type SessionPersistence =
 interface SpawnSessionOptions {
 	cwd: string;
 	model: Model<any>;
-	role: SubsessionRole;
 	thinking: ThinkingLevelValue;
 	tools: string[];
 	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
@@ -37,7 +37,7 @@ interface SpawnSessionOptions {
 	systemPrompt: { mode: "append" | "replace"; text: string };
 	contextFiles: boolean;
 	persistence: SessionPersistence;
-	/** 审查会话关闭自动扩展、Skill 与模板，保持评判政策不受被审项目改写。 */
+	/** 审查会话关闭自动扩展（含 FireCode）、Skill 与模板，保持评判政策不受被审项目改写。 */
 	isolated?: boolean;
 }
 
@@ -58,8 +58,20 @@ interface HeldSession {
 
 // 单写者登记必须进程唯一，跨模块拷贝共享。
 const SESSION_WRITERS = processShared("session-writers", () => new Set<string>());
+// 子会话加载扩展期间的标记，跨模块拷贝共享：宿主从磁盘另读的那份 FireCode 读到它就不注册。
+const LOADING_SUBSESSION = processShared("loading-subsession", () => new AsyncLocalStorage<true>());
+
+/** 当前是否处在本池建子会话、加载扩展的过程中。 */
+export function loadingSubsession(): boolean {
+	return LOADING_SUBSESSION.getStore() === true;
+}
 
 interface PoolEnvironment {
+	/**
+	 * 注册进非隔离子会话的 FireCode：主会话已加载的这一份。宿主为子会话从磁盘另读的 FireCode 不注册，
+	 * 否则 FireCode 在会话中途更新后，主会话与子会话会跑两个版本，彼此的落盘约定（如审查 checkpoint 版本）对不上。
+	 */
+	firecode?: ExtensionFactory;
 	modelRuntime?: ModelRuntime;
 	idleTimeoutMs?: number;
 	/** 模型原子 id（provider/model）解析；默认用池内缓存的一份 ModelRuntime。 */
@@ -101,7 +113,7 @@ export class InProcessSessionPool {
 				cwd: options.cwd,
 				agentDir: getAgentDir(),
 				noContextFiles: !options.contextFiles,
-				extensionFactories: [BUILTIN_CODEMODE],
+				extensionFactories: this.extensionsFor(options),
 				noExtensions: options.isolated,
 				noSkills: options.isolated,
 				noPromptTemplates: options.isolated,
@@ -114,7 +126,7 @@ export class InProcessSessionPool {
 						!matchesExtension(extension.path, options.excludeExtensions ?? [])),
 				}),
 			});
-			await withSubsessionRole(options.role, () => loader.reload());
+			await LOADING_SUBSESSION.run(true, () => loader.reload());
 			if (loader.getExtensions().errors.length)
 				throw new Error(msg.spawn.extensionErrors(JSON.stringify(loader.getExtensions().errors)));
 			const sessionManager = makeSessionManager(options.persistence, options.cwd);
@@ -150,6 +162,12 @@ export class InProcessSessionPool {
 	onRelease(listener: (sessionPath: string) => void): () => void {
 		this.releaseListeners.add(listener);
 		return () => this.releaseListeners.delete(listener);
+	}
+
+	private extensionsFor(options: SpawnSessionOptions): InlineExtension[] {
+		const firecode = this.environment.firecode;
+		if (options.isolated || !firecode) return [BUILTIN_CODEMODE];
+		return [BUILTIN_CODEMODE, { name: "firecode", factory: firecode, hidden: true }];
 	}
 
 	private modelRuntime(): Promise<ModelRuntime> {

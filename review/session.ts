@@ -19,7 +19,6 @@ export interface ReviewModelConfig {
 }
 
 export interface ReviewSessionRequest {
-	role: "reviewer" | "advisor";
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
@@ -34,14 +33,13 @@ export function createReviewSessionRunner(pool: InProcessSessionPool): ReviewSes
 
 async function runReviewSession(
 	pool: InProcessSessionPool,
-	{ role, config, prompt, cwd, signal }: ReviewSessionRequest,
+	{ config, prompt, cwd, signal }: ReviewSessionRequest,
 ): Promise<ReviewSessionResult> {
 	if (signal?.aborted) return { kind: "aborted" };
 	let spawned: Awaited<ReturnType<InProcessSessionPool["spawn"]>>;
 	try {
 		spawned = await pool.spawn({
 			cwd,
-			role,
 			model: await pool.resolveModel(config.model),
 			thinking: config.thinking,
 			tools: [...new Set(config.tools)].filter((tool) => tool !== "write" && tool !== "edit"),

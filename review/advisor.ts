@@ -14,7 +14,6 @@ interface RunAdvisorOptions {
 
 export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorResult> {
 	const result = await options.runSession({
-		role: "advisor",
 		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,

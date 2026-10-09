@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- After FireCode is updated while a Master session is open, sub-agents keep running the same FireCode version as the Master instead of loading the new code from disk. Before, a review started in such a session could finish but be reported as "checkpoint format is invalid" or "did not start". Reload the Master session to pick up a FireCode update for both.
+
 ## [1.2.1] - 2026-10-09
 
 ### Changed

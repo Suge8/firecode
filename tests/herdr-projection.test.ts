@@ -283,15 +283,15 @@ test("子会话不接管 pane：同一 herdr 环境下主会话投影，子会�
 	const herdr = await herdrStub();
 	await register(herdr.path);
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: JSON.stringify({ features: await featuresOnly() }) }) as any;
-	const sessionStartRequests = async (role: string) => {
+	const sessionStartRequests = async (subsession: boolean) => {
 		herdr.requests.length = 0;
 		const fake = fakePi({ registerProvider() {}, getThinkingLevel: () => "medium" });
-		registerFirecode(fake.pi, role);
+		registerFirecode(fake.pi, subsession);
 		const base = context("x");
 		await fake.fire("session_start", {}, { ...base, cwd: "/tmp", hasUI: true, ui: new Proxy({}, { get: () => () => {} }), sessionManager: { ...base.sessionManager, getBranch: () => [], getEntries: () => [], getSessionId: () => "s" } });
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		return herdr.requests.length;
 	};
-	expect(await sessionStartRequests("worker")).toBe(0);
-	expect(await sessionStartRequests("main")).toBeGreaterThan(0);
+	expect(await sessionStartRequests(true)).toBe(0);
+	expect(await sessionStartRequests(false)).toBeGreaterThan(0);
 });

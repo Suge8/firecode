@@ -17,7 +17,7 @@ import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
 import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
-import { InProcessSessionPool } from "../spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { modelAtomText } from "./state.js";
 
 const MASTER_TOOL = "subagents";
@@ -32,12 +32,12 @@ const INTERRUPT_RESUME_MS = 5 * 60_000;
 const WAKE_QUIET_MS = 1_500;
 
 interface MasterDependencies {
-	pool?: InProcessSessionPool;
+	pool: InProcessSessionPool;
 	interruptResumeMs?: number;
 	wakeQuietMs?: number;
 }
 
-export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies = {}): void {
+export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies): void {
 	const all = loadConfig();
 	const loaded = all.master;
 	const prompts = loadMasterPrompts();
@@ -62,7 +62,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	};
 	const setup: MasterSetup = {
 		pi,
-		pool: dependencies.pool ?? new InProcessSessionPool(),
+		pool: dependencies.pool,
 		roster,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
 		workerPrompt: prompts.worker,

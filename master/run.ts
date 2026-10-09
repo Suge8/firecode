@@ -33,7 +33,6 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 	active.assertOpen();
 	const spawned = await pool.spawn({
 		cwd: worker.cwd ?? process.cwd(),
-		role: "worker",
 		model,
 		thinking: worker.thinking,
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,

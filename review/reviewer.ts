@@ -22,7 +22,6 @@ type ParseOutcome = {
 /** 运行一个独立审查会话并解析输出。会话故障记为 error，不拖垮整轮。 */
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const result = await options.runSession({
-		role: "reviewer",
 		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
