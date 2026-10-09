@@ -19,7 +19,7 @@ import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
 import { currentSubsessionRole, type SubsessionRole } from "./master/role.js";
 import { registerWatcher } from "./watcher/index.js";
-import { registerRoundRecorder } from "./round-recorder.js";
+import { registerRoundRecorder } from "./round.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
 

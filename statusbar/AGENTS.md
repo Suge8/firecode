@@ -14,7 +14,7 @@
 
 ## 状态的来源与边界
 
-- 计时与落定态都不在外壳里算：状态来自 `busy.ts` 的 `watchBusy`，落定态经 `tools/round.ts` 的 `latestTurnRecord` 读取（算一次的时点见 `index.ts` 的 `showRecord`）。这是整个界面唯一的实时计时。
+- 计时与落定态都不在外壳里算：状态来自 `busy.ts` 的 `watchBusy`，落定态经根 `round.ts` 的 `latestTurnRecord` 读取（算一次的时点见 `index.ts` 的 `showRecord`）。这是整个界面唯一的实时计时。
 - 右侧的“观察员”“指挥官”与预设名是其它模块在 `setStatus` 发布的串，外壳原样组合，不解析彩色串也不维护启用状态；发不发布预设名由 `session/presets.ts` 决定。
 - 审查进度来自 `watchBusy` 视图的 `review`：审查持有时它是活的 `progress` 访问器（频道与类型定义在 `busy.ts`），外壳每次绘制调用它取阶段、轮次与票数；审查锁编辑器时的外壳可见性由 `review/ui.ts` 保证（见 review/AGENTS.md）。
 - 动效只经 `flame.ts` 的 `onFrame`：仅在回合进行、落定过渡或审查进行时订阅，其余时间时钟停止。

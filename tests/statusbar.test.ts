@@ -6,21 +6,19 @@ import { PI_TUI_URL, loadFirecodeModule } from "./loader.ts";
 
 const FLAME3 = "[\u2800-\u28ff]{3}";
 
-/** 会话分支里的人类消息与轮记录（生产中轮记录由 tools 在歇下边沿写入）。 */
+/** 会话分支里的人类消息与轮记录（生产中轮记录由记录器在歇下边沿写入）。 */
 const humanEntry = (text: string) => ({ type: "message", message: { role: "user", content: text } });
 const roundEntry = (data: Record<string, unknown>) =>
 	({ type: "custom", customType: "firecode-round", data, timestamp: new Date().toISOString() });
 
-/** tools 写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
+/** 记录器写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
 const ROUND_RECORDED = "firecode:round-recorded";
 
-/** 像 tools 一样订阅同一个歇下边沿：把轮记录写进分支，再发布“已写入”。 */
+/** 装上真正的记录器：它写进会话的轮记录落进分支，再发布“已写入”。 */
 async function recordRounds(pi: any, branch: unknown[]) {
-	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;
-	watchBusy(pi, { onSettled: (_ctx: unknown, round: Record<string, unknown>) => {
-		branch.push(roundEntry(round));
-		pi.events.emit(ROUND_RECORDED);
-	} });
+	const { registerRoundRecorder } = await loadFirecodeModule("round.ts") as any;
+	pi.appendEntry = (customType: string, data: Record<string, unknown>) => { branch.push(roundEntry(data)); };
+	registerRoundRecorder(pi);
 }
 
 interface MountOptions {
@@ -312,19 +310,21 @@ async function shellWithBusy() {
 	const { fake, ctx, statuses, start } = host;
 	start();
 	const feed = (globalThis as any).__fcBusyFeed;
+	let progress: Record<string, unknown> | undefined;
 	return {
 		statuses,
 		branch,
 		branchReads: () => branchReads,
 		start,
-		view: (view: Record<string, unknown>) => feed.onChange({ agentRunning: false, inFlight: 0, review: false, ...view }, ctx),
-		/** 歇下边沿：像 tools 一样把这一段的轮记录写进分支，再通知外壳。 */
+		/** review: true 即审查持有；进度由 review() 设置，外壳每次绘制才读它。 */
+		view: ({ review, ...view }: Record<string, unknown>) =>
+			feed.onChange({ agentRunning: false, inFlight: 0, ...view, review: review ? () => progress : undefined }),
+		/** 歇下边沿：像记录器一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
-			feed.onSettled?.(ctx, round);
 			branch.push(roundEntry(round));
 			fake.pi.events.emit(ROUND_RECORDED);
 		},
-		review: (progress: Record<string, unknown>) => fake.pi.events.emit("firecode:review", { active: true, progress: () => progress }),
+		review: (next: Record<string, unknown>) => { progress = next; },
 		top: (width = 110) => host.top(width),
 		bottom: (width = 110) => host.bottom(width),
 	};

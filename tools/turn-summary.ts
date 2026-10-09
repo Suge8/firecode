@@ -6,11 +6,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { HEAT_COLORS, flame, mix, paint, settleMark } from "../flame.js";
-import { OUTCOME_TEXT, roundTexts } from "../busy.js";
 import { clip } from "../format.js";
 import { CHAT_GUTTER } from "./line.js";
 import { msg } from "./messages.js";
-import type { Round } from "./round.js";
+import { OUTCOME_TEXT, type Round, roundTexts } from "../round.js";
 import { ARRIVAL_FLASH_MS } from "./turn-clock.js";
 
 export interface SummaryView {

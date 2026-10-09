@@ -20,7 +20,8 @@ import { ToolLine, makeResultRenderer } from "./line.js";
 import { toolTarget } from "./actions.js";
 import { type Part, diffMeta } from "./parts.js";
 import { msg } from "./messages.js";
-import { ROUND_ENTRY, renderRound } from "./round.js";
+import { ROUND_ENTRY } from "../round.js";
+import { renderRound } from "./round.js";
 import { clearDurations, executeTimed } from "./timing.js";
 import { TurnClock } from "./turn-clock.js";
 

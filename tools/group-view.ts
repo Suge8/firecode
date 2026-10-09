@@ -19,7 +19,8 @@ import { assistantView, hasThinking, replyText, type AssistantActivity } from ".
 import { customMessageOf, isEntry, isToolOutputEcho, openCard, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { msg } from "./messages.js";
-import { combineRounds, type Round, roundOf } from "./round.js";
+import { combineRounds, type Round } from "../round.js";
+import { roundOf } from "./round.js";
 import { ARRIVAL_FLASH_MS, type TurnClock } from "./turn-clock.js";
 import { Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 

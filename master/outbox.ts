@@ -5,7 +5,7 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";
-import { roundFromEntry } from "../tools/round.js";
+import { roundFromEntry } from "../round.js";
 import { MASTER_EVENT_TYPE, withElapsed, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import type { MasterRuntime } from "./runtime.js";

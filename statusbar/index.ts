@@ -12,11 +12,11 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import { type BusyView, IDLE, OUTCOME_TEXT, type ReviewProgress, roundTexts, watchBusy } from "../busy.js";
+import { type BusyView, IDLE, type ReviewProgress, watchBusy } from "../busy.js";
 import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
 import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
 import { contextColor, thinkingColor } from "../theme.js";
-import { type BranchEntry, latestTurnRecord, ROUND_RECORDED_CHANNEL, type TurnRecord } from "../tools/round.js";
+import { type BranchEntry, latestTurnRecord, OUTCOME_TEXT, roundTexts, type TurnRecord, watchRoundRecorded } from "../round.js";
 import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
 import { promptRename } from "./rename.js";
@@ -216,7 +216,7 @@ export function registerStatusBar(pi: ExtensionAPI): void {
 		shell.syncClock();
 		shell.requestRender();
 	};
-	pi.events.on(ROUND_RECORDED_CHANNEL, () => showRecord(Date.now()));
+	watchRoundRecorded(pi, () => showRecord(Date.now()));
 	pi.on("session_tree", (_event, ctx) => {
 		updateTitle(ctx);
 		showRecord();

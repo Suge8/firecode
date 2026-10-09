@@ -20,7 +20,7 @@ pi 的个人定制层：启动横幅、输入框外壳（状态嵌进边框）�
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（自带 Responses 序列化，宿主转换器不对扩展开放；以 `tests/openai-native.test.ts` 对照宿主） | |
-| `round-recorder.ts` | 轮记录器：歇下时写轮记录；不属于任何可关的功能，主会话与每个子代理会话都注册 | |
+| `round.ts` | 轮记录：测量（终态、均速）、持久化格式、合成规则、读取与字样，以及歇下时写记录的记录器；记录器不属于任何可关的功能，主会话与每个子代理会话都注册（宿主渲染适配在 `tools/round.ts`） | |
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回）；同样每个会话都注册 | |
 | `today.ts` | 系统提示的日期段，每个会话都注册 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
