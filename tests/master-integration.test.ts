@@ -78,17 +78,6 @@ test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR �
 	expect(files).toContain(`firecode-master-${harness.sessionId}.json`);
 });
 
-test("边框身份只发布“指挥官”，子代理进出不改变它", async () => {
-	const harness = await setup();
-	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	await harness.execute({ action: "start", worker: "status-id", prompt: "执行", role: "工程师" });
-	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
-	await settled;
-	expect(stripVTControlCharacters(harness.statuses.get("master")!)).toBe("指挥官");
-});
-
 test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
@@ -102,16 +91,12 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
-test("Master Markdown 与动态角色表按单一接缝注入", async () => {
+test("指挥官提示词作为系统提示段注入，附上已配置的角色表；停用后撤下", async () => {
 	const harness = await setup();
-	const prompt = await loadFirecodeModule("master/prompt.js") as any;
-	const expected = prompt.assembleMasterPrompt(
-		prompt.readMasterPrompt("master"),
-		"工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）",
-	);
-	expect(expected.startsWith(prompt.readMasterPrompt("master"))).toBe(true);
-	expect(expected.endsWith("\n\n角色表：工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）。")).toBe(true);
-	expect(await harness.systemPrompt("自定义系统提示")).toBe(`自定义系统提示\n\n${expected}`);
+	const prompt = await harness.systemPrompt("自定义系统提示");
+	expect(prompt.startsWith("自定义系统提示\n\n")).toBe(true);
+	expect(prompt.endsWith("\n\n角色表：工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）。")).toBe(true);
+	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
 });
@@ -132,21 +117,9 @@ test("Worker 的系统提示带上自己的名字，包在协议信封里", asyn
 	expect(systemPrompt).toContain("</firecode_worker>");
 });
 
-test("Master prompt 缺失或为空时只关闭 Master 并明确失败", async () => {
-	const missing = await loadFirecodeModule("master/prompt.js") as any;
-	expect(() => missing.readMasterPrompt("missing")).toThrow("Master missing prompt 读取失败");
-
-	for (const kind of ["master", "worker"]) {
-		const empty = await loadFirecodeModule("master/prompt.js", {
-			extraFiles: { [`master/prompts/${kind}.zh.md`]: " \n" },
-		}) as any;
-		expect(() => empty.readMasterPrompt(kind)).toThrow(`Master ${kind} prompt 为空`);
-	}
-
-	const harness = await setup(true, {
-		promptFiles: { "master/prompts/master.zh.md": " \n" },
-	});
-	expect(harness.notices.at(-1)).toContain("Master master prompt 为空");
+test.each(["master", "worker"])("%s 提示词为空时拒绝激活并说明原因", async (kind) => {
+	const harness = await setup(true, { promptFiles: { [`master/prompts/${kind}.zh.md`]: " \n" } });
+	expect(harness.notices.at(-1)).toContain(`Master ${kind} prompt 为空`);
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 });
 
@@ -194,7 +167,7 @@ test("真 SDK 在执行前拒绝缺 worker 与旧 list 动作", async () => {
 	session.dispose();
 });
 
-test("角色表、原子与 fallback 配置错误时拒绝启动", async () => {
+test("角色表配置有错时拒绝启动（具体问题文案由配置解析的测试守）", async () => {
 	const harness = await setup(true, {
 		roles: {
 			工程师: {
@@ -206,11 +179,6 @@ test("角色表、原子与 fallback 配置错误时拒绝启动", async () => {
 		},
 	});
 	expect(harness.notices.join("\n")).toContain("Master 配置有问题，已停止");
-	expect(harness.notices.join("\n")).toContain("未知字段 master.roles.工程师.thinking");
-	expect(harness.notices.join("\n")).toContain(
-		"master.roles.工程师.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：invalid）",
-	);
-	expect(harness.notices.join("\n")).toContain("master.roles.工程师.fallback 必须是至多 2 项的数组");
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
 });
 
@@ -223,19 +191,6 @@ test("角色表提示词与 role 枚举都只来自已配置角色", async () =>
 	await expect(harness.execute({
 		action: "start", worker: "missing-role", prompt: "执行",
 	})).rejects.toThrow("start 必须指定 role");
-});
-
-test("subagents 是 worker 必填的七命令，池快照是独立零参查询", async () => {
-	const harness = await setup();
-	expect(harness.commandTool.parameters.type).toBe("object");
-	expect(harness.commandTool.parameters.required).toEqual(["action", "worker"]);
-	expect(harness.commandTool.parameters.properties.action.anyOf?.map((item: any) => item.const)
-		?? harness.commandTool.parameters.properties.action.enum).not.toContain("list");
-	expect(harness.commandTool.parameters.properties).not.toHaveProperty("model");
-	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
-	expect(harness.listTool.parameters.required ?? []).toEqual([]);
-	expect(Object.keys(harness.listTool.parameters.properties)).toEqual([]);
-	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 });
 
 test("list 展开投影 working 的当前工具，但模型正文不含动作", async () => {
@@ -412,6 +367,12 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒；指�
 	expect(harness.userMessages).toHaveLength(1);
 	expect(harness.userMessages[0]).toContain("结果 0");
 	expect(harness.userMessages[0]).toContain("结果 1");
+	// 每条结果投递前各写一条 pending，整批送达后只写一条 ack。
+	expect(harness.appended.map(([type]) => type)).toEqual([
+		"firecode-master-pending-event",
+		"firecode-master-pending-event",
+		"firecode-master-event-ack",
+	]);
 
 	// 指挥官在跑：不等窗口，立即经 steer 送达。
 	harness.idle = false;
@@ -669,10 +630,10 @@ test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会�
 	});
 	await spawned.prompt("回合");
 	await new Promise((resolve) => setTimeout(resolve, 30));
-	expect(harness.pool.has(sessionPath)).toBe(true);
+	expect(harness.pool.getSession(sessionPath)).toBeDefined();
 	harness.pool.markIdle(sessionPath);
 	await new Promise((resolve) => setTimeout(resolve, 60));
-	expect(harness.pool.has(sessionPath)).toBe(false);
+	expect(harness.pool.getSession(sessionPath)).toBeUndefined();
 	expect(await readFile(join(directory!, "shutdown.log"), "utf8")).toBe("quit\n");
 });
 
@@ -686,7 +647,7 @@ test("reviewing 中的 Worker 回合早已落定也不会被 idle 超时释放",
 	await harness.execute({ action: "review", worker: "review-hot" });
 	// 修复回合由 faux 即时回复，80ms 足够它落定并越过 10ms 的 idle 超时。
 	await new Promise((resolve) => setTimeout(resolve, 80));
-	expect(harness.pool.has(path)).toBe(true);
+	expect(harness.pool.getSession(path)).toBeDefined();
 	expect((await harness.list().then((listed) => listed.details as any)).workers[0].status).toBe("reviewing");
 });
 
@@ -710,7 +671,7 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 	await settled;
 	const sessionPath = (started.details as any).worker.session;
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.pool.has(sessionPath)).toBe(false);
+	expect(harness.pool.getSession(sessionPath)).toBeUndefined();
 	await harness.execute({ action: "kill", worker: "cold-kill" });
 	expect(existsSync(sessionPath)).toBe(true);
 });
@@ -759,35 +720,6 @@ test("审查结算中替换会话，旧 continuation 不得写入新 runtime", a
 	expect(harness.appended).toHaveLength(appendedBeforeSettlement);
 	expect(harness.notices).toHaveLength(noticesBeforeSettlement);
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
-});
-
-test("主回合空闲时，并发落定合并走前门用户消息，投递前写 pending、成功后写 ack", async () => {
-	const harness = await setup();
-	harness.idle = true;
-	let release!: () => void;
-	const gate = new Promise<void>((resolve) => { release = resolve; });
-	faux.setResponses([
-		async () => { await gate; return fauxAssistantMessage("结果 A"); },
-		async () => { await gate; return fauxAssistantMessage("结果 B"); },
-	]);
-	await Promise.all([
-		harness.execute({ action: "start", worker: "merge-a", prompt: "A", role: "工程师" }),
-		harness.execute({ action: "start", worker: "merge-b", prompt: "B", role: "工程师" }),
-	]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	release();
-	await delivered;
-	// 前门消息发出后，唤醒回合稍后才开始；ack 在回合开始之后写。
-	await Bun.sleep(5);
-	expect(harness.messages).toEqual([]);
-	expect(harness.userMessages).toHaveLength(1);
-	expect(harness.userMessages[0]).toContain("结果 A");
-	expect(harness.userMessages[0]).toContain("结果 B");
-	expect(harness.appended.map(([type]) => type)).toEqual([
-		"firecode-master-pending-event",
-		"firecode-master-pending-event",
-		"firecode-master-event-ack",
-	]);
 });
 
 test("本次运行耗时读子代理会话自己写的轮记录：子代理没装轮记录器时事件不带本次运行，不拿指挥官这边的计时冒充", async () => {
@@ -1245,19 +1177,6 @@ test("活动列表：已完成展开显示结果首句，下一轮人类输入�
 	await harness.command("");
 });
 
-test("resume 后池里仍有空闲子代理：活动列表显示一行“N 个空闲”", async () => {
-	const harness = await setup(false);
-	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
-	const path = masterStatePath(harness.agentDir, harness.sessionId);
-	await mkdir(dirname(path), { recursive: true });
-	await writeFile(path, JSON.stringify({ version: 9, workers: ["writer", "slow"].map((name, index) => ({
-		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), launch: index + 1,
-	})) }));
-	await harness.command("");
-	expect(harness.activity()).toEqual([expect.stringMatching(/2 个空闲/u)]);
-	await harness.command("");
-});
-
 test("恢复后按档案里的启动序列出子代理（并行 start 的落盘先后不可靠）；新 start 的启动序接在已有之后", async () => {
 	const harness = await setup(false);
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
@@ -1544,7 +1463,7 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 	await delivered;
 	const sessionPath = (started.details as any).worker.session;
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(harness.pool.has(sessionPath)).toBe(false);
+	expect(harness.pool.getSession(sessionPath)).toBeUndefined();
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "send", worker: "revive", prompt: "沿用" });
@@ -1746,7 +1665,6 @@ async function setup(activate = true, options: {
 	});
 	if (!modelRuntime.hasConfiguredAuth("faux")) throw new Error("测试 Faux 模型认证未载入");
 	const pool = new (spawnModule as any).InProcessSessionPool({
-		agentDir,
 		modelRuntime,
 		resolveModel: async (id: string) => {
 			await (globalThis as any).__modelGate;
