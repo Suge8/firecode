@@ -114,8 +114,10 @@ async function sessionFiles(dir: string): Promise<string[]> {
 		}
 		for (const entry of entries) {
 			const path = join(current, entry.name);
-			if (entry.isDirectory()) pending.push(path);
-			else if (entry.name.endsWith(".jsonl")) found.push(path);
+			// 软链接按目标判断（指向目录的要继续遍历）；断链忽略。
+			const target = entry.isSymbolicLink() ? await stat(path).catch(() => undefined) : entry;
+			if (target?.isDirectory()) pending.push(path);
+			else if (target && entry.name.endsWith(".jsonl")) found.push(path);
 		}
 	}
 	return found;
@@ -152,8 +154,6 @@ async function collect(days: number): Promise<Report> {
 	for (const file of files) {
 		let content: string;
 		try {
-			// 文件最后修改早于窗口起点，里面不会有窗口内的记录：不读。
-			if (from !== undefined && (await stat(file)).mtimeMs < from) continue;
 			content = await readFile(file, "utf8");
 		} catch {
 			continue;

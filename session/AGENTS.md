@@ -6,7 +6,7 @@
 | --- | --- |
 | `presets.ts` | 预设切换：模型原子、工具集、附加指令；生效中的预设名以 `preset` 状态键发布（accent 色名字，不带图标），输入框下边框显示；只有改了工具集或附加指令（边框看不见的改动）的预设才发布，只改模型与思考档的不发布 |
 | `herdr-projection.ts` | 会话在 herdr 里的投影：agent 副标题与 `$session` token、working/idle 状态、恢复命令、退出 release |
-| `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT）。修改时间早于窗口起点的文件不读，逐文件让出事件循环，几千个会话文件也不冻住界面 |
+| `stats.ts` | 统计入口；`/tokens` 扫会话 jsonl 统计 token 与成本（源自 pi-token-stats, MIT）。逐文件让出事件循环，几千个会话文件也不冻住界面；扫描语义不随优化改变（跟随目录软链接，无时间戳的记录计入任意窗口） |
 | `messages.ts` | 本目录全部用户可见文案（预设、额度、统计、herdr 侧边栏标签），机制见根 AGENTS.md「文案」 |
 | `quota.ts` | `/quota` 按需查询 Codex、Claude 与 Fable 订阅剩余额度 |
 

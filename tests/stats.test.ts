@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadFirecodeModule } from "./loader.ts";
@@ -11,7 +11,7 @@ const assistant = (provider: string, model: string, timestamp = Date.now()) =>
 	({ type: "message", message: { role: "assistant", provider, model, usage, timestamp } });
 
 /** 经 /tokens 命令（无界面模式打印到 stdout）观察统计：真实会话 jsonl 进，Markdown 报告出。 */
-async function report(lines: unknown[], args: string): Promise<string> {
+async function report(lines: unknown[], args: string, arrange?: (agentDir: string) => void): Promise<string> {
 	const agentDir = mkdtempSync(join(tmpdir(), "firecode-stats-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	const log = console.log;
@@ -20,6 +20,7 @@ async function report(lines: unknown[], args: string): Promise<string> {
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		mkdirSync(join(agentDir, "sessions"));
 		writeFileSync(join(agentDir, "sessions", "a.jsonl"), [...lines.map((line) => JSON.stringify(line)), "not json"].join("\n"));
+		arrange?.(agentDir);
 		const { registerStats } = await loadFirecodeModule("session/stats.ts") as { registerStats: (pi: unknown) => void };
 		const fake = fakePi();
 		registerStats(fake.pi);
@@ -51,4 +52,18 @@ test("/tokens：assistant 按 provider/model 计请求，toolResult 与压缩/�
 	expect(recent).not.toContain("old/model");
 	expect(recent).not.toContain("openai/none");
 	expect(await report(lines, "0")).toContain("| `old/model` | 1 |");
+});
+
+test("/tokens：旧文件里没有时间戳的记录照常计入，指向目录的软链接照常遍历", async () => {
+	const undated = { type: "message", message: { role: "assistant", provider: "undated", model: "m", usage } };
+	const out = await report([undated], "7", (agentDir) => {
+		const old = new Date(0);
+		utimesSync(join(agentDir, "sessions", "a.jsonl"), old, old);
+		const elsewhere = join(agentDir, "elsewhere");
+		mkdirSync(elsewhere);
+		writeFileSync(join(elsewhere, "b.jsonl"), JSON.stringify(assistant("linked", "m")));
+		symlinkSync(elsewhere, join(agentDir, "sessions", "link"));
+	});
+	expect(out).toContain("`undated/m` | 1 |");
+	expect(out).toContain("`linked/m` | 1 |");
 });
