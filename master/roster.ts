@@ -3,12 +3,12 @@
  * 把整份名册发布在 `firecode:subagents` 频道（`{ workers }`，按启动序；停用时发空名册）。名册只是活动列表的投影，
  * 分组与动作文字取自 activity-list.ts 的 `workerPhase`，读者不要自己从会话文件推导。
  */
-import { workerPhase, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { launchSorted, workerPhase, type ActivityFacts, type RowKind } from "./activity-list.js";
 
 export const SUBAGENTS_CHANNEL = "firecode:subagents";
 
 /** 活动列表的分组减去“卡住”（卡住仍是在跑，要靠计时才判得出，名册不发时间驱动的变化）。 */
-export type SubagentState = Exclude<RowKind, "stuck">;
+type SubagentState = Exclude<RowKind, "stuck">;
 
 export interface SubagentInfo {
 	name: string;
@@ -32,23 +32,18 @@ export interface SubagentsPayload {
 
 /** 按启动序投影整份名册。 */
 export function subagentInfos(facts: ActivityFacts, now: number): SubagentInfo[] {
-	return facts.workers
-		.map((worker, index) => {
-			const { kind, action, startedAt, settledAt } = workerPhase(facts, index, now);
-			return {
-				launch: worker.launch,
-				info: {
-					name: worker.name,
-					role: worker.role,
-					model: worker.model,
-					thinking: worker.thinking,
-					state: kind === "stuck" ? "running" : kind,
-					action,
-					...(startedAt === undefined ? {} : { startedAt }),
-					...(settledAt === undefined ? {} : { settledAt }),
-				} satisfies SubagentInfo,
-			};
-		})
-		.sort((a, b) => a.launch - b.launch)
-		.map(({ info }) => info);
+	return launchSorted(facts).map((index): SubagentInfo => {
+		const worker = facts.workers[index];
+		const { kind, action, startedAt, settledAt } = workerPhase(facts, index, now);
+		return {
+			name: worker.name,
+			role: worker.role,
+			model: worker.model,
+			thinking: worker.thinking,
+			state: kind === "stuck" ? "running" : kind,
+			action,
+			...(startedAt === undefined ? {} : { startedAt }),
+			...(settledAt === undefined ? {} : { settledAt }),
+		};
+	});
 }

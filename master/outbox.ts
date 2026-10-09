@@ -32,7 +32,6 @@ export class Outbox {
 	private retrying = false;
 	/** 空闲合并窗口里第一条事件入队的时刻。 */
 	private firstQueuedAt?: number;
-	private inFlightScheduled = false;
 
 	constructor(private readonly active: MasterRuntime) {}
 
@@ -59,23 +58,14 @@ export class Outbox {
 		for (const event of unackedEvents(ctx)) this.push(event);
 	}
 
-	/**
-	 * 在飞 = working/reviewing + 已落定但结果事件还在队列或投递中（投递失败重试期间也算）。
-	 * 落定先改 store、随后才入队事件：同一同步段内合并成一次计算，避免中间闪出一次归零。
-	 */
-	scheduleInFlight(): void {
-		if (this.inFlightScheduled) return;
-		this.inFlightScheduled = true;
-		queueMicrotask(() => {
-			this.inFlightScheduled = false;
-			if (this.active.closed) return;
-			const names = new Set<string>();
-			for (const worker of this.active.store.workers)
-				if ((worker.status === "working" || worker.status === "reviewing") && this.active.live.get(worker.name)?.origin !== "view")
-					names.add(worker.name);
-			for (const event of [...this.queued, ...this.delivering]) if (event.worker && !event.inform) names.add(event.worker);
-			this.active.setup.publishInFlight(names.size);
-		});
+	/** 在飞 = working/reviewing + 已落定但结果事件还在队列或投递中（投递失败重试期间也算）。 */
+	inFlight(): number {
+		const names = new Set<string>();
+		for (const worker of this.active.store.workers)
+			if ((worker.status === "working" || worker.status === "reviewing") && this.active.live.get(worker.name)?.origin !== "view")
+				names.add(worker.name);
+		for (const event of [...this.queued, ...this.delivering]) if (event.worker && !event.inform) names.add(event.worker);
+		return names.size;
 	}
 
 	close(): void {
@@ -89,7 +79,7 @@ export class Outbox {
 	 */
 	private push(event: PendingMasterEvent): void {
 		this.queued.push(event);
-		this.scheduleInFlight();
+		this.active.schedulePublish();
 		if (this.retrying) return;
 		const quiet = this.active.setup.wakeQuietMs;
 		if (!this.active.ctx.isIdle() || quiet <= 0) {
@@ -137,7 +127,7 @@ export class Outbox {
 				if (worker?.status === "idle" && worker.disposition !== "reminded")
 					active.store.upsert({ ...worker, disposition: "pending" });
 			}
-			this.scheduleInFlight();
+			active.schedulePublish();
 		}, (error) => {
 			if (active.closed) return;
 			for (const event of batch) this.delivering.delete(event);

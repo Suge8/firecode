@@ -76,8 +76,8 @@ interface Groups {
 	animating: boolean;
 }
 
-/** 按档案里的启动序。 */
-function launchSorted(facts: ActivityFacts): number[] {
+/** facts.workers 的下标，按档案里的启动序。 */
+export function launchSorted(facts: ActivityFacts): number[] {
 	return facts.workers.map((_, index) => index).sort((a, b) => facts.workers[a].launch - facts.workers[b].launch);
 }
 
@@ -96,7 +96,7 @@ export const ANIMATING_KINDS: ReadonlySet<RowKind> = new Set(["stuck", "running"
  * 一个子代理此刻的相位：所在分组、动作文字与时刻。纯事实不带着色——活动列表的行与 `subagentInfos`（外部扩展读的名册）共用这一处，
  * 分组与动作只在这里判定一次。`settledAt` 是落定时刻；`silentMinutes` 只在卡住时有。
  */
-export interface WorkerPhase {
+interface WorkerPhase {
 	kind: RowKind;
 	action: string;
 	startedAt?: number;
