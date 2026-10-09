@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-10-09
+
 ### Changed
 
 - Master's final review and `/fire-review` no longer expect test-first acceptance tests. They check that every acceptance criterion has a result from a check run in the task, and flag unit or integration tests that only restate the implementation. This follows the implement skill, which now verifies by running checks instead of writing tests first.
@@ -95,7 +97,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/Suge8/firecode/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Suge8/firecode/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Suge8/firecode/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Suge8/firecode/compare/v1.0.0...v1.0.1
