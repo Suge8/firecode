@@ -2,7 +2,7 @@
  * Claude 订阅适配（Anthropic OAuth 会话）：
  * - 归因：仅订阅（OAuth）会话。请求头 user-agent 用本机 Claude Code 的版本号覆盖宿主的固定版本，与系统提示词首块 billing header
  *   里的 cc_version 保持一致（宿主已为 OAuth 请求带 x-app，不重复）；billing header 缺失时注入，已存在则原样通过。
- *   API key 与兼容代理的 anthropic 请求不带这些标识，所以头只在检测到 OAuth 凭据后才注册。
+ *   API key 与兼容代理的 anthropic 请求不带这些标识：头随当前凭据类型注册，登出订阅改用 API key 后在下一次提示前清掉。
  * - 换发自愈：Anthropic 换发订阅令牌即吊销旧令牌，换发时仍在途的请求以 401 落空；宿主不重试 401，
  *   这里把该失败从模型投影中省略并续跑一次，续跑请求由宿主重读令牌文件拿到新令牌。重试仍 401 即登录真失效，照常落定。
  *   是否已重试只看会话分支，不留内存标记；不交给角色 fallback，换模型解决不了令牌换发。宿主将来自行重试这类 401 时删除本自愈。
@@ -98,16 +98,18 @@ function lastTwoMessages(branch: SessionEntry[]): [SessionEntry | undefined, Ses
 export function registerClaudeSub(pi: ExtensionAPI): void {
 	// 探测同步起 `claude --version` 子进程：只在功能开启时做，且整个进程只做一次（子会话也会注册本功能）。
 	const claudeCodeVersion = (detectedVersion ??= detectClaudeCodeVersion());
-	// 供应商头注册对该供应商的全部请求生效且无法按请求撤回；一个会话里 anthropic 只有一种凭据，登录后再补注册即可。
+	// 供应商头注册对该供应商的全部请求生效，按当前凭据同步：订阅凭据时注册，换成 API key 后清空（headers: {} 整体替换，
+	// 同一供应商上别的扩展注册的头也随之清掉，这只发生在订阅凭据登出之后）。
 	let identified = false;
-	const identify = (_event: unknown, ctx: ExtensionContext) => {
-		if (identified || !shouldApply(ctx)) return;
-		identified = true;
-		pi.registerProvider("anthropic", { headers: { "user-agent": `claude-cli/${claudeCodeVersion} (external, cli)` } });
+	const sync = (_event: unknown, ctx: ExtensionContext) => {
+		const wanted = shouldApply(ctx);
+		if (wanted === identified) return;
+		identified = wanted;
+		pi.registerProvider("anthropic", { headers: wanted ? { "user-agent": `claude-cli/${claudeCodeVersion} (external, cli)` } : {} });
 	};
-	pi.on("session_start", identify);
-	pi.on("model_select", identify);
-	pi.on("before_agent_start", identify);
+	pi.on("session_start", sync);
+	pi.on("model_select", sync);
+	pi.on("before_agent_start", sync);
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const payload = event.payload;
