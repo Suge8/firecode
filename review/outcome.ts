@@ -3,10 +3,20 @@ import { checkpointOf, refusalOf, type Snapshot } from "./checkpoint.js";
 import { msg } from "./messages.js";
 import { roundText } from "./state.js";
 
+/**
+ * 对外中止一场进行中的审查：在审查所在的会话里执行这条命令（`session.prompt`）。走用户取消的同一条路径——
+ * 结局记为取消、终态 checkpoint 照写、在途审查会话与投递中止；该会话没有进行中的审查时只提示，不留拒绝记录。
+ * Master 的 interrupt 对审查中的子代理用它。
+ */
+export const CANCEL_REVIEW_ARG = "--cancel";
+export const CANCEL_REVIEW_COMMAND = `/fire-review ${CANCEL_REVIEW_ARG}`;
+
 export type ReviewOutcome =
 	| { status: "passed"; runId: string; rounds: number }
 	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string }
 	| { status: "failed"; runId: string; rounds: number; reason: string }
+	/** 被取消（用户或 CANCEL_REVIEW_COMMAND）；不是故障，也不是质量裁决。 */
+	| { status: "cancelled"; runId: string; rounds: number }
 	| { status: "in_progress"; runId: string }
 	/** 命令入口拒绝启动（配置问题、已有审查在跑、参数错误）；runId 是这次拒绝的 id，message 是原因原文。 */
 	| { status: "refused"; runId: string; message: string }
@@ -76,11 +86,11 @@ function outcomeOf(latest: Snapshot): ReviewOutcome {
 			return { status: "stopped", runId, rounds, ...(last?.advisor?.advice ? { advisorAdvice: last.advisor.advice } : {}) };
 		case "exhausted":
 			return { status: "stopped", runId, rounds };
-		// 故障、取消、超时是基础设施故障或人为中断，不弱化成“停止”；原因给人话，不把枚举名交给读取方。
+		// 故障与超时是基础设施故障，取消是人为中断，都不弱化成“停止”；原因给人话，不把枚举名交给读取方。
 		case "error":
 			return { status: "failed", runId, rounds, reason: (last && roundText(last).trim()) || msg.outcome.error };
 		case "cancelled":
-			return { status: "failed", runId, rounds, reason: msg.outcome.cancelled };
+			return { status: "cancelled", runId, rounds };
 		case "timed_out":
 			return { status: "failed", runId, rounds, reason: msg.outcome.timedOut };
 	}

@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type MasterRole } from "../config.js";
-import { readReviewOutcome } from "../review/outcome.js";
+import { CANCEL_REVIEW_COMMAND, readReviewOutcome } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
 import {
@@ -89,6 +89,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 
 async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = targetOf(active, params);
+	if (target.status === "reviewing") return interruptReview(active, target);
 	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
 	const session = active.setup.pool.getSession(target.sessionPath);
 	if (!session) throw new Error(msg.action.sessionReleased(target.name));
@@ -102,6 +103,26 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 		return toolResult({ interrupted: true });
 	} catch (error) {
 		if (live.interruptedRun === run) live.interruptedRun = undefined;
+		throw error;
+	}
+}
+
+/**
+ * 审查中的子代理：先在它的会话里取消审查（review/outcome.ts 的 CANCEL_REVIEW_COMMAND，与 esc 取消同一路径，终态 checkpoint 照写），
+ * 再中止会话里可能在跑的修复/总结回合。落定由审查监视（run.ts）看到取消的终态后按中断处理：回到 idle、带中断标记、审查义务保留。
+ */
+async function interruptReview(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
+	const session = active.setup.pool.getSession(target.sessionPath);
+	if (!session) throw new Error(msg.action.sessionReleased(target.name));
+	const live = active.liveOf(target.name);
+	live.interruptedReview = true;
+	try {
+		await session.prompt(CANCEL_REVIEW_COMMAND);
+		if (session.isStreaming) await session.abort();
+		active.assertOpen();
+		return toolResult({ interrupted: true });
+	} catch (error) {
+		live.interruptedReview = undefined;
 		throw error;
 	}
 }

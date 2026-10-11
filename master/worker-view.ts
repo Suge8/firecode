@@ -416,7 +416,7 @@ export class WorkerView implements Component, Focusable {
 				for (let room = visibleWidth(notice); room >= 1; room--) yield [lead, dim(clip(notice, room))];
 				return;
 			}
-			const tail = TAIL.filter((item) => (item.text !== undefined || model) && (!item.working || worker?.status === "working"));
+			const tail = TAIL.filter((item) => (item.text !== undefined || model) && (!item.working || worker?.status !== "idle"));
 			for (;;) {
 				yield [lead, dim(tail.map((item) => item.text ?? model).join(" · "))];
 				const weakest = tail.reduce((a, b) => (b.drop < a.drop ? b : a));
@@ -513,9 +513,9 @@ export class WorkerView implements Component, Focusable {
 		}
 	}
 
-	/** 只对在跑的子代理有意义；其余状态静默忽略（提示行也不会显示这个键）。 */
+	/** 只对在跑或审查中的子代理有意义；空闲的静默忽略（提示行也不会显示这个键）。 */
 	private async interrupt(): Promise<void> {
-		if (this.removed || this.worker()?.status !== "working") return;
+		if (this.removed || (this.worker()?.status ?? "idle") === "idle") return;
 		try {
 			await this.source.interrupt(this.name);
 			this.showNotice(msg.view.interrupted, NOTICE_MS);

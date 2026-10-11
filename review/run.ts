@@ -237,6 +237,11 @@ export class Run {
 		}
 	}
 
+	/** 对外中止整场审查（CANCEL_REVIEW_COMMAND）：与 esc 取消同一事件，但顾问阶段也整场取消，不只是跳过咨询。 */
+	cancel(): void {
+		this.dispatch({ type: "CANCEL", reason: "user" });
+	}
+
 	/** 界面上的 esc：顾问阶段只跳过本次咨询，其余取消整场审查。 */
 	private cancelByUser(): void {
 		if (this.state.phase !== "needs_fix") return this.dispatch({ type: "CANCEL", reason: "user" });

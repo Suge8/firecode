@@ -29,7 +29,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道 | |
 | `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
 | `process-shared.ts` | 跨模块拷贝共享的进程唯一状态 | |
-| `spawn.ts` | 全插件唯一的进程内子会话入口（Master、Review、Watcher 共用）；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
+| `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review、Watcher 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
 | `format.ts` | 共享的宽度/文本格式化 | |
 | `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置与 provider 共用的唯一对象判定） | |
@@ -43,7 +43,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断外层背景色（[earendil-works/pi#4894](https://github.com/earendil-works/pi/issues/4894) 已报，被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，该回合第一次工具调用后扩展注入的段被撤下，下一次前门回合再补回，所以唤醒一律走前门 `sendUserMessage`（[#33](https://github.com/Suge8/firecode/issues/33)）。这是宿主缺陷，上游 [pi#8712](https://github.com/earendil-works/pi/issues/8712) 被自动关闭未处理，同一缺陷的 [pi#5581](https://github.com/earendil-works/pi/issues/5581) 仍开着。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。以 `triggerTurn: true` 唤起歇透会话会跳过 `before_agent_start`，该回合第一次工具调用后扩展注入的段被撤下，下一次前门回合再补回，所以唤醒一律走前门 `sendUserMessage`（[#33](https://github.com/Suge8/firecode/issues/33)）。手动 `/compact` 与带摘要的 `/tree` 切换期间宿主 `isIdle()` 为 false 却没有回合，直接 steer 只会被当场追加、无人唤起（`/tree` 还会挂在被丢下的旧分支上），所以 `deliver` 在这两种情况下等它们落定再投，调用方不处理。这是宿主缺陷，上游 [pi#8712](https://github.com/earendil-works/pi/issues/8712) 被自动关闭未处理，同一缺陷的 [pi#5581](https://github.com/earendil-works/pi/issues/5581) 仍开着。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 

@@ -51,6 +51,10 @@ export const msg = defineMessages({
 			interrupted: "被中断",
 			interruptedKept: (obligation: boolean) => (obligation ? "会话与审查义务均已保留，可 send 续派" : "会话已保留，可 send 续派"),
 			reviewIncomplete: "审查未完成",
+			reviewInterrupted: "审查被中断",
+			reviewInterruptedKept: (obligation: boolean) =>
+				(obligation ? "审查已取消，会话与审查义务均已保留，可再 review 或 send 续派" : "审查已取消，会话已保留，可再 review 或 send 续派"),
+			reviewCancelled: "审查被取消",
 			reviewPassed: (rounds: number) => `审查通过（${rounds} 轮）`,
 			reviewStopped: (rounds: number) => `审查停止（${rounds} 轮）`,
 			stoppedByAdvisor: (rounds: number) => `审查 ${rounds} 轮未通过，顾问叫停`,
@@ -215,6 +219,10 @@ export const msg = defineMessages({
 			interruptedKept: (obligation: boolean) =>
 				(obligation ? "Session and review obligation are both kept; resume with send" : "Session kept; resume with send"),
 			reviewIncomplete: "review incomplete",
+			reviewInterrupted: "review interrupted",
+			reviewInterruptedKept: (obligation: boolean) =>
+				(obligation ? "The review was cancelled; session and review obligation are both kept; run review again or resume with send" : "The review was cancelled; session kept; run review again or resume with send"),
+			reviewCancelled: "Review was cancelled",
 			reviewPassed: (rounds: number) => `review passed (${rounds} ${plural(rounds, "round", "rounds")})`,
 			reviewStopped: (rounds: number) => `review stopped (${rounds} ${plural(rounds, "round", "rounds")})`,
 			stoppedByAdvisor: (rounds: number) => `Review failed after ${rounds} ${plural(rounds, "round", "rounds")}; the advisor called a stop`,

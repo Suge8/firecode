@@ -395,9 +395,9 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 // kitty 键盘协议里的 ctrl+shift+x。
 const INTERRUPT = "\x1b[120;6u";
 
-test("在跑的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已中断”；空闲的不提示也不响应；失败写原因", async () => {
+test("在跑与审查中的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已中断”；空闲的不提示也不响应；失败写原因", async () => {
 	const failing = { fail: false };
-	const workers = [worker("busy", "working"), worker("quiet")];
+	const workers = [worker("busy", "working"), worker("quiet"), worker("judged", "reviewing")];
 	const interruptedNames: string[] = [];
 	const view = await open({
 		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
@@ -422,6 +422,14 @@ test("在跑的子代理：底行提示中断键，按下走 interrupt 同一入
 	view.key(INTERRUPT);
 	await Bun.sleep(0);
 	expect(interruptedNames).toEqual(["busy"]);
+
+	// 审查中的子代理同样提示并响应。
+	failing.fail = false;
+	view.key(TAB);
+	expect(view.bottom()).toContain("ctrl+shift+x 中断");
+	view.key(INTERRUPT);
+	await Bun.sleep(0);
+	expect(interruptedNames).toEqual(["busy", "judged"]);
 });
 
 test("中断键避开宿主全部默认键位（根 AGENTS.md「快捷键冲突」）", async () => {

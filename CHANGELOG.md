@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - In a Worker's full-run view, `Ctrl+Shift+X` interrupts the Worker.
+- A Worker under review can be interrupted (by the Master, or with `Ctrl+Shift+X` in its view): the review is cancelled, the Worker returns to idle with its review obligation kept, and the Master is told the review was interrupted. It can then be reviewed again.
+- `/fire-review --cancel` cancels the whole running review, even while the advisor is being consulted; it also works when the review config is broken.
 - Turning Master mode off while Workers are running asks for confirmation first.
 - A Worker interrupted before its first reply can be resumed directly.
 - The Master is told when an extension inside a Worker's session fails.
@@ -30,7 +32,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `tail` returns what happened after the last outside input, with errors first.
 - Workers start with the project trust of their target directory: extensions of an untrusted project are not loaded.
 - The watcher session is isolated: it loads none of your extensions, skills or prompt templates.
-- While you run `/compact` by hand, Master events wait until compaction settles before they are delivered.
+- While you run `/compact` by hand or switch branches with a summary in `/tree`, Master events, watcher suggestions and review feedback wait until it settles before they are delivered, instead of being appended without waking anyone (after a `/tree` switch they would also have been left on the abandoned branch).
 - Events that only inform no longer wake the Master; during a turn they are appended at its end.
 - **Breaking:** the review checkpoint is version 7; a review still in progress when you upgrade is discarded.
 - During a review the editor lets Pi's application keys and extension shortcuts through; only typing and submit are blocked.
