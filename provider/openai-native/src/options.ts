@@ -1,8 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { isRecord } from "../../../jsonc.js";
-import { STATUS_KEYS } from "../../../status-keys.js";
 import { isTextVerbosity, type OpenAINativeSettings, type TextVerbosity } from "./config.js";
-import { isOpenAIResponsesApi } from "./native-runtime.js";
+import { isOpenAIResponsesApi } from "./native-details.js";
 
 const PRIORITY_MODEL_IDS = new Set([
 	"gpt-5.5",

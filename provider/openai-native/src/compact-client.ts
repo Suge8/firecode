@@ -1,23 +1,19 @@
-import type { NativeCompactionRuntime } from "./native-runtime.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { isRecord } from "../../../jsonc.js";
-import type { NativeCompactionRequest } from "./responses-input.js";
+import { type Auth, leadingPromptLength, postThroughHost } from "./host-stream.js";
 
-const JSON_CONTENT_TYPE = "application/json";
 const COMPACTION_TRIGGER = { type: "compaction_trigger" } as const;
 const RETAINED_MESSAGE_TOKEN_BUDGET = 64_000;
 
-type ParsedOutput = {
-	output: Record<string, unknown>[];
-	createdAt?: unknown;
-};
+type ParsedOutput = { output: Record<string, unknown>[] };
 
 type ParsedFailure = {
 	reason: "input-too-large" | "response-failed";
 	detail?: string;
 };
 
-type NativeCompactionFailureReason =
-	| "aborted"
+export type NativeCompactionFailureReason =
 	| "network-error"
 	| "non-2xx"
 	| "empty-body"
@@ -28,36 +24,9 @@ type NativeCompactionFailureReason =
 	| "response-failed";
 
 export type NativeCompactionResult =
-	| {
-			ok: true;
-			compactedWindow: unknown[];
-			createdAt?: string;
-	  }
-	| {
-			ok: false;
-			reason: NativeCompactionFailureReason;
-			status?: number;
-			detail?: string;
-	  };
-
-function isAbortError(error: unknown): boolean {
-	return (
-		(error instanceof DOMException && error.name === "AbortError") ||
-		(error instanceof Error && (error.name === "AbortError" || error.name === "ABORT_ERR"))
-	);
-}
-
-function normalizeResponseTimestamp(value: unknown): string | undefined {
-	if (typeof value === "number" && Number.isFinite(value)) {
-		const milliseconds = value > 1_000_000_000_000 ? value : value * 1000;
-		return new Date(milliseconds).toISOString();
-	}
-	if (typeof value !== "string" || !value.trim()) {
-		return undefined;
-	}
-	const parsed = Date.parse(value);
-	return Number.isNaN(parsed) ? value.trim() : new Date(parsed).toISOString();
-}
+	| { ok: true; compactedWindow: Record<string, unknown>[] }
+	| { ok: false; reason: "aborted" }
+	| { ok: false; reason: NativeCompactionFailureReason; status?: number; detail?: string };
 
 function errorMessage(value: unknown): string | undefined {
 	if (!isRecord(value)) {
@@ -118,7 +87,7 @@ function parseJsonOutput(value: unknown): ParsedOutput | undefined {
 	if (!isRecord(value) || !isOutputArray(value.output)) {
 		return undefined;
 	}
-	return { output: value.output, createdAt: value.created_at };
+	return { output: value.output };
 }
 
 function parseSseOutput(responseText: string): ParsedOutput | ParsedFailure | undefined {
@@ -148,10 +117,7 @@ function parseSseOutput(responseText: string): ParsedOutput | ParsedFailure | un
 			continue;
 		}
 		if (event.type === "response.completed") {
-			completed = parseJsonOutput(event.response) ?? {
-				output: [],
-				createdAt: isRecord(event.response) ? event.response.created_at : undefined,
-			};
+			completed = parseJsonOutput(event.response) ?? { output: [] };
 			continue;
 		}
 		failure = parseFailedResponse(event) ?? failure;
@@ -160,7 +126,7 @@ function parseSseOutput(responseText: string): ParsedOutput | ParsedFailure | un
 		return completed;
 	}
 	if (completed && streamedItems.length > 0) {
-		return { output: streamedItems, createdAt: completed.createdAt };
+		return { output: streamedItems };
 	}
 	return failure;
 }
@@ -217,7 +183,7 @@ function estimateTokens(item: Record<string, unknown>): number {
 	return Math.max(1, Math.ceil(itemText(item).length / 4));
 }
 
-function buildCompactedWindow(input: unknown[], compactionItem: Record<string, unknown>): unknown[] {
+function buildCompactedWindow(input: Record<string, unknown>[], compactionItem: Record<string, unknown>): Record<string, unknown>[] {
 	const retained: Record<string, unknown>[] = [];
 	let remaining = RETAINED_MESSAGE_TOKEN_BUDGET;
 	for (let index = input.length - 1; index >= 0 && remaining > 0; index--) {
@@ -236,112 +202,44 @@ function buildCompactedWindow(input: unknown[], compactionItem: Record<string, u
 	return [...retained, structuredClone(compactionItem)];
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
-	const parts = token.split(".");
-	if (parts.length !== 3) {
-		return undefined;
-	}
-	try {
-		const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
-		return isRecord(payload) ? payload : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function codexAccountId(token: string): string | undefined {
-	const authClaims = decodeJwtPayload(token)?.["https://api.openai.com/auth"];
-	if (!isRecord(authClaims) || typeof authClaims.chatgpt_account_id !== "string") {
-		return undefined;
-	}
-	return authClaims.chatgpt_account_id.trim() || undefined;
-}
-
-function buildHeaders(runtime: NativeCompactionRuntime): Record<string, string> {
-	const headers = new Headers(runtime.currentModel.headers ?? {});
-	for (const [key, value] of Object.entries(runtime.headers ?? {})) {
-		if (value === null) headers.delete(key);
-		else headers.set(key, value);
-	}
-	headers.set("accept", "text/event-stream, application/json");
-	headers.set("content-type", JSON_CONTENT_TYPE);
-	if (!headers.has("authorization")) {
-		headers.set("authorization", `Bearer ${runtime.apiKey}`);
-	}
-	if (runtime.provider === "openai-codex") {
-		const accountId = codexAccountId(runtime.apiKey);
-		if (accountId) {
-			headers.set("chatgpt-account-id", accountId);
-		}
-		headers.set("originator", "pi");
-		headers.set("user-agent", `pi (${process.platform}; ${process.arch})`);
-		headers.set("openai-beta", "responses=experimental");
-	}
-	return Object.fromEntries(headers.entries());
-}
-
+/**
+ * 原生压缩：宿主按这批消息构造请求体，这里在它前面补上上次的压缩窗口、在末尾追加 compaction_trigger 后真实发出。
+ * 输入是否超窗由服务端裁决（context_length_exceeded → input-too-large）；本地字符估算既不准也是第二事实源，
+ * 历史上曾把正常触发线（窗口 − 预留）上的压缩全部误拒。
+ */
 export async function executeNativeCompaction(args: {
-	runtime: NativeCompactionRuntime;
-	request: NativeCompactionRequest;
-	signal?: AbortSignal;
+	model: Model<Api>;
+	auth: Auth;
+	/** 第一条是系统提示（压缩指令），其后是要压缩的对话。 */
+	messages: AgentMessage[];
+	/** 上一次压缩留下的窗口：它代表消息之前的全部历史，接在系统提示之后。 */
+	priorWindow?: Record<string, unknown>[];
+	signal: AbortSignal;
 }): Promise<NativeCompactionResult> {
-	const { runtime, request, signal } = args;
-	if (signal?.aborted) {
-		return { ok: false, reason: "aborted" };
+	let retained: Record<string, unknown>[] = [];
+	const posted = await postThroughHost(args.model, args.messages, args.auth, {
+		signal: args.signal,
+		rewrite: ({ model, instructions, input }) => {
+			const lead = leadingPromptLength(input);
+			const body = [...input.slice(0, lead), ...(args.priorWindow ?? []), ...input.slice(lead)];
+			retained = body.slice(lead);
+			return { model, ...(instructions === undefined ? {} : { instructions }), input: [...body, COMPACTION_TRIGGER], store: false, stream: true };
+		},
+	});
+	if (!posted.wire) {
+		return posted.aborted ? { ok: false, reason: "aborted" } : { ok: false, reason: "network-error", detail: posted.error };
 	}
 
-	try {
-		// 输入是否超窗由服务端裁决（context_length_exceeded → input-too-large）：
-		// 本地字符估算既不准也是第二事实源，历史上曾把正常触发线（窗口 − 预留）上的压缩全部误拒。
-		const input = [...request.input, COMPACTION_TRIGGER];
-		const response = await fetch(runtime.responsesUrl, {
-			method: "POST",
-			headers: buildHeaders(runtime),
-			body: JSON.stringify({
-				model: request.model,
-				instructions: request.instructions,
-				input,
-				store: false,
-				stream: true,
-			}),
-			signal,
-		});
-		const responseText = await response.text();
-		if (!response.ok) {
-			const detail = parseErrorDetail(responseText);
-			return {
-				ok: false,
-				reason: "non-2xx",
-				status: response.status,
-				...(detail ? { detail } : {}),
-			};
-		}
-		if (!responseText.trim()) {
-			return { ok: false, reason: "empty-body", status: response.status };
-		}
-
-		const parsed = parseResponseOutput(responseText);
-		if (!parsed.ok) {
-			return { ...parsed, status: response.status };
-		}
-
-		const compactionItems = parsed.parsed.output.filter((item) => item.type === "compaction");
-		if (compactionItems.length !== 1) {
-			return { ok: false, reason: "missing-compaction", status: response.status };
-		}
-
-		return {
-			ok: true,
-			compactedWindow: buildCompactedWindow(request.input, compactionItems[0]!),
-			createdAt: normalizeResponseTimestamp(parsed.parsed.createdAt),
-		};
-	} catch (error) {
-		return isAbortError(error)
-			? { ok: false, reason: "aborted" }
-			: {
-					ok: false,
-					reason: "network-error",
-					detail: error instanceof Error ? error.message : String(error),
-				};
+	const { status, text } = posted.wire;
+	if (status < 200 || status >= 300) {
+		const detail = parseErrorDetail(text);
+		return { ok: false, reason: "non-2xx", status, ...(detail ? { detail } : {}) };
 	}
+	if (!text.trim()) return { ok: false, reason: "empty-body", status };
+
+	const parsed = parseResponseOutput(text);
+	if (!parsed.ok) return { ...parsed, status };
+	const compactionItems = parsed.parsed.output.filter((item) => item.type === "compaction");
+	if (compactionItems.length !== 1) return { ok: false, reason: "missing-compaction", status };
+	return { ok: true, compactedWindow: buildCompactedWindow(retained, compactionItems[0]!) };
 }

@@ -22,7 +22,7 @@ afterEach(async () => {
 type Credential = { type: "oauth"; access: string; refresh: string; expires: number } | { type: "api_key"; key: string };
 
 /** 真实 SDK 会话：anthropic 由 faux 应答，凭据走真实令牌文件与宿主解析；responses 拿到本次请求所用令牌。 */
-async function claudeSession(credential: Credential, responses: Array<(token: string, authPath: string) => Promise<unknown>>) {
+async function claudeSession(credential: Credential, responses: Array<(token: string, authPath: string) => Promise<unknown>>, fauxProviderActive = true) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-token-rotation-"));
 	const agentDir = join(directory, "agent");
 	const authPath = join(agentDir, "auth.json");
@@ -50,8 +50,10 @@ async function claudeSession(credential: Credential, responses: Array<(token: st
 		sessionManager: SessionManager.inMemory(directory),
 		tools: [],
 	});
-	// 注册在会话之后：归因模块给 anthropic 补请求头的注册会覆盖先注册的原生供应商。
-	runtime.registerNativeProvider({
+	// 会话启动（session_start）时归因模块按凭据类型给 anthropic 补请求头，该注册会覆盖先注册的原生供应商，所以这里在其后注册。
+	await session.bindExtensions({ mode: "print" });
+	const headers = (await runtime.getAuth(faux.getModel()))?.auth.headers ?? {};
+	if (fauxProviderActive) runtime.registerNativeProvider({
 		...faux.provider,
 		auth: {
 			...faux.provider.auth,
@@ -64,7 +66,7 @@ async function claudeSession(credential: Credential, responses: Array<(token: st
 			},
 		},
 	});
-	return { session, tokens };
+	return { session, tokens, headers, runtime, authPath, headersNow: async () => (await runtime.getAuth(faux.getModel()))?.auth.headers ?? {} };
 }
 
 const oauth = (access: string): Credential => ({ type: "oauth", access, refresh: `${access}-refresh`, expires: FAR_FUTURE });
@@ -101,3 +103,31 @@ test.each([
 		session.dispose();
 	}
 }, 10_000);
+
+test.each([
+	["订阅登录", oauth("sub-token"), /^claude-cli\/\d+\.\d+\.\d+ \(external, cli\)$/],
+	["API key", { type: "api_key", key: "sk-ant-api03-own" } as Credential, undefined],
+])("%s：请求头里的 Claude Code 标识只给订阅会话", async (_name, credential, expected) => {
+	const { session, headers } = await claudeSession(credential, []);
+	try {
+		if (expected) expect(headers["user-agent"]).toMatch(expected);
+		else expect(headers).toEqual({});
+	} finally {
+		session.dispose();
+	}
+});
+
+test("同一会话里订阅登出、改用 API key 后，Claude Code 标识在下一次提示前被清掉", async () => {
+	const { session, headersNow, runtime, authPath } = await claudeSession(oauth("sub-token"), [], false);
+	try {
+		expect((await headersNow())["user-agent"]).toMatch(/^claude-cli\//);
+
+		await writeFile(authPath, JSON.stringify({ anthropic: { type: "api_key", key: "sk-ant-api03-own" } }));
+		await runtime.refresh({ allowNetwork: false });
+		await session.prompt("start").catch(() => undefined);
+
+		expect(await headersNow()).toEqual({});
+	} finally {
+		session.dispose();
+	}
+});
