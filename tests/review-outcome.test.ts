@@ -28,16 +28,27 @@ describe("review outcome reader", () => {
 	test("maps max-round and advisor terminal decisions to stopped", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "stopped-max-rounds.jsonl"))).toMatchObject({ status: "stopped" });
-		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped" });
+		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped", advisorAdvice: "stop here" });
 	});
 
-	test("error, cancelled or timed_out terminals surface as failed carrying the round details", async () => {
+	test("error, cancelled or timed_out terminals surface as failed carrying the failure text", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
 			status: "failed",
 			runId: "error-run",
 			rounds: 2,
 			reason: "issue remains",
+		});
+	});
+
+	// 修复回合期间被取消或超时：末轮仍是 failed，但结局不是“轮数用尽”。
+	test("a review cancelled during the repair turn is failed, not stopped", async () => {
+		const readReviewOutcome = await loadReader();
+		expect(readReviewOutcome(join(fixtures, "cancelled-during-repair.jsonl"))).toEqual({
+			status: "failed",
+			runId: "cancelled-run",
+			rounds: 1,
+			reason: "审查被取消",
 		});
 	});
 

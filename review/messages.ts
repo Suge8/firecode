@@ -14,6 +14,7 @@ const zhTerms = {
 	field: { severity: "严重程度", issue: "问题", evidence: "证据", contract: "违反的约定与期望行为", commands: "验证命令" },
 	high: "高",
 	medium: "中",
+	low: "低",
 	anchor: { files: "文件", commands: "命令" },
 	model: "模型",
 	models: "模型",
@@ -36,6 +37,7 @@ const enTerms: typeof zhTerms = {
 	},
 	high: "High",
 	medium: "Medium",
+	low: "Low",
 	anchor: { files: "files", commands: "commands" },
 	model: "Model",
 	models: "Models",
@@ -52,6 +54,17 @@ const escapeRegExp = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu
 /** 某个字段名在所有语言里的写法合成的正则片段。 */
 export function termPattern(pick: (terms: Terms) => string): string {
 	return `(?:${ALL_TERMS.map(pick).map(escapeRegExp).join("|")})`;
+}
+
+const BOLD = String.raw`(?:\*\*|__)?`;
+
+/**
+ * 字段行「- **字段名**：值」的匹配：字段名两种语言都认，容忍粗体包裹（含冒号写进粗体内）和冒号后的粗体开头；
+ * value 是接在冒号之后的正则片段，缺省时只匹配到冒号。审查者解析与状态机回顾已收口问题共用，容忍度一致。
+ */
+export function fieldLine(pick: (terms: Terms) => string, { value = "", bullet = true }: { value?: string; bullet?: boolean } = {}): RegExp {
+	const lead = bullet ? String.raw`[-*+]\s*` : String.raw`(?:[-*+]\s*)?`;
+	return new RegExp(String.raw`^${lead}${BOLD}${termPattern(pick)}${BOLD}\s*[:：]\s*${BOLD}\s*${value}`, "iu");
 }
 
 /** 审查输出里“## 建议（非阻塞）”标题行（整行，两种语言都认）：审查者解析与状态机拆建议区共用这一条。 */
@@ -76,19 +89,19 @@ export const msg = defineMessages({
 		notify: {
 			cannotSealOld: (reason: string) => `fire-review 无法收口旧 checkpoint：${reason}`,
 			stepFailed: (reason: string) => `fire-review 步骤失败：${reason}`,
-			checkpointConflict: "fire-review checkpoint 冲突，已停止审查。",
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint 写入失败，已停止审查：${reason}`,
 			cannotSeal: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
-			occupancyFailed: (reason: string) => `fire-review 无法同步占用状态：${reason}`,
 			cancelled: "审查已取消\n已按你的操作停止",
 		},
 		failure: {
 			reviewerSession: (reason: string) => `审查会话异常：${reason}`,
-			advisorSession: (reason: string) => `顾问会话异常：${reason}`,
 			cannotReadSession: (reason: string) => `无法读取 session 文件：${reason}`,
 			badJsonLine: (line: number) => `session 第 ${line} 行不是有效 JSON`,
-			staleRunId: "fire-review checkpoint Run ID 已失效",
-			illegalCheckpoint: "fire-review checkpoint 状态非法",
+		},
+		outcome: {
+			error: "审查因故障中止",
+			cancelled: "审查被取消",
+			timedOut: "审查超过总体时限被终止",
 		},
 		ui: {
 			reviewing: "审查中",
@@ -107,6 +120,8 @@ export const msg = defineMessages({
 			errorBlocker: `${zhTerms.blocker}：审查未完成`,
 			errorReason: (message: string) => `${zhTerms.reason}：${message}`,
 			advisorGuidance: (decision: string) => `顾问指引 · ${decision}`,
+			advisorSkipped: "顾问不可用，已跳过",
+			advisorSkippedBody: "未取得顾问裁决，按「继续修复」把本轮发现交给执行模型。",
 			modelLine: (model: string) => `**${zhTerms.model} · ${model}**`,
 			elapsed: (elapsed: string, total?: string) =>
 				total === undefined
@@ -158,6 +173,8 @@ export const msg = defineMessages({
 			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `第一行必须是 PASS 或 FAIL；实际是：${actual}`,
 			formatInvalid: (issue: string) => `审查输出格式无效：${issue}`,
+			failFormatNote: (issue: string) => `（审查者的 FAIL 输出未满足格式契约：${issue}。以下为原文，仍按未通过处理）`,
+			severityNotBlocking: (index: number, value: string) => `FAIL 第 ${index} 条发现的严重程度是「${value}」，阻塞发现只能是高或中（低严重度写进建议区）`,
 			timeout: "审查会话超时，未在时限内返回有效输出。",
 			sessionFailed: (reason: string) => `审查会话失败。${reason}`,
 			emptyOutput: "审查输出为空：无审查结论。",
@@ -199,19 +216,19 @@ export const msg = defineMessages({
 		notify: {
 			cannotSealOld: (reason: string) => `fire-review could not seal the old checkpoint: ${reason}`,
 			stepFailed: (reason: string) => `fire-review step failed: ${reason}`,
-			checkpointConflict: "fire-review checkpoint conflict; review stopped.",
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint write failed; review stopped: ${reason}`,
 			cannotSeal: "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc.",
-			occupancyFailed: (reason: string) => `fire-review could not sync the occupancy signal: ${reason}`,
 			cancelled: "Review cancelled\nStopped by user",
 		},
 		failure: {
 			reviewerSession: (reason: string) => `reviewer session error: ${reason}`,
-			advisorSession: (reason: string) => `advisor session error: ${reason}`,
 			cannotReadSession: (reason: string) => `Cannot read the session file: ${reason}`,
 			badJsonLine: (line: number) => `session line ${line} is not valid JSON`,
-			staleRunId: "fire-review checkpoint Run ID is no longer valid",
-			illegalCheckpoint: "fire-review checkpoint state is illegal",
+		},
+		outcome: {
+			error: "Review aborted by a failure",
+			cancelled: "Review was cancelled",
+			timedOut: "Review stopped at the overall time limit",
 		},
 		ui: {
 			reviewing: "Reviewing",
@@ -230,6 +247,8 @@ export const msg = defineMessages({
 			errorBlocker: `${enTerms.blocker}: review did not complete`,
 			errorReason: (message: string) => `${enTerms.reason}: ${message}`,
 			advisorGuidance: (decision: string) => `Advisor guidance · ${decision}`,
+			advisorSkipped: "Advisor unavailable, skipped",
+			advisorSkippedBody: "No advisor ruling was obtained; this round's findings go to the executor as \"continue fixing\".",
 			modelLine: (model: string) => `**${enTerms.model} · ${model}**`,
 			elapsed: (elapsed: string, total?: string) =>
 				total === undefined
@@ -281,6 +300,8 @@ export const msg = defineMessages({
 			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `first line must be PASS or FAIL; actual: ${actual}`,
 			formatInvalid: (issue: string) => `review output format invalid: ${issue}`,
+			failFormatNote: (issue: string) => `(The reviewer's FAIL output did not meet the format contract: ${issue}. Original text follows and still counts as a failure.)`,
+			severityNotBlocking: (index: number, value: string) => `FAIL finding ${index} has severity "${value}"; a blocking finding must be High or Medium (low severity goes in the suggestions section)`,
 			timeout: "review session timed out before returning valid output.",
 			sessionFailed: (reason: string) => `review session failed. ${reason}`,
 			emptyOutput: "review output is empty: no check result.",

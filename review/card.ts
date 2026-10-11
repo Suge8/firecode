@@ -17,16 +17,16 @@ import { msg, REDUNDANT_VERDICT_LINES, termPattern } from "./messages.js";
 import { shortModel, type CardData } from "./state.js";
 
 export const CARD_TYPE = "firecode-review-card";
-const VERSION = 1;
 
 /**
- * 卡标题前的单色字形与它的语义色，按卡种类一处定义：构建时写进 details.icon，渲染时按种类上色。
+ * 卡标题前的单色字形与它的语义色，按卡种类一处定义，渲染时按种类取用。
  * 字形与全局体系一致（✓ ✗ ◌ ‖ 与审查的盲文点阵），颜色只表达结论：通过绿、失败与未完成红、取消灰，
  * 审查过程中的中性卡（开始、顾问指引）用审查的金色——品牌火焰不用于中性状态。
  */
 const MARKS = {
 	start: { glyph: "⠿", color: "review" },
 	advisor: { glyph: "⠿", color: "review" },
+	skipped: { glyph: "◌", color: "review" },
 	pass: { glyph: "✓", color: "success" },
 	fail: { glyph: "✗", color: "error" },
 	stop: { glyph: "✗", color: "error" },
@@ -37,32 +37,28 @@ const MARKS = {
 const CARD_KINDS: ReadonlySet<string> = new Set(Object.keys(MARKS));
 const TONES = ["success", "warning", "neutral"] as const;
 
-function paintMark(details: CardDetails, theme: Theme): string {
-	const { color } = MARKS[details.kind];
-	return color === "review" ? paint(HEAT_COLORS.gold, details.icon) : theme.fg(color, details.icon);
+function paintMark(kind: CardData["kind"], theme: Theme): string {
+	const { glyph, color } = MARKS[kind];
+	return color === "review" ? paint(HEAT_COLORS.gold, glyph) : theme.fg(color, glyph);
 }
 
+/** tone 同时是折叠界面（tools/machine.ts）判断失败色的依据。 */
 type CardDetails = {
-	version: typeof VERSION;
 	kind: CardData["kind"];
 	title: string;
 	lines: string[];
 	tone: (typeof TONES)[number];
-	icon: string;
 };
 
 /** 一次性整体校验结果卡 payload；结构不符返回 false（渲染器降级 content 纯文本）。 */
 function isValidCardDetails(value: unknown): value is CardDetails {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	const record = value as Record<string, unknown>;
-	if (Object.keys(record).length !== 6) return false;
-	if (record.version !== VERSION) return false;
+	if (!isRecord(value)) return false;
+	const record = value;
 	if (typeof record.kind !== "string" || !CARD_KINDS.has(record.kind)) return false;
 	if (typeof record.title !== "string") return false;
 	if (!Array.isArray(record.lines) || !record.lines.every((line) => typeof line === "string"))
 		return false;
-	if (!TONES.includes(record.tone as CardDetails["tone"])) return false;
-	return typeof record.icon === "string";
+	return TONES.includes(record.tone as CardDetails["tone"]);
 }
 
 interface BuiltCard {
@@ -113,7 +109,7 @@ class ReviewCard implements Component {
 function nativeCard(details: CardDetails, theme: Theme): Component {
 	// 全家卡统一：无垂直内边距；消息间距由宿主 CustomMessageComponent 提供，不再叠加。
 	const box = new Box(1, 0, (text) => theme.bg(backgroundFor(details.tone), text));
-	box.addChild(new Text(`${paintMark(details, theme)} ${details.title}`, 0, 0));
+	box.addChild(new Text(`${paintMark(details.kind, theme)} ${details.title}`, 0, 0));
 	box.addChild(new Spacer(1));
 	box.addChild(new Markdown(details.lines.join("\n"), 0, 0, getMarkdownTheme()));
 	return box;
@@ -152,6 +148,8 @@ export function buildCard(card: CardData): BuiltCard {
 			return errored(card);
 		case "advisor":
 			return advisorCard(card);
+		case "skipped":
+			return spec("skipped", msg.card.advisorSkipped, [msg.card.advisorSkippedBody, msg.card.errorReason(card.message)], "neutral");
 	}
 }
 
@@ -291,6 +289,6 @@ function spec(
 ): BuiltCard {
 	return {
 		content: `${title}\n${lines.join("\n")}`,
-		details: { version: VERSION, kind, title, lines, tone, icon: MARKS[kind].glyph },
+		details: { kind, title, lines, tone },
 	};
 }
