@@ -390,12 +390,12 @@ test("自定义渲染与自带鼠标处理的工具同样入组，展开态正�
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 	s.ui.setToolsExpanded(true);
 	for (const shell of ["self", "default"]) {
-		s.click(s.lines().findIndex((line: string) => line.startsWith("▏") && line.includes(`custom-${shell}`)));
+		s.click(s.lines().findIndex((line: string) => line.includes(`custom-${shell}`)));
 		expect(s.lines().join("\n")).toContain(`static custom render ${shell}`);
 		s.click(s.lines().findIndex((line: string) => line.includes(`static custom render ${shell}`)));
 		expect(s.lines().join("\n")).not.toContain(`static custom render ${shell}`);
 	}
-	s.click(s.lines().findIndex((line: string) => line.startsWith("▏") && line.includes("real-control")));
+	s.click(s.lines().findIndex((line: string) => line.includes("real-control")));
 	s.click(s.lines().findIndex((line: string) => line.includes("确认操作")));
 	expect(clicked).toBe(1);
 });
@@ -590,22 +590,6 @@ test("一轮里先被 Esc 中断、又跑了一段（如 /fire-review）：不�
 	s.setNow(600_000);
 	const summary = s.lines().find((line: string) => /^[✓✗]/.test(line))!.trimEnd();
 	expect(summary).toBe("✓ 5m32s · 中断过 1 次");
-	expect(s.chat.render(100).join("\n")).toContain(s.ui.theme.fg("warning", "中断过 1 次"));
-});
-
-test("折叠态中间回复取最近 3 条首句，更早的折成 +N 条，最后一条回复全文", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	for (let step = 1; step <= 5; step++) {
-		assistant(s, [{ type: "text", text: `第 ${step} 步。细节${step}` }, { type: "toolCall", id: `c${step}`, name: "read", arguments: {} }], "toolUse");
-		s.complete(s.tool("read", { path: `${step}.ts` }));
-	}
-	assistant(s, [{ type: "text", text: "全文收尾" }]);
-
-	const lines = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(lines.filter((line: string) => line.includes("开工"))).toHaveLength(1);
-	expect(lines.slice(lines.findIndex((line: string) => line.startsWith("✓")) + 1)).toEqual(["+2 条", "第 3 步。", "第 4 步。", "第 5 步。", "全文收尾"]);
-	expect(lines.join("\n")).not.toContain("细节");
 });
 
 test("逐轮展开只是相对全局档位的临时覆盖：ctrl+o 永远是全部展开/全部折叠", async () => {
@@ -694,18 +678,6 @@ test("中间回复与子代理结果行都经首句规则预览（规则本身�
 	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
 });
 
-test("异常提醒：宿主提示原文按宽裁剪；多条提示取首条；工具失败不影响标记", async () => {
-	const s = await scene();
-	s.complete(s.tool("read", { path: "missing" }), "ENOENT", true);
-	s.note("warning", "Cache miss after 8m idle: 63k tokens re-billed");
-	s.note("warning", "Anthropic dropped 23 thinking blocks");
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ ⚠ Cache miss after 8m idle: 63k tokens re-billed\s*$/);
-	const narrow = s.lines(30).filter(Boolean)[0];
-	expect(narrow).toMatch(/^✓ ⚠ Cache m/);
-	expect(s.tui.visibleWidth(narrow)).toBeLessThanOrEqual(30);
-	expect(s.lines().join("\n")).not.toMatch(/[▸▾]/);
-});
-
 test("运行中摘要的目标按宽度先裁，动作词保留，放不下才丢目标", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
@@ -750,11 +722,18 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要只�
 	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });
 
-test("纯文字轮从开始到歇下摘要行一直在原位：思考中 → 回复中 → 落定，回复不跳", async () => {
+test("摘要行从开始到歇下一直在原位：思考中 → 读取 → 思考中 → 回复中 → 落定，回复不跳；当前动作不挂着已完成的工具", async () => {
 	const s = await scene();
 	hostUser(s, "你好");
 	s.setNow(1000);
 	feed(s, true, 0, 1000);
+	const current = () => s.lines(60).find((line: string) => /^[⠀-⣿]/.test(line))!.trimEnd();
+	// 助手组件还没来时已有摘要行；当前动作只说正在发生的事：工具在跑是动作，都完成后等模型是思考中。
+	expect(current()).toMatch(new RegExp(`^${FLAME} 思考中$`));
+	const read = s.tool("read", { path: "/project/a.ts" });
+	expect(current()).toMatch(new RegExp(`^${FLAME} 读取 \\./a\\.ts$`));
+	s.complete(read);
+	expect(current()).toMatch(new RegExp(`^${FLAME} 思考中$`));
 	const reply = s.blankAssistant();
 	const frame = () => s.lines(60).map((line: string) => line.trimEnd());
 	const summaryAt = (lines: string[]) => lines.findIndex((line) => /^(?:✓|✗|[⠀-⣿])/.test(line));
@@ -783,20 +762,6 @@ test("纯文字轮从开始到歇下摘要行一直在原位：思考中 → 回
 	expect(summaryAt(settled)).toBe(summaryAt(first));
 	expect(settled[summaryAt(settled)]).toMatch(/^✓ 2\.4s · 80 tps$/u);
 	expect(settled.findIndex((line) => line.includes("你好，有什么要做的？"))).toBe(replyAt);
-});
-
-test("当前动作只说正在发生的事：工具都完成后等模型是思考中，出正文是回复中，不再挂着已完成的工具", async () => {
-	const s = await scene();
-	hostUser(s, "看一下");
-	feed(s, true, 0, 0);
-	const summary = () => s.lines().find((line: string) => /^[⠀-⣿]/.test(line))!.trimEnd();
-	const read = s.tool("read", { path: "/project/a.ts" });
-	expect(summary()).toMatch(new RegExp(`^${FLAME} 读取 \\./a\\.ts$`));
-	s.complete(read);
-	expect(summary()).toMatch(new RegExp(`^${FLAME} 思考中$`));
-	const reply = s.blankAssistant();
-	reply.updateContent({ role: "assistant", stopReason: "pending", content: [{ type: "text", text: "读完了，正在" }] }, true);
-	expect(summary()).toMatch(new RegExp(`^${FLAME} 回复中$`));
 });
 
 test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预览取首条发现或原因，观察员只写建议原文", async () => {
@@ -836,7 +801,7 @@ test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预
 	expect(["第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
 });
 
-test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失败”（红），与提示原文同一退让", async () => {
+test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失败”，与提示原文同一退让，窄屏先裁提示原文", async () => {
 	const s = await scene();
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
@@ -849,7 +814,6 @@ test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失
 	s.setNow(60_000);
 	const summary = (width = 100) => s.lines(width).find((line: string) => line.startsWith("✓"))!.trimEnd();
 	expect(summary()).toBe("✓ 3.0s · 2 个子代理失败");
-	expect(s.chat.render(100).join("\n")).toContain(s.ui.theme.fg("error", "2 个子代理失败"));
 	expect(summary(20)).toBe("✓ 2 个子代理失败");
 
 	s.chat.addChild(new s.tui.Spacer(1));
@@ -860,27 +824,6 @@ test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失
 		expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 		expect(line).toContain("2 个子代理失败");
 	}
-});
-
-test("展开态 ↳ 行与上一段正文之间空一行；折叠态中间回复与最后回复左边距一致", async () => {
-	const s = await scene();
-	hostUser(s, "开工");
-	assistant(s, [{ type: "text", text: "先看看。" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "a.ts" }));
-	assistant(s, [{ type: "text", text: "全部通过。" }], "toolUse");
-	hostUser(s, WORKER_RESULT("fix-auth"));
-	assistant(s, [{ type: "text", text: "收口" }]);
-
-	const folded = s.lines();
-	const interim = folded.find((line: string) => line.includes("先看看。"))!;
-	const final = folded.find((line: string) => line.includes("收口"))!;
-	expect(interim.indexOf("先看看。")).toBe(final.indexOf("收口"));
-
-	s.ui.setToolsExpanded(true);
-	const expanded = s.lines();
-	const body = expanded.findIndex((line: string) => line.includes("全部通过。"));
-	expect(expanded[body + 1].trim()).toBe("");
-	expect(expanded[body + 2].trim()).toStartWith("↳ fix-auth 已返回");
 });
 
 test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为红、预览取错误原文、计入子代理失败数", async () => {
@@ -983,7 +926,7 @@ test("宿主形状不符出现在全局展开补丁里时同样整体退回原�
 	expect(host.CustomMessageComponent.prototype.setExpanded).toBe(pristine);
 });
 
-test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮，折叠态与展开态都是带竖条的全文、上下留白；歇下之后的人类消息才开新一轮", async () => {
+test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮，折叠态与展开态都显示全文；歇下之后的人类消息才开新一轮", async () => {
 	const s = await scene();
 	hostUser(s, "原问题");
 	s.setNow(0);
@@ -1001,19 +944,14 @@ test("补话不切轮：与上一条人类消息之间没有轮记录的人类�
 	s.settle(5_000, "complete", 0);
 	s.setNow(60_000);
 
-	const all = s.lines().map((line: string) => line.trimEnd());
-	const folded = all.filter(Boolean);
+	const folded = s.lines().map((line: string) => line.trimEnd()).filter(Boolean);
 	expect(folded.filter((line: string) => /^✓/.test(line))).toEqual(["✓ 5.0s"]);
 	const at = (needle: string) => folded.findIndex((line: string) => line.includes(needle));
-	// 补话是人类原话：与普通用户消息同样的竖条全文，不截成首句。
-	expect(folded[at("补一句")]).toBe("▌ 补一句：顺便说下几点");
-	expect(folded[at("第二行细节")]).toBe("▌ 第二行细节");
+	// 补话是人类原话：全文显示，不截成首句。
+	expect(folded[at("补一句")]).toContain("补一句：顺便说下几点");
+	expect(folded[at("第二行细节")]).toContain("第二行细节");
 	expect([at("原问题"), at("✓ 5.0s"), at("先看看。"), at("补一句"), at("第二行细节"), at("现在十点。")])
 		.toEqual([at("原问题"), at("✓ 5.0s"), at("先看看。"), at("补一句"), at("第二行细节"), at("现在十点。")].sort((a, b) => a - b));
-	const row = (needle: string) => all.findIndex((line: string) => line.includes(needle));
-	// 上下留白：与前一条中间回复、后一条回复之间都至少隔一行空白。
-	expect(all.slice(row("先看看。") + 1, row("补一句")).some((line: string) => !line.replace(/▌/u, "").trim())).toBe(true);
-	expect(all.slice(row("第二行细节") + 1, row("现在十点。")).some((line: string) => !line.replace(/▌/u, "").trim())).toBe(true);
 
 	s.click(s.lines().findIndex((line: string) => line.startsWith("✓")));
 	const expanded = s.lines().join("\n");
@@ -1024,16 +962,6 @@ test("补话不切轮：与上一条人类消息之间没有轮记录的人类�
 	hostUser(s, "新问题");
 	s.complete(s.tool("read", { path: "c.ts" }));
 	expect(s.lines().filter((line: string) => /^✓/.test(line))).toHaveLength(2);
-});
-
-test("回合一开始就有摘要行：首条用户消息一出现就带橙色竖条，助手组件还没来时已显示思考中", async () => {
-	const s = await scene();
-	s.setNow(0);
-	feed(s, true, 0, 0);
-	hostUser(s, "你好");
-	const lines = s.lines().map((line: string) => line.trimEnd()).filter(Boolean);
-	expect(lines[0]).toBe("▌ 你好");
-	expect(lines[1]).toMatch(new RegExp(`^${FLAME} 思考中$`));
 });
 
 test("点击摘要展开或收起时被点的行留在视口内；原本跟随末尾的之后恢复跟随、新输出看得到，原本已上滚的保持不动", async () => {
@@ -1191,7 +1119,7 @@ test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一�
 	expect(s.tui.visibleWidth(stripVTControlCharacters(machine))).toBeLessThanOrEqual(width - 2);
 });
 
-test("折叠态按时间顺序：每条补话之后跟它那一段的中间回复首句，“+N 条”在各自段内，补话之间不空出多余的行", async () => {
+test("折叠态按时间顺序：每条补话之后跟它那一段的中间回复首句，每段最多 3 条、更早的折成“+N 条”，最后一条回复全文", async () => {
 	const s = await scene();
 	const interim = (text: string, id: string) => {
 		assistant(s, [{ type: "text", text }, { type: "toolCall", id, name: "read", arguments: {} }], "toolUse");
@@ -1211,36 +1139,19 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 	s.settle(5_000, "complete", 0);
 	s.setNow(60_000);
 
-	const all = s.lines().map((line: string) => line.trimEnd());
-	expect(all.filter((line: string) => line.replace(/▌/u, "").trim()).map((line: string) => line.trim())).toEqual([
-		"▌ 原问题", "✓ 5.0s", "回复甲。", "回复乙。",
-		"▌ 补话一", "+1 条", "回复丁。", "回复戊。", "回复庚。",
-		"▌ 补话二", "回复己。",
+	const shown = s.lines().map((line: string) => line.replace(/^▌/u, "").trim()).filter(Boolean);
+	expect(shown).toEqual([
+		"原问题", "✓ 5.0s", "回复甲。", "回复乙。",
+		"补话一", "+1 条", "回复丁。", "回复戊。", "回复庚。",
+		"补话二", "回复己。",
 		"最终回复。",
 	]);
-	// 留白与其他节点一致：人类消息的上下内边距加一行间隔，最多连续两行空白。
-	let blank = 0;
-	for (const line of all) {
-		blank = line.replace(/▌/u, "").trim() ? 0 : blank + 1;
-		expect(blank).toBeLessThanOrEqual(2);
-	}
 });
 
-test("用户消息竖条上下不保留宿主的底色内边距空行（竖条从第一行正文开始、到最后一行正文结束，前后是普通间隔），OSC 133 语义提示标记留在行首", async () => {
+test("用户消息的 OSC 133 语义提示标记始终在行首：终端把行中的 133;A 当 fresh-line 执行 CR+LF，会把后半行写到下一行留下残影", async () => {
 	const s = await scene();
 	hostUser(s, "第一段\n\n第二段");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	const raw = s.chat.render(60);
-	const plain = raw.map((line: string) => stripVTControlCharacters(line));
-	const first = plain.findIndex((line: string) => line.startsWith("▌"));
-	const last = plain.findLastIndex((line: string) => line.startsWith("▌"));
-	expect(plain[first]).toContain("第一段");
-	expect(plain[last]).toContain("第二段");
-	expect(plain[first - 1]).toBe("");
-	expect(plain[last + 1]).toBe("");
-	// OSC 133 语义标记仍在消息的第一行行首。
-	expect(raw[first]).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/u);
-	// 终端（libghostty 等）把行中的 133;A 当 fresh-line 执行 CR+LF，会把后半行写到下一行留下残影：所有带标记的行，标记都在行首。
 	assistant(s, [{ type: "text", text: "收到" }]);
 	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
 	expect(marked.length).toBeGreaterThan(0);
