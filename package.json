@@ -17,7 +17,8 @@
     "pi-extension"
   ],
   "files": [
-    "dist"
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "test": "bun test",
