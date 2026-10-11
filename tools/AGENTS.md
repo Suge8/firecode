@@ -8,7 +8,7 @@
 | `group-view.ts` | 从原组件顺序派生轮、过程组与折叠/展开投影（轮界、摘要行、中间回复规则见其注释） |
 | `turn-summary.ts` | 摘要行渲染；会话进行中的事实由投影环境的 `busy()` 拉取（主会话取 `busy.ts` 的 `busyView`，子代理视图取自己的会话事件），不记时长 |
 | `round.ts` | 轮记录的宿主适配：把 entry 渲染成零行标记组件，投影按能力识别；记录的格式、测量、读取与一轮多条的合成规则（`combineRounds`）在根 `round.ts`，摘要行与输入框外壳都经它读，resume 后仍有数 |
-| `machine.ts` | 信封机器消息的一行投影，卡片与展开态共用；分节标记与耗时行词汇读根 `messages.ts` 的 `envelope`，与生产端（`master/event-format.ts`）同源；审查卡的字段名读 `review/messages.ts` 的 `terms`，两种语言都认 |
+| `machine.ts` | 信封机器消息的一行投影，卡片与展开态共用；信封词汇与审查卡字段名的来源见根 AGENTS「文案」 |
 | `assistant-view.ts` | 思考/正文投影，封装宿主助手组件的内部结构，不重建 Markdown |
 | `line.ts` `parts.ts` `actions.ts` | 单工具行、着色片段与动作词/目标（工具行与 Master 活动列表共用）；Master 复用纯渲染部分 |
 | `click-anchor.ts` | 点击展开时的视口锚定，主会话与子代理视图共用 |

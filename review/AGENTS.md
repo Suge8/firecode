@@ -58,8 +58,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 ## 占用信号
 
 审查活跃期只有一个出口：进程内 `firecode:review` 频道（定义见根 `busy.ts`，读者一律经 `watchBusy`），review 是唯一发布者，不接触 herdr。
-`busy.ts` 把它算进“会话进行中”，herdr 投影据此报 working 并带“对抗审查进行中”标签（不报 blocked：审查期间不需要用户决定任何事，
-blocked 会触发需要关注的通知）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障由宿主事件总线隔离，不影响审查。
+`busy.ts` 把它算进“会话进行中”（herdr 侧如何呈现见 `session/herdr-projection.ts` 头注释）；终态、取消、退出时发布 `active:false`，reload 恢复时重新持有。订阅方故障由宿主事件总线隔离，不影响审查。
 
 ## 契约与配置
 
@@ -75,4 +74,3 @@ blocked 会触发需要关注的通知）；终态、取消、退出时发布 `a
 
 config.jsonc 的 `review` 节必须显式完整配置（字段见 `config.ts`）；公开包不内置依赖个人认证或偏好的模型。
 该节有任何配置问题时，`/fire-review` 与 checkpoint 恢复都拒绝启动；活动 checkpoint 保持原样，修好配置并重启后继续恢复。
-不读 pi-flow 的 config.json。

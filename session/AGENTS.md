@@ -32,7 +32,7 @@ Claude 只解析当前接口的 `limits[]`，`session`、`weekly_all` 与 Fable 
 
 **安装前提：必须卸载 herdr 官方 Pi 集成**（`herdr integration uninstall pi`），也不要在 herdr 设置面板里点 install——会装回来。
 herdr 每个 pane 只有一个 hook authority，官方 source（`herdr:pi`）在位时其它 source 的状态上报被静默丢弃，
-两个写者并存时 FireCode 的上报全部失效；状态标签（`state_labels.working`）与上述行为按 herdr 0.9.3 核实；FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
+两个写者并存时 FireCode 的上报全部失效；状态标签（`state_labels.working`）与上述行为是 herdr 的行为，升级 herdr 后需重新核实；FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
 
 投影内容见文件头注释，状态 working 的来源与审查为何不报 blocked 也在那里；`seq` 用时间戳型，身份与状态共用一个单调计数；
 自定义 source 拿不到官方会话恢复，所以每次状态上报附 `resume_argv`（`pi --session <会话文件>`，路径含撇号时 herdr 拒收，不附）。
@@ -45,5 +45,3 @@ workspace、pane label 与 tab label 都归 herdr、用户或 Master 管；FireC
 model/thinking 选择。同一内容不重发，只有确认送达才记为已发布，请求串行避免乱序覆盖。非 TUI 模式
 （print/json/rpc）与子会话不投影：无头调用不能接管可见会话的显示。只有 `quit` 清空身份并 release，
 reload/new/resume/fork 由新会话的 `session_start` 覆盖（重载时回合已在跑的情形由 `busy.ts` 在 `session_start` 读 `ctx.isIdle()` 补上，herdr 不另算）。没有 feature 开关。
-
-测试在 herdr pane 里运行时会继承 `HERDR_*`，`bunfig.toml` 的 preload 把它们清掉，避免用例把测试会话报到真实 pane。

@@ -16,10 +16,9 @@
 - **角色**（Role）→ 配置 `master.roles` 的键；避免：模型别名、预设
 - **fallback 链**（Fallback Chain）→ `master.roles.*.fallback`、`master/run.ts`；避免：质量路由、瞬时限流重试、静默降级
 - **收割**（Harvest）：调研与盯守子代理取完要点即 kill；避免：清理、归档
-- **发落**（Disposition）→ 档案 `disposition`；指挥官对落定类事件的 send / review / kill / ack；避免：确认、处置
 - **审查义务**（Review Obligation）→ `review:true`、档案 `reviewNeeded`；避免：自动审查、审查触发器
 - **会话进行中** / **歇下**（Session Busy）→ `busy.ts`；指挥官回合结束不等于歇下；避免：完成、空闲
-- **待命**（Ack）→ `ack` 动作；避免：挂起、暂停、hold
+- **待命**（Ack）→ `ack` 动作；清失败/被中断行并取消续跑提醒，审查义务未履行时拒绝；避免：挂起、暂停、hold
 - **中断**（Interruption）→ 档案 `interruptedAt`；不是执行失败；避免：执行失败、abort
 - **自动续跑**（Auto-resume）→ “待续跑”提醒；插件只提醒，续派仍由指挥官发；避免：自动重发、心跳
 

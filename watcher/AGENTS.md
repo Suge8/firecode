@@ -36,7 +36,7 @@ compaction、会话切换或观察会话自身上下文超过阈值时，丢弃�
 ## 配置
 
 `watcher` 节的字段与默认值见 `config.ts`，模型必须显式配置。`features.watcher` 开关本身写错（字符串
-`"false"` 会因 `!== false` 静默启用）也算配置问题。模型由子会话池解析，必须能在内置 provider 或 models.json 解析——扩展注册的 provider（如 antigravity）在
+`"false"` 会因 `!== false` 静默启用）也算配置问题。模型由子会话池解析，必须能在内置 provider 或 models.json 解析——扩展注册的 provider 在
 子会话里不可解析，解析失败时报错引导改用内置 provider 模型。
 
 裸 `/fire-watch` 翻转当前会话，不写回配置。启用时通过 `setStatus` 发布“观察员”，关闭或故障停用时清除；
