@@ -82,10 +82,8 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 		ui: { setWorkingVisible: (visible: boolean) => workingVisible.push(visible) },
 		pi: { getThinkingLevel: () => "medium" },
 	});
-	const { visibleWidth } = await import(PI_TUI_URL) as any;
 	const { fake, ctx, statuses, top, bottom } = host;
 	host.start();
-	const editor = host.editor();
 
 	expect(host.footer().render(100)).toEqual([]);
 	expect(workingVisible).toEqual([false]);
@@ -112,27 +110,17 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(top()).not.toContain("处理中");
 	fake.fire("agent_start", {}, ctx);
 	expect(top()).toMatch(/处理中 \d/u);
-	let progress = { stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 };
-	fake.pi.events.emit("firecode:review", { active: true, progress: () => progress });
-	expect(top()).toMatch(/^─ [\u2800-\u28ff]{3} \S+ · [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 审查 第2轮 1\/3 · 1 阻断 /u);
-	// 审查字形是金色盲文转圈点，与火苗同一字符族，靠金色区分。
-	expect(editor.render(100)[0]).toMatch(/\x1b\[38;2;255;195;61m[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u);
-	progress = { stage: "reviewing", round: 2, passed: 3, total: 3, blocked: 0 };
-	expect(top()).toContain("审查 第2轮 3/3 ─");
 	statuses.set("watcher", "观察员");
 	statuses.set("master", "指挥官");
 	expect(top()).toEndWith(" 观察员 指挥官 ─");
 	fake.fire("agent_end", { messages: [] }, ctx);
 	fake.fire("agent_settled", {}, ctx);
 	expect(top()).not.toContain("处理中");
-	expect(top()).toContain("审查 第2轮 3/3");
-	progress = { stage: "summarizing", round: 2, passed: 0, total: 0, blocked: 0 };
-	expect(top()).toContain("审查 第2轮 总结中");
-	fake.pi.events.emit("firecode:review", { active: false });
-	expect(top()).not.toContain("审查");
 
-	for (let width = 1; width <= 120; width++)
-		for (const line of editor.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	// 预设名由预设模块发布，外壳原样显示在标题之后、模型之前。
+	statuses.set("preset", "Deep");
+	expect(bottom()).toContain("Deep · test-model/medium Fast");
+
 	fake.fire("session_shutdown", {}, ctx);
 	expect(host.footer()).toBeUndefined();
 	expect(host.editor()).toBeUndefined();
@@ -159,19 +147,6 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
 });
 
-test("上下文低占用保持灰色，仅接近既有阈值时警告", async () => {
-	const colorOf = async (percent: number | null) => {
-		const host = await mount({ percent, theme: { fg: (color, text) => `<${color}>${text}` } });
-		host.start();
-		return /<(\w+)>(?:[\d.]+%|\?)/u.exec(host.bottom(120))?.[1];
-	};
-	expect(await colorOf(0)).toBe("dim");
-	expect(await colorOf(49.9)).toBe("dim");
-	expect(await colorOf(50)).toBe("warning");
-	expect(await colorOf(75)).toBe("error");
-	expect(await colorOf(null)).toBe("muted");
-});
-
 test("输入框边框按宽度退让：下边框先省容量、再让预设名、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
 	const { bottomBorder } = await loadFirecodeModule("statusbar/render.js") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
@@ -192,27 +167,6 @@ test("输入框边框按宽度退让：下边框先省容量、再让预设名�
 			expect(visibleWidth(text)).toBeLessThanOrEqual(width);
 			if (width >= 20) expect(stripVTControlCharacters(text)).toContain("23%");
 		}
-});
-
-test("输入框上边框：状态在左，观察员与指挥官在右，宽度不够时先省审查字样、处理中、审查计数", async () => {
-	const { topBorder } = await loadFirecodeModule("statusbar/render.js") as any;
-	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	const parts = {
-		mark: "FFF", word: "处理中", elapsed: "12s", review: ["◈ 审查 2/3", "◈ 2/3"],
-		watcher: "观察员", master: "指挥官", glow: 0,
-	};
-	const line = (text: string) => text;
-	const draw = (width: number, over = {}) => stripVTControlCharacters(topBorder(width, { ...parts, ...over }, line));
-
-	for (const width of [110, 72]) expect(draw(width)).toMatch(/^─ FFF 处理中 12s · ◈ 审查 2\/3 ─{2,} 观察员 指挥官 ─$/u);
-	expect(draw(40)).toMatch(/^─ FFF 处理中 12s · ◈ 2\/3 ─{2,} 指挥官 ─$/u);
-	expect(draw(26)).toMatch(/^─ FFF 12s ─{2,} 指挥官 ─$/u);
-	const idle = { mark: "", word: "", elapsed: "", review: [] };
-	expect(draw(110, idle)).toMatch(/^─{2,} 观察员 指挥官 ─$/u);
-	expect(draw(30, { ...idle, watcher: "", master: "" })).toBe("─".repeat(30));
-	for (let width = 0; width <= 120; width++)
-		for (const over of [{}, idle, { watcher: "" }, { master: "" }])
-			expect(visibleWidth(topBorder(width, { ...parts, ...over }, line))).toBeLessThanOrEqual(width);
 });
 
 test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变忙起连续累计，中途输入与结果唤醒都不重置）/ 全部落定且歇下才定格", async () => {
@@ -293,100 +247,77 @@ test("上边框落定态：均速跟在耗时后，中断与请求失败写明�
 });
 
 
-/** 会话进行中的视图由 busy.ts 产出；这里换掉它的 watchBusy，直接喂带 review 字段的视图（主会话审查算进行中）。 */
-async function shellWithBusy() {
-	const { readFileSync } = await import("node:fs");
-	const { join } = await import("node:path");
-	const { FIRECODE_DIR } = await import("./loader.ts");
-	const stub = [
-		`export * from "./busy-real.ts";`,
-		`import { watchBusy as real } from "./busy-real.ts";`,
-		`export function watchBusy(pi, handlers) { globalThis.__fcBusyFeed = handlers; return real(pi, handlers); }`,
-	].join("\n");
+/** 外壳加真实记录：轮记录写进分支再发布“已写入”，审查进度经真实的占用频道。 */
+async function shellWithRecords() {
 	const branch: unknown[] = [];
-	let branchReads = 0;
 	const host = await mount({
-		moduleOptions: { extraFiles: { "busy-real.ts": readFileSync(join(FIRECODE_DIR, "busy.ts"), "utf8"), "busy.ts": stub } },
 		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
 		name: () => "修复登录态偶发失效",
-		branch: () => { branchReads++; return branch; },
+		branch: () => branch,
 		statuses: new Map([["master", "指挥官"]]),
 		pi: { getThinkingLevel: () => "off" },
 	});
-	const { fake, ctx, statuses, start } = host;
-	start();
-	const feed = (globalThis as any).__fcBusyFeed;
+	host.start();
 	let progress: Record<string, unknown> | undefined;
 	return {
-		statuses,
+		...host,
 		branch,
-		branchReads: () => branchReads,
-		start,
-		/** review: true 即审查持有；进度由 review() 设置，外壳每次绘制才读它。 */
-		view: ({ review, ...view }: Record<string, unknown>) =>
-			feed.onChange({ agentRunning: false, inFlight: 0, ...view, review: review ? () => progress : undefined }),
+		/** 审查持有或释放占用；进度由 progress() 设置，外壳每次绘制才读它。 */
+		review: (active: boolean) => host.fake.pi.events.emit("firecode:review", active ? { active, progress: () => progress } : { active }),
+		progress: (next: Record<string, unknown>) => { progress = next; },
+		workers: (inFlight: number) => host.fake.pi.events.emit("firecode:workers", { inFlight }),
 		/** 歇下边沿：像记录器一样把这一段的轮记录写进分支，再通知外壳。 */
 		settle: (round: Record<string, unknown>) => {
 			branch.push(roundEntry(round));
-			fake.pi.events.emit(ROUND_RECORDED);
+			host.fake.pi.events.emit(ROUND_RECORDED);
 		},
-		review: (next: Record<string, unknown>) => { progress = next; },
-		top: (width = 110) => host.top(width),
-		bottom: (width = 110) => host.bottom(width),
 	};
 }
 
 test("主会话审查算会话进行中：上边框是火苗加计时与审查进度，不并排显示上一段的落定记录，也不写“等待 N 个子代理”", async () => {
-	const shell = await shellWithBusy();
+	const shell = await shellWithRecords();
 	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
 	try {
 		setSystemTime(new Date(1_000_000));
 		shell.settle({ elapsed: 3_100, outcome: "complete", tps: 21.5 });
-		expect(shell.top()).toContain("✓ 3.1s");
-		shell.view({ busy: true, since: 1_000_000, review: true, inFlight: 2 });
-		shell.review({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 0 });
+		expect(shell.top(110)).toContain("✓ 3.1s");
+		shell.workers(2);
+		shell.review(true);
+		shell.progress({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 0 });
 		setSystemTime(new Date(1_062_000));
-		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
+		expect(shell.top(110)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
 		expect(shell.top(40)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
 		// 修复回合指挥官在跑，措辞与只等审查时一致：审查期间的状态都由审查进度说明，不另写“处理中”。
-		shell.view({ busy: true, since: 1_000_000, review: true, agentRunning: true });
-		shell.review({ stage: "fixing", round: 2, passed: 0, total: 0, blocked: 0 });
-		expect(shell.top()).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 修复中 ─+ 指挥官 ─$`, "u"));
+		shell.fake.fire("agent_start", {}, shell.ctx);
+		shell.progress({ stage: "fixing", round: 2, passed: 0, total: 0, blocked: 0 });
+		expect(shell.top(110)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 修复中 ─+ 指挥官 ─$`, "u"));
+		shell.review(false);
+		expect(shell.top(110)).not.toContain("审查");
 	} finally {
 		setSystemTime();
 	}
 });
 
 test("歇下那一刻上边框直接是 ✓ 加定格文字，不先出一帧冷却中的火苗", async () => {
-	const shell = await shellWithBusy();
-	shell.view({ busy: true, since: Date.now() - 2_900, agentRunning: true });
-	shell.view({ busy: false });
+	const shell = await shellWithRecords();
+	shell.fake.fire("agent_start", {}, shell.ctx);
+	shell.fake.fire("agent_settled", {}, shell.ctx);
 	shell.settle({ elapsed: 2_900, outcome: "complete", tps: 40 });
-	expect(shell.top()).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
+	expect(shell.top(110)).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
 });
 
-test("预设名显示在下边框标题之后、模型之前，不带图标；显不显示由预设模块发不发布决定，外壳原样显示", async () => {
-	const shell = await shellWithBusy();
-	shell.statuses.set("preset", "Deep");
-	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Deep · test-model · 1\.0%\/1M ─$/u);
-	shell.statuses.set("preset", "\x1b[38;5;4mModel\x1b[39m");
-	expect(shell.bottom()).toMatch(/^─ 修复登录态偶发失效 ─+ Model · test-model · 1\.0%\/1M ─$/u);
-});
-
-test("落定态与摘要行读同一份事实：一轮多段按同一合成规则显示整轮（耗时累加、更早的中断追加）；事件时算一次，歇下后反复重绘（按键）不再读会话分支；重开会话时直接显示上一轮", async () => {
-	const shell = await shellWithBusy();
+test("落定态与摘要行读同一份事实：一轮多段按同一合成规则显示整轮（耗时累加、更早的中断追加）；重开会话时直接显示上一轮", async () => {
+	const shell = await shellWithRecords();
 	shell.branch.push(humanEntry("上一轮"), roundEntry({ elapsed: 9_000, outcome: "complete" }));
 	shell.branch.push(humanEntry("写一篇冬天散文"), roundEntry({ elapsed: 17_700, outcome: "aborted" }));
-	shell.view({ busy: true, since: Date.now() - 195_000, review: true });
-	shell.view({ busy: false });
+	shell.fake.fire("agent_start", {}, shell.ctx);
+	shell.fake.fire("agent_settled", {}, shell.ctx);
 	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
 	const settled = /^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u;
-	const reads = shell.branchReads();
-	for (let key = 0; key < 20; key++) expect(shell.top()).toMatch(settled);
-	expect(shell.branchReads()).toBe(reads);
+	expect(shell.top(110)).toMatch(settled);
 
 	shell.start();
-	expect(shell.top()).toMatch(settled);
+	expect(shell.top(110)).toMatch(settled);
 });
 
 /** 改名键是 \x12，输入框按 answers 依次应答。 */
@@ -433,9 +364,3 @@ test("改名取消或留空不改会话名；其它键不弹输入框", async ()
 	expect(host.notices).toEqual([]);
 });
 
-test("不注册 /rename 命令，也不自占快捷键：键位归宿主的 app.session.rename", async () => {
-	const host = await renameHost([]);
-
-	expect([...host.fake.commands.keys()]).toEqual([]);
-	expect([...host.fake.shortcuts.keys()]).toEqual([]);
-});

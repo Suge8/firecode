@@ -2,7 +2,6 @@
  * 输入框外壳：状态画进编辑器的上下边框，不再有独立底栏。
  * 上边框：回合火苗与计时、主会话审查进度 | 观察员、指挥官；下边框：会话标题 | 模型、上下文。
  */
-import { stripVTControlCharacters } from "node:util";
 import {
 	CustomEditor,
 	type ExtensionAPI,
@@ -14,37 +13,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE, type ReviewProgress, watchBusy } from "../busy.js";
-import { HEAT_COLORS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
-import { clip, firstSentence, formatDuration, formatModelName, formatTokens, oneLine } from "../format.js";
+import { HEAT_COLORS, SETTLE_MS, flame, onFrame, paint, phaseOf, reviewMark, settleMark, settling } from "../flame.js";
+import { formatDuration, formatModelName, formatTokens } from "../format.js";
 import { type BranchEntry, latestTurnRecord, OUTCOME_TEXT, roundTexts, type TurnRecord, watchRoundRecorded } from "../round.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
 import { type BottomParts, type TopParts, bottomBorder, topBorder } from "./render.js";
-import { promptRename } from "./rename.js";
-
-/** 展示标题的上限（列）：实际宽度由下边框布局按终端宽度逐级裁。 */
-const TITLE_MAX_WIDTH = 60;
-/** 去掉终端控制序列与控制字符，保留换行供首句规则识别 Markdown 结构。 */
-const sanitize = (text: string) => stripVTControlCharacters(text).replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, " ");
-
-function userTitle(message: MessageStartEvent["message"]): string | undefined {
-	if (message.role !== "user") return undefined;
-	const content = message.content;
-	const text = typeof content === "string" ? content : content
-		.filter((block) => block.type === "text").map((block) => block.text).join("\n");
-	return clip(firstSentence(sanitize(text)), TITLE_MAX_WIDTH) || undefined;
-}
-
-function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["message"]): string {
-	const name = ctx.sessionManager.getSessionName();
-	if (name) return oneLine(sanitize(name));
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message") continue;
-		const title = userTitle(entry.message);
-		if (title) return title;
-	}
-	return (incoming && userTitle(incoming)) || msg.newSession;
-}
+import { displayTitle, promptRename } from "./title.js";
 
 /** 上下文占用的分级色：低占用保持灰色，接近既有阈值才警告。 */
 const contextColor = (percent: number | null | undefined): ThemeColor =>
@@ -59,9 +34,6 @@ const THINKING_COLORS: Record<string, ThemeColor> = {
 	xhigh: "thinkingXhigh",
 	max: "thinkingMax",
 };
-
-/** 落定后暖光渐隐的时长；落定结果本身一直留到下一轮开始。 */
-const GLOW_FADE_MS = 1_000;
 
 /** 外壳要展示的全部运行状态；事件写入，编辑器每次绘制只读。 */
 class Shell {
@@ -130,7 +102,8 @@ class Shell {
 				...roundTexts(record.round).map((part) => this.fg("muted", part)),
 				...record.earlier.map((part) => this.fg("warning", part)),
 			].join(this.fg("dim", " · "));
-			parts.glow = Math.max(0, 1 - since / GLOW_FADE_MS);
+			// 暖光与标记转色同走落定过渡；时钟在过渡结束时退订，渐隐必须在这之前走完，否则最后一帧会定格在半途。
+			parts.glow = Math.max(0, 1 - since / SETTLE_MS);
 		}
 		if (busy.review) parts.review = reviewTiers(busy.review(), (text) => this.fg("error", text));
 		return parts;
