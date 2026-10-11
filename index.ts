@@ -4,7 +4,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CONFIG_PATH, seedConfig } from "./config-file.js";
-import { watchManualCompaction } from "./deliver.js";
+import { watchSessionMaintenance } from "./deliver.js";
 import { type Feature, loadConfig } from "./config.js";
 import { registerHeader } from "./header.js";
 import { msg } from "./messages.js";
@@ -54,7 +54,7 @@ export function registerFirecode(
 	const reviewEnabled = config.features.review !== false;
 	// 轮记录不属于任何可关的功能：每个会话（含子代理）都写，界面、Master 耗时与子代理视图都只读它。
 	registerRoundRecorder(pi);
-	if (!subsession) watchManualCompaction(pi);
+	if (!subsession) watchSessionMaintenance(pi);
 	registerTruncatedWriteGuard(pi);
 	registerToday(pi);
 	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {

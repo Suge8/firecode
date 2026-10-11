@@ -183,9 +183,9 @@ test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展�
 	let release!: () => void;
 	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
 	const session = await hostSession(`
-import { deliver, watchManualCompaction, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+import { deliver, watchSessionMaintenance, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
-	watchManualCompaction(pi);
+	watchSessionMaintenance(pi);
 	// 排在 deliver 的登记之后的其他扩展：宿主逐个 await 处理器，压缩状态要等它跑完才清。
 	pi.on("session_compact", () => new Promise((resolve) => setTimeout(resolve, 80)));
 	pi.on("session_start", (_event, ctx) => {
@@ -219,6 +219,81 @@ export default function (pi) {
 		expect(requests).toEqual(["<firecode_master_event>\nworker done\n</firecode_master_event>"]);
 	} finally {
 		delete (globalThis as any).__deliverDuringCompaction;
+		session.dispose();
+	}
+}, 15_000);
+
+const ENVELOPE_TEXT = "<firecode_master_event>\nworker done\n</firecode_master_event>";
+
+/** 三轮对话后切回第一条助手消息并生成分支摘要；摘要请求卡在闸门上，摘要期间调 deliver。 */
+async function summarizingSession() {
+	const requests: string[] = [];
+	let release!: () => void;
+	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
+	const session = await hostSession(`
+import { deliver, watchSessionMaintenance, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+export default function (pi) {
+	watchSessionMaintenance(pi);
+	pi.on("session_start", (_event, ctx) => {
+		globalThis.__deliverDuringSummary = () => deliver(pi, ctx, { customType: "firecode-review-card", content: wrapEnvelope("firecode_master_event", "worker done") });
+	});
+}
+`, [
+		fauxAssistantMessage("ok 1"),
+		fauxAssistantMessage("ok 2"),
+		fauxAssistantMessage("ok 3"),
+		async () => { await summaryGate; return fauxAssistantMessage("BRANCH SUMMARY"); },
+		(context: any) => {
+			const last = context.messages.at(-1);
+			requests.push(typeof last.content === "string" ? last.content : last.content.map((part: any) => part.text ?? "").join(""));
+			return fauxAssistantMessage("handled");
+		},
+	]);
+	await session.bindExtensions({ mode: "print" });
+	for (let turn = 1; turn <= 3; turn++) await session.prompt(`message ${turn}`);
+	const firstAssistant = session.sessionManager.getEntries().find((entry: any) => entry.type === "message" && entry.message.role === "assistant");
+	const navigating = session.navigateTree(firstAssistant.id, { summarize: true });
+	while (!session.isCompacting) await new Promise((resolve) => setTimeout(resolve, 1));
+	const delivered = (globalThis as any).__deliverDuringSummary();
+	const early = await Promise.race([delivered.then(() => "resolved"), new Promise((resolve) => setTimeout(() => resolve("pending"), 100))]);
+	const onCurrentBranch = () => session.sessionManager.getBranch().some((entry: any) =>
+		entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("worker done"));
+	return { session, requests, release, navigating, delivered, early, onCurrentBranch };
+}
+
+// 宿主在摘要期间 isIdle 为 false 却没有回合：steer 会把消息追加在即将被丢下的旧分支上，模型永远看不到，也没人被唤起。
+test("带摘要的 /tree 切换期间 deliver：摘要结束后前门唤起一个回合，信封在切换后的当前分支上", async () => {
+	const { session, requests, release, navigating, delivered, early, onCurrentBranch } = await summarizingSession();
+	try {
+		expect(early).toBe("pending");
+
+		release();
+		expect((await navigating).cancelled).toBe(false);
+		await delivered;
+		await session.waitForIdle();
+		expect(requests).toEqual([ENVELOPE_TEXT]);
+		expect(onCurrentBranch()).toBe(true);
+	} finally {
+		delete (globalThis as any).__deliverDuringSummary;
+		session.dispose();
+	}
+}, 15_000);
+
+// 宿主只在切换成功时发 session_tree：取消和报错没有事件，deliver 不能等事件，否则永远悬挂。
+test("带摘要的 /tree 切换被取消后 deliver 不悬挂：照常唤起一个回合", async () => {
+	const { session, requests, release, navigating, delivered, early, onCurrentBranch } = await summarizingSession();
+	try {
+		expect(early).toBe("pending");
+
+		session.abortBranchSummary();
+		release();
+		expect((await navigating).cancelled).toBe(true);
+		await delivered;
+		await session.waitForIdle();
+		expect(requests).toEqual([ENVELOPE_TEXT]);
+		expect(onCurrentBranch()).toBe(true);
+	} finally {
+		delete (globalThis as any).__deliverDuringSummary;
 		session.dispose();
 	}
 }, 15_000);

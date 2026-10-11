@@ -32,7 +32,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `tail` returns what happened after the last outside input, with errors first.
 - Workers start with the project trust of their target directory: extensions of an untrusted project are not loaded.
 - The watcher session is isolated: it loads none of your extensions, skills or prompt templates.
-- While you run `/compact` by hand, Master events wait until compaction settles before they are delivered.
+- While you run `/compact` by hand or switch branches with a summary in `/tree`, Master events, watcher suggestions and review feedback wait until it settles before they are delivered, instead of being appended without waking anyone (after a `/tree` switch they would also have been left on the abandoned branch).
 - Events that only inform no longer wake the Master; during a turn they are appended at its end.
 - **Breaking:** the review checkpoint is version 7; a review still in progress when you upgrade is discarded.
 - During a review the editor lets Pi's application keys and extension shortcuts through; only typing and submit are blocked.
