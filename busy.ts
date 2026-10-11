@@ -69,7 +69,9 @@ const hubs = () => processShared("busy", () => new WeakMap<ExtensionAPI, Hub>())
  * 会话进行中的唯一判定与歇下边沿：上边框、herdr 投影等都只订阅这里，不各自拼装。
  * 每个 pi 只有一份状态机，首个订阅者安装宿主事件，之后只追加订阅；登记跨模块拷贝共享（process-shared.ts），
  * 宿主按文件加载模块副本时同一个 pi 仍只命中一份。
- * 指挥官回合以 agent_start → agent_settled（且 ctx.isIdle()）为界。在飞数归零与回合落定先后不定
+ * 指挥官回合以 agent_start → agent_settled 为界：宿主只在回合彻底结束（不再有自动重试、压缩或排队的续跑）后才发
+ * agent_settled，排队的续跑要等本次通知派发完才开始，所以它就是回合结束。会话启动时回合已在跑（扩展在回合中重载宿主）
+ * 以 ctx.isIdle() 补上，否则这一段会漏掉起点。在飞数归零与回合落定先后不定
  * （闲时前门投递在宿主记录这条消息后才算送达，见 deliver.ts），歇下必须在两个来源都满足的那一刻触发。
  * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
@@ -118,13 +120,16 @@ function installBusy(pi: ExtensionAPI, hub: Hub): void {
 	pi.on("session_shutdown", () => {
 		closed = true;
 	});
+	pi.on("session_start", (_event, context) => {
+		agentRunning = !context.isIdle();
+		update();
+	});
 	pi.on("agent_start", () => {
 		agentRunning = true;
 		update();
 	});
-	pi.on("agent_settled", (_event, context) => {
-		// 宿主在 agent_settled 期间可能已有排队/延后的动作（isIdle 为 false），紧接着会再 agent_start：不算回合结束。
-		agentRunning = context.isIdle() !== true;
+	pi.on("agent_settled", () => {
+		agentRunning = false;
 		update();
 	});
 	// 主会话审查算会话进行中：审查与修复、总结回合同属这一段，审查时长计入轮记录。
