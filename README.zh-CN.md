@@ -93,6 +93,6 @@ OpenAI 原生压缩（`openai.nativeCompaction`，模板里开启）使用 OpenA
 | **FireCode** | 2 | **1,713** |
 | pi-subagents（0.77.0） | 2–3 | 1,561–4,918 |
 
-测法：每个工具的 `name`、`description`、`parameters` 的 JSON 字符数。FireCode 统计 `subagents` 与 `subagents_list`，用模板里的角色和英文界面（中文界面是 1,022）。pi-subagents 0.77.0（默认设置）注册 `subagent`（3,357）、`bg_wait`（1,133）和加载器 `subagents_enable`（428）。低值是在能中途加工具的模型上，只有加载器和 `bg_wait` 在请求里的情形；启用委派之后，或在其他模型上默认，是 4,490–4,918。这里只算工具定义：指挥官提示词另给系统提示增加约 8,500 字符（英文文件 8,527，中文 6,625），再加每个角色一行。
+测法：每个工具的 `name`、`description`、`parameters` 的 JSON 字符数。FireCode 统计 `subagents` 与 `subagents_list`，用模板里的角色和英文界面（中文界面是 1,022）。pi-subagents 0.77.0（[提交 5852aa0](https://github.com/nicobailon/pi-subagents/tree/5852aa08ccd55e8c64dd16e69d1b96a17e92b8aa)，2026-10-11；默认设置）注册 `subagent`（3,357）、`bg_wait`（1,133）和加载器 `subagents_enable`（428）。低值是在能中途加工具的模型上，只有加载器和 `bg_wait` 在请求里的情形；启用委派之后，或在其他模型上默认，是 4,490–4,918。复现 pi-subagents 的数字：把它的 `index.ts` 加载到一个只记录 `registerTool` 调用的假 `ExtensionAPI` 上（工具注册在 `src/extension/index.ts`、`src/extension/tool-activation.ts` 和 `src/runs/background/wait-tool.ts`），对记录到的每个工具用同样的方法量。这里只算工具定义：指挥官提示词另给系统提示增加约 8,500 字符（英文文件 8,527，中文 6,625），再加每个角色一行。
 
 [参与开发](.github/CONTRIBUTING.md) · [第三方声明](THIRD_PARTY_NOTICES.md) · MIT © Suge8

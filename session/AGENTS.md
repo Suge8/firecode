@@ -30,18 +30,10 @@ Claude 只解析当前接口的 `limits[]`，`session`、`weekly_all` 与 Fable 
 
 ## herdr-projection
 
-**安装前提：必须卸载 herdr 官方 Pi 集成**（`herdr integration uninstall pi`），也不要在 herdr 设置面板里点 install——会装回来。
-herdr 每个 pane 只有一个 hook authority，官方 source（`herdr:pi`）在位时其它 source 的状态上报被静默丢弃，
-两个写者并存时 FireCode 的上报全部失效；状态标签（`state_labels.working`）与上述行为是 herdr 的行为，升级 herdr 后需重新核实；FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
+投影内容、状态来源、上报机制与为什么必须卸载 herdr 官方 Pi 集成，都在 `herdr-projection.ts` 头注释。头注释之外：
 
-投影内容见文件头注释，状态 working 的来源与审查为何不报 blocked 也在那里；`seq` 用时间戳型，身份与状态共用一个单调计数；
-自定义 source 拿不到官方会话恢复，所以每次状态上报附 `resume_argv`（`pi --session <会话文件>`，路径含撇号时 herdr 拒收，不附）。
-发送队列只保留最新意图，失败重试一次，其后由下一事件补发。`tokens.session` 把会话名供给侧边栏行布局（herdr 侧边栏只消费自定义 token，用户 herdr 配置的 pi 行布局引用 `$session`）。
-
-workspace、pane label 与 tab label 都归 herdr、用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane
-共享状态，而 herdr 没有条件 rename/CAS 与清除自定义名的接口，先检查再 rename 无法消除 split/move 竞态。
-
-只听宿主的 `session_info_changed`（命令、改名键、自动命名已在宿主收口），另听
-model/thinking 选择。同一内容不重发，只有确认送达才记为已发布，请求串行避免乱序覆盖。非 TUI 模式
-（print/json/rpc）与子会话不投影：无头调用不能接管可见会话的显示。只有 `quit` 清空身份并 release，
-reload/new/resume/fork 由新会话的 `session_start` 覆盖（重载时回合已在跑的情形由 `busy.ts` 在 `session_start` 读 `ctx.isIdle()` 补上，herdr 不另算）。没有 feature 开关。
+- 卸载命令是 `herdr integration uninstall pi`；不要在 herdr 设置面板里点 install，会装回来。
+- 官方 source（`herdr:pi`）在位时其它 source 的上报被丢弃、状态标签（`state_labels.working`）等是 herdr 的行为，升级 herdr 后需重新核实。FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
+- `tokens.session` 把会话名供给侧边栏行布局：herdr 侧边栏只消费自定义 token，用户在 herdr 配置里的 pi 行布局引用 `$session`。
+- workspace、pane label 与 tab label 都归 herdr、用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane 共享状态，而 herdr 没有条件 rename/CAS 与清除自定义名的接口，先检查再 rename 无法消除 split/move 竞态。
+- 只听宿主的 `session_info_changed`（命令、改名键、自动命名已在宿主收口），另听 model/thinking 选择。同一内容不重发，只有确认送达才记为已发布，请求串行避免乱序覆盖。只有 `quit` 清空身份并 release，reload/new/resume/fork 由新会话的 `session_start` 覆盖（重载时回合已在跑的情形由 `busy.ts` 在 `session_start` 读 `ctx.isIdle()` 补上，herdr 不另算）。
