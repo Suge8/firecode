@@ -1,5 +1,5 @@
 import { CanvasTexture, LinearFilter, Mesh, MeshBasicNodeMaterial, NoColorSpace, OrthographicCamera, PlaneGeometry, Scene, Vector2, WebGPURenderer } from "three/webgpu";
-import { Fn, clamp, color, dot, exp, float, floor, fract, fwidth, length, max, mix, mx_noise_float, sin, smoothstep, step, texture, uniform, uv, vec2, vec3, vec4 } from "three/tsl";
+import { Fn, If, clamp, color, dot, exp, float, floor, fract, fwidth, length, max, mix, mx_noise_float, sin, smoothstep, step, texture, uniform, uv, vec2, vec3, vec4 } from "three/tsl";
 import type { Node } from "three/webgpu";
 
 // 着色器全部在像素空间里算：q 以火苗底部中点为原点、以标志高度为单位，y 向上
@@ -14,19 +14,20 @@ const OUTER_BLUR = 0.1;
 const IGNITE_AT = 0.9;
 const GROW_SECONDS = 1.5;
 const BURST_SPARKS = 18;
-const MAX_PIXEL_RATIO = 2;
+// 开场火星点燃后按 exp(-0.9t) 熄灭，这么多秒后亮度不到 1/255，着色器不再逐像素算这一段
+const BURST_SECONDS = 7;
+// 火焰是柔和的光，1.5 倍像素密度在 Retina 屏上看不出差别，像素数比 2 倍少四成多
+const MAX_PIXEL_RATIO = 1.5;
 const WIND_RESPONSE = 6;
 const WIND_LIMIT = 2400;
 const PRESENCE_RESPONSE = 3;
 // 滚出首屏时火焰缩到这个比例
 const SCROLL_SHRINK = 0.4;
-// 静止模式取的时刻：火舌轮廓干净、没有脱离的团块
-const STILL_AT = 3;
-const BACKGROUND = "#0c0a09";
 
-type Mount = { canvas: HTMLCanvasElement; box: HTMLElement; markUrl: string; reduce: boolean; onIgnite: () => void };
+type Mount = { canvas: HTMLCanvasElement; box: HTMLElement; markUrl: string; onIgnite: () => void };
 
-export async function mountFlame({ canvas, box, markUrl, reduce, onIgnite }: Mount) {
+// 只在允许动效时挂载；减少动效时首屏用静态标志，不加载本模块
+export async function mountFlame({ canvas, box, markUrl, onIgnite }: Mount) {
 	const renderer = new WebGPURenderer({ canvas, antialias: false, powerPreference: "high-performance" });
 	const [masks] = await Promise.all([markMasks(markUrl), renderer.init()]);
 
@@ -44,18 +45,13 @@ export async function mountFlame({ canvas, box, markUrl, reduce, onIgnite }: Mou
 		fade: uniform(0),
 	};
 	const material = new MeshBasicNodeMaterial({ depthTest: false, depthWrite: false });
-	material.colorNode = flameNode(u, masks);
+	// 着色器把火光叠在页面底色上，底色只取全局样式的 --bg
+	material.colorNode = flameNode(u, masks, getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
 	const scene = new Scene();
 	scene.add(new Mesh(new PlaneGeometry(2, 2), material));
 	const camera = new OrthographicCamera(-1, 1, 1, -1, 0, 2);
 	camera.position.z = 1;
 	await renderer.compileAsync(scene, camera);
-	if (reduce) {
-		u.grow.value = 1;
-		u.since.value = 60;
-		u.time.value = STILL_AT;
-		onIgnite();
-	}
 
 	let rect = canvas.getBoundingClientRect();
 	let markHeight = 1;
@@ -69,8 +65,6 @@ export async function mountFlame({ canvas, box, markUrl, reduce, onIgnite }: Mou
 		u.base.value.set(mark.left - rect.left + mark.width / 2, rect.bottom - mark.bottom);
 		markHeight = mark.height;
 		u.size.value = markHeight;
-		// 静止模式只画一帧；改尺寸会清空画布，所以每次布局后重画
-		if (reduce) renderer.render(scene, camera);
 	};
 	layout();
 	const resize = new ResizeObserver(layout);
@@ -79,7 +73,6 @@ export async function mountFlame({ canvas, box, markUrl, reduce, onIgnite }: Mou
 
 	// 首屏滚出的进度（0–1），由区块的滚动触发器写入
 	const setFade = (progress: number) => (fade = progress);
-	if (reduce) return { setFade };
 
 	const pointer = new Vector2();
 	const pending = new Vector2();
@@ -126,7 +119,7 @@ export async function mountFlame({ canvas, box, markUrl, reduce, onIgnite }: Mou
 		renderer.render(scene, camera);
 	};
 
-	// 离开视口就停帧，回来再续
+	// 离开视口就不再渲染，回来再续。three 的渲染器初始化后自带一个只做帧计数的空 rAF 循环，没有公开接口能停，留着
 	new IntersectionObserver(([entry]) => renderer.setAnimationLoop(entry.isIntersecting ? frame : null)).observe(canvas);
 	return { setFade };
 }
@@ -145,7 +138,7 @@ type Uniforms = {
 	fade: Node<"float">;
 };
 
-function flameNode(u: Uniforms, { sharp, inner, outer }: Record<"sharp" | "inner" | "outer", CanvasTexture>) {
+function flameNode(u: Uniforms, { sharp, inner, outer }: Record<"sharp" | "inner" | "outer", CanvasTexture>, background: string) {
 	const fbm = (p: Node<"vec3">) =>
 		mx_noise_float(p)
 			.add(mx_noise_float(p.mul(2.03)).mul(0.5))
@@ -248,13 +241,15 @@ function flameNode(u: Uniforms, { sharp, inner, outer }: Record<"sharp" | "inner
 
 		// 点燃时迸出的一把火星：减速外飞、缓慢上浮、逐渐熄灭
 		const flight = float(1).sub(exp(since.mul(-2.2))).div(2.2);
-		let burst: Node<"float"> = float(0);
-		for (let i = 0; i < BURST_SPARKS; i++) {
-			const angle = (seeded(i, 1) - 0.5) * 2.6;
-			const speed = 0.7 + seeded(i, 2) * 1.3;
-			const at = vec2(Math.sin(angle) * speed, Math.cos(angle) * speed * 0.8).mul(flight).add(vec2(0, since.mul(since).mul(0.18)));
-			burst = burst.add(smoothstep(0.012 + seeded(i, 3) * 0.012, 0, length(q.sub(at))));
-		}
+		const burst = float(0).toVar();
+		If(u.since.lessThan(BURST_SECONDS), () => {
+			for (let i = 0; i < BURST_SPARKS; i++) {
+				const angle = (seeded(i, 1) - 0.5) * 2.6;
+				const speed = 0.7 + seeded(i, 2) * 1.3;
+				const at = vec2(Math.sin(angle) * speed, Math.cos(angle) * speed * 0.8).mul(flight).add(vec2(0, since.mul(since).mul(0.18)));
+				burst.addAssign(smoothstep(0.012 + seeded(i, 3) * 0.012, 0, length(q.sub(at))));
+			}
+		});
 		const embersBurst = color(0xffc070).mul(burst.mul(exp(since.mul(-0.9)).mul(lit)).mul(1.6));
 
 		// 火星：三层随时间上移的网格，每格按哈希决定有没有一颗；被风带走、被指针推开，靠近指针时更亮
@@ -280,7 +275,7 @@ function flameNode(u: Uniforms, { sharp, inner, outer }: Record<"sharp" | "inner
 		const dim = float(1).sub(smoothstep(0.1, 0.4, u.fade));
 		const lightOut = fire.add(ignition).mul(dim).add(embers.add(embersBurst).mul(smoothstep(0.45, 0.15, u.fade)));
 		const dither = vec3(hash(p).sub(0.5).div(1200));
-		return vec4(lightOut.add(color(BACKGROUND)).add(dither), 1);
+		return vec4(lightOut.add(color(background)).add(dither), 1);
 	})();
 }
 

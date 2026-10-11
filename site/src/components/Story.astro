@@ -1,0 +1,112 @@
+---
+// 一幕的说明列：条目 + 左侧进度线。滚动播放时（轨道带 data-live）由 scroll.ts 的 scrollStory 标出当前条目、推进进度线；
+// 没有动效时所有条目平铺、不显示进度线。Agents 与 Review 两幕共用。
+interface Props {
+	beats: { title: string; body: string }[];
+}
+const { beats } = Astro.props;
+---
+
+<div class="story">
+	<span class="rail" aria-hidden="true"><span class="rail-fill"></span></span>
+	<ol class="beats">
+		{
+			beats.map((beat) => (
+				<li class="beat">
+					<h3 class="item-title">{beat.title}</h3>
+					<p>{beat.body}</p>
+				</li>
+			))
+		}
+	</ol>
+</div>
+
+<style>
+	.story {
+		position: relative;
+		padding-left: 22px;
+	}
+
+	.rail {
+		display: none;
+		position: absolute;
+		inset: 4px auto 4px 0;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--ring);
+	}
+
+	:global([data-live]) .rail {
+		display: block;
+	}
+
+	.rail-fill {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--accent);
+		transform-origin: top;
+		transform: scaleY(var(--reach, 0));
+		transition: transform 300ms var(--ease-move);
+	}
+
+	.beats {
+		display: grid;
+		gap: 28px;
+		padding: 0;
+		list-style: none;
+	}
+
+	.beat {
+		transition: opacity 320ms var(--ease-enter);
+	}
+
+	:global([data-live]) .beat:not([aria-current]) {
+		opacity: 0.45;
+	}
+
+	.beat p {
+		margin-top: 6px;
+		color: var(--muted);
+		font-size: var(--text-body);
+		line-height: 1.55;
+		text-wrap: pretty;
+	}
+
+	/* 单栏（两幕在这个宽度都收成一列）：条目叠在同一位置轮换，只显示当前一条，把高度让给终端 */
+	@media (max-width: 960px) {
+		.story {
+			padding-left: 0;
+		}
+
+		:global([data-live]) .rail {
+			display: none;
+		}
+
+		:global([data-live]) .beats {
+			gap: 0;
+		}
+
+		:global([data-live]) .beat {
+			grid-area: 1 / 1;
+		}
+
+		:global([data-live]) .beat:not([aria-current]) {
+			opacity: 0;
+		}
+	}
+
+	@media (max-width: 960px) and (max-height: 760px) {
+		.beat p {
+			font-size: 0.9rem;
+			line-height: 1.45;
+		}
+	}
+
+	/* 更矮的屏（如 360×640）：只留条目标题，内容区块导语里已经列过 */
+	@media (max-width: 960px) and (max-height: 700px) {
+		:global([data-live]) .beat p {
+			display: none;
+		}
+	}
+</style>

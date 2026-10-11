@@ -2,28 +2,37 @@
 import markUrl from "../../../design/brand/mark.svg?url";
 import Install from "../components/Install.astro";
 import type { Lang } from "../i18n";
-import { copy } from "./Hero.copy";
+import { tagline } from "../repo";
 
 interface Props {
 	lang: Lang;
 }
 const { lang } = Astro.props;
-const t = copy[lang];
+const { headline, ledeLines } = tagline(lang);
 ---
 
-<!-- 解析到这里就同步标记“脚本可用”：静态标志与标题等待都以它为前提，脚本没跑起来时首屏照常完整显示 -->
-<script is:inline>document.documentElement.classList.add("js");</script>
-<section class="hero" data-flame="idle" aria-labelledby="headline">
+<section class="hero" aria-labelledby="headline">
+	<!-- 火焰加载期间（data-flame="loading"）藏起静态标志、闪光标；点燃后（"lit"）交给画布。
+	     减少动效时不加载火焰；3 秒内没点燃（脚本被拦、网络太慢）就退回静态标志，火焰晚到仍会接手 -->
+	<script is:inline>
+		{
+			const hero = document.currentScript.parentElement;
+			if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+				hero.dataset.flame = "loading";
+				setTimeout(() => hero.dataset.flame === "loading" && delete hero.dataset.flame, 3000);
+			}
+		}
+	</script>
 	<div class="flame-clip" aria-hidden="true"><canvas class="flame-canvas"></canvas></div>
 	<div class="flame-box" data-mark={markUrl}>
 		<img class="flame-static" src={markUrl} alt="" />
 		<span class="cursor" aria-hidden="true"></span>
 	</div>
 	<div class="copy">
-		<h1 id="headline">
-			{t.headline.map((line, i) => <span class:list={["line", { dim: i > 0 }]}><span>{line}</span></span>)}
+		<h1 id="headline" class="display">
+			{headline.map((line, i) => <span class:list={["line", { dim: i > 0 }]}><span>{line}</span></span>)}
 		</h1>
-		<p class="lede">{t.lede.map((sentence) => <span>{sentence} </span>)}</p>
+		<p class="lede">{ledeLines.map((sentence) => <span>{sentence} </span>)}</p>
 		<Install lang={lang} class="hero-install" />
 	</div>
 </section>
@@ -34,53 +43,37 @@ const t = copy[lang];
 	const hero = document.querySelector<HTMLElement>(".hero")!;
 	const box = hero.querySelector<HTMLElement>(".flame-box")!;
 	const canvas = hero.querySelector("canvas")!;
-	let setFade = (_progress: number) => {};
-
-	// 标题随点燃升起；火焰迟迟不来时最多等这么久就直接播
-	const INTRO_TIMEOUT_MS = 1200;
-	const playIntro = () => (hero.dataset.intro = "play");
-	if (reducedMotion) playIntro();
-	else setTimeout(playIntro, INTRO_TIMEOUT_MS);
-
-	import("../flame/flame")
-		.then(async ({ mountFlame }) => {
-			const flame = await mountFlame({
-				canvas,
-				box,
-				markUrl: box.dataset.mark!,
-				reduce: reducedMotion,
-				onIgnite: () => {
-					hero.dataset.flame = "lit";
-					playIntro();
-				},
-			});
-			setFade = flame.setFade;
-			setFade(exit?.scrollTrigger?.progress ?? 0);
-		})
-		.catch((error) => {
-			console.error(error);
-			hero.dataset.flame = "static";
-			playIntro();
-		});
 
 	// 往下滚时：文字先走（进度 0–0.35 淡出并轻微模糊），火焰以 0.35 倍速上移、原地缩小压暗（着色器里 0.1–0.4 熄灭），把视线交给下一屏
 	const FLAME_LAG = 0.65;
-	const exit = reducedMotion
-		? undefined
-		: gsap
-				.timeline({
-					defaults: { ease: "none" },
-					scrollTrigger: {
-						trigger: hero,
-						start: "top top",
-						end: "bottom top",
-						scrub: true,
-						invalidateOnRefresh: true,
-						onUpdate: (self) => setFade(self.progress),
-					},
-				})
-				.to([canvas, box], { y: () => hero.offsetHeight * FLAME_LAG, duration: 1 }, 0)
-				.to(hero.querySelector(".copy"), { opacity: 0, filter: "blur(8px)", duration: 0.35 }, 0);
+	if (!reducedMotion) {
+		let setFade = (_progress: number) => {};
+		const exit = gsap
+			.timeline({
+				defaults: { ease: "none" },
+				scrollTrigger: {
+					trigger: hero,
+					start: "top top",
+					end: "bottom top",
+					scrub: true,
+					invalidateOnRefresh: true,
+					onUpdate: (self) => setFade(self.progress),
+				},
+			})
+			.to([canvas, box], { y: () => hero.offsetHeight * FLAME_LAG, duration: 1 }, 0)
+			.to(hero.querySelector(".copy"), { opacity: 0, filter: "blur(8px)", duration: 0.35 }, 0);
+
+		import("../flame/flame")
+			.then(async ({ mountFlame }) => {
+				const flame = await mountFlame({ canvas, box, markUrl: box.dataset.mark!, onIgnite: () => (hero.dataset.flame = "lit") });
+				setFade = flame.setFade;
+				setFade(exit.scrollTrigger!.progress);
+			})
+			.catch((error) => {
+				console.error(error);
+				delete hero.dataset.flame;
+			});
+	}
 </script>
 
 <style>
@@ -129,13 +122,12 @@ const t = copy[lang];
 		transition: opacity 600ms var(--ease-enter);
 	}
 
-	/* 脚本可用时先藏起静态标志，交给画布；画布起不来再亮回 */
-	:global(.js) .hero:not([data-flame="static"]) .flame-static {
+	[data-flame] .flame-static {
 		opacity: 0;
 	}
 
+	/* 光标只在火焰加载期间闪；点燃时拉长淡出 */
 	.cursor {
-		display: none;
 		position: absolute;
 		left: 50%;
 		bottom: 0;
@@ -144,21 +136,17 @@ const t = copy[lang];
 		translate: -50% 0;
 		background: var(--accent);
 		box-shadow: 0 0 18px var(--accent);
-		animation: blink 1s steps(1) infinite;
+		opacity: 0;
+		scale: 1 2.4;
 		transition:
 			opacity var(--duration-state) var(--ease-enter),
 			scale var(--duration-state) var(--ease-enter);
 	}
 
-	:global(.js) .cursor {
-		display: block;
-	}
-
-	[data-flame="lit"] .cursor,
-	[data-flame="static"] .cursor {
-		opacity: 0;
-		scale: 1 2.4;
-		animation: none;
+	[data-flame="loading"] .cursor {
+		opacity: 1;
+		scale: 1;
+		animation: blink 1s steps(1) infinite;
 	}
 
 	@keyframes blink {
@@ -176,24 +164,10 @@ const t = copy[lang];
 
 	h1 {
 		margin-top: clamp(28px, 5svh, 56px);
-		font-size: var(--text-display);
-		font-weight: 680;
-		font-stretch: var(--stretch-display);
-		line-height: 0.98;
-		letter-spacing: -0.038em;
-		text-wrap: balance;
 	}
 
-	/* 每行自带裁切窗口，入场时从窗口下沿升起；上下留出字形的升部与降部 */
-	.line {
-		display: block;
-		overflow: clip;
-		padding-block: 0.04em 0.1em;
-		margin-block: -0.04em -0.1em;
-	}
-
+	/* 入场不等火焰：页面一显示标题就升起 */
 	.line > span {
-		display: block;
 		animation: rise-line 1100ms var(--ease-enter) both;
 	}
 
@@ -205,23 +179,8 @@ const t = copy[lang];
 		animation-delay: 180ms;
 	}
 
-	/* 脚本可用时，标题、简介、安装命令等点燃（或超时）才开始入场 */
-	:global(.js) .hero:not([data-intro]) .line > span,
-	:global(.js) .hero:not([data-intro]) .lede,
-	:global(.js) .hero:not([data-intro]) .copy > :global(.hero-install) {
-		animation-play-state: paused;
-	}
-
 	.dim {
 		color: oklch(0.74 0.02 60);
-	}
-
-	:global(:lang(zh)) h1 {
-		font-size: min(calc(var(--text-display) * 0.88), 11vw);
-		font-weight: 700;
-		font-stretch: 100%;
-		letter-spacing: -0.02em;
-		line-height: 1.12;
 	}
 
 	.lede {
@@ -240,7 +199,6 @@ const t = copy[lang];
 	:global(:lang(zh)) .lede {
 		max-width: 30em;
 		line-height: 1.75;
-		word-break: keep-all;
 	}
 
 	:global(.hero-install) {
@@ -305,13 +263,6 @@ const t = copy[lang];
 
 		.flame-box {
 			height: clamp(150px, 26svh, 240px);
-		}
-
-		/* 手机上收窄一点宽度轴，让 "Install one extension." 整行放得下，不断成两截 */
-		h1 {
-			font-size: min(var(--text-display), 9vw);
-			font-stretch: 104%;
-			letter-spacing: -0.03em;
 		}
 	}
 </style>
