@@ -222,8 +222,12 @@ export class InProcessSessionPool {
 		return true;
 	}
 
-	async disposeAll(): Promise<void> {
-		await Promise.all([...this.held.values()].map((held) => this.release(held)));
+	/**
+	 * 释放全部落盘的（Worker）会话。内存会话归创建它的一方（观察员自己 dispose），不在此列：
+	 * 池由 Master 与观察员共用，Master 关闭时不能顺手掐掉观察员正在评估的会话。
+	 */
+	async disposeWorkers(): Promise<void> {
+		await Promise.all([...this.held.values()].filter((held) => held.sessionPath).map((held) => this.release(held)));
 	}
 
 	/** 镜像宿主替换会话的顺序：先 session_shutdown 让扩展收口，再 dispose 作废上下文。 */

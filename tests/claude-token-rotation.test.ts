@@ -124,6 +124,9 @@ test("同一会话里订阅登出、改用 API key 后，Claude Code 标识在�
 
 		await writeFile(authPath, JSON.stringify({ anthropic: { type: "api_key", key: "sk-ant-api03-own" } }));
 		await runtime.refresh({ allowNetwork: false });
+		// 这次提示本身会失败（没有注册 faux 供应商），只为触发 before_agent_start；其错误文本带 faux 供应商名里的毫秒时间戳，
+		// 时间戳里出现 429、500 等数字时宿主会当作可重试错误退避重试，所以关掉自动重试。
+		session.setAutoRetryEnabled(false);
 		await session.prompt("start").catch(() => undefined);
 
 		expect(await headersNow()).toEqual({});
