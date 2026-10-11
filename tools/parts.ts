@@ -1,13 +1,11 @@
 /** 工具行的着色片段：路径、命令、大小、耗时、diff 统计。 */
-import { homedir } from "node:os";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { type ClipSide, clip, formatDuration, oneLine } from "../format.js";
+import { type ClipSide, clip, formatDuration, oneLine, tildeHome, tildeHomeIn } from "../format.js";
 
 /** pi 公共出口未导出 ThemeBg：从 Theme.bg 的参数派生，避免依赖内部路径。 */
 export type ThemeBg = Parameters<Theme["bg"]>[0];
 
-const HOME = homedir();
 const ELLIPSIS = "…";
 /** 结果小于此字符数不显示大小列（噪音阈值） */
 const SIZE_MIN_CHARS = 100;
@@ -56,7 +54,7 @@ export function clipParts(parts: Part[], width: number, from: ClipSide): Part[] 
 export function pathValue(path: string, cwd: string, suffix = ""): Part[] {
 	let display = path || ELLIPSIS;
 	if (cwd && display.startsWith(`${cwd}/`)) display = `./${display.slice(cwd.length + 1)}`;
-	else if (HOME && display.startsWith(HOME)) display = `~${display.slice(HOME.length)}`;
+	else display = tildeHome(display);
 	const cut = display.lastIndexOf("/") + 1;
 	const parts: Part[] = [];
 	if (cut > 0) parts.push({ text: display.slice(0, cut), color: "muted" });
@@ -77,7 +75,8 @@ function appendPart(parts: Part[], text: string, color?: ThemeColor): void {
 
 /** 命令分层着色：命令词 accent，参数默认色，管道/重定向/连接符/环境赋值暗色。 */
 export function commandParts(command: string): Part[] {
-	const display = oneLine((command || "").replace(/\r?\n/g, " ↵ ")).replaceAll(HOME, "~");
+	const flat = oneLine((command || "").replace(/\r?\n/g, " ↵ "));
+	const display = tildeHomeIn(flat);
 	if (!display) return [{ text: "$ ", color: "muted" }, { text: ELLIPSIS, color: "accent" }];
 	const parts: Part[] = [{ text: "$ ", color: "muted" }];
 	let expectCommand = true;

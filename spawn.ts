@@ -178,7 +178,13 @@ export class InProcessSessionPool {
 		return this.runtime;
 	}
 
+	/** 纯查询：不改变释放计时（视图、steer、interrupt 只看不占）。 */
 	getSession(sessionPath: string): AgentSession | undefined {
+		return this.held.get(sessionPath)?.session;
+	}
+
+	/** 占用热会话：取消空闲释放计时，直到调用方再次 markIdle。只有要在它上面开回合的一方调用。 */
+	hold(sessionPath: string): AgentSession | undefined {
 		const held = this.held.get(sessionPath);
 		if (!held) return undefined;
 		this.clearTimer(held);

@@ -32,6 +32,8 @@ export class Outbox {
 	private retrying = false;
 	/** 空闲合并窗口里第一条事件入队的时刻。 */
 	private firstQueuedAt?: number;
+	/** 发件箱收口时中止悬而未决的前门唤起：停用后的回合不再补投旧事件。 */
+	private readonly closing = new AbortController();
 
 	constructor(private readonly active: MasterRuntime) {}
 
@@ -70,6 +72,7 @@ export class Outbox {
 
 	close(): void {
 		clearTimeout(this.flushTimer);
+		this.closing.abort();
 	}
 
 	/**
@@ -109,11 +112,14 @@ export class Outbox {
 		if (!this.queued.length) return;
 		const batch = this.queued.splice(0);
 		for (const event of batch) this.delivering.add(event);
-		const send = batch.every((event) => event.inform) ? inform : deliver;
-		send(active.setup.pi, active.ctx, {
+		const envelope = {
 			customType: MASTER_EVENT_TYPE,
 			content: batch.map((event) => wrapEnvelope("firecode_master_event", event.content)).join("\n\n"),
-		}).then(() => {
+		};
+		const sent = batch.every((event) => event.inform)
+			? (async () => inform(active.setup.pi, envelope))()
+			: deliver(active.setup.pi, active.ctx, envelope, this.closing.signal);
+		sent.then(() => {
 			if (active.closed) return;
 			for (const event of batch) this.delivering.delete(event);
 			try {

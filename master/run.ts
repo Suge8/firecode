@@ -50,7 +50,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 
 export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	active.assertOpen();
-	return active.setup.pool.getSession(worker.sessionPath) ?? spawnWorker(active, worker, true);
+	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true);
 }
 
 /** 投影当前动作、卡住判定与审查进度的唯一订阅。 */

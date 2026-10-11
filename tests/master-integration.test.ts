@@ -746,8 +746,8 @@ test("子代理视图里的补话走 send 同一入口：落定事件标题注�
 	expect(content).toContain("你说：把标题改短");
 	expect(content).toContain("回复：\n按你说的改好了");
 	expect(content).toMatch(/耗时：本次运行 /u);
-	// 指挥官回合在跑：照常经 steer 队列在句缝送达。
-	expect(harness.messages.at(-1).options).toMatchObject({ deliverAs: "steer" });
+	// 指挥官回合在跑也不走 steer（steer 会让宿主续跑一次）：宿主把它推迟到本回合结束再追加。
+	expect(harness.messages.at(-1).options?.deliverAs).toBeUndefined();
 	await Bun.sleep(0);
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ status: "idle", disposition: "pending" });

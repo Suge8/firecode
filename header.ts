@@ -4,11 +4,10 @@
  * 金→橙→红，字标自左向右橙→金。启动时火焰自下而上点燃、字标自左向右显现，约 1 秒后定格并退订动画时钟——
  * 横幅会滚出视口，定格后不再触发重绘。
  */
-import { homedir } from "node:os";
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { clamp, easeOut as ease, flame, HEAT_COLORS, mix, onFrame, paint, type Rgb } from "./flame.js";
-import { clip } from "./format.js";
+import { clip, tildeHome } from "./format.js";
 
 const WORD = "firecode";
 const IGNITE_END = 0.6;
@@ -195,8 +194,6 @@ function createBanner(tui: TUI, subtitle: Subtitle) {
 
 export function registerHeader(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
-		const home = homedir();
-		const cwd = ctx.cwd.startsWith(home) ? `~${ctx.cwd.slice(home.length)}` : ctx.cwd;
-		ctx.ui.setHeader((tui) => createBanner(tui, { version: VERSION, cwd }));
+		ctx.ui.setHeader((tui) => createBanner(tui, { version: VERSION, cwd: tildeHome(ctx.cwd) }));
 	});
 }

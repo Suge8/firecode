@@ -1,6 +1,23 @@
-/** 宽度、文本与数值格式化：状态栏与工具行共用。 */
+/** 宽度、文本、路径与数值格式化：全插件共用。 */
+import { homedir } from "node:os";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { isRecord } from "./jsonc.js";
+
+const HOME = homedir();
+
+/** 家目录缩写成 ~：只在路径边界上匹配，/Users/ab 不会把 /Users/abc 写成 ~c。 */
+export function tildeHome(path: string): string {
+	if (!HOME) return path;
+	if (path === HOME) return "~";
+	return path.startsWith(`${HOME}/`) ? `~${path.slice(HOME.length)}` : path;
+}
+
+/** 命令文本里的家目录路径缩写成 ~：同样只在路径边界上（前为行首/空白/引号/=，后为 / 或词尾）。 */
+export function tildeHomeIn(text: string): string {
+	if (!HOME) return text;
+	const escaped = HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return text.replace(new RegExp(`(^|[\\s"'=:])${escaped}(?=/|$|[\\s"'])`, "g"), "$1~");
+}
 
 const ELLIPSIS = "…";
 const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g;
