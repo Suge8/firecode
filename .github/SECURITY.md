@@ -12,4 +12,8 @@ Include the affected version, a description of the impact, and steps to reproduc
 
 ## Scope
 
-FireCode runs inside your Pi session with your user's permissions and sends requests through the models and credentials you configure. Reports about the extension's own code are in scope, for example credential leakage, unintended command execution, or Worker sandbox escapes. Vulnerabilities in Pi itself or in model providers belong to those projects.
+FireCode runs inside your Pi session with your user's permissions and sends requests through the models and credentials you configure.
+
+Worker and reviewer sessions have an unsandboxed `bash`; that is a trusted capability by design, because they need to run tests. The guard on Worker `edit`/`write` (current checkout and the system temp directory only) and the read-only tool list for reviewers prevent accidents. They are not a sandbox, so "a Worker or reviewer can run an arbitrary command" is not a vulnerability. Isolation needs a container or a read-only mount.
+
+In scope: flaws in the extension's own code, for example credential leakage, commands run without a model or user having asked for them, or a guard that fails to stop an accidental write it is meant to stop. Vulnerabilities in Pi itself or in model providers belong to those projects.

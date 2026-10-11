@@ -4,7 +4,7 @@
 `CustomEditor` 子类，只覆写 `renderTopBorder` / `renderBottomBorder`；输入过长滚动出现“↑ n more”时让位给宿主的边框。
 会话启动时关闭宿主内嵌的 Working 指示，Working 可见性只在本模块管理。
 
-`render.ts` 是唯一纯布局入口（`topBorder` / `bottomBorder`；子代理视图输入区共用其中的边框布局 `fitBorder`），按实际 `visibleWidth` 逐级退让，不保存状态；退让顺序写在各函数的注释里。
+`render.ts` 是唯一纯布局入口（`topBorder` / `bottomBorder`；子代理视图输入区共用 `fitBorder`），布局原则见其头注释，退让顺序写在各函数的注释里。
 
 ## 显示内容
 
@@ -19,8 +19,7 @@
 - 审查进度来自 `watchBusy` 视图的 `review`：审查持有时它是活的 `progress` 访问器（频道与类型定义在 `busy.ts`），外壳每次绘制调用它取阶段、轮次与票数；审查锁编辑器时的外壳可见性由 `review/ui.ts` 保证（见 review/AGENTS.md）。
 - 动效只经 `flame.ts` 的 `onFrame`：仅在回合进行、落定过渡（`SETTLE_MS`，标记转色与边框暖光渐隐共用这一个时长）或审查进行时订阅，其余时间时钟停止；渐隐必须在时钟退订前走完，否则最后一帧会定格在半途。
 
-外壳编辑器还挂着宿主的改名键（`app.session.rename`）：按下时由 `title.ts` 弹输入框、清洗标题并设会话名，随外壳一起启停（`features.statusbar` 关掉就没有键盘改名）；不提供 `/rename`（宿主自带 `/name`），不注册扩展快捷键，原因见根 AGENTS.md「快捷键冲突」。
+外壳编辑器挂着宿主的改名键（`app.session.rename`，机制与不注册扩展快捷键的原因见 `title.ts` 头注释），随外壳一起启停（`features.statusbar` 关掉就没有键盘改名）；不提供 `/rename`（宿主自带 `/name`）。
 
-展示标题只属于外壳，得来、清洗、改名都在 `title.ts`：正式会话名优先，否则取当前分支首条非空用户文本（`format.ts` 的 `textOf`）的首句（`firstSentence`，上限 60 列），尚无文本显示“新会话”；标题与改名输入共用同一套清洗（去终端控制序列、控制字符、零宽字符）。
-会话启动、切树、改名和用户消息开始时更新投影，消息落盘前即可显示，逐帧绘制不扫描历史。不写回会话名，不改变官方会话列表
-或终端侧边栏。
+展示标题只属于外壳，得来规则见 `title.ts` 头注释；首句取 `format.ts` 的 `firstSentence`（上限 60 列），标题与改名输入共用同一套清洗（去终端控制序列、控制字符、零宽字符）。
+会话启动、切树、改名和用户消息开始时更新投影，消息落盘前即可显示，逐帧绘制不扫描历史。不改变官方会话列表或终端侧边栏。

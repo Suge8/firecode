@@ -1,12 +1,66 @@
 # Changelog
 
-All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
+All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers do not strictly follow Semantic Versioning: a breaking change can ship in any release and is marked **Breaking**.
 
 ## [Unreleased]
+
+### Added
+
+- In a Worker's full-run view, `Ctrl+Shift+X` interrupts the Worker.
+- Turning Master mode off while Workers are running asks for confirmation first.
+- A Worker interrupted before its first reply can be resumed directly.
+- The Master is told when an extension inside a Worker's session fails.
+- Delivery of Master events that fails is retried with a growing delay instead of being dropped.
+- The watcher stops with a notice when the provider returns an error; an extension error in the watcher session is reported once and does not stop it.
+- A new watcher suggestion replaces one that has not been delivered yet.
+
+### Changed
+
+- **Breaking:** `/tool-status` is removed.
+- FireCode no longer re-registers `read`, `bash`, `edit` and `write`. It only restyles the rows of `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`, so Pi's own tool descriptions and the `shellPath`, `shellCommandPrefix` and image-resize settings apply again.
+- Tool durations come from Pi, so they also show after resume and in the Worker view.
+- In Pi's regular display mode, a summary line that has scrolled out of view is drawn still instead of animating.
+- The average speed of a turn is computed from each reply's own duration.
+- **Breaking:** presets saved in old sessions are void after reopening them; preset records are now version 2.
+- `/preset (none)` restores the model, thinking level and tools from before the preset; a preset without `tools` returns to the tool set from before the preset.
+- Switching model by hand voids the active preset and restores its tool set without touching the model.
+- `--preset` is applied only at startup.
+- `/tokens` reads session files in chunks, so very large sessions are no longer undercounted and use far less memory; unreadable files are reported, and the argument must be a plain number of days.
+- **Breaking:** the Worker pool file is version 10; an older one is discarded with a notice, and the file is deleted when the pool is empty.
+- `tail` returns what happened after the last outside input, with errors first.
+- Workers start with the project trust of their target directory: extensions of an untrusted project are not loaded.
+- The watcher session is isolated: it loads none of your extensions, skills or prompt templates.
+- While you run `/compact` by hand, Master events wait until compaction settles before they are delivered.
+- Events that only inform no longer wake the Master; during a turn they are appended at its end.
+- **Breaking:** the review checkpoint is version 7; a review still in progress when you upgrade is discarded.
+- During a review the editor lets Pi's application keys and extension shortcuts through; only typing and submit are blocked.
+- OpenAI native compaction now goes through Pi's public stream API instead of FireCode's own Responses serialization.
+- Diagnostics from the OpenAI and Claude adapters are bilingual and prefixed with `FireCode`.
+- Config files may have trailing commas and a BOM; an unreadable file is reported as one problem; the `openai` section is validated with the rest, so unknown fields are reported.
+- **Breaking:** `review.tools` must not contain `write` or `edit`; the config is rejected otherwise.
+
+### Removed
+
+- The Master action `disposition` and the `/skill:tdd` allowlist.
 
 ### Fixed
 
 - After FireCode is updated while a Master session is open, sub-agents keep running the same FireCode version as the Master instead of loading the new code from disk. Before, a review started in such a session could finish but be reported as "checkpoint format is invalid" or "did not start". Reload the Master session to pick up a FireCode update for both.
+- Resuming an old session no longer starts a model turn for no reason.
+- `ack` cancels the pending resume reminder, and a Worker you have looked at is still released after 10 minutes.
+- After Esc, a turn that only runs a review no longer shows a false "interrupted" mark.
+- The warm glow after a turn settles no longer freezes halfway.
+- A session that starts while a turn is already running is counted as busy from the start.
+- A wake-up delivery can be aborted, so a Master you turned off no longer delivers old events afterwards.
+- A malformed review vote that starts with FAIL counts as a failure, and its original text goes back as feedback.
+- Decorated verdict lines (bold, headings, trailing punctuation) are read the same way everywhere.
+- When the advisor is unavailable, the review skips it, keeps repairing and still posts its card.
+- A review timeout card is posted even while the executing model is busy.
+- What the Master reads as the outcome of a review now follows how it ended: passed, advisor stopped it, rounds used up, failure, cancelled or timed out.
+- OpenAI native compaction no longer gives up replaying history that contains text without a phase, grammar-constrained tools or foreign call ids.
+- A manual `/compact` is cancelled with an explanation when the compacted window cannot be used; automatic compaction falls back to a normal summary and warns.
+- The Claude Code request headers are added only under Claude subscription credentials; API-key users are no longer presented as Claude Code.
+- The fast-mode toggle replaces only the top-level `openai` key, so a comment containing `"openai": {` is no longer edited by mistake, and turning it off writes `false`.
 
 ## [1.2.1] - 2026-10-09
 
