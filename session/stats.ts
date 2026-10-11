@@ -2,7 +2,7 @@
  * 会话 token / 成本统计：扫描 sessions 下的 jsonl，按模型汇总后用 Markdown 展示。
  * 源自 pi-token-stats (MIT, https://github.com/reaishijie/pi-token-stats)，已精简。
  */
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Dirent } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -14,6 +14,11 @@ import { registerQuota } from "./quota.js";
 
 const DEFAULT_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** 每次读入的字节数：会话文件可达数百 MB 且含超长行，整文件读成字符串会超过 Node 的字符串上限并占满内存。 */
+const CHUNK_BYTES = 1 << 20;
+const NEWLINE = 0x0a;
+/** 只有带 usage 的行才可能被计入，其余（工具输出等大行）不必解码解析。 */
+const USAGE_MARK = Buffer.from('"usage"');
 
 type Usage = {
 	input?: number;
@@ -101,15 +106,18 @@ function add(target: Totals, usage: Usage, countRequest: boolean): void {
 	target.cost += usage.cost?.total ?? 0;
 }
 
-async function sessionFiles(dir: string): Promise<string[]> {
+/** 目录读不了的计入 unreadable（根目录不存在不算：没有会话就是没有用量）。 */
+async function sessionFiles(dir: string): Promise<{ files: string[]; unreadable: number }> {
 	const found: string[] = [];
+	let unreadable = 0;
 	const pending = [dir];
 	while (pending.length > 0) {
 		const current = pending.pop() as string;
 		let entries: Dirent[];
 		try {
 			entries = await readdir(current, { withFileTypes: true });
-		} catch {
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") unreadable += 1;
 			continue;
 		}
 		for (const entry of entries) {
@@ -120,7 +128,33 @@ async function sessionFiles(dir: string): Promise<string[]> {
 			else if (target && entry.name.endsWith(".jsonl")) found.push(path);
 		}
 	}
-	return found;
+	return { files: found, unreadable };
+}
+
+/** 逐块读文件、按字节切行：峰值内存是一块加当前这一行，每块读完都让出事件循环。 */
+async function forEachLine(path: string, onLine: (line: Buffer) => void): Promise<void> {
+	const handle = await open(path, "r");
+	try {
+		const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+		/** 上一块末尾还没结束的行；块缓冲会被复用，所以存副本。 */
+		let tail: Buffer[] = [];
+		for (;;) {
+			const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, null);
+			if (bytesRead === 0) break;
+			const data = chunk.subarray(0, bytesRead);
+			let start = 0;
+			for (let end = data.indexOf(NEWLINE); end >= 0; end = data.indexOf(NEWLINE, start)) {
+				tail.push(data.subarray(start, end));
+				onLine(tail.length === 1 ? tail[0] : Buffer.concat(tail));
+				tail = [];
+				start = end + 1;
+			}
+			if (start < bytesRead) tail.push(Buffer.from(data.subarray(start)));
+		}
+		if (tail.length) onLine(Buffer.concat(tail));
+	} finally {
+		await handle.close();
+	}
 }
 
 type Report = {
@@ -129,50 +163,51 @@ type Report = {
 	to: number;
 	dir: string;
 	scanned: number;
+	/** 没读成的文件与目录数；这些文件里的用量没有计入。 */
+	unreadable: number;
 	matched: number;
 	overall: Totals;
 	byModel: Map<string, Totals>;
 };
 
-/** 逐文件让出事件循环：几千个会话文件扫下来不冻住界面。 */
 async function collect(days: number): Promise<Report> {
 	const to = Date.now();
 	const from = days === 0 ? undefined : to - days * DAY_MS;
 	const dir = join(getAgentDir(), "sessions");
-	const files = await sessionFiles(dir);
+	const { files, unreadable } = await sessionFiles(dir);
 	const report: Report = {
 		days,
 		from,
 		to,
 		dir,
 		scanned: files.length,
+		unreadable,
 		matched: 0,
 		overall: emptyTotals(),
 		byModel: new Map(),
 	};
 
 	for (const file of files) {
-		let content: string;
+		// 先收进本文件的列表，读完才并入报告：读到一半失败的文件不留半截数字。
+		const found: UsageAttribution[] = [];
 		try {
-			content = await readFile(file, "utf8");
+			await forEachLine(file, (line) => {
+				if (!line.includes(USAGE_MARK)) return;
+				try {
+					const attributed = usageAttribution(JSON.parse(line.toString("utf8")) as SessionLine);
+					if (!attributed) return;
+					if (from !== undefined && attributed.timestamp !== undefined && attributed.timestamp < from) return;
+					found.push(attributed);
+				} catch {
+					// 写到一半的坏行忽略。
+				}
+			});
 		} catch {
+			report.unreadable += 1;
 			continue;
 		}
 
-		let matched = false;
-		for (const line of content.split("\n")) {
-			// 只有带 usage 的行才可能被计入，其余（工具输出等大行）不必解析。
-			if (!line.includes('"usage"')) continue;
-
-			let attributed: UsageAttribution | undefined;
-			try {
-				attributed = usageAttribution(JSON.parse(line) as SessionLine);
-			} catch {
-				continue;
-			}
-			if (!attributed) continue;
-			if (from !== undefined && attributed.timestamp !== undefined && attributed.timestamp < from) continue;
-
+		for (const attributed of found) {
 			const key = `${attributed.provider}/${attributed.model}`;
 			let model = report.byModel.get(key);
 			if (!model) {
@@ -181,10 +216,8 @@ async function collect(days: number): Promise<Report> {
 			}
 			add(report.overall, attributed.usage, attributed.countRequest);
 			add(model, attributed.usage, attributed.countRequest);
-			matched = true;
 		}
-
-		if (matched) report.matched += 1;
+		if (found.length) report.matched += 1;
 	}
 
 	return report;
@@ -224,6 +257,7 @@ function buildMarkdown(report: Report): string {
 		msg.stats.rangeLine(range),
 		msg.stats.sessionsLine(number(report.matched), number(report.scanned)),
 		msg.stats.requestsLine(number(report.overall.requests), cost(report.overall.cost)),
+		...(report.unreadable ? [msg.stats.unreadableLine(number(report.unreadable))] : []),
 		"",
 		row(headers),
 		row(aligns),
@@ -271,14 +305,11 @@ async function show(markdown: string, ctx: ExtensionCommandContext): Promise<voi
 	});
 }
 
-/** 支持 `/tokens 7`、`/tokens --days 7`、`/tokens 0`（全部）。 */
-function parseDays(args: string | undefined): number {
-	const text = (args ?? "").trim();
+/** 参数只认纯数字天数；省略即默认天数，无法解析返回 undefined。 */
+function parseDays(args: string): number | undefined {
+	const text = args.trim();
 	if (!text) return DEFAULT_DAYS;
-
-	const matched = text.match(/(?:^|\s)(?:--days|-d)\s+(\d+)(?:\s|$)/i) ?? text.match(/^(\d+)\s*d?$/i);
-	const value = Number.parseInt(matched?.[1] ?? "", 10);
-	return Number.isFinite(value) ? value : DEFAULT_DAYS;
+	return /^\d+$/.test(text) ? Number.parseInt(text, 10) : undefined;
 }
 
 const dayCompletions: AutocompleteItem[] = [
@@ -295,8 +326,12 @@ export function registerStats(pi: ExtensionAPI): void {
 			const matches = dayCompletions.filter((item) => item.value.startsWith(prefix.trim()));
 			return matches.length > 0 ? matches : null;
 		},
-		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const days = parseDays(args);
+			if (days === undefined) {
+				ctx.ui.notify(msg.stats.usage, "warning");
+				return;
+			}
 			if (ctx.hasUI) {
 				ctx.ui.notify(msg.stats.counting(days), "info");
 			}
