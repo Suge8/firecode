@@ -1530,6 +1530,22 @@ test("有子代理在跑时关闭指挥官模式先确认：拒绝则保持原�
 	expect(headless.activeTools).not.toContain("subagents");
 });
 
+test("有子代理在跑时同意关闭：确认后才关，子代理被中断，档案保留，重新启用后在池里变为空闲待续派", async () => {
+	const harness = await setup(true, { confirmAnswer: true });
+	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
+	await harness.execute({ action: "start", worker: "busy", prompt: "慢", role: "工程师", thinking: "low" });
+	await harness.command("");
+	expect(harness.confirmations).toHaveLength(1);
+	expect(harness.notices.at(-1)).toBe("指挥官模式已关闭");
+	expect(harness.activeTools).not.toContain("subagents");
+	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
+
+	await harness.command("");
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ name: "busy", status: "idle", interruptedAt: expect.any(Number) });
+	await harness.command("");
+});
+
 test("tail：错误在前，只取最后一条外部输入之后，工具调用只留名字与简短参数；热会话与已释放的冷会话读到同一份", async () => {
 	const harness = await setup(true, { idleTimeoutMs: 30 });
 	faux.setResponses([
