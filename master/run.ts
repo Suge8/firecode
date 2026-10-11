@@ -2,10 +2,10 @@
  * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视与中断续跑提醒。
  * 所有 await 之后的写回经 runtime.current/commit 重读档案：kill 赢过迟到的异步写回。
  */
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { MasterRole, ModelAtom } from "../config.js";
 import { wrapEnvelope } from "../deliver.js";
-import { clip, firstSentence, textOf } from "../format.js";
+import { clip, firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
@@ -40,6 +40,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
 		contextFiles: true,
 		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume ? { resume: true } : {}) },
+		onExtensionError: (error) => reportExtensionError(active, worker, error),
 	});
 	if (active.closed) {
 		await spawned.dispose();
@@ -51,6 +52,16 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	active.assertOpen();
 	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true);
+}
+
+/** 子代理会话里的扩展出错：同一处错误只告知指挥官一次（事件处理器每次触发都会再抛）。 */
+function reportExtensionError(active: MasterRuntime, worker: WorkerRef, error: ExtensionError): void {
+	if (!active.find(worker)) return;
+	const live = active.liveOf(worker.name);
+	const key = `${error.extensionPath}\n${error.event}\n${error.error}`;
+	if (live.reportedErrors.has(key)) return;
+	live.reportedErrors.add(key);
+	active.outbox.enqueue(masterEvent.extensionError(worker.name, tildeHome(error.extensionPath), error.event, error.error), worker.name);
 }
 
 /** 投影当前动作、卡住判定与审查进度的唯一订阅。 */
@@ -125,7 +136,6 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		live.interruptTimer = undefined;
 		const current = active.find(worker);
 		if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
-		active.store.upsert({ ...current, disposition: "reminded" });
 		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
 	}, delay);
 	live.interruptTimer.unref?.();
@@ -185,7 +195,7 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef, session: AgentSession, previousRunId: string | undefined): void {
 	const live = active.liveOf(target.name);
 	const reviewing = () => {
-		const current = active.closed || active.live.get(target.name) !== live ? undefined : active.find(target);
+		const current = active.live.get(target.name) !== live ? undefined : active.find(target);
 		return current?.status === "reviewing" ? current : undefined;
 	};
 	void monitorReview(session, target.sessionPath, previousRunId).then(

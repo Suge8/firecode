@@ -40,7 +40,6 @@ export function compactWorker(worker: WorkerRef) {
 		session: worker.sessionPath,
 		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
 		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
-		...(worker.disposition ? { disposition: worker.disposition } : {}),
 	};
 }
 
