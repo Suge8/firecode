@@ -42,6 +42,9 @@ export const masterEvent = {
 		settled(runTitle(name, msg.event.failed, view), ...youSaid(view), SECTIONS.error, error, obligation ? msg.event.obligation : undefined),
 	interrupted: (name: string, obligation: boolean, view: ViewPrompts = []) =>
 		settled(runTitle(name, msg.event.interrupted, view), ...youSaid(view), msg.event.interruptedKept(obligation)),
+	/** 审查被 interrupt 取消：不是失败，会话保留，审查义务照旧。 */
+	reviewInterrupted: (name: string, obligation: boolean) =>
+		settled(`${name} ${msg.event.reviewInterrupted}`, msg.event.reviewInterruptedKept(obligation)),
 	reviewIncomplete: (name: string, reason: string, reply?: string) =>
 		settled(`${name} ${msg.event.reviewIncomplete}`, SECTIONS.error, reason, ...(reply === undefined ? [] : [SECTIONS.finalReply, reply || msg.event.noReply])),
 	/** 审查终态；reply 是 Worker 最后一条回复。停止与未完成是失败：原因进“错误：”分节，顾问意见在其后。 */
@@ -57,6 +60,7 @@ export const masterEvent = {
 				...final,
 			);
 		if (outcome.status === "failed") return masterEvent.reviewIncomplete(name, outcome.reason, reply);
+		if (outcome.status === "cancelled") return masterEvent.reviewIncomplete(name, msg.event.reviewCancelled);
 		if (outcome.status === "refused") return masterEvent.reviewIncomplete(name, outcome.message);
 		if (outcome.status === "error") return masterEvent.reviewIncomplete(name, msg.event.reviewReadFailed(outcome.message));
 		return masterEvent.reviewIncomplete(name, msg.event.reviewNoFinal(outcome.status));

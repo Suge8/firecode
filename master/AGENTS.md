@@ -8,8 +8,8 @@
 
 Worker 是主进程内的 SDK 子会话而非独立进程：reload 会中断在飞回合（JSONL 与审查义务保留、可续派），换来父进程退出即全停、无幽灵进程与跨进程对账。池只管 Worker 生命周期与结果回传，不建 Goal、Task、任务板或消息总线；多个 Worker 可并行写同一 checkout，没有写租约，集成与验证归指挥官。
 
-所有子会话只经根级 `spawn.ts` 创建（Master 与 Watcher 共用一个池，Review 持自己的池，生命周期互不牵连）：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
-系统提示、上下文文件与持久化。Master 与观察员共用的池由入口建，注册进子会话的是主会话已加载的这份 FireCode（子会话模式：只有守卫、轮记录等与界面无关的部分）；宿主为子会话从磁盘另读的 FireCode 在加载标记下不注册。否则 FireCode 在会话中途更新后，新开的 Worker 会跑新代码而指挥官仍是旧代码，审查 checkpoint 等落盘约定对不上；改完 FireCode 要 reload 指挥官，Worker 才用上新代码。审查会话隔离，不带任何扩展。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在模型解析时不可见。这份 ModelRuntime 同时交给池里建出的每个子会话，所以某个子会话里扩展注册的 provider 对同池其他子会话也可见（宿主跨会话复用服务也是如此）。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。子会话按目标 cwd 起项目信任（`spawn.ts` 的 `projectTrusted`，与宿主非交互路径同一判定：无需信任的项目资源就信任，否则取宿主信任存储里最近的显式决定，没有决定时看全局 `defaultProjectTrust` 是否为 always；子会话无法弹窗，ask 与只对主会话本次生效的选择都按不信任），资源加载器与会话共用同一个 SettingsManager。
+所有子会话只经根级 `spawn.ts` 创建（进程里只有一个池：根 `index.ts` 建一次，Master、Watcher 与 Review——含 Worker 会话里的审查——共用，模型运行时只读一次；各自的会话互不牵连）：它封装 Pi SDK 会话、模型、工具（含只属于该子会话的自定义工具）、扩展、
+系统提示、上下文文件与持久化。池由入口建并传给各方，注册进子会话的是主会话已加载的这份 FireCode（子会话模式：只有守卫、轮记录等与界面无关的部分）；宿主为子会话从磁盘另读的 FireCode 在加载标记下不注册。否则 FireCode 在会话中途更新后，新开的 Worker 会跑新代码而指挥官仍是旧代码，审查 checkpoint 等落盘约定对不上；改完 FireCode 要 reload 指挥官，Worker 才用上新代码。审查会话隔离，不带任何扩展；Master 关闭只释放落盘的子代理会话（`disposeWorkers`），审查与观察员的内存会话归创建它们的一方，不会被掐断。模型原子也只在池里解析：每个池只建一份 ModelRuntime（auth.json 与 models.json 只读一次），扩展注册的 provider 在模型解析时不可见。这份 ModelRuntime 同时交给池里建出的每个子会话，所以某个子会话里扩展注册的 provider 对同池其他子会话也可见（宿主跨会话复用服务也是如此）。单写者登记挂在 globalThis 上，宿主重新求值模块图时仍是进程唯一。Worker 使用 file 会话，文件位于主会话目录下的 `subagents/`，不会出现在 `/resume`；会话路径是档案身份的唯一事实源。同一路径只允许一个热会话持有者。子会话按目标 cwd 起项目信任（`spawn.ts` 的 `projectTrusted`，与宿主非交互路径同一判定：无需信任的项目资源就信任，否则取宿主信任存储里最近的显式决定，没有决定时看全局 `defaultProjectTrust` 是否为 always；子会话无法弹窗，ask 与只对主会话本次生效的选择都按不信任），资源加载器与会话共用同一个 SettingsManager。
 
 Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录派发角色、`model` 与 `thinking` 记录实际原子，`launch` 记录启动序；另有 `interruptedAt` 与 `reviewNeeded` 两个独立标记。旧版档案由 `MasterStore` 丢弃并告知，不迁移；比当前更新的版本（降级）明确失败，不删档案。`MasterStore` 是档案唯一所有者：列表始终按启动序（`launch`）排列，读者不再二次排序；载入时把在飞状态收敛为 `idle + interruptedAt`（保留会话与审查义务）并把这些名字记在运行时的 `recovered`，激活时只对它们补挂续跑提醒——指挥官自己 interrupt 的、早已提醒过的不再提醒，`ack` 取消还没发出的提醒。池变空（删最后一票、载入空池）就删档案文件。首次续派会前置现场核对提示。
 
@@ -23,7 +23,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 
 - `start`：显式指定角色表内的 role 和短名；可用 thinking 覆盖角色原子档，可带 cwd、review。
 - `send`：working Worker 的普通 send 经宿主 `session.steer` 在句缝送达，不打断（仅回合确在流式时；steer 是子会话自己的消息队列，与根 AGENTS.md「硬约束」里主会话的唤醒问题无关，且只在流式中使用，不会唤起歇透会话）。切换 role、thinking 或 cwd 要求 Worker 空闲，working 时提示先 `interrupt`，reviewing 时等落定。省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。带 cwd 时释放热会话并以新目录重开同一份 JSONL（不新建会话），档案记新 cwd；Worker 的 cwd 已不存在且未带 cwd 时明确报错并提示带 cwd。steer 入队后回合若以中断等方式结束，滞留队列的补充说明在落定时清出并作为事件回报指挥官重发，不留到下次 prompt。
-- `interrupt`：中止 working 回合，保留会话与义务；指挥官自己发起，所以不补发续跑提醒（只有会话重载打断的回合才提醒）。`start` 与 `send` 等回合真正在飞才返回：宿主 prompt 的前置阶段仍报空闲，落在那里的 abort 会被静默丢弃。
+- `interrupt`：中止 working 回合，保留会话与义务；指挥官自己发起，所以不补发续跑提醒（只有会话重载打断的回合才提醒）。对 reviewing 的子代理：先在它的会话里执行 `review/outcome.ts` 的 `CANCEL_REVIEW_COMMAND`（与 esc 取消同一路径，审查以取消收场、终态 checkpoint 照写），再中止会话里可能在跑的修复/总结回合；审查监视看到取消的终态后按中断落定——回到 idle、带中断标记、审查义务保留（未履行，仍可再 review），指挥官收到“审查被中断”事件（不是失败）。取消没来得及生效、审查先以别的结局收场时，按那个结局落定。`start` 与 `send` 等回合真正在飞才返回：宿主 prompt 的前置阶段仍报空闲，落在那里的 abort 会被静默丢弃。
 - `review`：只对 idle Worker 显式发起 fire-review。
 - `tail`：最后一条外部输入（不是整条由 Master 信封构成的用户消息）之后的轨迹快照，不改变状态；格式与预算见 `trace.ts` 头注释。
 - `ack`：清掉失败与被中断的活动列表行并取消未发出的续跑提醒；审查义务未履行时拒绝。
@@ -74,7 +74,7 @@ Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它�
 
 - 输入区与上下横线共用 `statusbar/render.ts` 的 `fitBorder`；调用点是活动列表的 `rowState`（上横线）与 `roundFromEntry`（轮记录），不在视图另算。
 - 已发出未送达的补话读子会话的排队队列。
-- 中断键 `ctrl+shift+x`（`INTERRUPT_KEY`）走 `ACTION_HANDLERS.interrupt`，只对在跑的子代理生效，底行提示只在它在跑时出现；展开工具行经 `tools/group-view` 带形状校验的 `toggleToolDetails`，不直接读宿主私有字段。
+- 中断键 `ctrl+shift+x`（`INTERRUPT_KEY`）走 `ACTION_HANDLERS.interrupt`，对在跑和审查中的子代理生效（审查中走上面的 reviewing 中断），底行提示只在它不是空闲时出现；展开工具行经 `tools/group-view` 带形状校验的 `toggleToolDetails`，不直接读宿主私有字段。
 - 被移除时正在看的子代理留着已有记录、不再更新，输入框停用并丢掉草稿；Tab 序列与 n/N 立即去掉它。
 - 浮层抢走焦点后宿主编辑器的全局键不生效，视图给出同义行为：esc 返回，ctrl+c 先清输入、再按关闭视图，空输入的 ctrl+d 关闭视图（不在浮层里退出 pi），ctrl+o 是当前子代理的全部展开。
 - 视图只处理滚轮与点击；按下、拖动与松开交还宿主做文字选择（有浮层时宿主按屏幕坐标选、松开即复制），不拖动的松开由宿主转成点击发回。点击展开/收起的视口锚定与主会话同一个 `tools/click-anchor.ts`。
