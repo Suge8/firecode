@@ -196,7 +196,7 @@ interface MirrorSources {
 	ui: TUI;
 	cwd: string;
 	theme: Theme;
-	toolDefinition(name: string): ToolRenderers | undefined;
+	toolRenderers(name: string): ToolRenderers | undefined;
 	messageRenderer(customType: string): MessageRenderer | undefined;
 	entryRenderer(customType: string): EntryRenderer | undefined;
 }
@@ -367,7 +367,7 @@ export class ChatMirror {
 	}
 
 	private toolRow(name: string, id: string, args: unknown): ToolExecutionComponent {
-		const row = new ToolExecutionComponent(name, id, args, {}, this.sources.toolDefinition(name), this.sources.ui, this.sources.cwd);
+		const row = new ToolExecutionComponent(name, id, args, {}, this.sources.toolRenderers(name), this.sources.ui, this.sources.cwd);
 		toolFacts(row);
 		this.chat.addChild(row);
 		return row;

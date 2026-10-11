@@ -57,15 +57,15 @@ const RENDERERS: Record<Name, ToolRenderers> = {
 };
 
 /** 默认工具的渲染器，按工具名取：主会话经宿主解析器使用，子代理全过程视图拿同一份渲染子会话的工具行。 */
-export function toolDefinitions(): Readonly<Record<string, ToolRenderers>> {
-	return RENDERERS;
+export function toolRenderers(tool: string): ToolRenderers | undefined {
+	return Object.hasOwn(RENDERERS, tool) ? RENDERERS[tool as Name] : undefined;
 }
 
 export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
 	// 轮记录由根级轮记录器写（每个会话都有）；这里只把它渲染成零行标记，供摘要行读。
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
-	pi.registerToolRenderer((tool, next) => (Object.hasOwn(RENDERERS, tool) ? RENDERERS[tool as Name] : next()));
+	pi.registerToolRenderer((tool, next) => toolRenderers(tool) ?? next());
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();

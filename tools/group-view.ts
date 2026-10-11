@@ -264,8 +264,6 @@ export interface Projection {
 	nodes: Component[];
 	/** 第一个有活的摘要或落定过渡的节点下标；没有则不需要按帧重绘。 */
 	animatingAt?: number;
-	/** 有活的摘要或落定过渡在播放，宿主需要按帧重绘（由 animatingAt 派生，子代理视图读它）。 */
-	readonly animating: boolean;
 }
 
 /**
@@ -335,7 +333,7 @@ export function projectProcessGroups(source: readonly Component[], env: Projecti
 		}
 	}
 	flush(true);
-	return { nodes, animatingAt, get animating() { return animatingAt !== undefined; } };
+	return { nodes, animatingAt };
 }
 
 type IsProcess = (component: Component) => boolean;

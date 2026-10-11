@@ -16,7 +16,7 @@ import { clip } from "../format.js";
 import { ClickAnchor, type Scroller } from "../tools/click-anchor.js";
 import { projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "../tools/group-view.js";
 import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../tools/host.js";
-import { toolDefinitions } from "../tools/index.js";
+import { toolRenderers } from "../tools/index.js";
 import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
@@ -119,12 +119,11 @@ class WorkerRecord {
 	private unsubscribe: (() => void) | undefined;
 
 	constructor(worker: WorkerRef, readonly session: AgentSession | undefined, tui: TUI, theme: Theme, private readonly changed: () => void) {
-		const definitions: Record<string, ReturnType<typeof toolDefinitions>[keyof ReturnType<typeof toolDefinitions>]> = toolDefinitions();
 		this.mirror = new ChatMirror({
 			ui: detachedTui(tui, changed),
 			cwd: worker.cwd ?? process.cwd(),
 			theme,
-			toolDefinition: (tool) => definitions[tool],
+			toolRenderers,
 			messageRenderer: (type) => session?.extensionRunner.getMessageRenderer(type),
 			// 轮记录逐条经 roundFromEntry 读出，以零行标记放进聊天树，投影按它分轮（与主会话同一份记录格式）。
 			entryRenderer: (type) => (type === ROUND_ENTRY ? roundEntryRenderer : undefined),
@@ -357,9 +356,9 @@ export class WorkerView implements Component, Focusable {
 	private body(width: number): { lines: string[]; animating: boolean } {
 		const record = this.record;
 		if (!record) return { lines: [this.theme.fg("warning", ` ${this.failure ?? ""}`)], animating: false };
-		const { nodes, animating } = projectProcessGroups(record.mirror.chat.children, this.env(record));
+		const { nodes, animatingAt } = projectProcessGroups(record.mirror.chat.children, this.env(record));
 		this.projection.children = nodes;
-		return { lines: this.projection.render(width), animating };
+		return { lines: this.projection.render(width), animating: animatingAt !== undefined };
 	}
 
 	private syncFrames(moving: boolean): void {

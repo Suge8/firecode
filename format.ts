@@ -23,7 +23,7 @@ const ELLIPSIS = "…";
 const ANSI_SEQUENCE = /(\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)))/g;
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** 消息 content 里的正文：字符串原样；块数组只取 text 块，按行拼接。全插件只此一处。 */
+/** 消息 content 里的正文：字符串原样；块数组只取 text 块，按行拼接。 */
 export function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
