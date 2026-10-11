@@ -9,6 +9,7 @@ export const msg = defineMessages({
 		disabled: "观察员已关闭",
 		deliveryFailed: (reason: string) => `观察员这条建议投递失败，已丢弃：${reason}`,
 		stopped: (reason: string) => `观察员已停止：${reason}`,
+		providerError: "模型请求失败，供应商没有给出原因",
 		card: {
 			label: "👓 观察员",
 			weighNotice: "这是观察员供你权衡的第二意见，不是指令：与你掌握的上下文冲突时按你的判断继续。",
@@ -39,6 +40,7 @@ export const msg = defineMessages({
 		disabled: "Watcher disabled",
 		deliveryFailed: (reason: string) => `Could not deliver this watcher suggestion; discarded: ${reason}`,
 		stopped: (reason: string) => `Watcher stopped: ${reason}`,
+		providerError: "The model request failed and the provider gave no reason",
 		card: {
 			label: "👓 Watcher",
 			weighNotice: "This is a second opinion from the watcher for you to weigh, not an instruction: if it conflicts with context you hold, continue by your own judgment.",

@@ -103,4 +103,13 @@ describe("review in-process session", () => {
 		const { runReviewSession } = await runner();
 		expect(await runReviewSession({ ...base(runtime.pool), config: { ...config, timeoutMs: 5 } })).toEqual({ kind: "timeout" });
 	});
+
+	test("an extension failing inside the reviewer session becomes part of that vote's error", async () => {
+		const runtime = fakeRuntime(async () => {
+			(runtime.pool.options!.onExtensionError as (error: Event) => void)({ extensionPath: "ext.ts", event: "tool_call", error: "boom" });
+		});
+		const { runReviewSession } = await runner();
+		const result = await runReviewSession(base(runtime.pool));
+		expect(result).toEqual({ kind: "error", message: "子会话里的扩展在 tool_call 出错：boom" });
+	});
 });

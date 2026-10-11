@@ -550,7 +550,7 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	await first.dispose();
 	await expect(pool.spawn({ ...options, persistence: { ...options.persistence, resume: true } }))
 		.rejects.toThrow("会话文件不存在");
-	pool.disposeAll();
+	pool.disposeWorkers();
 });
 
 test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会话扩展先收到 session_shutdown", async () => {

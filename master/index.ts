@@ -105,7 +105,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		// 遗弃在飞子代理不是歇下：带 teardown 归零，busy.ts 只结束本段。
 		publishInFlight(0, true);
 		publishRoster([]);
-		await setup.pool.disposeAll();
+		await setup.pool.disposeWorkers();
 		setTools(false);
 	};
 
