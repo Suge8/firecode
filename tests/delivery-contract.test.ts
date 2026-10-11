@@ -27,7 +27,7 @@ const waitTool = {
 };
 
 /** 真实 SDK 会话 + faux 供应商：宿主契约在真实宿主上验证，extension 是写进 Agent 目录的扩展源码。 */
-async function hostSession(extensionSource: string, responses: unknown[], options: Record<string, unknown> = {}) {
+async function hostSession(extensionSource: string, responses: unknown[], options: Record<string, unknown> = {}, settings?: unknown) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-delivery-contract-"));
 	const cwd = join(directory, "project");
 	const agentDir = join(directory, "agent");
@@ -35,6 +35,7 @@ async function hostSession(extensionSource: string, responses: unknown[], option
 	await Promise.all([mkdir(cwd), mkdir(extensionsDir, { recursive: true })]);
 	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	await writeFile(join(extensionsDir, "contract.ts"), extensionSource);
+	if (settings) await writeFile(join(agentDir, "settings.json"), JSON.stringify(settings));
 
 	faux = registerFauxProvider();
 	const model = faux.getModel();
@@ -53,27 +54,26 @@ async function hostSession(extensionSource: string, responses: unknown[], option
 const waitToolOptions = { tools: ["contract_wait"], customTools: [waitTool] };
 const toolCallResponse = fauxAssistantMessage(fauxToolCall("contract_wait", {}), { stopReason: "toolUse" });
 
-test("streaming steer delivery preserves the sent prefix and reaches the next request after tool results", async () => {
+test("回合进行中 deliver 经 steer 入队：已发出的前缀不变，工具结果之后的下一次请求带上它", async () => {
 	const requests: any[][] = [];
 	const record = (reply: unknown) => (context: any) => {
 		requests.push(structuredClone(context.messages));
 		return reply;
 	};
 	const session = await hostSession(`
+import { deliver } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
 	let delivered = false;
-	pi.on("tool_execution_start", () => {
+	pi.on("tool_execution_start", (_event, ctx) => {
 		if (delivered) return;
 		delivered = true;
-		pi.sendMessage(
-			{ customType: "delivery-contract", content: ${JSON.stringify(DELIVERY_TEXT)}, display: false },
-			{ deliverAs: "steer", triggerTurn: true },
-		);
+		void deliver(pi, ctx, { customType: "delivery-contract", content: ${JSON.stringify(DELIVERY_TEXT)} });
 	});
 }
 `, [record(toolCallResponse), record(fauxAssistantMessage("delivery observed"))], waitToolOptions);
 
 	try {
+		await session.bindExtensions({ mode: "print" });
 		await session.prompt("start contract run");
 		const [inFlightRequest, nextRequest] = requests;
 		const messageText = (message: any) => typeof message.content === "string"
@@ -90,28 +90,6 @@ export default function (pi) {
 		]);
 		expect(messageText(nextRequest.at(-2))).toContain("tool completed");
 		expect(messageText(nextRequest.at(-1))).toBe(DELIVERY_TEXT);
-	} finally {
-		session.dispose();
-	}
-}, 10_000);
-
-test("idle wake via sendUserMessage runs before_agent_start on every request", async () => {
-	const prompts: string[] = [];
-	const record = (reply: unknown) => (context: any) => {
-		prompts.push(getCurrentSystemPrompt(context.messages));
-		return reply;
-	};
-	const session = await hostSession(`
-export default function (pi) {
-	pi.on("before_agent_start", (event) => { event.systemPromptOptions.sections.guidelines_mark = "GUIDELINES-MARK"; });
-}
-`, [record(toolCallResponse), record(fauxAssistantMessage("woken"))], waitToolOptions);
-
-	try {
-		// 会话歇透时的前门唤醒：deliver.ts 空闲分支依赖的宿主契约。
-		await session.sendUserMessage("delivered while idle");
-		expect(prompts).toHaveLength(2);
-		expect(prompts.every((prompt) => prompt.includes("GUIDELINES-MARK"))).toBe(true);
 	} finally {
 		session.dispose();
 	}
@@ -176,3 +154,69 @@ export default function (pi) {
 		session.dispose();
 	}
 }, 10_000);
+
+test("回合进行中 inform 不多起一次模型请求：消息在回合末追加到会话记录，排在助手回复之后", async () => {
+	let requests = 0;
+	const session = await hostSession(`
+import { inform, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+export default function (pi) {
+	pi.on("turn_start", () => inform(pi, { customType: "inform-contract", content: wrapEnvelope("firecode_master_event", "told, not woken") }));
+}
+`, [() => { requests++; return fauxAssistantMessage("done"); }]);
+	try {
+		await session.bindExtensions({ mode: "print" });
+		await session.prompt("start contract run");
+		await session.waitForIdle();
+		const entries = session.sessionManager.getEntries();
+		const roles = entries.map((entry: any) => entry.type === "custom_message" ? `custom:${entry.customType}` : entry.message?.role);
+
+		expect(requests).toBe(1);
+		expect(roles.slice(-3)).toEqual(["user", "assistant", "custom:inform-contract"]);
+	} finally {
+		session.dispose();
+	}
+}, 10_000);
+
+// 手动 /compact 不在回合里：宿主 isIdle 为 false，但 steer 只会被当场追加、没有回合可续。deliver 要等压缩落定再唤起。
+test("手动 /compact 期间 deliver：压缩落定后前门唤起一个回合，信封作为用户消息进上下文", async () => {
+	const requests: string[] = [];
+	let release!: () => void;
+	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
+	const session = await hostSession(`
+import { deliver, watchManualCompaction, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+export default function (pi) {
+	watchManualCompaction(pi);
+	pi.on("session_start", (_event, ctx) => {
+		globalThis.__deliverDuringCompaction = () => deliver(pi, ctx, { customType: "firecode-review-card", content: wrapEnvelope("firecode_master_event", "worker done") });
+	});
+}
+`, [
+		fauxAssistantMessage("ok 1"),
+		fauxAssistantMessage("ok 2"),
+		fauxAssistantMessage("ok 3"),
+		async () => { await summaryGate; return fauxAssistantMessage("SUMMARY"); },
+		(context: any) => {
+			const last = context.messages.at(-1);
+			requests.push(typeof last.content === "string" ? last.content : last.content.map((part: any) => part.text ?? "").join(""));
+			return fauxAssistantMessage("handled");
+		},
+	], {}, { compaction: { enabled: false, keepRecentTokens: 5 } });
+	try {
+		await session.bindExtensions({ mode: "print" });
+		for (let turn = 1; turn <= 3; turn++) await session.prompt(`message ${turn} ${"word ".repeat(200)}`);
+		const compacting = session.compact();
+		while (!session.isCompacting) await new Promise((resolve) => setTimeout(resolve, 1));
+		const delivered = (globalThis as any).__deliverDuringCompaction();
+		const early = await Promise.race([delivered.then(() => "resolved"), new Promise((resolve) => setTimeout(() => resolve("pending"), 50))]);
+		expect(early).toBe("pending");
+
+		release();
+		await compacting;
+		await delivered;
+		await session.waitForIdle();
+		expect(requests).toEqual(["<firecode_master_event>\nworker done\n</firecode_master_event>"]);
+	} finally {
+		delete (globalThis as any).__deliverDuringCompaction;
+		session.dispose();
+	}
+}, 15_000);

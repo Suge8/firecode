@@ -682,8 +682,8 @@ test("子代理视图里的补话走 send 同一入口：落定事件标题注�
 	expect(content).toContain("你说：把标题改短");
 	expect(content).toContain("回复：\n按你说的改好了");
 	expect(content).toMatch(/耗时：本次运行 /u);
-	// 指挥官回合在跑也不走 steer（steer 会让宿主续跑一次）：宿主把它推迟到本回合结束再追加。
-	expect(harness.messages.at(-1).options?.deliverAs).toBeUndefined();
+	// 指挥官回合在跑也不走 steer（steer 会让宿主续跑一次）：显式 triggerTurn:false，宿主把它推迟到本回合结束再追加。
+	expect(harness.messages.at(-1).options).toEqual({ triggerTurn: false });
 });
 
 const inFlightCounts = (harness: { emitted: [string, any][] }) =>
@@ -708,8 +708,7 @@ test("视图里直接派的运行指挥官并不在等：不计入在飞数（�
 	expect(harness.userMessages).toHaveLength(wakes);
 	const { message, options } = harness.messages.at(-1);
 	expect(titleOf(message.content)).toBe("viewed 已返回（你在子代理视图里直接派的）");
-	expect(options?.deliverAs).toBeUndefined();
-	expect(options?.triggerTurn).toBeFalsy();
+	expect(options).toEqual({ triggerTurn: false });
 });
 
 test("视图派的运行进行中指挥官又 send 给同一子代理：来源转为指挥官，从此算在飞，落定照常唤醒指挥官", async () => {
