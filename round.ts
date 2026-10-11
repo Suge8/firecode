@@ -21,7 +21,7 @@ export const ROUND_ENTRY = "firecode-round";
 const ROUND_RECORDED_CHANNEL = "firecode:round-recorded";
 
 /**
- * 本段最后一个指挥官回合的终态：宿主的回合中断信号（ctx.signal.aborted）为真即“已中断”——工具执行中被 Esc 时
+ * 本段最后一个指挥官回合的终态：宿主在 agent_settled 给出的 aborted 为真即“已中断”——工具执行中被 Esc 时
  * 宿主给的终态是 error（“The operation was aborted.”），不能只看 stopReason；其余按最后一条助手消息的 stopReason。
  */
 type Outcome = "complete" | "aborted" | "error";
@@ -55,9 +55,8 @@ export function roundTexts(round: SettledRound): string[] {
 
 // ---- 测量与记录器 ----
 
-/** 本段的模型请求计时；requestMs 为 undefined 表示本段已无法给出均速。 */
+/** 本段的模型请求计时（各条助手消息的宿主实测耗时之和）；requestMs 为 undefined 表示本段已无法给出均速。 */
 interface Requests {
-	startedAt?: number;
 	requestMs?: number;
 	outputTokens: number;
 }
@@ -65,8 +64,8 @@ const FRESH: Requests = { requestMs: 0, outputTokens: 0 };
 /** 输出 token 少于这个数时均速没有意义（1 个 token 的快答算出来的 tps 只是噪声）。 */
 const MIN_RATE_TOKENS = 20;
 
-function settledRound(elapsed: number, outcome: Outcome, { startedAt, requestMs, outputTokens }: Requests): SettledRound {
-	const valid = outcome === "complete" && startedAt === undefined && requestMs && outputTokens >= MIN_RATE_TOKENS;
+function settledRound(elapsed: number, outcome: Outcome, { requestMs, outputTokens }: Requests): SettledRound {
+	const valid = outcome === "complete" && requestMs && outputTokens >= MIN_RATE_TOKENS;
 	return { elapsed, outcome, ...(valid ? { tps: (outputTokens * 1_000) / requestMs } : {}) };
 }
 
@@ -79,16 +78,16 @@ export function registerRoundRecorder(pi: ExtensionAPI): void {
 	let outcome: Outcome = "complete";
 	let requests = FRESH;
 	let busy = false;
-	pi.on("agent_end", (event, context) => {
-		outcome = context.signal?.aborted ? "aborted" : outcomeOf(event.messages);
+	pi.on("agent_end", (event) => {
+		outcome = outcomeOf(event.messages);
 	});
-	pi.on("before_provider_request", () => {
-		// 上一次请求没有等到助手 message_end 就又发起：起止无法配对。
-		requests = { ...requests, startedAt: Date.now(), requestMs: requests.startedAt === undefined ? requests.requestMs : undefined };
+	// 须先于 watchBusy 注册：歇下边沿也在 agent_settled 里触发，同一事件的处理器按注册顺序跑，记录要先拿到 aborted。
+	pi.on("agent_settled", (event) => {
+		if (event.aborted) outcome = "aborted";
 	});
 	pi.on("message_end", ({ message }) => {
 		if (message.role !== "assistant") return;
-		const duration = requests.startedAt === undefined ? 0 : Date.now() - requests.startedAt;
+		const duration = message.durationMs ?? 0;
 		const output = message.usage.output;
 		const valid = requests.requestMs !== undefined && duration > 0 && Number.isFinite(output) && output > 0
 			&& (message.stopReason === "stop" || message.stopReason === "toolUse");
@@ -96,14 +95,12 @@ export function registerRoundRecorder(pi: ExtensionAPI): void {
 			? { requestMs: requests.requestMs! + duration, outputTokens: requests.outputTokens + output }
 			: { requestMs: undefined, outputTokens: requests.outputTokens };
 	});
-	// 压缩的模型调用没有助手 message_end，不把它的起点借给下一条回复；压缩失败则本段不给均速。
-	const clearRequest = () => { requests = { ...requests, startedAt: undefined }; };
-	pi.on("session_before_compact", clearRequest);
-	pi.on("session_compact", clearRequest);
-	pi.on("session_compact_failed", () => { requests = { requestMs: undefined, outputTokens: requests.outputTokens }; });
 	watchBusy(pi, {
 		onChange: (view) => {
-			if (view.busy && !busy) requests = FRESH;
+			if (view.busy && !busy) {
+				requests = FRESH;
+				outcome = "complete";
+			}
 			busy = view.busy;
 		},
 		onSettled: (elapsed) => {
