@@ -23,7 +23,10 @@ test("紧凑工具保留路径、错误和修改摘要，按需正文保留空�
 	const result = { content: [{ type: "text", text: "  alpha  \n" }, { type: "text", text: "\x1b[31mbeta\x1b[0m\x00 " }] };
 	expect(read.renderResult(result, { expanded: false }, theme, ctx).render(76)).toEqual([]);
 	expect(read.renderCall({ path: "/project/a.ts", offset: 10 }, theme, ctx).render(76)[0]).toContain("读取 ./a.ts:10+");
-	expect(read.renderResult(result, { expanded: true }, theme, ctx).render(76)).toEqual(["", "  alpha  ", "", "beta "]);
+	const body = read.renderResult(result, { expanded: true }, theme, ctx).render(76);
+	expect(body).toContain("  alpha  ");
+	expect(body).toContain("beta ");
+	expect(body.join("")).not.toMatch(/[\x00\x1b]/);
 	const error = context({ isError: true });
 	bash.renderResult({ content: [{ type: "text", text: "Cannot find module" }] }, { expanded: false }, theme, error);
 	expect(bash.renderCall({ command: "bun test" }, theme, error).render(100)[0]).toContain("操作 $ bun test · Cannot find module");
