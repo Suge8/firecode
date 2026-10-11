@@ -4,6 +4,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CONFIG_PATH, seedConfig } from "./config-file.js";
+import { watchManualCompaction } from "./deliver.js";
 import { type Feature, loadConfig } from "./config.js";
 import { registerHeader } from "./header.js";
 import { msg } from "./messages.js";
@@ -35,28 +36,31 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	statusbar: registerStatusBar,
 };
 
-/** 只属于交互主会话的功能：子会话（Worker、观察员）没有界面与命令入口，注册了只会白占资源。 */
+/** 只属于交互主会话的功能：子会话（Worker）没有界面与命令入口，注册了只会白占资源。 */
 const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats", "statusbar"]);
 
-/** subsession：Worker、观察员等子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。 */
+/** subsession：Worker 子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。 */
 export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
 	let seeding = subsession ? undefined : seedConfigNotice();
 	const { config, problems, featuresBroken } = loadConfig();
 	const reviewEnabled = config.features.review !== false;
 	// 轮记录不属于任何可关的功能：每个会话（含子代理）都写，界面、Master 耗时与子代理视图都只读它。
 	registerRoundRecorder(pi);
+	if (!subsession) watchManualCompaction(pi);
 	registerTruncatedWriteGuard(pi);
 	registerToday(pi);
 	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);
 	}
-	// 子会话不带观察员：级联抑制是代码规则，不靠进程环境。
-	if (config.features.watcher !== false && !subsession) registerWatcher(pi, { pool: subsessionPool() });
-	// 子会话里 Master 只注册 checkout 守卫，不注册命令、工具与生命周期。
-	if (config.features.master !== false) {
-		if (subsession) registerWorkerGuard(pi);
-		else registerMaster(pi, { pool: subsessionPool() });
+	// 子会话不带观察员、也不带 Master 本体（只注册 checkout 守卫）：级联抑制是代码规则，不靠进程环境。
+	// 观察员与 Master 共用一个池：模型运行时（auth.json 与 models.json）只读一次。
+	if (subsession) {
+		if (config.features.master !== false) registerWorkerGuard(pi);
+	} else {
+		const pool = new InProcessSessionPool({ firecode: (child) => registerFirecode(child, true) });
+		if (config.features.watcher !== false) registerWatcher(pi, { pool });
+		if (config.features.master !== false) registerMaster(pi, { pool });
 	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
@@ -77,11 +81,6 @@ export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
 }
 
 type SeedNotice = { message: string; level: "info" | "error" };
-
-/** Worker 与观察员的池：子会话注册的是本模块这一份 FireCode，与主会话同版本。 */
-function subsessionPool(): InProcessSessionPool {
-	return new InProcessSessionPool({ firecode: (pi) => registerFirecode(pi, true) });
-}
 
 /** 主会话加载时补默认配置，必须先于 loadConfig；子会话不写盘。提示留到 session_start 有 UI 时显示。 */
 function seedConfigNotice(): SeedNotice | undefined {

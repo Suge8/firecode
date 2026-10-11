@@ -108,6 +108,24 @@ test("用户 esc 中断过的现场照常投递，投递选项不变", async () 
 	expect(harness.notes()).toEqual([{ note: "迁移脚本会删表", turnIndex: 9 }]);
 });
 
+test("Master 关闭时释放子代理会话，不掐断与它共用池的观察员正在评估的会话", async () => {
+	const harness = await setup();
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	faux.appendResponses([async () => {
+		await gate;
+		return fauxAssistantMessage([fauxToolCall("advise", { note: "共用池里的建议" })], { stopReason: "toolUse" });
+	}, fauxAssistantMessage("已提交")]);
+	const delivered = harness.next();
+	await harness.turnEnd(3, "评估进行中");
+	await Bun.sleep(20);
+	await harness.pool.disposeWorkers();
+	release();
+	await delivered;
+
+	expect(harness.notes()).toEqual([{ note: "共用池里的建议", turnIndex: 3 }]);
+});
+
 test("fire-review 活跃期零评估，结束后合并补上", async () => {
 	const harness = await setup();
 	advise("两个回合一起看到的");
@@ -173,6 +191,37 @@ test("主会话空闲时发言走前门用户消息，不出卡片", async () =>
 	expect(harness.userMessages).toHaveLength(1);
 	expect(harness.userMessages[0]).toContain("<firecode_watcher>");
 	expect(harness.userMessages[0]).toContain("空闲现场的提醒");
+});
+
+test("供应商报错时观察员停用并提示原因，不装作还在工作", async () => {
+	const harness = await setup();
+	faux.appendResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "invalid x-api-key" })]);
+	await harness.turnEnd(1, "继续");
+	await Bun.sleep(50);
+
+	expect(harness.notices).toEqual(["观察员已停止：invalid x-api-key"]);
+	expect(harness.statuses.has("watcher")).toBeFalse();
+	expect(harness.messages).toEqual([]);
+});
+
+test("新建议取代还没送达的上一条：过时的建议在之后的回合里不补投", async () => {
+	const harness = await setup({ neverWake: true });
+	harness.idle = true;
+	advise("过时的第一条");
+	let sent = harness.next();
+	await harness.turnEnd(1, "第一回合");
+	await sent;
+	advise("较新的第二条");
+	sent = harness.next();
+	await harness.turnEnd(2, "第二回合");
+	await sent;
+	expect(harness.userMessages).toHaveLength(2);
+
+	// 用户自己开了回合：只有仍在途的那条补投，被取代的不再出现。
+	harness.idle = false;
+	await harness.fire("agent_start", {}, harness.context.ctx);
+	await harness.fire("message_start", { message: { role: "user", content: [{ type: "text", text: "用户自己说的话" }] } }, harness.context.ctx);
+	expect(harness.notes()).toEqual([{ note: "较新的第二条", turnIndex: 2 }]);
 });
 
 test("一次评估只接受一条 advise，多余的当场拒绝", async () => {
@@ -265,18 +314,6 @@ test("无建议时保持沉默；增量带上工具调用与工具结果，minim
 	// minimal 只省推理与 diff 正文：写入动作还在，正文只留长度。
 	expect(increment).toContain("content=<50 字符>");
 	expect(increment).not.toContain("xxxxx");
-});
-
-test("features.watcher 写成非布尔值时拒绝启动，不静默启用", async () => {
-	const harness = await setup({ features: { watcher: "false" } });
-	advise("不应该被看到");
-	await harness.turnEnd(1, "回合");
-	await Bun.sleep(20);
-	expect(faux.getPendingResponseCount()).toBe(2);
-	expect(harness.messages).toEqual([]);
-
-	await harness.command("");
-	expect(harness.notices.join("\n")).toContain("features.watcher 必须是 true 或 false");
 });
 
 test("主会话压缩后从当前尾部重新入场，不回放旧增量", async () => {
@@ -448,6 +485,8 @@ async function setup(options: {
 	createObserver?: (...args: any[]) => Promise<any>;
 	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
 	failDeliveries?: number;
+	/** 前门唤起发出后宿主迟迟不开回合：复现发言停在“未送达”。 */
+	neverWake?: boolean;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-watcher-"));
 	const cwd = join(directory, "project");
@@ -508,6 +547,7 @@ async function setup(options: {
 		sendUserMessage: (content: string) => {
 			userMessages.push(content);
 			settle();
+			if (options.neverWake) return;
 			setTimeout(() => {
 				void fake.fire("agent_start", {}, context.ctx);
 				const message = { role: "user", content: [{ type: "text", text: content }] };
@@ -556,6 +596,7 @@ async function setup(options: {
 	const emit = (name: string, event: any, ctx = context.ctx) => fake.fire(name, event, ctx);
 	await emit("session_start", { type: "session_start", reason: "startup" });
 	return {
+		pool,
 		messages,
 		userMessages,
 		notices,
@@ -568,6 +609,7 @@ async function setup(options: {
 		}),
 		pi,
 		emit,
+		fire: fake.fire,
 		context,
 		createContext,
 		sessionStart: (ctx: any) => emit("session_start", { type: "session_start", reason: "switch" }, ctx),

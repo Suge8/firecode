@@ -2,37 +2,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 去掉行注释和块注释，字符串内的斜杠不动。不支持尾逗号。 */
+// 与宿主的 settings/models.json 同一宽容度：行注释、块注释、尾逗号、BOM。字符串字面量先整体匹配，里面的斜杠与逗号不动。
+const COMMENT = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)/g;
+const TRAILING_COMMA = /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g;
+
 export function parseJsonc(text: string): unknown {
-	let output = "";
-	let inString = false;
-	let escape = false;
-	for (let index = 0; index < text.length; index++) {
-		const char = text[index];
-		if (inString) {
-			output += char;
-			if (escape) escape = false;
-			else if (char === "\\") escape = true;
-			else if (char === '"') inString = false;
-			continue;
-		}
-		if (char === '"') {
-			inString = true;
-			output += char;
-			continue;
-		}
-		if (char === "/" && text[index + 1] === "/") {
-			index += 1;
-			while (index + 1 < text.length && text[index + 1] !== "\n") index += 1;
-			continue;
-		}
-		if (char === "/" && text[index + 1] === "*") {
-			index += 1;
-			while (index + 1 < text.length && !(text[index] === "*" && text[index + 1] === "/")) index += 1;
-			index += 1;
-			continue;
-		}
-		output += char;
-	}
-	return JSON.parse(output);
+	const bare = text.replace(/^\uFEFF/, "")
+		.replace(COMMENT, (match) => (match.startsWith('"') ? match : " "))
+		.replace(TRAILING_COMMA, (match, tail?: string) => tail ?? match);
+	return JSON.parse(bare);
 }

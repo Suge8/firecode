@@ -9,6 +9,7 @@ import {
 import { watchBusy } from "../busy.js";
 import { loadConfig } from "../config.js";
 import { deliver } from "../deliver.js";
+import { msg as rootMsg } from "../messages.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import {
@@ -53,9 +54,16 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	const spawnObserver = dependencies.createObserver ?? createObserver;
 	let runtime: WatcherRuntime | undefined;
 	let reviewActive = false;
+	/** 还没送达的最近一条发言；只有一条在途，新建议或会话失效时中止它。 */
+	let speaking: AbortController | undefined;
+	const supersede = () => {
+		speaking?.abort(new DOMException("superseded", "AbortError"));
+		speaking = undefined;
+	};
 
 	const deactivate = (owner = runtime) => {
 		if (!owner || runtime !== owner) return;
+		supersede();
 		runtime = undefined;
 		owner.observer?.dispose();
 		owner.observer = undefined;
@@ -79,14 +87,21 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 		return owner;
 	};
 	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
-	// 建议是当下的第二意见，过时重投没有价值：投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
-	const speak = async (owner: WatcherRuntime, note: string, turnIndex: number) => {
+	// 建议是当下的第二意见，过时重投没有价值：发言不阻塞评估循环，新建议、压缩或会话失效时中止上一条未送达的，
+	// 它不再补投；投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
+	const speak = (owner: WatcherRuntime, note: string, turnIndex: number) => {
+		supersede();
+		const controller = speaking = new AbortController();
+		const ctx = owner.ctx;
 		const card: WatcherCard = { note, turnIndex };
-		try {
-			await deliver(pi, owner.ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) });
-		} catch (error) {
-			if (runtime === owner) owner.ctx.ui.notify(msg.deliveryFailed(error instanceof Error ? error.message : String(error)), "warning");
-		}
+		deliver(pi, ctx, { customType: WATCHER_MESSAGE_TYPE, content: adviceMessage(card) }, controller.signal)
+			.catch((error) => {
+				if (controller.signal.aborted || runtime?.ctx !== ctx) return;
+				ctx.ui.notify(msg.deliveryFailed(error instanceof Error ? error.message : String(error)), "warning");
+			})
+			.finally(() => {
+				if (speaking === controller) speaking = undefined;
+			});
 	};
 	const evaluate = async (owner: WatcherRuntime) => {
 		owner.evaluating = true;
@@ -100,7 +115,15 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 					const cwd = owner.ctx.cwd;
 					const model = await pool.resolveModel(config.model);
 					if (runtime !== owner) return;
-					observer = await spawnObserver({ cwd, model, thinking: config.thinking, pool });
+					observer = await spawnObserver({
+						cwd,
+						model,
+						thinking: config.thinking,
+						pool,
+						onExtensionError: (error) => {
+							if (runtime === owner) owner.ctx.ui.notify(rootMsg.spawn.extensionFailed(error.event, error.error), "warning");
+						},
+					});
 					if (runtime !== owner) {
 						await observer.dispose();
 						return;
@@ -109,10 +132,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 				}
 				const advice = await observer.evaluate(increment);
 				if (runtime !== owner) return;
-				if (advice) {
-					await speak(owner, advice, turnIndex);
-					if (runtime !== owner) return;
-				}
+				if (advice) speak(owner, advice, turnIndex);
 				// 自身上下文快满时也重新入场：观察员只需要当下，不需要完整历史。
 				if ((observer.contextPercent() ?? 0) >= CONTEXT_RESET_PERCENT) resetObserver(owner);
 			}
@@ -169,7 +189,10 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 	});
 
 	// 主会话压缩：旧增量已不再对应主会话现场，观察员从当前尾部重新入场而不回放。
-	pi.on("session_compact", () => resetObserver());
+	pi.on("session_compact", () => {
+		supersede();
+		resetObserver();
+	});
 	pi.on("session_shutdown", () => deactivate());
 }
 

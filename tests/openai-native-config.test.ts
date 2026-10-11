@@ -34,7 +34,7 @@ test("toggling fast flips the provider's priority and leaves everything else in 
 }
 `);
 
-	expect(togglePriority("openai-codex", path).enabled).toBe(true);
+	expect(togglePriority("openai-codex", path)).toBe(true);
 	const afterOn = read(path);
 	expect(afterOn).toContain("// keep me");
 	expect(afterOn).toContain("/* trailing note */");
@@ -48,7 +48,7 @@ test("toggling fast flips the provider's priority and leaves everything else in 
 		language: "zh",
 	});
 
-	expect(togglePriority("openai-codex", path).enabled).toBe(false);
+	expect(togglePriority("openai-codex", path)).toBe(false);
 	expect((parseJsonc(read(path)) as any).openai.providers["openai-codex"]).toEqual({ textVerbosity: "low", priority: false });
 });
 
@@ -60,7 +60,7 @@ test("an \"openai\": { inside a comment or a string is not the openai section", 
 }
 `);
 
-	expect(togglePriority("openai-codex", path).enabled).toBe(true);
+	expect(togglePriority("openai-codex", path)).toBe(true);
 
 	const after = read(path);
 	expect(after).toContain('// "openai": { "providers": { "old": {} } }');
