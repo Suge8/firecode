@@ -33,7 +33,7 @@ Claude 只解析当前接口的 `limits[]`，`session`、`weekly_all` 与 Fable 
 投影内容、状态来源、上报机制与为什么必须卸载 herdr 官方 Pi 集成，都在 `herdr-projection.ts` 头注释。头注释之外：
 
 - 卸载命令是 `herdr integration uninstall pi`；不要在 herdr 设置面板里点 install，会装回来。
-- 官方 source（`herdr:pi`）在位时其它 source 的上报被丢弃、状态标签（`state_labels.working`）等是 herdr 的行为，升级 herdr 后需重新核实。FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
+- 头注释里的丢弃规则与状态标签（`state_labels.working`）都是 herdr 的行为，升级 herdr 后需重新核实。FireCode 的 source 是 `firecode`（自定义 source 不能以 `herdr:` 开头）。
 - `tokens.session` 把会话名供给侧边栏行布局：herdr 侧边栏只消费自定义 token，用户在 herdr 配置里的 pi 行布局引用 `$session`。
 - workspace、pane label 与 tab label 都归 herdr、用户或 Master 管；FireCode 不写这些持久名称——tab 是多 pane 共享状态，而 herdr 没有条件 rename/CAS 与清除自定义名的接口，先检查再 rename 无法消除 split/move 竞态。
 - 只听宿主的 `session_info_changed`（命令、改名键、自动命名已在宿主收口），另听 model/thinking 选择。同一内容不重发，只有确认送达才记为已发布，请求串行避免乱序覆盖。只有 `quit` 清空身份并 release，reload/new/resume/fork 由新会话的 `session_start` 覆盖（重载时回合已在跑的情形由 `busy.ts` 在 `session_start` 读 `ctx.isIdle()` 补上，herdr 不另算）。

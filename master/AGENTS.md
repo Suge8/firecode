@@ -89,8 +89,8 @@ Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它�
 
 点活动列表里任一子代理行打开它的全过程视图，行为与结构见 `worker-view.ts` 头注释。输入框上横线左边是状态与耗时（与活动列表同一说法），右边是名字与角色；下横线左边是第几个（n/N），右边是模型与按键提示，窄屏先省角色、模型和次要提示。Tab / Shift+Tab 按启动顺序换子代理，PageUp/PageDown 与滚轮翻看，拖动选中文字即复制，esc 返回。子代理被移除时上横线写“已移除”，不能再补话；之后对它的 send 报“子代理不存在：<名字>”。n/N 取档案的启动序（`activityFacts`），不随状态分组跳。
 
-- 输入区与上下横线共用 `statusbar/render.ts` 的 `fitBorder`；上横线的状态与耗时调活动列表的 `rowState`，同一分组、同一字形、同一“本次运行”耗时，不在视图另算；轮界与每轮耗时、终态、均速逐条经 `roundFromEntry` 读 Worker 会话自己的轮记录。
-- 补话就是 `ACTION_HANDLERS.send(active, { worker, prompt }, ctx, "view")`；已发出未送达的补话读子会话的排队队列。
+- 输入区与上下横线共用 `statusbar/render.ts` 的 `fitBorder`；调用点是活动列表的 `rowState`（上横线）与 `roundFromEntry`（轮记录），不在视图另算。
+- 已发出未送达的补话读子会话的排队队列。
 - 中断键 `ctrl+shift+x`（`INTERRUPT_KEY`）走 `ACTION_HANDLERS.interrupt`，只对在跑的子代理生效，底行提示只在它在跑时出现；展开工具行经 `tools/group-view` 带形状校验的 `toggleToolDetails`，不直接读宿主私有字段。
 - 被移除时正在看的子代理留着已有记录、不再更新，输入框停用并丢掉草稿；Tab 序列与 n/N 立即去掉它。
 - 浮层抢走焦点后宿主编辑器的全局键不生效，视图给出同义行为：esc 返回，ctrl+c 先清输入、再按关闭视图，空输入的 ctrl+d 关闭视图（不在浮层里退出 pi），ctrl+o 是当前子代理的全部展开。
