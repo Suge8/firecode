@@ -52,32 +52,46 @@ export interface Delivery {
 	content: string;
 }
 
-/** 手动 /compact 进行中的等待点；undefined 表示没有。 */
-const manualCompactions = new WeakMap<ExtensionAPI, { pending?: PromiseWithResolvers<void> }>();
+interface CompactionState {
+	/** 手动压缩进行中的等待点；undefined 表示没有。 */
+	pending?: PromiseWithResolvers<void>;
+	/** 压缩事件已发完、但宿主可能还没退出压缩状态的收尾期。 */
+	settling: boolean;
+}
+
+const manualCompactions = new WeakMap<ExtensionAPI, CompactionState>();
+
+/** 收尾期里宿主退出压缩状态之前的轮询间隔；收尾只剩其余扩展的 session_compact 处理器，通常毫秒级。 */
+const SETTLE_TICK_MS = 5;
 
 /**
- * 登记宿主的手动压缩事件，主会话注册时调用一次。压缩成功时 session_compact 先于宿主清掉压缩状态发出，
- * 所以落定要让出一个宏任务，之后读到的 isIdle 才是真的；失败与取消走 session_compact_failed，同样处理。
+ * 登记宿主的手动压缩事件，主会话注册时调用一次。session_compact 在宿主清掉压缩状态之前发出，且宿主逐个 await 全部处理器
+ * （包括排在本处理器之后的其他扩展），所以事件到达时 isIdle 仍是 false，之后多久转 true 取决于别人的处理器：
+ * 没有事件可等，收尾期由 deliver 按 isIdle 等到真正落定。失败与取消走 session_compact_failed，同样处理。
  */
 export function watchManualCompaction(pi: ExtensionAPI): void {
 	if (manualCompactions.has(pi)) return;
-	const state: { pending?: PromiseWithResolvers<void> } = {};
+	const state: CompactionState = { settling: false };
 	manualCompactions.set(pi, state);
-	const settle = () => {
+	const finish = () => {
 		const waiting = state.pending;
-		if (waiting) setImmediate(() => {
-			if (state.pending === waiting) state.pending = undefined;
-			waiting.resolve();
-		});
+		if (!waiting) return;
+		state.pending = undefined;
+		state.settling = true;
+		waiting.resolve();
 	};
 	pi.on("session_before_compact", (event) => {
-		if (event.reason === "manual") state.pending ??= Promise.withResolvers<void>();
+		if (event.reason !== "manual") return;
+		state.settling = false;
+		state.pending ??= Promise.withResolvers<void>();
 	});
-	pi.on("session_compact", (event) => { if (event.reason === "manual") settle(); });
-	pi.on("session_compact_failed", (event) => { if (event.reason === "manual") settle(); });
+	pi.on("session_compact", (event) => { if (event.reason === "manual") finish(); });
+	pi.on("session_compact_failed", (event) => { if (event.reason === "manual") finish(); });
+	// 收尾期里用户或别的扩展开了回合：之后的忙就是回合在忙，steer 会被续跑，不用再等。
+	pi.on("agent_start", () => { state.settling = false; });
 	pi.on("session_shutdown", () => {
-		state.pending?.resolve();
-		state.pending = undefined;
+		state.settling = false;
+		finish();
 	});
 }
 
@@ -93,8 +107,12 @@ export async function deliver(
 	envelope: Delivery,
 	signal?: AbortSignal,
 ): Promise<void> {
-	for (let compaction = manualCompactions.get(pi)?.pending; compaction; compaction = manualCompactions.get(pi)?.pending)
-		await abortable(compaction.promise, signal);
+	const compaction = manualCompactions.get(pi);
+	while (compaction?.pending) await abortable(compaction.pending.promise, signal);
+	while (compaction?.settling && !ctx.isIdle()) {
+		signal?.throwIfAborted();
+		await new Promise((resolve) => setTimeout(resolve, SETTLE_TICK_MS));
+	}
 	if (ctx.isIdle()) return wake(pi, envelope, signal);
 	steer(pi, envelope);
 }

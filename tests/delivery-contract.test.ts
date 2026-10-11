@@ -178,7 +178,7 @@ export default function (pi) {
 }, 10_000);
 
 // 手动 /compact 不在回合里：宿主 isIdle 为 false，但 steer 只会被当场追加、没有回合可续。deliver 要等压缩落定再唤起。
-test("手动 /compact 期间 deliver：压缩落定后前门唤起一个回合，信封作为用户消息进上下文", async () => {
+test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展较慢的 session_compact 处理器）前门唤起一个回合，信封作为用户消息进上下文", async () => {
 	const requests: string[] = [];
 	let release!: () => void;
 	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
@@ -186,6 +186,8 @@ test("手动 /compact 期间 deliver：压缩落定后前门唤起一个回合�
 import { deliver, watchManualCompaction, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
 	watchManualCompaction(pi);
+	// 排在 deliver 的登记之后的其他扩展：宿主逐个 await 处理器，压缩状态要等它跑完才清。
+	pi.on("session_compact", () => new Promise((resolve) => setTimeout(resolve, 80)));
 	pi.on("session_start", (_event, ctx) => {
 		globalThis.__deliverDuringCompaction = () => deliver(pi, ctx, { customType: "firecode-review-card", content: wrapEnvelope("firecode_master_event", "worker done") });
 	});
