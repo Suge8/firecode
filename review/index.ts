@@ -9,12 +9,13 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config.js";
-import { InProcessSessionPool } from "../spawn.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { registerCardRenderer } from "./card.js";
 import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from "./checkpoint.js";
 import { msg } from "./messages.js";
 import { errorText, Run, type RunHost } from "./run.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
+import { CANCEL_REVIEW_ARG } from "./outcome.js";
 import { initialState, isActive } from "./state.js";
 
 export interface ReviewOptions {
@@ -22,21 +23,25 @@ export interface ReviewOptions {
 	enabled?: boolean;
 	/** features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。 */
 	configBroken?: boolean;
-	/** 审查/顾问会话的执行器；缺省是进程内会话池。 */
+	/** 审查/顾问会话开在这个池里：进程里唯一的子会话池，由入口传入，本模块不自建。 */
+	pool?: InProcessSessionPool;
+	/** 审查/顾问会话的执行器；测试注入脚本化会话用，给了就不需要 pool。 */
 	runSession?: ReviewSessionRunner;
 }
 
-export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken = false, runSession }: ReviewOptions = {}): void {
+export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken = false, pool, runSession }: ReviewOptions = {}): void {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
 		return;
 	}
+	const sessionRunner = runSession ?? (pool && createReviewSessionRunner(pool));
+	if (!sessionRunner) throw new Error("registerReview needs a session pool or a session runner");
 	let current: Run | undefined;
 	const host: RunHost = {
 		pi,
-		runSession: runSession ?? createReviewSessionRunner(new InProcessSessionPool()),
+		runSession: sessionRunner,
 		ended: (run) => {
 			if (current === run) current = undefined;
 		},
@@ -57,6 +62,8 @@ export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken 
 	pi.on("session_shutdown", (event, ctx) => current?.shutdown(event.reason, ctx));
 
 	async function startReview(args: string, ctx: ExtensionContext): Promise<void> {
+		// 取消不依赖配置能否解析：配置坏掉时也要能停掉已在跑的审查。
+		if (args.trim() === CANCEL_REVIEW_ARG) return cancelReview(ctx);
 		// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 		// 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。
 		const loaded = loadConfig().review;
@@ -66,6 +73,11 @@ export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken 
 		if (input.startsWith("--")) return refuse(ctx, msg.command.invalidArgs, "error");
 		current = new Run(host, ctx, loaded.config, initialState(randomUUID()), new CheckpointWriter(pi));
 		current.start(input);
+	}
+
+	function cancelReview(ctx: ExtensionContext): void {
+		if (current) current.cancel();
+		else if (ctx.hasUI) ctx.ui.notify(msg.command.nothingToCancel, "info");
 	}
 
 	/** 拒绝启动：有 UI 时通知，无论有无 UI 都记录——Worker 里没有 UI，Master 靠这条记录读到原因。 */

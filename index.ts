@@ -39,8 +39,16 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 /** 只属于交互主会话的功能：子会话（Worker）没有界面与命令入口，注册了只会白占资源。 */
 const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats", "statusbar"]);
 
-/** subsession：Worker 子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。 */
-export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
+/**
+ * subsession：Worker 子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。
+ * pool 是进程里唯一的子会话池：主会话建一个，Master、观察员与审查（含 Worker 会话里的审查）共用它——
+ * 模型运行时只读一次，也只有一处登记谁持有哪个会话文件；子会话注册时由池把自己传回来。
+ */
+export function registerFirecode(
+	pi: ExtensionAPI,
+	subsession = false,
+	pool: InProcessSessionPool = new InProcessSessionPool({ firecode: (child) => registerFirecode(child, true, pool) }),
+): void {
 	let seeding = subsession ? undefined : seedConfigNotice();
 	const { config, problems, featuresBroken } = loadConfig();
 	const reviewEnabled = config.features.review !== false;
@@ -54,11 +62,9 @@ export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
 		register(pi);
 	}
 	// 子会话不带观察员、也不带 Master 本体（只注册 checkout 守卫）：级联抑制是代码规则，不靠进程环境。
-	// 观察员与 Master 共用一个池：模型运行时（auth.json 与 models.json）只读一次。
 	if (subsession) {
 		if (config.features.master !== false) registerWorkerGuard(pi);
 	} else {
-		const pool = new InProcessSessionPool({ firecode: (child) => registerFirecode(child, true) });
 		if (config.features.watcher !== false) registerWatcher(pi, { pool });
 		if (config.features.master !== false) registerMaster(pi, { pool });
 	}
@@ -66,7 +72,7 @@ export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, { enabled: reviewEnabled, configBroken: featuresBroken });
+	registerReview(pi, { enabled: reviewEnabled, configBroken: featuresBroken, pool });
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {

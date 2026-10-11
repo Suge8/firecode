@@ -22,8 +22,14 @@ const flush = async () => {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
+/** 入口把进程里唯一的池传给 registerReview；这里给每次注册一个默认池，用例要脚本化会话时再用 runSession 覆盖。 */
+async function loadReviewModule(path: string, options?: Parameters<typeof loadFirecodeModule>[1]) {
+	const [review, spawn] = await Promise.all([loadFirecodeModule(path, options), loadFirecodeModule("spawn.js")]) as any[];
+	return { ...review, registerReview: (pi: unknown, extra: object = {}) => review.registerReview(pi, { pool: new spawn.InProcessSessionPool(), ...extra }) };
+}
+
 async function loadAll() {
-	registerReview = ((await loadFirecodeModule("review/index.js")) as { registerReview: RegisterReview }).registerReview;
+	registerReview = ((await loadReviewModule("review/index.js")) as { registerReview: RegisterReview }).registerReview;
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
 	({ CheckpointWriter, readCheckpoint } = checkpoint);
 	initialState = ((await loadFirecodeModule("review/state.js")) as { initialState: InitialState }).initialState;
@@ -109,7 +115,7 @@ async function loadReviewWithVerdict(
 	maxRounds?: number,
 	{ top = {}, onSession }: { top?: Record<string, unknown>; onSession?: (options: { prompt: { system: string; user: string } }) => void } = {},
 ) {
-	const review = (await loadFirecodeModule("review/index.js", {
+	const review = (await loadReviewModule("review/index.js", {
 		configJsonc: reviewConfig({
 			reviewers: ["p/one/low"],
 			...(maxRounds === undefined ? {} : { maxRounds }),
@@ -188,7 +194,7 @@ describe("registerReview wiring", () => {
 	});
 
 	test("a missing control prompt settles as an infrastructure error", async () => {
-		const module = (await loadFirecodeModule("review/index.js", {
+		const module = (await loadReviewModule("review/index.js", {
 			extraFiles: { "review/prompts/review.zh.md": "" },
 		})) as { registerReview: (pi: unknown) => void };
 		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
@@ -316,7 +322,7 @@ describe("registerReview wiring", () => {
 	test("headless session shutdown cancels the active review session", async () => {
 		let started!: () => void;
 		const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
-		const module = (await loadFirecodeModule("review/index.js", {
+		const module = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as {
 			registerReview: (pi: unknown, options?: unknown) => void;
@@ -340,6 +346,48 @@ describe("registerReview wiring", () => {
 		await flush();
 		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	}, 10_000);
+
+	test("/fire-review --cancel stops the running review the way esc does: reviewer aborted, terminal checkpoint cancelled, occupancy released", async () => {
+		let started!: () => void;
+		const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
+		const module = (await loadReviewModule("review/index.js", {
+			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
+		})) as { registerReview: (pi: unknown, options?: unknown) => void };
+		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
+			readCheckpoint: (ctx: unknown) => { phase: string; end?: string } | undefined;
+		};
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		let aborted = false;
+		module.registerReview(pi, {
+			runSession: ({ signal }: { signal?: AbortSignal }) => new Promise((resolve) => {
+				started();
+				signal?.addEventListener("abort", () => { aborted = true; resolve({ kind: "aborted" }); }, { once: true });
+			}),
+		});
+		const ctx = makeHeadlessCtx(sessionManager);
+		const command = fireReview(registered);
+		await command.handler("", ctx);
+		await sessionStarted;
+		await command.handler("--cancel", ctx);
+		await flush();
+		expect(aborted).toBe(true);
+		expect(checkpoint.readCheckpoint({ sessionManager })).toMatchObject({ phase: "settled", end: "cancelled" });
+		expect(registered.emitted.at(-1)).toEqual(RELEASED);
+		// 不是拒绝：没有留下拒绝记录。
+		expect(sessionManager.entries).not.toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+	}, 10_000);
+
+	test("/fire-review --cancel with no review running only says so: no refusal record, no checkpoint, even when the config is broken", async () => {
+		const { registerReview } = (await loadReviewModule("review/index.js", { configJsonc: "{" })) as { registerReview: (pi: unknown) => void };
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		await fireReview(registered).handler("--cancel", ctx);
+		expect(ctx.notices).toEqual(["没有进行中的审查。"]);
+		expect(sessionManager.entries).toEqual([]);
+	});
 
 	test("queued user cancellation notifies immediately without persisting a result card", async () => {
 		await loadAll();
@@ -406,7 +454,7 @@ describe("registerReview wiring", () => {
 	});
 
 	test("review accepts focus text and rejects flags in the configured language", async () => {
-		const module = (await loadFirecodeModule("review/index.js", {
+		const module = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig({}, { language: "en" }),
 		})) as { registerReview: (pi: unknown) => void };
 		const sessionManager = makeSessionManager();
@@ -553,7 +601,7 @@ describe("review config is rejected at every entry point", () => {
 	const unparsableConfig = "{";
 
 	async function loadWithConfig(configJsonc: string) {
-		return (await loadFirecodeModule("review/index.js", { configJsonc })) as {
+		return (await loadReviewModule("review/index.js", { configJsonc })) as {
 			registerReview: (pi: unknown) => void;
 		};
 	}
@@ -618,7 +666,7 @@ describe("reload recovery actually resumes the loop", () => {
 	test("restored reviewers wait for the post-session event after later async handlers", async () => {
 		await loadAll();
 		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
-		const module = (await loadFirecodeModule("review/index.js", {
+		const module = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as {
 			registerReview: (pi: unknown, options?: unknown) => void;
@@ -704,7 +752,7 @@ describe("reload recovery actually resumes the loop", () => {
 	});
 
 	test("a queued review resumes on session_start when the session is idle", async () => {
-		const { registerReview } = (await loadFirecodeModule("review/index.js", {
+		const { registerReview } = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig(),
 		})) as { registerReview: (pi: unknown) => void };
 		const checkpointModule = (await loadFirecodeModule("review/checkpoint.js")) as {
@@ -902,7 +950,7 @@ describe("review cards and degraded paths", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
 		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
-		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "failed", rounds: 1, reason: "审查被取消" });
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "cancelled", rounds: 1 });
 		await rm(sessionPath, { force: true });
 	}, 20_000);
 
@@ -931,7 +979,7 @@ describe("review cards and degraded paths", () => {
 
 /** 两个审查者（p/one、p/two）加顾问；answer 按模型给出会话输出，返回 undefined 表示该会话没有产出。 */
 async function loadTwoReviewers(answer: (model: string) => string | undefined) {
-	const review = (await loadFirecodeModule("review/index.js", {
+	const review = (await loadReviewModule("review/index.js", {
 		configJsonc: reviewConfig({ reviewers: ["p/one/low", "p/two/low"], maxRounds: 3 }),
 	})) as { registerReview: (pi: unknown, options?: unknown) => void };
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
