@@ -57,7 +57,7 @@ pi install npm:pi-firecode
 | `/tokens [天数]` | 统计会话文件里的 token 和花费 |
 | `/fast` | 开关 OpenAI/xAI 加速档（`Ctrl+Shift+S`） |
 
-在输入框里按 Pi 的改名键（默认 `Ctrl+R`）可以改会话名。在子代理的全过程视图里，`Ctrl+Shift+X` 中断它。
+在输入框里按 Pi 的改名键（默认 `Ctrl+R`）可以改会话名。在子代理的全过程视图里，`Ctrl+Shift+X` 中断它；审查中的子代理被中断时会取消这场审查，审查义务保留。`/fire-review --cancel` 可手动停掉进行中的审查。
 
 OpenAI 原生压缩（`openai.nativeCompaction`，模板里开启）使用 OpenAI/Codex 自带的上下文压缩。压缩结果是只能由同一模型和基址续用的密文窗口，切换模型后不能续用，FireCode 会提示。手动 `/compact` 在窗口不可用时会取消并说明原因；自动压缩则回落到普通摘要并给出警告。想一直用普通摘要，把 `nativeCompaction` 设为 `false` 并重启。
 
