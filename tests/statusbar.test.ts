@@ -226,11 +226,10 @@ test("上边框落定态：均速跟在耗时后，中断与请求失败写明�
 		setSystemTime(new Date(at));
 		branch.push(humanEntry("再来一轮"));
 		emit("agent_start");
-		emit("before_provider_request");
 		setSystemTime(new Date(at + 10_000));
-		emit("message_end", { message: { role: "assistant", usage: { output }, stopReason } });
+		emit("message_end", { message: { role: "assistant", usage: { output }, stopReason, durationMs: 10_000 } });
 		emit("agent_end", { messages: [{ role: "assistant", stopReason }] });
-		emit("agent_settled");
+		emit("agent_settled", { aborted: stopReason === "aborted" });
 		setSystemTime(new Date(at + 20_000));
 	};
 	try {

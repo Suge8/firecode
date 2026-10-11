@@ -18,10 +18,11 @@ import {
 	type AgentSessionEvent,
 	type ExtensionUIContext,
 	type MessageRenderer,
-	type ToolDefinition,
+	type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
 import { Container, ScrollView, Spacer, Text, type Component, type TUI } from "@earendil-works/pi-tui";
+import { textOf } from "../format.js";
 import type { RowState, ToolResult } from "./line.js";
 import { msg } from "./messages.js";
 
@@ -47,12 +48,14 @@ export interface ToolFacts {
 	ui: TUI;
 }
 
-type Shape = Record<string, "string" | "boolean" | "object">;
-const TOOL_SHAPE: Shape = { toolName: "string", toolCallId: "string", cwd: "string", expanded: "boolean", isPartial: "boolean", rendererState: "object", ui: "object" };
-const ASSISTANT_SHAPE: Shape = { contentContainer: "object", isStreaming: "boolean" };
+/** 私有字段名与 typeof 期望；每帧都要校验，所以直接存成数组。 */
+type Shape = readonly (readonly [field: string, type: "string" | "boolean" | "object"])[];
+const TOOL_FIELDS: Shape = [["toolName", "string"], ["toolCallId", "string"], ["cwd", "string"], ["expanded", "boolean"], ["isPartial", "boolean"], ["rendererState", "object"], ["ui", "object"]];
+const ASSISTANT_FIELDS: Shape = [["contentContainer", "object"], ["isStreaming", "boolean"]];
+const TEXT_FIELDS: Shape = [["text", "string"]];
 
-function checked<T>(value: object, shape: Shape, where: string): T {
-	for (const [field, type] of Object.entries(shape)) {
+function checked<T>(value: object, fields: Shape, where: string): T {
+	for (const [field, type] of fields) {
 		const actual = (value as Record<string, unknown>)[field];
 		if (typeof actual !== type || actual === null) throw new HostShapeError(`${where}.${field}`);
 	}
@@ -65,7 +68,7 @@ export function rowUiOf(row: ToolRow): unknown {
 }
 
 export function toolFacts(row: ToolRow): ToolFacts {
-	return checked<ToolFacts>(row, TOOL_SHAPE, "ToolExecutionComponent");
+	return checked<ToolFacts>(row, TOOL_FIELDS, "ToolExecutionComponent");
 }
 
 interface AssistantFacts {
@@ -75,7 +78,7 @@ interface AssistantFacts {
 }
 
 export function assistantFacts(source: AssistantMessageComponent): AssistantFacts {
-	const facts = checked<AssistantFacts>(source, ASSISTANT_SHAPE, "AssistantMessageComponent");
+	const facts = checked<AssistantFacts>(source, ASSISTANT_FIELDS, "AssistantMessageComponent");
 	if (!(facts.contentContainer instanceof Container)) throw new HostShapeError("AssistantMessageComponent.contentContainer");
 	return facts;
 }
@@ -88,14 +91,14 @@ export function customMessageOf(component: CustomMessageComponent): { content: u
 }
 
 export function userTextOf(component: UserMessageComponent): string {
-	return checked<{ text: string }>(component, { text: "string" }, "UserMessageComponent").text;
+	return checked<{ text: string }>(component, TEXT_FIELDS, "UserMessageComponent").text;
 }
 
 /** 宿主整行单色提示的原文（带颜色转义）。宿主的 ThemedText 首次渲染前 text 还是空串，原文由私有的 build 现算。 */
 export function textComponentText(component: Text): string {
 	const build = (component as unknown as { build?: unknown }).build;
 	if (typeof build === "function") return String(build.call(component));
-	return checked<{ text: string }>(component, { text: "string" }, "Text").text;
+	return checked<{ text: string }>(component, TEXT_FIELDS, "Text").text;
 }
 
 /** 宿主对 ctrl+o 的状态回显；在过程分组里 ctrl+o 就是“全部展开/全部折叠”，这句回显只是噪声。 */
@@ -193,7 +196,7 @@ interface MirrorSources {
 	ui: TUI;
 	cwd: string;
 	theme: Theme;
-	toolDefinition(name: string): ToolDefinition | undefined;
+	toolDefinition(name: string): ToolRenderers | undefined;
 	messageRenderer(customType: string): MessageRenderer | undefined;
 	entryRenderer(customType: string): EntryRenderer | undefined;
 }
@@ -308,7 +311,7 @@ export class ChatMirror {
 				return this.pending.has(event.toolCallId);
 			case "tool_execution_end": {
 				const row = this.pending.get(event.toolCallId);
-				row?.updateResult({ ...event.result, isError: event.isError });
+				row?.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });
 				this.pending.delete(event.toolCallId);
 				return row !== undefined;
 			}
@@ -344,9 +347,7 @@ export class ChatMirror {
 			return;
 		}
 		if (message.role !== "user") return;
-		const text = typeof message.content === "string"
-			? message.content
-			: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+		const text = textOf(message.content);
 		if (!text) return;
 		if (this.chat.children.length) this.chat.addChild(new Spacer(1));
 		this.chat.addChild(new UserMessageComponent(text, getMarkdownTheme()));

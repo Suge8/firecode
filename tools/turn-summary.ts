@@ -29,6 +29,8 @@ export interface SummaryView {
 	/** 这一轮更早几段的非完成终态短标记，如“中断过 1 次”。 */
 	earlier?: string[];
 	sinceEnd?: number;
+	/** 静止形态：火苗不动、落定直接是终色（见 group-view 的 ProjectionEnv.still）。 */
+	still?: boolean;
 	/** 单轮展开/收起；全局展开时为空，点击无效。 */
 	toggle?: () => void;
 }
@@ -37,6 +39,7 @@ export interface SummaryView {
 const NOTICE_MIN = 12;
 /** 目标少于这个宽度就不显示，只留动作词。 */
 const MIN_TARGET = 4;
+const STILL_FLAME = paint(HEAT_COLORS.orange, "⠶");
 
 export class TurnSummary implements Component {
 	constructor(private readonly view: SummaryView, private readonly theme: Theme) {}
@@ -50,8 +53,8 @@ export class TurnSummary implements Component {
 		const word = view.live ? this.actionText() : outcome;
 		const target = view.live && view.action?.target && !this.flashing() ? view.action.target : undefined;
 		const glyph = view.live
-			? flame(1, 0.05)
-			: settleMark(outcome ? "failed" : "done", view.sinceEnd ?? Infinity);
+			? view.still ? STILL_FLAME : flame(1, 0.05)
+			: settleMark(outcome ? "failed" : "done", view.still ? Infinity : view.sinceEnd ?? Infinity);
 		const head = word ? `${glyph} ${word}` : glyph;
 		const record = view.round === undefined ? [] : roundTexts(view.round).map((text) => theme.fg("muted", text));
 		// 失败数与更早的中断都是不能丢的固定标记，窄屏时与它们一起保留。
