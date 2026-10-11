@@ -32,7 +32,10 @@ const PRESET_CONFIG = JSON.stringify({
 	},
 });
 
-/** 宿主替身：模型、思考档与工具集都由宿主记在会话里，并在 session_start 之前按记录恢复（真实宿主的工具集随运行记入 transcript）。 */
+/**
+ * 宿主替身：模型、思考档与工具集都由宿主记在会话里，并在 session_start 之前按记录恢复（真实宿主的工具集随运行记入 transcript）。
+ * 重开会话时宿主重新调用扩展工厂函数，预设的内存状态随旧实例消失，只剩会话分支里的记录——reopen 按此重建实例。
+ */
 async function presetHost() {
 	const { registerPresets } = await loadFirecodeModule("session/presets.ts", { configJsonc: PRESET_CONFIG });
 	const models: Record<string, { provider: string; id: string }> = {
@@ -43,6 +46,7 @@ async function presetHost() {
 	};
 	const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, recordedTools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined, flag: undefined as string | undefined };
+	let fake: ReturnType<typeof install>;
 	const emit = (name: string, event: unknown = {}) => fake.fire(name, event, ctx);
 	const ctx = {
 		get model() { return state.model; },
@@ -50,7 +54,7 @@ async function presetHost() {
 		sessionManager: { getEntries: () => state.branch, getBranch: () => state.branch },
 		ui: { notify() {}, setStatus: (_key: string, text?: string) => { state.status = text; }, theme: { fg: (_color: string, text: string) => text } },
 	};
-	const fake = fakePi({
+	const install = () => fakePi({
 		getFlag: () => state.flag,
 		getThinkingLevel: () => state.thinking,
 		setThinkingLevel: (level: string) => { state.thinking = level; },
@@ -65,11 +69,16 @@ async function presetHost() {
 		getAllTools: () => DEFAULT_TOOLS.map((name) => ({ name })),
 		appendEntry: (customType: string, data: unknown) => state.branch.push({ type: "custom", customType, data }),
 	});
-	(registerPresets as (pi: unknown) => void)(fake.pi);
-	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再发 session_start。 */
+	const mount = () => {
+		fake = install();
+		(registerPresets as (pi: unknown) => void)(fake.pi);
+	};
+	mount();
+	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再建新实例、发 session_start。 */
 	const reopen = async (restoredModel: string, event: unknown = {}) => {
 		state.model = models[restoredModel];
 		state.tools = state.recordedTools;
+		mount();
 		await emit("session_start", event);
 	};
 	const instructions = () => fake.systemPrompt("BASE", ctx);
@@ -149,6 +158,20 @@ test("没写工具集的预设回到快照工具集：从带工具集的预设�
 	await host.preset("quick");
 	expect(host.state.status).toBe("Quick");
 	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+});
+
+test("启动时命令行预设盖在已恢复的预设上：快照仍是最初的，清除后回到最初", async () => {
+	const host = await presetHost();
+	await host.emit("session_start");
+	await host.preset("deep");
+	host.state.flag = "quick";
+	await host.reopen("test/deep", { reason: "startup" });
+	expect(host.state.status).toBe("Quick");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	await host.preset("（无）");
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.thinking).toBe("medium");
 });
 
 test("命令行预设只在启动时应用：重载、恢复会话不再套用它", async () => {

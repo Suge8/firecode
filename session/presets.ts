@@ -302,12 +302,14 @@ export function registerPresets(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// 先按会话记录恢复：启动时命令行预设盖在已恢复的预设上，快照要沿用最初的，不能拿受限状态当默认。
+		restore(ctx);
 		// 命令行预设只管启动那一次：之后的重载、恢复、新会话按各自的会话记录走，不被它复活或覆盖。
 		const flag = event.reason === "startup" ? pi.getFlag("preset") : undefined;
 		if (typeof flag === "string" && flag) {
 			if (presets[flag]) await applyPreset(flag, ctx);
 			else unknownPreset(flag, ctx, "warning");
-		} else restore(ctx);
+		}
 		updateStatus(ctx);
 	});
 
