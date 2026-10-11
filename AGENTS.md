@@ -20,7 +20,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
-| `round.ts` | 轮记录：测量（终态、均速）、持久化格式、合成规则、读取与字样，以及歇下时写记录的记录器，主会话与每个子代理会话都注册（宿主渲染适配在 `tools/round.ts`） | |
+| `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回） | |
 | `today.ts` | 系统提示的日期段 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
@@ -28,7 +28,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言、review 的修复反馈与总结提示共用） | |
 | `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道 | |
 | `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
-| `process-shared.ts` | 跨模块拷贝共享的进程唯一状态（宿主会重新求值模块图，模块级变量互不相通） | |
+| `process-shared.ts` | 跨模块拷贝共享的进程唯一状态 | |
 | `spawn.ts` | 全插件唯一的进程内子会话入口（Master、Review、Watcher 共用）；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
 | `format.ts` | 共享的宽度/文本格式化 | |
 | `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |

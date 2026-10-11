@@ -67,16 +67,19 @@ OpenAI 原生压缩（`openai.nativeCompaction`，模板里开启）使用 OpenA
 
 <p align="center"><img alt="第 1 轮没过，代理修复后第 2 轮通过" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.zh.gif" width="760"></p>
 
-别的审查工具交给你一份问题清单，FireCode 会修复并再审一遍：
+别的审查工具报告问题，有的能一次性应用修复。FireCode 反复修复、复审，直到审查通过、顾问叫停或轮数用尽：
 
 | | 审查者 | 交到你手里的是 |
 | --- | --- | --- |
 | **FireCode** | 任意多个模型对抗审查 | **修好并复审的代码** |
-| Claude Code `/code-review` | 多个代理，只用 Claude 模型 | 问题清单；`--fix` 可照清单直接改 |
-| Codex `/review` | 一个审查者，用当前会话的模型 | 问题清单，不改代码 |
-| Open Code Review（阿里） | 同一个模型，逐文件审 | 问题清单，要你自己修 |
-| PR-Agent / Qodo | 分工代理，同一个模型 | 评论和修改建议 |
-| multi-model-review（Pi） | 多家模型 | 一份汇总结论 |
+| Claude Code `/code-review` | 你的 Claude Code 会话派生的一个子代理 | 问题清单；`--fix` 把它应用到工作区 |
+| Codex `/review` | 一个审查者，用当前会话的模型（或 `review_model`） | 一份问题摘要 |
+| Open Code Review（阿里） | 一个配置好的模型；改动文件分组，每组一个子代理 | 行级审查评论，要你自己修 |
+| Qodo | 并行的专项代理，加一个汇总裁判代理 | PR 上按严重度排序的问题；Qodo 可以生成并应用修复 |
+| PR-Agent（开源） | 每个工具一次 LLM 调用，模型可配置 | 审查评论和代码修改建议 |
+| multi-model-review（Pi） | 多家模型，互相交叉核对 | 一份汇总结论 |
+
+竞品各行于 2026-10-12 对照以下来源核对：[Claude Code 文档 Code Review](https://code.claude.com/docs/en/code-review)（“Review a diff locally”一节）、[Codex 斜杠命令](https://developers.openai.com/codex/cli/slash-commands)与 [Codex 的 review 任务](https://github.com/openai/codex/blob/27065a9/codex-rs/core/src/tasks/review.rs)、[Open Code Review README](https://github.com/alibaba/open-code-review/blob/357c3f0/README.md)、[Qodo 文档](https://docs.qodo.ai/code-review)、[PR-Agent README](https://github.com/The-PR-Agent/pr-agent)、[multi-model-review](https://github.com/Scott-Meyer/multi-model-review)（npm 0.2.2）。这些产品会变，引用某一行前请先对照来源。
 
 ## 清晰的子代理状态
 

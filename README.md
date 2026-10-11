@@ -67,16 +67,19 @@ Tell the Master what you want. On complex tasks it sends the work to an adversar
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 
-Other reviewers hand you a list of problems. FireCode fixes them and reviews again:
+Other tools report findings, and some can apply a fix once. FireCode repeats fix and review until the review passes, the advisor stops it or the round limit is reached:
 
 | | Reviewers | What you get |
 | --- | --- | --- |
 | **FireCode** | Any number of models, reviewing adversarially | **Fixed code, re-reviewed** |
-| Claude Code `/code-review` | Several agents, Claude models only | A findings list; `--fix` applies it as-is |
-| Codex `/review` | One reviewer on your session's model | A findings list, no code changes |
-| Open Code Review (Alibaba) | One model, file by file | A findings list to fix yourself |
-| PR-Agent / Qodo | Specialist agents, one model | Comments and suggestions |
-| multi-model-review (Pi) | Several model families | One combined verdict |
+| Claude Code `/code-review` | One forked subagent of your Claude Code session | A findings list; `--fix` applies it to your working tree |
+| Codex `/review` | One reviewer, on your session's model (or `review_model`) | A summary of the issues it finds |
+| Open Code Review (Alibaba) | One configured model; changed files are bundled, one sub-agent per bundle | Line-level review comments to fix yourself |
+| Qodo | Specialized agents in parallel, plus a judge agent | Ranked findings on the PR; Qodo can generate and apply the fix |
+| PR-Agent (open source) | One LLM call per tool, any configured model | Review comments and code suggestions |
+| multi-model-review (Pi) | Several model families that cross-check each other | One synthesized verdict |
+
+The competitor rows were checked on 2026-10-12 against: [Claude Code docs, Code Review](https://code.claude.com/docs/en/code-review) (the "Review a diff locally" section), [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands) and [Codex's review task](https://github.com/openai/codex/blob/27065a9/codex-rs/core/src/tasks/review.rs), [Open Code Review README](https://github.com/alibaba/open-code-review/blob/357c3f0/README.md), [Qodo docs](https://docs.qodo.ai/code-review), [PR-Agent README](https://github.com/The-PR-Agent/pr-agent), and [multi-model-review](https://github.com/Scott-Meyer/multi-model-review) (npm 0.2.2). These products change; check a row against its source before relying on it.
 
 ## Clear Worker status
 
