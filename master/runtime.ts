@@ -60,6 +60,8 @@ export interface WorkerLive {
 	run?: symbol;
 	/** interrupt 标记的回合：它落定时按中断处理。 */
 	interruptedRun?: symbol;
+	/** interrupt 对审查中的子代理取消了审查：审查以取消收场时按中断落定（义务保留），而不是审查失败。 */
+	interruptedReview?: true;
 	interruptTimer?: NodeJS.Timeout;
 	/** 本次运行（start/send/review 投递）的起点：活动列表的实时耗时，以及从子代理会话里挑出属于这次运行的轮记录。 */
 	runStartedAt?: number;
@@ -224,6 +226,7 @@ export class MasterRuntime {
 		clearTimeout(live.interruptTimer);
 		live.interruptTimer = undefined;
 		live.runStartedAt = Date.now();
+		live.interruptedReview = undefined;
 		live.viewPrompts = [];
 		live.origin = origin;
 		this.schedulePublish();

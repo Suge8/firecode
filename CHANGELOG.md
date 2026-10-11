@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - In a Worker's full-run view, `Ctrl+Shift+X` interrupts the Worker.
+- A Worker under review can be interrupted (by the Master, or with `Ctrl+Shift+X` in its view): the review is cancelled, the Worker returns to idle with its review obligation kept, and the Master is told the review was interrupted. It can then be reviewed again.
+- `/fire-review --cancel` cancels the whole running review, even while the advisor is being consulted; it also works when the review config is broken.
 - Turning Master mode off while Workers are running asks for confirmation first.
 - A Worker interrupted before its first reply can be resumed directly.
 - The Master is told when an extension inside a Worker's session fails.

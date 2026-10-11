@@ -6,11 +6,11 @@
 
 状态机（相、判别联合、不变量）见 `state.ts` 头注释。修复回合与总结回合共用同一条 `turn` 生命周期（`pending → running → done`，总结回合结束直接落 settled）；总结类型与修复反馈都由 `history` 末轮推出，不另存。已收口轮的全文只存在 `reviewers[].details` 一处，其余文本经 `roundText` / `findingsOf` 推出。
 
-分工见 `run.ts`、`index.ts` 头注释。命令入口的 START 一律先排队，开审只经 `advance` 在 idle 门里发生，没有“直接开审”的第二条路径；用户取消是 `notify_cancelled` 通知效果，不是卡。
+分工见 `run.ts`、`index.ts` 头注释。命令入口的 START 一律先排队，开审只经 `advance` 在 idle 门里发生，没有“直接开审”的第二条路径；用户取消是 `notify_cancelled` 通知效果，不是卡。对外中止入口是命令 `/fire-review --cancel`（常量在 `outcome.ts`，Master 的 interrupt 用它）：与 esc 同一个 CANCEL 事件，顾问阶段也整场取消而不是只跳过咨询；没有进行中的审查时只提示，不留拒绝记录，配置坏掉时同样可用。
 
 `Run.release()` 中止在途工作与投递、停看门狗、放占用、还界面、通知宿主不再持有；它幂等，释放后的 dispatch 一律忽略。
 
-`registerReview(pi, options)` 的 `options`：`enabled`（用户关闭时只封存遗留的活动 checkpoint）、`configBroken`（features 配置坏掉不是关闭，保留 checkpoint）、`runSession`（审查/顾问会话执行器，缺省是进程内会话池；测试注入脚本化会话用）。会话级状态的隔离方式见 `index.ts` 头注释。
+`registerReview(pi, options)` 的 `options`：`enabled`（用户关闭时只封存遗留的活动 checkpoint）、`configBroken`（features 配置坏掉不是关闭，保留 checkpoint）、`pool`（审查/顾问会话开在这个池里：进程里唯一的子会话池，由根 `index.ts` 传入，本模块不自建）、`runSession`（审查/顾问会话执行器，测试注入脚本化会话用，给了就不需要 `pool`；两者都没有时注册即报错）。会话级状态的隔离方式见 `index.ts` 头注释。
 
 reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被根级 `spawn.ts` 的池释放时同样先收到 quit 再 dispose。
 
@@ -20,7 +20,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程（空闲时它们是前门送达的用户消息，显示为折叠的一行 ↳）；details 保持原始卡片数据。给审查者的证据（`sessionEntries`）过滤掉审查自己的信封：自定义消息与整条由审查信封构成的用户消息都不进证据。占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
 
-`outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` / `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。终态读取按 `settled.end` 判定：通过 / 顾问叫停（带裁决）/ 轮数用尽 / 故障 / 取消 / 总体超时；不从末轮结果猜（修复回合期间被取消，末轮仍是 failed，曾被读成“轮数用尽”）。故障的 `reason` 取该轮故障说明原文（超时、供应商报错都写在 `error` 里），取消与超时给人话，读取方不得把枚举名当原因展示。命令入口拒绝启动（配置问题、已有审查在跑、参数错误）统一经 `checkpoint.ts` 的 `recordRefusal` 写一条拒绝记录（不动 checkpoint，不碰进行中的审查），有 UI 时另行通知；无 UI 的 Worker 里这条记录是原因唯一的出口，`outcome.ts` 把它读成 `refused`（`runId` 是这次拒绝的 id，`message` 是原文），Master 原样报给指挥官。新增拒绝分支必须走同一个 `refuse`。
+`outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` / `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。终态读取按 `settled.end` 判定：通过 / 顾问叫停（带裁决）/ 轮数用尽 / 故障 / 取消（`cancelled`，不是故障也不是质量裁决）/ 总体超时；不从末轮结果猜（修复回合期间被取消，末轮仍是 failed，曾被读成“轮数用尽”）。故障的 `reason` 取该轮故障说明原文（超时、供应商报错都写在 `error` 里），取消与超时给人话，读取方不得把枚举名当原因展示。命令入口拒绝启动（配置问题、已有审查在跑、参数错误）统一经 `checkpoint.ts` 的 `recordRefusal` 写一条拒绝记录（不动 checkpoint，不碰进行中的审查），有 UI 时另行通知；无 UI 的 Worker 里这条记录是原因唯一的出口，`outcome.ts` 把它读成 `refused`（`runId` 是这次拒绝的 id，`message` 是原文），Master 原样报给指挥官。新增拒绝分支必须走同一个 `refuse`。
 
 ## 持久化
 

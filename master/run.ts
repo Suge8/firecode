@@ -118,13 +118,18 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 	await inflight.promise;
 }
 
-function settleInterrupted(active: MasterRuntime, identity: WorkerRef): void {
+/** 被中断落定：回合被 interrupt 打断，或审查被 interrupt 取消（review）。两者都回到 idle 并带中断标记，审查义务保留。 */
+function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = false): void {
 	const current = active.find(identity);
 	if (!current) return;
 	const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
 	active.store.upsert(interrupted);
 	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
-	active.outbox.enqueue(masterEvent.interrupted(identity.name, current.reviewNeeded === true, takeViewPrompts(active, identity)), identity.name);
+	const obligation = current.reviewNeeded === true;
+	active.outbox.enqueue(
+		review ? masterEvent.reviewInterrupted(identity.name, obligation) : masterEvent.interrupted(identity.name, obligation, takeViewPrompts(active, identity)),
+		identity.name,
+	);
 }
 
 /**
@@ -205,8 +210,11 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 	};
 	void monitorReview(session, target.sessionPath, previousRunId).then(
 		(outcome) => {
+			const interrupted = live.interruptedReview;
+			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
+			if (interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
 			const { reviewNeeded: _needed, ...fulfilled } = current;
 			const idle: WorkerRef = { ...(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current), status: "idle" };
 			active.store.upsert(idle);
@@ -214,6 +222,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
 		},
 		(error) => {
+			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
 			const idle: WorkerRef = { ...current, status: "idle" };

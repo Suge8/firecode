@@ -33,6 +33,7 @@ afterEach(async () => {
 	delete (globalThis as any).__modelGate;
 	delete (globalThis as any).__inputGate;
 	delete (globalThis as any).__masterActive;
+	delete (globalThis as any).__pool;
 	faux?.unregister();
 	faux = undefined;
 	if (directory) await rm(directory, { recursive: true, force: true });
@@ -1576,6 +1577,89 @@ test("子代理在第一条回复前随会话关闭被打断（还没有会话�
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("early 审查通过（1 轮）");
 });
 
+test("审查中的子代理被 interrupt：审查以取消收场（终态 checkpoint 已写），子代理回到 idle 带中断标记，审查义务仍在，可再 review", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
+	const { readReviewOutcome } = await loadFirecodeModule("review/outcome.js") as any;
+	let reviewerStarted!: () => void;
+	let started = new Promise<void>((resolve) => { reviewerStarted = resolve; });
+	const hangingReviewer = async (_context: any, options: any) => {
+		reviewerStarted();
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中止");
+	};
+	faux.setResponses([fauxAssistantMessage("实现完成"), hangingReviewer, hangingReviewer]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const startedWorker = await harness.execute({ action: "start", worker: "judged", prompt: "实现", role: "工程师", review: true });
+	await delivered;
+	const sessionPath = (startedWorker.details as any).worker.session;
+	const state = async () => (await harness.list().then((result) => result.details as any)).workers[0];
+
+	await harness.execute({ action: "review", worker: "judged" });
+	await started;
+	expect(await state()).toMatchObject({ status: "reviewing" });
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "interrupt", worker: "judged" });
+	await delivered;
+	const content = harness.messages.at(-1).message.content as string;
+	expect(titleOf(content)).toBe("judged 审查被中断");
+	expect(content).toContain("审查义务均已保留");
+	// 不是失败：没有错误分节，活动列表是被中断的黄行。
+	expect(content).not.toContain("错误：");
+	expect(await state()).toMatchObject({ status: "idle", reviewNeeded: true, interruptedAt: expect.any(Number) });
+	expect(harness.activity()[0]).toMatch(/^ {2}‖ judged /u);
+	// 审查以取消收场，终态 checkpoint 已写在子代理会话里。
+	expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "cancelled" });
+	// 义务仍在：未履行不能 ack，但可以再 review，新一场审查是新的 run。
+	await expect(harness.execute({ action: "ack", worker: "judged" })).rejects.toThrow("审查义务");
+	started = new Promise<void>((resolve) => { reviewerStarted = resolve; });
+	const cancelledRun = readReviewOutcome(sessionPath).runId;
+	await harness.execute({ action: "review", worker: "judged" });
+	await started;
+	expect(await state()).toMatchObject({ status: "reviewing" });
+	expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "in_progress" });
+	expect(readReviewOutcome(sessionPath).runId).not.toBe(cancelledRun);
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "interrupt", worker: "judged" });
+	await delivered;
+	expect(titleOf(harness.messages.at(-1).message.content)).toBe("judged 审查被中断");
+	await harness.command("");
+});
+
+test("Master 关闭只释放落盘的子代理：同池里进行中的审查会话（内存会话）不受影响，照常出结果", async () => {
+	const harness = await setup(true);
+	const { createReviewSessionRunner } = await loadFirecodeModule("review/session.js") as any;
+	let reviewerStarted!: () => void;
+	const started = new Promise<void>((resolve) => { reviewerStarted = resolve; });
+	let finishReview!: () => void;
+	const gate = new Promise<void>((resolve) => { finishReview = resolve; });
+	faux.setResponses([
+		async (_context: any, options: any) => {
+			await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+			return fauxAssistantMessage("已中断");
+		},
+		async () => {
+			reviewerStarted();
+			await gate;
+			return fauxAssistantMessage("审查者结论");
+		},
+	]);
+	const startedWorker = await harness.execute({ action: "start", worker: "alongside", prompt: "慢", role: "工程师" });
+	const workerPath = (startedWorker.details as any).worker.session;
+	const review = createReviewSessionRunner(harness.pool)({
+		config: { model: "test/reviewer", thinking: "low", tools: [], timeoutMs: 30_000 },
+		prompt: { system: "审查者", user: "审" },
+		cwd: harness.cwd,
+	});
+	await started;
+
+	await harness.command("");
+	expect(harness.pool.getSession(workerPath)).toBeUndefined();
+	finishReview();
+	expect(await review).toEqual({ kind: "output", text: "审查者结论" });
+});
+
 test("tail：错误在前，只取最后一条外部输入之后，工具调用只留名字与简短参数；热会话与已释放的冷会话读到同一份", async () => {
 	const harness = await setup(true, { idleTimeoutMs: 30 });
 	faux.setResponses([
@@ -1736,7 +1820,7 @@ async function setup(activate = true, options: {
 	if (options.workerReview) {
 		const configJsonc = JSON.stringify({ features: await featuresOnly("review"), ...options.workerReview });
 		await writeFile(join(extensions, "real-review.ts"),
-			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi); }`);
+			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi, { pool: globalThis.__pool }); }`);
 	}
 	if (options.throwingExtension)
 		await writeFile(join(extensions, "throwing.ts"), `export default function(pi) {
@@ -1803,6 +1887,7 @@ async function setup(activate = true, options: {
 		MasterRuntime.prototype.render = function (this: unknown) { (globalThis as any).__masterActive = this; return render.call(this); };
 		MasterRuntime.prototype.capturesActive = true;
 	}
+	(globalThis as any).__pool = pool;
 	const fake = fakePi();
 	const { commands, tools, sent: messages, appended, userMessages, emitted } = fake;
 	const notices: string[] = [];

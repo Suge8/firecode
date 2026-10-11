@@ -57,7 +57,7 @@ Before you use it:
 | `/tokens [days]` | Token and cost totals from your session files |
 | `/fast` | Toggle OpenAI/xAI fast mode (`Ctrl+Shift+S`) |
 
-Pi's session-rename key (`Ctrl+R` by default) renames the session from the input box. In a Worker's full-run view, `Ctrl+Shift+X` interrupts it.
+Pi's session-rename key (`Ctrl+R` by default) renames the session from the input box. In a Worker's full-run view, `Ctrl+Shift+X` interrupts it; a Worker under review is interrupted by cancelling the review, and its review obligation is kept. `/fire-review --cancel` stops a running review by hand.
 
 OpenAI native compaction (`openai.nativeCompaction`, on in the template) uses OpenAI/Codex's own context compaction. The result is an encrypted window that only the same model and base URL can continue from; after you switch models FireCode tells you it cannot be continued. A manual `/compact` is cancelled with an explanation when the window is unavailable; automatic compaction falls back to a normal summary with a warning. To always use normal summaries, set `nativeCompaction` to `false` and restart.
 

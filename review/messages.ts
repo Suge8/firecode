@@ -84,6 +84,7 @@ export const msg = defineMessages({
 			description: "对抗性审查：审这个会话到目前为止做完的事",
 			invalidArgs: "fire-review 参数无效",
 			alreadyRunning: "已有审查在进行中。",
+			nothingToCancel: "没有进行中的审查。",
 			scope: "当前会话当前任务的交付质量。首条用户消息是原始需求锚点；后续用户消息可能覆盖、缩小或修正，以后者为准。",
 		},
 		notify: {
@@ -100,7 +101,6 @@ export const msg = defineMessages({
 		},
 		outcome: {
 			error: "审查因故障中止",
-			cancelled: "审查被取消",
 			timedOut: "审查超过总体时限被终止",
 		},
 		ui: {
@@ -211,6 +211,7 @@ export const msg = defineMessages({
 			description: "Adversarial review: audit what this session has delivered so far",
 			invalidArgs: "Invalid fire-review arguments.",
 			alreadyRunning: "A review is already running.",
+			nothingToCancel: "No review is running.",
 			scope: "Delivery quality of the current task in this conversation. The first user message is the original-request anchor; later user messages may override, narrow, or correct it.",
 		},
 		notify: {
@@ -227,7 +228,6 @@ export const msg = defineMessages({
 		},
 		outcome: {
 			error: "Review aborted by a failure",
-			cancelled: "Review was cancelled",
 			timedOut: "Review stopped at the overall time limit",
 		},
 		ui: {
