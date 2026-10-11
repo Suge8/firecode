@@ -18,7 +18,8 @@ export const HEAT_COLORS = {
 
 const FPS = 12;
 const FRAME_MS = 1000 / FPS;
-const SETTLE_MS = 400;
+/** 落定过渡时长：标记转色与边框暖光渐隐共用，时钟订阅也以它为界（settling）。 */
+export const SETTLE_MS = 400;
 /** 一格火苗与三格火苗的火舌高度轮廓（每格两个点列）。 */
 const PROFILE = { 1: [0.75, 1], 3: [0.3, 0.6, 0.9, 1, 0.7, 0.35] } as const;
 // 盲文点位：左列自上而下 1 2 3 7，右列 4 5 6 8。
