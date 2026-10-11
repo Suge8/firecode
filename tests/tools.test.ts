@@ -68,7 +68,8 @@ test("接管渲染不改变宿主的工具：系统提示仍有 read/edit/write 
 		expect(session.systemPrompt).toContain("edits[].oldText must match exactly");
 		const bash = session.agent.state.tools.find((tool: { name: string }) => tool.name === "bash");
 		const output = await bash.execute("id", { command: "echo $FROM_PREFIX" }, undefined, undefined, undefined);
-		expect(output.content).toEqual([{ type: "text", text: "ok\n" }]);
+		// 只看命令自己的输出行：没有 zh_CN locale 的机器（CI）上 bash 会先打一行 setlocale 警告。
+		expect(output.content[0].text).toMatch(/(^|\n)ok\n$/);
 
 		const { createToolHtmlRenderer } = await import(new URL("./core/export-html/tool-renderer.ts", PI_CODING_AGENT_URL).href);
 		const { theme } = await import(new URL("./modes/interactive/theme/theme.ts", PI_CODING_AGENT_URL).href);
