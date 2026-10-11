@@ -4,7 +4,7 @@
 
 ## 状态与生命周期
 
-`state.ts` 是唯一状态事实源（纯 reducer，零 IO）：`ReviewState` 按 `phase` 判别，每个相只带自己的数据（reviewing 带审查者席位，needs_fix 带本轮全部审查结果，awaiting_fix / summarizing 带投递生命周期 `turn`），不存在“相与数据对不上”的状态。修复回合与总结回合共用同一条 `turn` 生命周期（`pending → running → done`，总结回合结束直接落 settled）；总结类型与修复反馈都由 `history` 末轮推出，不另存。已收口轮的全文只存在 `reviewers[].details` 一处，其余文本经 `roundText` / `findingsOf` 推出。
+`state.ts` 是唯一状态事实源（纯 reducer，零 IO）：`ReviewState` 按 `phase` 判别，每个相只带自己的数据（reviewing 带审查者席位，needs_fix 带本轮全部审查结果，awaiting_fix / summarizing 带投递生命周期 `turn`，settled 带结局 `end`），不存在“相与数据对不上”的状态。修复回合与总结回合共用同一条 `turn` 生命周期（`pending → running → done`，总结回合结束直接落 settled）；总结类型与修复反馈都由 `history` 末轮推出，不另存。已收口轮的全文只存在 `reviewers[].details` 一处，其余文本经 `roundText` / `findingsOf` 推出。
 
 一场审查由 `run.ts` 的 `Run` 执行副作用（起审查会话、投递、发卡、持久化、占用信号、界面、总体看门狗）；`index.ts` 只做注册与会话级事件分发。命令入口的 START 一律先排队，开审只经 `advance` 在 idle 门里发生，没有“直接开审”的第二条路径；用户取消是 `notify_cancelled` 通知效果，不是卡。
 
@@ -20,7 +20,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）不烧总结回合。修复反馈、总结提示与状态卡 content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程（空闲时它们是前门送达的用户消息，显示为折叠的一行 ↳）；details 保持原始卡片数据。给审查者的证据（`sessionEntries`）过滤掉审查自己的信封：自定义消息与整条由审查信封构成的用户消息都不进证据。占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
 
-`outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` / `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。事故终态的 `reason` 取该轮故障说明原文（超时、供应商报错都写在 `error` 里），枚举名只作缺失兜底：读取方不得把枚举名当原因展示。命令入口拒绝启动（配置问题、已有审查在跑、参数错误）统一经 `checkpoint.ts` 的 `recordRefusal` 写一条拒绝记录（不动 checkpoint，不碰进行中的审查），有 UI 时另行通知；无 UI 的 Worker 里这条记录是原因唯一的出口，`outcome.ts` 把它读成 `refused`（`runId` 是这次拒绝的 id，`message` 是原文），Master 原样报给指挥官。新增拒绝分支必须走同一个 `refuse`。
+`outcome.ts` 是外部读取审查进度与终态判定的唯一入口，checkpoint 格式仍归 review 所有：订阅方用 `outcomeOfEntry` / `reviewProgressOf` 从刚追加的记录增量解析，`readReviewOutcome` 只在需要整份文件时（回合结束兜底）用。终态读取按 `settled.end` 判定：通过 / 顾问叫停（带裁决）/ 轮数用尽 / 故障 / 取消 / 总体超时；不从末轮结果猜（修复回合期间被取消，末轮仍是 failed，曾被读成“轮数用尽”）。故障的 `reason` 取该轮故障说明原文（超时、供应商报错都写在 `error` 里），取消与超时给人话，读取方不得把枚举名当原因展示。命令入口拒绝启动（配置问题、已有审查在跑、参数错误）统一经 `checkpoint.ts` 的 `recordRefusal` 写一条拒绝记录（不动 checkpoint，不碰进行中的审查），有 UI 时另行通知；无 UI 的 Worker 里这条记录是原因唯一的出口，`outcome.ts` 把它读成 `refused`（`runId` 是这次拒绝的 id，`message` 是原文），Master 原样报给指挥官。新增拒绝分支必须走同一个 `refuse`。
 
 ## 持久化
 
@@ -70,7 +70,7 @@ blocked 会触发需要关注的通知）；终态、取消、退出时发布 `a
 加粗；校验容忍非粗体）。**格式无效但以 FAIL 开头的票仍按未通过计**：它是审查者提出的阻断意见，当缺席会让另一票的 PASS 翻盘；原文随修复反馈与结果卡交出，违例说明（点名真实原因，如“严重程度写的是低”）作为前注。首行不是判定词、格式无效的 PASS 才作废为缺席票。有裁决就成轮：一轮里只要有一票 PASS/FAIL，就按有裁决的票形成结论，缺席者（会话故障、超时、输出契约违例）在结论里点名而不阻断；全员缺席才是基础设施不可用。往轮发现清单随轮注入顾问裁决
 （`prompt.ts`），审查者不得原样重提已仲裁事项——僵尸发现收敛闭环。
 
-审查者的只读是契约而非能力边界：排除 write/edit 只挡住这两个工具，保留的 `bash` 仍能在项目目录执行任意
+审查者的只读是契约而非能力边界：`review.tools` 里不得含 write/edit（配置解析直接拒绝，`session.ts` 不再二次过滤），保留的 `bash` 仍能在项目目录执行任意
 命令。保留 bash 是有意的——审查者要跑测试取证；真需要物理隔离得上容器或只读挂载。
 
 config.jsonc 的 `review` 节必须显式完整配置（字段见 `config.ts`）；公开包不内置依赖个人认证或偏好的模型。

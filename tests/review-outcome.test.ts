@@ -41,6 +41,17 @@ describe("review outcome reader", () => {
 		});
 	});
 
+	// 修复回合期间被取消或超时：末轮仍是 failed，但结局不是“轮数用尽”。
+	test("a review cancelled during the repair turn is failed, not stopped", async () => {
+		const readReviewOutcome = await loadReader();
+		expect(readReviewOutcome(join(fixtures, "cancelled-during-repair.jsonl"))).toEqual({
+			status: "failed",
+			runId: "cancelled-run",
+			rounds: 1,
+			reason: "审查被取消",
+		});
+	});
+
 	test("reports an active checkpoint as in progress", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "in-progress.jsonl"))).toMatchObject({ status: "in_progress" });

@@ -10,7 +10,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../jsonc.js";
-import { PHASES, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
+import { PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
 
 const CHECKPOINT_TYPE = "firecode-review-checkpoint";
 const DETAILS_TYPE = "firecode-review-round-details";
@@ -47,9 +47,9 @@ export class CheckpointWriter {
 	}
 }
 
-/** 终态封存：把活动态改成 settled 写下去，调用方负责处理写不进去的情况。 */
+/** 终态封存（按取消收尾）：把活动态改成 settled 写下去，调用方负责处理写不进去的情况。 */
 export function sealCheckpoint(pi: ExtensionAPI, state: ReviewState): void {
-	new CheckpointWriter(pi, state).write({ ...state, phase: "settled", updatedAt: Date.now() } as ReviewState);
+	new CheckpointWriter(pi, state).write({ ...state, phase: "settled", end: "cancelled", updatedAt: Date.now() } as ReviewState);
 }
 
 function withoutDetails(state: ReviewState): ReviewState {
@@ -90,6 +90,8 @@ function isStored(value: unknown): value is ReviewState & { version: number } {
 			return Array.isArray(value.slots);
 		case "needs_fix":
 			return Array.isArray(value.voters);
+		case "settled":
+			return SETTLED_ENDS.includes(value.end as never);
 		case "awaiting_fix":
 		case "summarizing":
 			return TURN_STATUSES.includes(value.turn as never);

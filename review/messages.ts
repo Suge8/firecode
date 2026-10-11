@@ -98,6 +98,11 @@ export const msg = defineMessages({
 			cannotReadSession: (reason: string) => `无法读取 session 文件：${reason}`,
 			badJsonLine: (line: number) => `session 第 ${line} 行不是有效 JSON`,
 		},
+		outcome: {
+			error: "审查因故障中止",
+			cancelled: "审查被取消",
+			timedOut: "审查超过总体时限被终止",
+		},
 		ui: {
 			reviewing: "审查中",
 			editorHint: (keys: string) => `  审查进行中 · ${keys} 取消`,
@@ -219,6 +224,11 @@ export const msg = defineMessages({
 			reviewerSession: (reason: string) => `reviewer session error: ${reason}`,
 			cannotReadSession: (reason: string) => `Cannot read the session file: ${reason}`,
 			badJsonLine: (line: number) => `session line ${line} is not valid JSON`,
+		},
+		outcome: {
+			error: "Review aborted by a failure",
+			cancelled: "Review was cancelled",
+			timedOut: "Review stopped at the overall time limit",
 		},
 		ui: {
 			reviewing: "Reviewing",

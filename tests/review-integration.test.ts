@@ -885,6 +885,26 @@ describe("review cards and degraded paths", () => {
 		expect(registered.userMessages[1]).toContain("<firecode_review>");
 	}, 20_000);
 
+	// 修复回合里被取消：末轮是 failed，Master 不能把它读成“轮数用尽”。
+	test("cancelling during the repair turn is reported to the Master as cancelled, not as rounds exhausted", async () => {
+		const { registerReview, readCheckpoint, readReviewOutcome } = await loadSingleFailReview();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.userMessages.length > 0);
+		await startTurn(registered, ctx);
+		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctx);
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
+		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "failed", rounds: 1, reason: "审查被取消" });
+		await rm(sessionPath, { force: true });
+	}, 20_000);
+
 	// 持久化失败的收口曾漏掉界面：输入框一直被锁，连再开一场审查的命令都敲不进去。
 	test("a checkpoint write failure hands the editor and the occupancy back", async () => {
 		await loadAll();

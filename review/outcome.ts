@@ -66,19 +66,25 @@ export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefine
 function outcomeOf(latest: ReviewState): ReviewOutcome {
 	if (latest.phase === "idle") return { status: "none", runId: latest.runId };
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
+	const { runId } = latest;
 	const rounds = latest.history.length;
 	const last = latest.history.at(-1);
-	const result = last?.result;
-	if (result === "passed") return { status: "passed", runId: latest.runId, rounds };
-	// stopped（顾问叫停）与 failed（maxRounds 用尽）都是质量裁决终止；
-	// error / cancelled / timed_out 是基础设施故障或人为中断，不弱化成“停止”。
-	if (result === "stopped" || result === "failed") {
-		// 顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
-		const advice = last?.advisor?.advice;
-		return { status: "stopped", runId: latest.runId, rounds, ...(advice ? { advisorAdvice: advice } : {}) };
+	switch (latest.end) {
+		case "passed":
+			return { status: "passed", runId, rounds };
+		// 顾问叫停与轮数用尽都是质量裁决终止；顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
+		case "stopped":
+			return { status: "stopped", runId, rounds, ...(last?.advisor?.advice ? { advisorAdvice: last.advisor.advice } : {}) };
+		case "exhausted":
+			return { status: "stopped", runId, rounds };
+		// 故障、取消、超时是基础设施故障或人为中断，不弱化成“停止”；原因给人话，不把枚举名交给读取方。
+		case "error":
+			return { status: "failed", runId, rounds, reason: (last && roundText(last).trim()) || msg.outcome.error };
+		case "cancelled":
+			return { status: "failed", runId, rounds, reason: msg.outcome.cancelled };
+		case "timed_out":
+			return { status: "failed", runId, rounds, reason: msg.outcome.timedOut };
 	}
-	// 轮记录的 details 已写明故障形态（超时/供应商报错）；枚举名只是它缺失时的兜底。
-	return { status: "failed", runId: latest.runId, rounds, reason: (last && roundText(last).trim()) || result || "unknown" };
 }
 
 function isMissingFile(error: unknown): boolean {

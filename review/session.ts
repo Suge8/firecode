@@ -42,7 +42,7 @@ async function runReviewSession(
 			cwd,
 			model: await pool.resolveModel(config.model),
 			thinking: config.thinking,
-			tools: [...new Set(config.tools)].filter((tool) => tool !== "write" && tool !== "edit"),
+			tools: config.tools,
 			systemPrompt: { mode: "replace", text: clean(prompt.system) },
 			contextFiles: false,
 			persistence: { type: "memory" },

@@ -31,6 +31,9 @@ export type AdvisorVerdict = (typeof ADVISOR_VERDICTS)[number];
 export type StopReason = (typeof STOP_REASONS)[number];
 export type TurnStatus = (typeof TURN_STATUSES)[number];
 export type SummaryKind = "passed" | "max_rounds" | "advisor_stop";
+/** 审查为什么结束：质量裁决三种（通过 / 顾问叫停 / 轮数用尽）与事故三种（基础设施错误 / 取消 / 总体超时）。 */
+export const SETTLED_ENDS = ["passed", "stopped", "exhausted", "error", "cancelled", "timed_out"] as const;
+export type SettledEnd = (typeof SETTLED_ENDS)[number];
 
 /** 单个审查者的输出（output 契约解析结果，纯数据）。failed 含格式无效但以 FAIL 开头的票：原文进 details。 */
 export interface ReviewerResult extends ModelAtom {
@@ -82,7 +85,8 @@ interface Base {
 
 export type ReviewState = Base &
 	(
-		| { phase: "idle" | "queued" | "settled" }
+		| { phase: "idle" | "queued" }
+		| { phase: "settled"; end: SettledEnd }
 		| { phase: "reviewing"; slots: ReviewerSlot[] }
 		/** FAIL 轮等顾问仲裁：本轮全部审查结果，收口前不进 history。 */
 		| { phase: "needs_fix"; voters: ReviewerResult[] }
@@ -151,7 +155,8 @@ function baseOf(state: ReviewState): Base {
 }
 
 type PhaseData =
-	| { phase: "idle" | "queued" | "settled" }
+	| { phase: "idle" | "queued" }
+	| { phase: "settled"; end: SettledEnd }
 	| { phase: "reviewing"; slots: ReviewerSlot[] }
 	| { phase: "needs_fix"; voters: ReviewerResult[] }
 	| { phase: "awaiting_fix" | "summarizing"; turn: TurnStatus };
@@ -225,7 +230,7 @@ function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now
 
 /** 修复回合结束：总结回合无论何种结局都落 settled（总结是尽力而非必须）；修复回合被中断按用户取消收尾。 */
 function onTurnEnded(state: ReviewState, aborted: boolean, now: number): ReduceResult {
-	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled" }), effects: [] };
+	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
 	if (state.phase !== "awaiting_fix" || state.turn !== "running") return NOTHING(state);
 	if (aborted) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
 	return { state: go(state, now, { phase: "awaiting_fix", turn: "done" }), effects: [] };
@@ -254,7 +259,7 @@ function settleRound(state: ReviewState, results: ReviewerResult[], limits: Revi
 		// 全员缺席是事故终态 → 直接收尾，不烧总结回合。
 		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error: all });
 		return {
-			state: go(state, now, { phase: "settled" }, { history: [...state.history, closed] }),
+			state: go(state, now, { phase: "settled", end: "error" }, { history: [...state.history, closed] }),
 			effects: [{ kind: "send_card", card: { kind: "error", message: all, elapsedMs: closed.elapsedMs } }],
 		};
 	}
@@ -341,7 +346,7 @@ function toRepair(
 function onInfrastructureError(state: ReviewState, details: string, now: number): ReduceResult {
 	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
 	const round = reviewers && closeRound(state, now, { round: state.round, result: "error", reviewers, error: details });
-	return abort(state, now, round, [{ kind: "send_card", card: { kind: "error", message: details } }]);
+	return abort(state, now, "error", round, [{ kind: "send_card", card: { kind: "error", message: details } }]);
 }
 
 /** 取消与超时：收口在途轮（审查中或等顾问），由 effects 区分用户可见的反馈。 */
@@ -354,14 +359,14 @@ function interrupt(
 ): ReduceResult {
 	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
 	const round = reviewers && closeRound(state, now, { round: state.round, result, reviewers, reason });
-	return abort(state, now, round, effects);
+	return abort(state, now, result, round, effects);
 }
 
 /** 事故终态的统一出口：总结相已有质量裁决，静默收尾；其余相追加在途轮记录后直接 settled。 */
-function abort(state: ReviewState, now: number, round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
+function abort(state: ReviewState, now: number, end: "error" | "cancelled" | "timed_out", round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled") return NOTHING(state);
-	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled" }), effects: [] };
-	return { state: go(state, now, { phase: "settled" }, round ? { history: [...state.history, round] } : {}), effects };
+	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
+	return { state: go(state, now, { phase: "settled", end }, round ? { history: [...state.history, round] } : {}), effects };
 }
 
 function elapsedSince(state: ReviewState, now: number): number {
@@ -410,6 +415,12 @@ export function findingsOf(reviewers: ReviewerResult[]): string {
 /** 审查生命周期内：总结回合也算——占用标签持有到总结完成，Master 才不会在结果卡与总结之间的窗口提前结算、漏掉总结回复。 */
 export function isActive(state: ReviewState): boolean {
 	return state.phase !== "idle" && state.phase !== "settled";
+}
+
+/** 总结回合收尾时的结局：由质量裁决那一轮决定。 */
+function summaryEnd(state: ReviewState): SettledEnd {
+	const kind = summaryKindOf(state.history.at(-1));
+	return kind === "passed" ? "passed" : kind === "advisor_stop" ? "stopped" : "exhausted";
 }
 
 /** 总结回合的类型由终态那一轮决定。 */

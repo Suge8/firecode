@@ -35,7 +35,7 @@ async function runner() {
 	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => createReviewSessionRunner(pool)(options) };
 }
 
-const config = { model: "provider/model", thinking: "high", tools: ["read", "bash", "write", "edit"], timeoutMs: 1_000 };
+const config = { model: "provider/model", thinking: "high", tools: ["read", "bash"], timeoutMs: 1_000 };
 const base = (pool: unknown) => ({
 	pool,
 	config,

@@ -1827,7 +1827,7 @@ function mockReviewExtension(
 		slots: [{ model: "test/reviewer", thinking: "high", result: null }],
 	};
 	const settled = {
-		...base, phase: "settled", updatedAt: 2,
+		...base, phase: "settled", end: timeout ? "error" : "passed", updatedAt: 2,
 		history: [timeout
 			? {
 				round: 1, result: "error", error: TIMEOUT_DETAILS, elapsedMs: 1,

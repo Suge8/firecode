@@ -1,0 +1,2 @@
+{"type": "session", "version": 3, "id": "cancelled-session"}
+{"type": "custom", "customType": "firecode-review-checkpoint", "data": {"version": 7, "focus": "", "consecutiveFailures": 2, "startedAt": 1, "roundStartedAt": 3, "updatedAt": 5, "runId": "cancelled-run", "phase": "settled", "end": "cancelled", "round": 1, "history": [{"round": 1, "result": "failed", "reviewers": [{"index": 0, "model": "p/m", "thinking": "high", "status": "failed", "summary": "issue", "details": ""}], "elapsedMs": 2}]}}
