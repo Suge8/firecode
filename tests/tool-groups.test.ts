@@ -12,7 +12,13 @@ afterEach(async () => {
 
 const FLAME = "[\u2800-\u28ff]";
 
-async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
+/** 只记录写入的终端替身：宿主 regular 模式的渲染器只读它的行列数。 */
+function stubTerminal(rows: number) {
+	const known: Record<string, unknown> = { columns: 100, rows, kittyProtocolActive: false };
+	return new Proxy({}, { get: (_target, property: string) => known[property] ?? (() => {}) });
+}
+
+async function scene(options: { withMaster?: boolean; scroll?: boolean; regular?: boolean } = {}) {
 	const { withMaster = false } = options;
 	const [host, tui, module, toolsModule] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
@@ -24,7 +30,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 	const groupOptions = { busy: () => busy };
 	const feedBusy = (view: Record<string, unknown>) => { busy = view; };
 	host.initTheme("dark");
-	const { pi: api, tools, entryRenderers } = fakePi();
+	const { pi: api, tools, entryRenderers, resolveToolRenderers } = fakePi();
 	toolsModule.registerToolRendering(api);
 	if (withMaster) {
 		const [{ registerMaster }, { InProcessSessionPool }] = await Promise.all([
@@ -33,14 +39,13 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		registerMaster(api, { pool: new InProcessSessionPool() });
 	}
 	const chat = new tui.Container();
-	const root = new tui.Container();
+	// regular 模式用宿主真实的主屏渲染器：它在改动落到视口之外时清屏整屏重画，fullRedraws 计数。
+	const root = options.regular ? new tui.TuiMainScreen(stubTerminal(24)) : new tui.Container();
 	// 真实宿主（全屏模式）把聊天容器放在跟随末尾的 ScrollView 里。
 	const scroll = options.scroll ? new tui.ScrollView(chat, { follow: "end", primary: true }) : undefined;
 	root.addChild(scroll ?? chat);
 	let expanded = false;
-	let renders = 0;
-	root.requestRender = () => { renders++; };
-	const originalRequestRender = root.requestRender;
+	if (!options.regular) root.requestRender = () => {};
 	const { createInteractiveTuiReference } = await import(new URL("./modes/interactive/tui-renderer.ts", PI_CODING_AGENT_URL).href);
 	const reference = createInteractiveTuiReference(() => root);
 	const ui = {
@@ -54,7 +59,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		setWidget(_key: string, factory?: (tui: unknown) => unknown) { factory?.(reference); },
 		notify(message: string) { throw new Error(message); },
 	};
-	const tool = (name: string, args: Record<string, unknown>, definition = tools.get(name)) => {
+	const tool = (name: string, args: Record<string, unknown>, definition = resolveToolRenderers(name, tools.get(name))) => {
 		const row = new host.ToolExecutionComponent(name, crypto.randomUUID(), args, {}, definition, reference, "/project");
 		row.setExpanded(expanded);
 		chat.addChild(row);
@@ -88,7 +93,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean } = {}) {
 		chat.addChild(entry);
 		root.requestRender();
 	};
-	return { options: groupOptions, feedBusy, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender, originalRequestRender, renders: () => renders };
+	return { options: groupOptions, feedBusy, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -121,8 +126,6 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
 	dispose?.();
 	dispose = undefined;
-	expect(s.chat.render).toBe(s.originalRender);
-	expect(s.root.requestRender).toBe(s.originalRequestRender);
 	s.ui.setToolsExpanded(true);
 	expect(s.lines().join("\n")).toContain("private full result");
 });
@@ -833,25 +836,6 @@ test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预
 	expect(["第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
 });
 
-test("所有 Master 落定类事件都触发到达高亮，标题原样显示，失败为红", async () => {
-	const s = await scene();
-	hostUser(s, "开工");
-	s.setNow(1000);
-	feed(s, true, 0, 1000);
-	s.tool("bash", { command: "bun test" });
-	const summary = () => s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!;
-	hostUser(s, EVENT("fix-auth 审查通过（2 轮）", "最终回复：\n完成。"));
-	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} fix-auth 审查通过（2 轮）$`));
-	s.setNow(5000);
-	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test$`));
-	hostUser(s, WORKER_FAILED("perf-probe"));
-	expect(stripVTControlCharacters(summary()).trimEnd()).toMatch(new RegExp(`^${FLAME} perf-probe 失败$`));
-	// 到达文字从白色渐变到终色：失败的终色偏红，成功的偏金。
-	s.setNow(7400);
-	const [, r, g] = /38;2;(\d+);(\d+);\d+m[^\x1b]*perf-probe 失败/u.exec(summary())!.map(Number);
-	expect(r - g).toBeGreaterThan(100);
-});
-
 test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失败”（红），与提示原文同一退让", async () => {
 	const s = await scene();
 	hostUser(s, "开工");
@@ -928,7 +912,7 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 		{ title: undefined, body: masterEvent.modelSwitched("bench", "a/x/high", "b/y/high", "429"), row: "↳ bench 已切换模型", red: false },
 	];
 	const summaryOf = (s: any) => stripVTControlCharacters(s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!).trimEnd();
-	for (const { title, body } of cases) {
+	for (const { title, body, red } of cases) {
 		const s = await scene();
 		hostUser(s, "开工");
 		s.setNow(1000);
@@ -937,6 +921,13 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 		hostUser(s, event(body));
 		// 非落定事件（模型切换）不高亮：摘要行仍是当前动作。
 		expect(summaryOf(s)).toMatch(new RegExp(`^${FLAME} ${title?.replace(/[()（）]/gu, "\\$&") ?? "操作 \\$ bun test"}$`, "u"));
+		// 到达文字从白色渐变到终色：失败的终色偏红，成功的偏金。
+		if (title) {
+			s.setNow(3_400);
+			const raw = s.chat.render(100).find((line: string) => /^\x1b\[38;2;[\d;]+m[⠀-⣿]/.test(line))!;
+			const [, r, g] = [...raw.matchAll(/38;2;(\d+);(\d+);\d+m/gu)].at(-1)!.map(Number);
+			expect(r - g > 100).toBe(red);
+		}
 		dispose?.();
 		dispose = undefined;
 	}
@@ -1139,6 +1130,38 @@ test("收尾不拼帧：歇下那一刻摘要行直接是 ✓ 加定格文字，
 		s.setNow(now);
 		expect(s.lines().find((line: string) => line.includes("3.0s"))).toMatch(/^✓ 3\.0s · 40 tps/u);
 	}
+});
+
+test("regular 模式：摘要行滚出视口后火苗不再动，长回复流式输出期间宿主不整屏重画；回到视口内仍然在动", async () => {
+	const s = await scene({ regular: true });
+	s.root.start();
+	hostUser(s, "写长文");
+	feed(s, true, 0, 0);
+	const reply = s.blankAssistant();
+	const stream = (paragraphs: number) => reply.updateContent({
+		role: "assistant", stopReason: "pending",
+		content: [{ type: "text", text: Array.from({ length: paragraphs }, (_, index) => `第 ${index} 段`).join("\n\n") }],
+	}, true);
+	const frames = (count: number, from: number) => {
+		const seen = new Set<string>();
+		const before = s.root.fullRedraws;
+		for (let index = 0; index < count; index++) {
+			s.setNow(from + index * 90);
+			s.root.renderNow();
+			seen.add(s.chat.render(100).find((line: string) => new RegExp(`^\\x1b\\[38;2;[\\d;]+m${FLAME}`).test(line)) ?? "");
+		}
+		return { redraws: s.root.fullRedraws - before, distinct: seen.size };
+	};
+
+	stream(2);
+	s.root.renderNow();
+	expect(frames(12, 1_000).distinct).toBeGreaterThan(1);
+
+	stream(60);
+	s.root.renderNow();
+	const scrolled = frames(12, 5_000);
+	expect(scrolled.distinct).toBe(1);
+	expect(scrolled.redraws).toBe(0);
 });
 
 test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一格空：宿主按列切掉末列画滚动条时不丢颜色复位", async () => {

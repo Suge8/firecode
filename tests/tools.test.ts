@@ -1,23 +1,24 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadFirecodeModule } from "./loader.ts";
+import { loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text };
 const context = (overrides = {}) => ({ state: {}, cwd: "/project", toolCallId: crypto.randomUUID(), isPartial: false, isError: false, expanded: false, ...overrides });
-async function tools() {
+/** 宿主解析器给七个默认工具的渲染器：只接管渲染，不注册工具。 */
+async function renderers() {
 	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
 	const fake = fakePi();
 	registerToolRendering(fake.pi);
-	const registered = Object.fromEntries(fake.tools);
-	expect(Object.keys(registered).sort()).toEqual(["bash", "edit", "read", "write"]);
-	return registered;
+	expect(fake.tools.size).toBe(0);
+	return (name: string) => fake.resolveToolRenderers(name);
 }
 
 test("紧凑工具保留路径、错误和修改摘要，按需正文保留空白并清理终端控制字符", async () => {
-	const { read, bash, edit } = await tools();
+	const resolve = await renderers();
+	const [read, bash, edit] = ["read", "bash", "edit"].map(resolve);
 	const ctx = context();
 	const result = { content: [{ type: "text", text: "  alpha  \n" }, { type: "text", text: "\x1b[31mbeta\x1b[0m\x00 " }] };
 	expect(read.renderResult(result, { expanded: false }, theme, ctx).render(76)).toEqual([]);
@@ -32,43 +33,53 @@ test("紧凑工具保留路径、错误和修改摘要，按需正文保留空�
 	expect(edit.renderResult(diff, { expanded: true }, theme, ctx).render(76).join("\n")).toContain("+1 new\n-1 old");
 });
 
-test("折叠的成功结果只取长度，不逐字加工隐藏正文", async () => {
-	const { read } = await tools();
-	const ctx = context();
-	const text = "hidden-body-".repeat(10_000);
-	const original = String.prototype[Symbol.iterator];
-	let traversals = 0;
-	String.prototype[Symbol.iterator] = function () {
-		if (String(this) === text) traversals++;
-		return original.call(this);
+test("grep、find、ls 与读写工具同一套紧凑行，耗时列来自宿主给的真实执行耗时", async () => {
+	const resolve = await renderers();
+	const call = (name: string, args: unknown, overrides = {}) => {
+		const ctx = context(overrides);
+		const tool = resolve(name);
+		tool.renderResult({ content: [{ type: "text", text: "x".repeat(200) }] }, { expanded: false }, theme, ctx);
+		return tool.renderCall(args, theme, ctx).render(100)[0];
 	};
-	try {
-		const result = read.renderResult({ content: [{ type: "text", text }] }, { expanded: false }, theme, ctx);
-		expect(result.render(80)).toEqual([]);
-		expect(traversals).toBe(0);
-		expect(ctx.state).toMatchObject({ chars: text.length });
-	} finally {
-		String.prototype[Symbol.iterator] = original;
-	}
+	expect(call("grep", { pattern: "TODO", path: "/project/src" })).toContain("搜索 TODO ./src");
+	expect(call("find", { pattern: "*.ts" })).toContain("查找 *.ts");
+	expect(call("ls", {})).toContain("列出 .");
+	expect(call("read", { path: "/project/a.ts" }, { durationMs: 1500 })).toContain("1.5s");
+	// 导出 HTML 时宿主不带耗时。
+	expect(call("read", { path: "/project/a.ts" })).not.toContain("1.5s");
 });
 
-test("工具执行耗时仍来自真实调用，展示包装不改变结果", async () => {
-	const { read } = await tools();
-	const directory = await mkdtemp(join(tmpdir(), "firecode-timing-"));
-	const originalNow = performance.now.bind(performance);
+test("接管渲染不改变宿主的工具：系统提示仍有 read/edit/write 的准则，shellCommandPrefix 仍作用于 bash，导出 HTML 照常渲染", async () => {
+	const host = await import(PI_CODING_AGENT_URL) as any;
+	const { registerToolRendering } = await loadFirecodeModule("tools/index.ts");
+	const directory = mkdtempSync(join(tmpdir(), "firecode-tools-"));
 	try {
-		const path = join(directory, "a.txt");
-		await writeFile(path, "content");
-		const times = [0, 1500];
-		Object.defineProperty(performance, "now", { configurable: true, value: () => times.shift() ?? 1500 });
-		const ctx = context({ cwd: directory });
-		const result = await read.execute(ctx.toolCallId, { path }, undefined, undefined, { cwd: directory });
-		expect(result.content).toEqual([{ type: "text", text: "content" }]);
-		read.renderResult(result, { expanded: false }, theme, ctx);
-		expect(read.renderCall({ path }, theme, ctx).render(76)[0]).toContain("1.5s");
+		host.initTheme("dark");
+		const loader = new host.DefaultResourceLoader({
+			cwd: directory, agentDir: directory, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+			extensionFactories: [registerToolRendering],
+		});
+		await loader.reload();
+		const { session } = await host.createAgentSession({
+			cwd: directory, agentDir: directory, resourceLoader: loader,
+			sessionManager: host.SessionManager.inMemory(), settingsManager: host.SettingsManager.inMemory({ shellCommandPrefix: "export FROM_PREFIX=ok" }),
+		});
+		expect(session.systemPrompt).toContain("Use read to examine files instead of cat or sed.");
+		expect(session.systemPrompt).toContain("edits[].oldText must match exactly");
+		const bash = session.agent.state.tools.find((tool: { name: string }) => tool.name === "bash");
+		const output = await bash.execute("id", { command: "echo $FROM_PREFIX" }, undefined, undefined, undefined);
+		expect(output.content).toEqual([{ type: "text", text: "ok\n" }]);
+
+		const { createToolHtmlRenderer } = await import(new URL("./core/export-html/tool-renderer.ts", PI_CODING_AGENT_URL).href);
+		const { theme } = await import(new URL("./modes/interactive/theme/theme.ts", PI_CODING_AGENT_URL).href);
+		const html = createToolHtmlRenderer({
+			theme, cwd: directory,
+			getToolRenderers: (name: string) => session.extensionRunner.resolveToolRenderers(name, () => session.getToolDefinition(name)),
+		});
+		expect(html.renderCall("c1", "read", { path: "a.ts" })).toContain("a.ts");
+		expect(html.renderResult("c1", "read", [{ type: "text", text: "hello" }], undefined, false)?.expanded).toContain("hello");
 	} finally {
-		Object.defineProperty(performance, "now", { configurable: true, value: originalNow });
-		await rm(directory, { recursive: true, force: true });
+		rmSync(directory, { recursive: true, force: true });
 	}
 });
 

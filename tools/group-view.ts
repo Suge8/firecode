@@ -38,13 +38,20 @@ function machineText(component: Component): string | undefined {
 	return undefined;
 }
 
+/** 宿主消息组件的文本与 details 创建后不变，同一帧里要问多次、每帧都要问：按组件缓存解析结果。 */
+const MACHINE_ENTRIES = new WeakMap<Component, MachineEntry[] | null>();
+
 function machineEntriesOf(component: Component): MachineEntry[] | undefined {
+	const cached = MACHINE_ENTRIES.get(component);
+	if (cached !== undefined) return cached ?? undefined;
 	const text = machineText(component);
 	if (text === undefined) return undefined;
 	const details = component instanceof CustomMessageComponent
 		? customMessageOf(component).details
 		: undefined;
-	return machineEntries(text, details);
+	const entries = machineEntries(text, details);
+	MACHINE_ENTRIES.set(component, entries ?? null);
+	return entries;
 }
 
 /** 整条内容由信封构成的 CustomMessage 或用户消息。 */
@@ -249,12 +256,16 @@ export interface ProjectionEnv {
 	toggleOpen: (key: object) => void;
 	/** 第一条人类输入之前的过程所属的轮次键。 */
 	headless: object;
+	/** 摘要行画静止形态（不动的火苗、直接是终色）：regular 模式下摘要行滚出视口后，它的任何变化都会让宿主整屏重画，见 grouping.ts。 */
+	still?: boolean;
 }
 
 export interface Projection {
 	nodes: Component[];
-	/** 有活的摘要或落定过渡在播放，宿主需要按帧重绘。 */
-	animating: boolean;
+	/** 第一个有活的摘要或落定过渡的节点下标；没有则不需要按帧重绘。 */
+	animatingAt?: number;
+	/** 有活的摘要或落定过渡在播放，宿主需要按帧重绘（由 animatingAt 派生，子代理视图读它）。 */
+	readonly animating: boolean;
 }
 
 /**
@@ -287,15 +298,15 @@ export function projectProcessGroups(source: readonly Component[], env: Projecti
 	const openers = openersOf(children);
 	const isProcess = (component: Component) => isModelProcess(component) || (isHuman(component) && !openers.has(component));
 	const nodes: Component[] = [];
-	let animating = false;
+	let animatingAt: number | undefined;
 	let turn = env.headless;
 	let segment: Component[] = [];
 	const flush = (final: boolean) => {
 		// 进行中的轮在第一个助手组件到来之前也有摘要行（思考中）。
 		if (!segment.length && !(final && env.busy().busy)) return;
 		const view = renderSegment(segment, turn, final, isProcess, env);
+		if (animatingAt === undefined && view.animatingAt !== undefined) animatingAt = nodes.length + view.animatingAt;
 		nodes.push(...view.nodes);
-		animating ||= view.animating;
 		segment = [];
 	};
 	const inSegment = (index: number) => {
@@ -324,7 +335,7 @@ export function projectProcessGroups(source: readonly Component[], env: Projecti
 		}
 	}
 	flush(true);
-	return { nodes, animating };
+	return { nodes, animatingAt, get animating() { return animatingAt !== undefined; } };
 }
 
 type IsProcess = (component: Component) => boolean;
@@ -350,16 +361,19 @@ function renderSegment(segment: readonly Component[], turn: object, final: boole
 	const round = live ? undefined : facts.round;
 	const sinceEnd = round && Date.now() - round.at;
 	const nodes: Component[] = [];
+	const animating = hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd)));
 	if (hasSummary) {
 		nodes.push(new Spacer(1), new TurnSummary({
 			// 运行中失败行常驻在子代理活动列表，摘要行只在事后留痕。
 			...facts, failures: live ? 0 : facts.failures, live, round, sinceEnd,
+			arrival: env.still ? undefined : facts.arrival, still: env.still,
 			toggle: () => env.toggleOpen(turn),
 		}, env.ui.theme));
 	}
 	if (open) nodes.push(...processList(segment, env));
 	else nodes.push(...foldedReplies(segment, hasSummary && reply?.body ? tail : undefined, reply?.body, hasSummary, env));
-	return { nodes, animating: hasSummary && (live || (sinceEnd !== undefined && settling(sinceEnd))) };
+	// 摘要行是 nodes[1]（前面一个 Spacer）。
+	return { nodes, animatingAt: animating ? 1 : undefined };
 }
 
 /**

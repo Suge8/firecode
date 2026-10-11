@@ -1,19 +1,10 @@
 /**
- * 接管默认 4 工具（read/bash/edit/write）的展示：组摘要/紧凑列表 + 单工具正文，保留耗时/大小列。
+ * 接管默认工具（read/bash/edit/write/grep/find/ls）的展示：组摘要/紧凑列表 + 单工具正文，保留耗时/大小列。
  *
- * 只包装默认激活的工具：原版 pi 的 registerTool 是注册即激活（会话构建与 reload
- * 固定 includeAllExtensionTools），给 grep/find/ls 挂渲染包装会把它们在所有会话
- * 强制打开——渲染接管不得改变工具集，因此那三个用宿主默认渲染。
+ * 只经宿主的 registerToolRenderer 接管渲染，不重新注册工具：工具定义、系统提示条目与准则、
+ * shellPath/shellCommandPrefix/图片缩放等设置全部仍由宿主自己的定义负责，也不改变启用的工具集。
  */
-import {
-	createBashTool,
-	createEditTool,
-	createReadTool,
-	createWriteTool,
-	defineTool,
-	type ExtensionAPI,
-	type Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { busyView } from "../busy.js";
 import { installGroupPatch } from "./grouping.js";
 import { ToolLine, makeResultRenderer } from "./line.js";
@@ -22,20 +13,8 @@ import { type Part, diffMeta } from "./parts.js";
 import { msg } from "./messages.js";
 import { ROUND_ENTRY } from "../round.js";
 import { renderRound } from "./round.js";
-import { clearDurations, executeTimed } from "./timing.js";
 
-function createTools(cwd: string) {
-	return { read: createReadTool(cwd), bash: createBashTool(cwd), edit: createEditTool(cwd), write: createWriteTool(cwd) };
-}
-
-/** 工具实例按 cwd 复用：同一会话内 cwd 不变，切目录也不必重建全部工具。 */
-const cache = new Map<string, ReturnType<typeof createTools>>();
-
-function tools(cwd: string) {
-	let value = cache.get(cwd);
-	if (!value) cache.set(cwd, value = createTools(cwd));
-	return value;
-}
+type Name = keyof typeof msg.labels;
 
 function lineCount(text: string): number {
 	if (text === "") return 0;
@@ -43,82 +22,58 @@ function lineCount(text: string): number {
 	return text.endsWith("\n") ? lines - 1 : lines;
 }
 
-/** 四个工具共有的展示壳：执行仍是宿主工具（按调用 cwd 取实例）外加真实耗时，调用行是动作词 + 目标；meta 给调用行追加后缀。 */
-function shell(name: "read" | "bash" | "edit" | "write", meta?: (args: any) => Part[]) {
+/** 七个工具共有的展示壳：调用行是动作词 + 目标，meta 给调用行追加后缀。 */
+function renderers(name: Name, renderResult: ToolRenderers["renderResult"], meta?: (args: any) => Part[]): ToolRenderers {
 	return {
-		label: msg.labels[name],
-		renderShell: "self" as const,
-		execute: (id: string, params: any, signal: any, update: any, ctx: any) =>
-			executeTimed(id, () => (tools(ctx.cwd)[name].execute as (...args: unknown[]) => Promise<any>)(id, params, signal, update, ctx)),
-		renderCall: (args: any, theme: Theme, ctx: any) =>
+		renderShell: "self",
+		renderCall: (args, theme, ctx) =>
 			new ToolLine({ label: msg.labels[name], ...toolTarget(name, args, ctx.cwd), meta: meta?.(args), theme, ctx }),
+		renderResult,
 	};
 }
 
-const EDIT_RESULT = makeResultRenderer(false);
-let definitions: ReturnType<typeof buildDefinitions> | undefined;
+const SIZED = makeResultRenderer(true);
+const PLAIN = makeResultRenderer(false);
 
-/** 默认四工具的展示包装：主会话注册它们，子代理全过程视图拿同一份定义渲染子会话的工具行。 */
-export function toolDefinitions() {
-	return definitions ??= buildDefinitions();
-}
+/** edit 的结果渲染把 diff 的 ± 统计回写到调用行，展开时附 diff。 */
+const EDIT: ToolRenderers["renderResult"] = (result, options, theme, ctx) => {
+	const details = result.details as { diff?: unknown } | undefined;
+	const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
+	ctx.state.meta = diff ? diffMeta(diff) : undefined;
+	const display = options.expanded && diff
+		? { ...result, content: [...result.content, { type: "text" as const, text: diff }] }
+		: result;
+	return PLAIN(display, options, theme, ctx);
+};
 
-function buildDefinitions() {
-	const initial = tools(process.cwd());
-	return {
-		read: defineTool({ ...initial.read, ...shell("read"), renderResult: makeResultRenderer(true) }),
-		bash: defineTool({ ...initial.bash, ...shell("bash"), renderResult: makeResultRenderer(true) }),
-		edit: defineTool({
-			...initial.edit,
-			...shell("edit"),
-			renderResult(result, options, theme, ctx) {
-				const details = result.details as { diff?: unknown } | undefined;
-				const diff = !ctx.isError && typeof details?.diff === "string" ? details.diff : undefined;
-				ctx.state.meta = diff ? diffMeta(diff) : undefined;
-				const display = options.expanded && diff
-					? { ...result, content: [...result.content, { type: "text" as const, text: diff }] }
-					: result;
-				return EDIT_RESULT(display, options, theme, ctx);
-			},
-		}),
-		write: defineTool({
-			...initial.write,
-			...shell("write", (args) => [{ text: " +" + lineCount(args.content ?? ""), color: "toolDiffAdded" }]),
-			renderResult: makeResultRenderer(false),
-		}),
-	};
+const RENDERERS: Record<Name, ToolRenderers> = {
+	read: renderers("read", SIZED),
+	bash: renderers("bash", SIZED),
+	edit: renderers("edit", EDIT),
+	write: renderers("write", PLAIN, (args) => [{ text: " +" + lineCount(args.content ?? ""), color: "toolDiffAdded" }]),
+	grep: renderers("grep", SIZED),
+	find: renderers("find", SIZED),
+	ls: renderers("ls", SIZED),
+};
+
+/** 默认工具的渲染器，按工具名取：主会话经宿主解析器使用，子代理全过程视图拿同一份渲染子会话的工具行。 */
+export function toolDefinitions(): Readonly<Record<string, ToolRenderers>> {
+	return RENDERERS;
 }
 
 export function registerToolRendering(pi: ExtensionAPI): void {
 	let dispose: (() => void) | undefined;
 	// 轮记录由根级轮记录器写（每个会话都有）；这里只把它渲染成零行标记，供摘要行读。
 	pi.registerEntryRenderer(ROUND_ENTRY, renderRound);
+	pi.registerToolRenderer((tool, next) => (Object.hasOwn(RENDERERS, tool) ? RENDERERS[tool as Name] : next()));
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		dispose?.();
-		clearDurations();
 		dispose = installGroupPatch(ctx.ui, { busy: () => busyView(pi) });
 		ctx.ui.setToolsExpanded(false);
 	});
 	pi.on("session_shutdown", () => {
-		if (!dispose) return;
-		dispose();
+		dispose?.();
 		dispose = undefined;
-		clearDurations();
-	});
-
-	for (const definition of Object.values(toolDefinitions())) pi.registerTool(definition);
-
-	pi.registerCommand("tool-status", {
-		description: msg.toolStatusCommand,
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(
-				`active: ${pi.getActiveTools().join(", ")}\nall: ${pi
-					.getAllTools()
-					.map((tool) => tool.name)
-					.join(", ")}`,
-				"info",
-			);
-		},
 	});
 }

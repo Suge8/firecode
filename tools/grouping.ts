@@ -11,6 +11,12 @@ import { assistantFacts, captureTui, findChat, HostShapeError, isCardOpened, pat
 /** 宿主适配只有一个当前所有者，跨模块拷贝共享：reload 先卸旧再装新。 */
 const owner = () => processShared("tool-groups", () => ({ dispose: undefined as (() => void) | undefined }));
 
+/**
+ * regular 模式下宿主只能改动视口内的行：改到视口上方的行就清屏（连滚动历史）整屏重画。
+ * 摘要行之下的行数加上输入框、状态与页脚至少占的行数达到终端行数，摘要行就在视口之外。
+ */
+const CHROME_ROWS = 6;
+
 interface GroupOptions {
 	/** 会话进行中的快照（拉取）。 */
 	busy: () => BusyView;
@@ -29,6 +35,13 @@ export function installGroupPatch(ui: ExtensionUIContext, options: GroupOptions)
 	};
 	owner().dispose = dispose;
 	return dispose;
+}
+
+/** 第 index 个节点之下的行数（只重画它之后的节点，即同一轮的回复尾部）。 */
+function rowsBelow(nodes: readonly Component[], index: number, width: number): number {
+	let rows = 0;
+	for (const node of nodes.slice(index + 1)) rows += node.render(width).length;
+	return rows;
 }
 
 /** 首个真实实例的形状自检：私有字段改名或换型就不安装。 */
@@ -91,13 +104,14 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 				top: view.scrollTop,
 				following: view.isFollowingEnd,
 				viewport: view.viewportHeight,
-				contentHeight: scrollContentHeight(view),
+				// 只有点击锚定才要，字段形状不符也只在点击时才暴露。
+				get contentHeight() { return scrollContentHeight(view); },
 				holdAt: (top: number) => view.scrollTo(top, { disableFollow: true }),
 				follow: () => view.scrollToEnd(),
 			};
 		});
 		const env: ProjectionEnv = {
-			ui, busy: options.busy, headless: {},
+			ui, busy: options.busy, headless: {}, still: false,
 			toggleRow: (row) => {
 				toggleToolDetails(row, originalExpand);
 				tui.requestRender();
@@ -115,12 +129,22 @@ function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => 
 				overrides.clear();
 			}
 			return guarded(() => {
-				const { nodes, animating } = projectProcessGroups(chat.children, env);
+				let { nodes, animatingAt } = projectProcessGroups(chat.children, env);
 				projection.children = nodes;
-				// 动效只经全局时钟：有活的摘要才订阅，静止即取消。
+				let lines = projection.render(width);
+				if (tui.mode === "regular" && animatingAt !== undefined) {
+					const offscreen = rowsBelow(nodes, animatingAt, width) + CHROME_ROWS >= tui.terminal.rows;
+					if (offscreen !== env.still) {
+						env.still = offscreen;
+						({ nodes, animatingAt } = projectProcessGroups(chat.children, env));
+						projection.children = nodes;
+						lines = projection.render(width);
+					}
+				}
+				// 动效只经全局时钟：有活的摘要才订阅，静止（含画成静止形态）即取消。
+				const animating = animatingAt !== undefined && !env.still;
 				if (animating && !stopFrames) stopFrames = onFrame(() => tui.requestRender());
 				else if (!animating && stopFrames) { stopFrames(); stopFrames = undefined; }
-				const lines = projection.render(width);
 				anchor.layout(lines.length);
 				return lines;
 			}, () => render.call(chat, width));

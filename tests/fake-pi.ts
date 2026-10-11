@@ -16,6 +16,7 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 	const shortcuts = new Map<string, any>();
 	const messageRenderers = new Map<string, unknown>();
 	const entryRenderers = new Map<string, unknown>();
+	const toolRenderers: Handler[] = [];
 	const sent: { message: any; options: any }[] = [];
 	const userMessages: string[] = [];
 	const appended: [string, any][] = [];
@@ -37,6 +38,7 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		registerShortcut: (key: string, shortcut: unknown) => shortcuts.set(key, shortcut),
 		registerMessageRenderer: (type: string, renderer: unknown) => messageRenderers.set(type, renderer),
 		registerEntryRenderer: (type: string, renderer: unknown) => entryRenderers.set(type, renderer),
+		registerToolRenderer: (resolver: Handler) => toolRenderers.push(resolver),
 		registerFlag() {},
 		getFlag: () => undefined,
 		sendMessage: (message: unknown, options: unknown) => { sent.push({ message, options }); },
@@ -65,6 +67,9 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		shortcuts,
 		messageRenderers,
 		entryRenderers,
+		/** 宿主按注册顺序解析工具渲染器：第一个返回非 undefined 的生效，其余落到 base。 */
+		resolveToolRenderers: (name: string, base?: unknown) =>
+			toolRenderers.reduceRight<() => unknown>((next, resolver) => () => resolver(name, next), () => base)(),
 		sent,
 		userMessages,
 		appended,

@@ -7,6 +7,7 @@ import { commandParts, genericArgsParts, pathValue, type Part } from "./parts.js
 type ToolArgs = {
 	path?: string;
 	file_path?: string;
+	pattern?: string;
 	offset?: number;
 	limit?: number;
 };
@@ -32,6 +33,12 @@ function withoutCwdPrefix(command: string, cwd: string): string {
 	return trimSlash(target) === trimSlash(cwd) ? command.slice(match[0].length) : command;
 }
 
+/** grep/find 的目标：模式 + 搜索位置（默认当前目录时不写）。 */
+function patternValue(args: ToolArgs, cwd: string): Part[] {
+	const parts: Part[] = [{ text: args.pattern ?? "…", color: "accent" }];
+	return args.path ? [...parts, { text: " ", color: "muted" }, ...pathValue(args.path, cwd)] : parts;
+}
+
 /** 工具调用的目标片段与过长时的保留侧（路径留尾、命令留头）。 */
 export function toolTarget(tool: string, args: unknown, cwd: string): { value: Part[]; clip: ClipSide } {
 	const input = (args ?? {}) as ToolArgs & { command?: string };
@@ -40,6 +47,9 @@ export function toolTarget(tool: string, args: unknown, cwd: string): { value: P
 		case "edit":
 		case "write": return { value: pathValue(argPath(input), cwd), clip: "start" };
 		case "bash": return { value: commandParts(withoutCwdPrefix(input.command ?? "", cwd)), clip: "end" };
+		case "grep":
+		case "find": return { value: patternValue(input, cwd), clip: "end" };
+		case "ls": return { value: pathValue(argPath(input) || ".", cwd), clip: "start" };
 		default: return { value: genericArgsParts(args), clip: "end" };
 	}
 }
