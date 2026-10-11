@@ -50,6 +50,24 @@ interface MasterConfig {
 	autoActivate: boolean;
 }
 
+const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
+export type TextVerbosity = (typeof TEXT_VERBOSITIES)[number];
+
+export function isTextVerbosity(value: unknown): value is TextVerbosity {
+	return TEXT_VERBOSITIES.includes(value as TextVerbosity);
+}
+
+interface OpenAIProviderSettings {
+	textVerbosity?: TextVerbosity;
+	priority?: true;
+}
+
+/** openai 节：请求层（provider/openai-native）读取的全部设置；写回只有加速档开关。 */
+export interface OpenAISettings {
+	nativeCompaction: boolean;
+	providers: Record<string, OpenAIProviderSettings>;
+}
+
 /** 观察员喂给观察会话的增量粒度：minimal 省略 reasoning 与 diff 正文。 */
 export type WatcherContext = "minimal" | "full";
 
@@ -75,20 +93,13 @@ export const FEATURES = [
 
 export type Feature = (typeof FEATURES)[number];
 
-/** 顶层只认这些节；openai 节由 provider/openai-native 自己解析。 */
 const SECTIONS = ["language", "features", "keys", "openai", "presets", "review", "master", "watcher"];
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
  * （tests/config-seam.test.ts 守这条）。ctrl+shift+s：宿主默认键位里没有，s 取 speed；单个 ctrl+字母已被宿主占满。
  */
-const DEFAULT_KEYS = {
-	fast: "ctrl+shift+s",
-} as const;
-
-type FireCodeKeys = {
-	fast: string;
-};
+const DEFAULT_FAST_KEY = "ctrl+shift+s";
 
 /** 一节能否启动的唯一判定：要么交出可用配置，要么给出拒绝启动的原因。 */
 export type Section<T> = { config: T } | { error: string };
@@ -96,7 +107,8 @@ export type Section<T> = { config: T } | { error: string };
 type LoadedConfig = {
 	config: {
 		features: Partial<Record<Feature, boolean>>;
-		keys: FireCodeKeys;
+		keys: { fast: string };
+		openai: OpenAISettings;
 		presets: Record<string, Preset>;
 	};
 	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
@@ -153,9 +165,9 @@ function stringValue(value: unknown, field: string, problems: string[]): string 
 	return undefined;
 }
 
-function stringArray(value: unknown, field: string, problems: string[]): string[] {
+function stringArray(value: unknown, field: string, problems: string[], nonEmpty = false): string[] {
 	if (value === undefined) return [];
-	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item)) {
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item) || (nonEmpty && value.length === 0)) {
 		problems.push(msg.config.mustBeStringArray(field));
 		return [];
 	}
@@ -175,8 +187,8 @@ function checkFeatures(features: Record<string, unknown>, problems: string[]): v
 	}
 }
 
-function checkKeys(keys: FireCodeKeys, presets: Record<string, Preset>, problems: string[]): void {
-	const owners = new Map<string, string>([[keys.fast, "keys.fast"]]);
+function checkKeys(fastKey: string, presets: Record<string, Preset>, problems: string[]): void {
+	const owners = new Map<string, string>([[fastKey, "keys.fast"]]);
 	for (const [name, preset] of Object.entries(presets)) {
 		if (!preset?.key) continue;
 		const owner = owners.get(preset.key);
@@ -192,7 +204,8 @@ export function loadConfig(): LoadedConfig {
 
 	// 文件级与开关级问题阻断所有付费功能：开关写成字符串 "false" 时 `!== false` 仍会启用。
 	const blocking: string[] = [];
-	const raw = readFile(readConfigFile(), blocking);
+	const file = readConfigFile();
+	const raw = readFile(file, blocking);
 	// features 省略表示沿用默认全开；只要显式写了，就必须是对象。
 	// 非对象不能回退成 {}，因为 {} 在入口语义里正是「全部启用」。
 	const featuresBroken = raw.features !== undefined && !isRecord(raw.features);
@@ -205,16 +218,15 @@ export function loadConfig(): LoadedConfig {
 	const problems = [...blocking];
 	for (const key of Object.keys(raw)) if (!SECTIONS.includes(key)) problems.push(msg.config.unknownSection(key));
 	const rawKeys = asRecord(raw.keys);
-	rejectUnknownKeys(rawKeys, Object.keys(DEFAULT_KEYS), "keys", problems);
+	rejectUnknownKeys(rawKeys, ["fast"], "keys", problems);
 	const presets = parsePresets(raw.presets, problems);
-	const keys: FireCodeKeys = {
-		fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_KEYS.fast,
-	};
-	checkKeys(keys, presets, problems);
+	const keys = { fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_FAST_KEY };
+	checkKeys(keys.fast, presets, problems);
+	const openai = parseOpenAI(raw.openai, features.openaiNative !== false ? problems : []);
 	if (raw.language !== undefined && !parseLanguage(raw.language)) problems.push(msg.config.language);
 
 	// review / master / watcher 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
-	// 节内问题只在功能开启时进全局警告。
+	// 节内问题只在功能开启时进全局警告；文件读不出来时节是空的，节内问题全是读不出来的派生，只留文件级那一条。
 	const section = <T>(
 		name: "review" | "master" | "watcher",
 		refused: (reasons: string[]) => string,
@@ -224,8 +236,8 @@ export function loadConfig(): LoadedConfig {
 		const own: string[] = [];
 		if (raw[name] !== undefined && !isRecord(raw[name])) own.push(msg.config.mustBeObject(name));
 		const config = parse(asRecord(raw[name]), own);
-		if (features[name] !== false) problems.push(...own);
-		const reasons = [...blocking, ...own];
+		if (features[name] !== false && !file.fault) problems.push(...own);
+		const reasons = file.fault ? [...blocking] : [...blocking, ...own];
 		const missing = reasons.length ? undefined : incomplete(config);
 		if (missing) reasons.push(missing);
 		return reasons.length ? { error: refused(reasons) } : { config };
@@ -237,7 +249,7 @@ export function loadConfig(): LoadedConfig {
 	const watcher = section("watcher", msg.config.refusedWatcher, parseWatcherConfig, () => undefined);
 
 	cached = {
-		config: { features, keys, presets },
+		config: { features, keys, openai, presets },
 		problems,
 		review,
 		master,
@@ -313,9 +325,10 @@ function parsePreset(value: unknown, field: string, problems: string[]): Preset 
 // ---- review 节 ----
 
 const REVIEW_KEYS = ["advisor", "reviewers", "maxRounds", "advisorAfterFailures", "timeoutMinutes", "tools"] as const;
-const DEFAULT_TOOLS = ["read", "grep", "find", "ls", "bash"];
+/** 审查者只读：写入类工具直接拒绝配置，不留到会话里过滤。 */
+const REVIEW_WRITE_TOOLS = ["write", "edit"];
 
-/** 严格拒绝未知字段（含嵌套），类型错误一律记录而非静默回退。 */
+/** 严格拒绝未知字段（含嵌套），缺失与类型错误一律记录；有问题的节整节拒绝启动，所以不存在回退默认值。 */
 function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): ReviewConfig {
 	rejectUnknownKeys(raw, REVIEW_KEYS, "review", problems);
 	// advisor 与 reviewers 缺失由模型原子解析自己报形状，不再叠一条泛化的“必须显式配置”。
@@ -327,9 +340,9 @@ function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): Re
 	return {
 		advisor,
 		reviewers,
-		maxRounds: reviewInt(raw.maxRounds, "review.maxRounds", 5, 1, 10, problems),
-		advisorAfterFailures: reviewInt(raw.advisorAfterFailures, "review.advisorAfterFailures", 2, 1, 5, problems),
-		timeoutMinutes: reviewInt(raw.timeoutMinutes, "review.timeoutMinutes", 20, 1, 60, problems),
+		maxRounds: reviewInt(raw.maxRounds, "review.maxRounds", 1, 10, problems),
+		advisorAfterFailures: reviewInt(raw.advisorAfterFailures, "review.advisorAfterFailures", 1, 5, problems),
+		timeoutMinutes: reviewInt(raw.timeoutMinutes, "review.timeoutMinutes", 1, 60, problems),
 		tools: reviewTools(raw.tools, problems),
 	};
 }
@@ -342,41 +355,29 @@ function reviewModels(value: unknown, problems: string[]): ModelAtom[] {
 	return value.map((item, index) => parseModelAtom(item, `review.reviewers[${index}]`, problems));
 }
 
-function reviewInt(
-	value: unknown,
-	field: string,
-	fallback: number,
-	min: number,
-	max: number,
-	problems: string[],
-): number {
-	if (value === undefined) return fallback;
+/** 缺失已由 mustSet 报过；越界值记录问题，返回值只为满足类型，有问题的节不会交出配置。 */
+function reviewInt(value: unknown, field: string, min: number, max: number, problems: string[]): number {
+	if (value === undefined) return min;
 	if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
 		problems.push(msg.config.mustBeInteger(field, min, max));
-		return fallback;
+		return min;
 	}
 	return value;
 }
 
 function reviewTools(value: unknown, problems: string[]): string[] {
-	if (value === undefined) return [...DEFAULT_TOOLS];
-	if (!Array.isArray(value)) {
-		problems.push(msg.config.reviewToolsArray);
-		return [...DEFAULT_TOOLS];
-	}
-	const tools = value.filter((item): item is string => typeof item === "string" && item.length > 0);
-	if (tools.length !== value.length || tools.length === 0)
-		problems.push(msg.config.mustBeStringArray("review.tools"));
-	return tools.length > 0 ? tools : [...DEFAULT_TOOLS];
+	const tools = stringArray(value, "review.tools", problems, true);
+	if (tools.some((tool) => REVIEW_WRITE_TOOLS.includes(tool))) problems.push(msg.config.reviewToolsReadOnly);
+	return tools;
 }
 
 // ---- master 节 ----
 
+const MASTER_KEYS = ["roles", "workerExcludeExtensions", "autoActivate"] as const;
+
 /** 与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
 function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
-	for (const key of Object.keys(raw))
-		if (key !== "roles" && key !== "workerExcludeExtensions" && key !== "autoActivate")
-			problems.push(msg.config.unknownField(`master.${key}`));
+	rejectUnknownKeys(raw, MASTER_KEYS, "master", problems);
 	const exclusions = stringArray(raw.workerExcludeExtensions, "master.workerExcludeExtensions", problems);
 	const autoActivate = booleanValue(raw.autoActivate, "master.autoActivate", true, problems);
 	const table = raw.roles;
@@ -408,7 +409,7 @@ function masterFallback(value: unknown, field: string, problems: string[]): Mode
 // ---- watcher 节 ----
 
 const WATCHER_KEYS = ["enabled", "model", "context"] as const;
-const WATCHER_CONTEXTS = new Set<WatcherContext>(["minimal", "full"]);
+const WATCHER_CONTEXTS: readonly WatcherContext[] = ["minimal", "full"];
 
 /** model 必填（含思考档），enabled 默认 true、context 默认 minimal。 */
 function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
@@ -418,9 +419,46 @@ function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): W
 	const atom = parseModelAtom(raw.model, "watcher.model", problems);
 	let context: WatcherContext = "minimal";
 	if (raw.context !== undefined) {
-		if (typeof raw.context === "string" && WATCHER_CONTEXTS.has(raw.context as WatcherContext))
-			context = raw.context as WatcherContext;
-		else problems.push(msg.config.watcherContext);
+		if (WATCHER_CONTEXTS.includes(raw.context as WatcherContext)) context = raw.context as WatcherContext;
+		else problems.push(msg.config.mustBeOneOf("watcher.context", WATCHER_CONTEXTS));
 	}
 	return { enabled, ...atom, context };
+}
+
+// ---- openai 节 ----
+
+const OPENAI_KEYS = ["nativeCompaction", "providers"] as const;
+const OPENAI_PROVIDER_KEYS = ["textVerbosity", "priority"] as const;
+
+/** 问题只记录、不阻断：请求层对写错的字段按省略处理（verbosity 不设、不开加速），不会误发付费请求。 */
+function parseOpenAI(value: unknown, problems: string[]): OpenAISettings {
+	const settings: OpenAISettings = { nativeCompaction: false, providers: {} };
+	if (value === undefined) return settings;
+	if (!isRecord(value)) {
+		problems.push(msg.config.mustBeObject("openai"));
+		return settings;
+	}
+	rejectUnknownKeys(value, OPENAI_KEYS, "openai", problems);
+	settings.nativeCompaction = booleanValue(value.nativeCompaction, "openai.nativeCompaction", false, problems);
+	if (value.providers === undefined) return settings;
+	if (!isRecord(value.providers)) {
+		problems.push(msg.config.mustBeObject("openai.providers"));
+		return settings;
+	}
+	for (const [name, raw] of Object.entries(value.providers)) {
+		const field = `openai.providers.${name}`;
+		if (!isRecord(raw)) {
+			problems.push(msg.config.mustBeObject(field));
+			continue;
+		}
+		rejectUnknownKeys(raw, OPENAI_PROVIDER_KEYS, field, problems);
+		const provider: OpenAIProviderSettings = {};
+		if (raw.textVerbosity !== undefined) {
+			if (isTextVerbosity(raw.textVerbosity)) provider.textVerbosity = raw.textVerbosity;
+			else problems.push(msg.config.mustBeOneOf(`${field}.textVerbosity`, TEXT_VERBOSITIES));
+		}
+		if (booleanValue(raw.priority, `${field}.priority`, false, problems)) provider.priority = true;
+		if (Object.keys(provider).length > 0) settings.providers[name] = provider;
+	}
+	return settings;
 }

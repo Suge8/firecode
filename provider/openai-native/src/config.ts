@@ -1,121 +1,12 @@
+/** 加速档开关写回配置：只改 `openai` 节，文件其余部分含注释原样保留。读取与校验在根 config.ts。 */
 import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import type { OpenAISettings } from "../../../config.js";
 import { isRecord, parseJsonc } from "../../../jsonc.js";
 
-const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
-
-export type TextVerbosity = (typeof TEXT_VERBOSITIES)[number];
-
-type OpenAIProviderSettings = {
-	textVerbosity?: TextVerbosity;
-	priority?: true;
-};
-
-export type OpenAINativeSettings = {
-	nativeCompaction: boolean;
-	providers: Record<string, OpenAIProviderSettings>;
-};
-
-type LoadedOpenAINativeSettings = {
-	settings: OpenAINativeSettings;
-	warnings: string[];
-};
-
-export function isTextVerbosity(value: unknown): value is TextVerbosity {
-	return typeof value === "string" && TEXT_VERBOSITIES.includes(value as TextVerbosity);
-}
-
-function createDefaultSettings(): OpenAINativeSettings {
-	return {
-		nativeCompaction: false,
-		providers: {},
-	};
-}
-
-function readConfig(configPath: string): Record<string, unknown> {
-	const parsed = parseJsonc(readFileSync(configPath, "utf8"));
-	if (!isRecord(parsed)) {
-		throw new Error("expected a JSON object");
-	}
-	return parsed;
-}
-
-/** 配置文件里只有 `openai` 节归本模块；缺省按全默认。 */
-function openaiSection(root: Record<string, unknown>): Record<string, unknown> {
+function openaiSection(configPath: string): Record<string, unknown> {
+	const root = parseJsonc(readFileSync(configPath, "utf8"));
+	if (!isRecord(root)) throw new Error("expected a JSON object");
 	return isRecord(root.openai) ? root.openai : {};
-}
-
-function parseProviderSettings(
-	provider: string,
-	value: unknown,
-	warnings: string[],
-): OpenAIProviderSettings | undefined {
-	if (!isRecord(value)) {
-		warnings.push(`providers.${provider}: expected an object.`);
-		return undefined;
-	}
-
-	const settings: OpenAIProviderSettings = {};
-	if (value.textVerbosity !== undefined) {
-		if (isTextVerbosity(value.textVerbosity)) {
-			settings.textVerbosity = value.textVerbosity;
-		} else {
-			warnings.push(`providers.${provider}.textVerbosity: expected low, medium, or high.`);
-		}
-	}
-	if (value.priority !== undefined) {
-		if (typeof value.priority === "boolean") {
-			if (value.priority) {
-				settings.priority = true;
-			}
-		} else {
-			warnings.push(`providers.${provider}.priority: expected a boolean.`);
-		}
-	}
-
-	return Object.keys(settings).length > 0 ? settings : undefined;
-}
-
-function parseSettings(root: Record<string, unknown>): LoadedOpenAINativeSettings {
-	const warnings: string[] = [];
-	const settings = createDefaultSettings();
-	if (root.nativeCompaction !== undefined) {
-		if (typeof root.nativeCompaction === "boolean") {
-			settings.nativeCompaction = root.nativeCompaction;
-		} else {
-			warnings.push("nativeCompaction: expected a boolean.");
-		}
-	}
-	if (root.providers === undefined) {
-		return { settings, warnings };
-	}
-	if (!isRecord(root.providers)) {
-		warnings.push("providers: expected an object.");
-		return { settings, warnings };
-	}
-
-	for (const [provider, value] of Object.entries(root.providers)) {
-		if (!provider.trim()) {
-			warnings.push("providers: provider name cannot be empty.");
-			continue;
-		}
-		const providerSettings = parseProviderSettings(provider, value, warnings);
-		if (providerSettings) {
-			settings.providers[provider] = providerSettings;
-		}
-	}
-
-	return { settings, warnings };
-}
-
-export function loadOpenAINativeSettings(configPath: string): LoadedOpenAINativeSettings {
-	try {
-		return parseSettings(openaiSection(readConfig(configPath)));
-	} catch (error) {
-		return {
-			settings: createDefaultSettings(),
-			warnings: [`config.jsonc: ${error instanceof Error ? error.message : String(error)}`],
-		};
-	}
 }
 
 type Member = { key: string; start: number; end: number };
@@ -191,18 +82,12 @@ function replaceOpenAISection(text: string, section: Record<string, unknown>): s
 }
 
 /**
- * 翻转某供应商的 priority 并写回配置。读-改-写之间不加锁：两个 Pi 进程同一瞬间切换才会丢一次更新，
+ * 翻转某供应商的 priority 并写回配置，返回翻转后的开关。读-改-写之间不加锁：两个 Pi 进程同一瞬间切换才会丢一次更新，
  * 不值得为此维护锁文件（崩溃后的陈旧锁会让切换永久报错）。
  */
-export function togglePriority(
-	provider: string,
-	configPath: string,
-): { enabled: boolean; loaded: LoadedOpenAINativeSettings } {
-	if (!provider.trim()) {
-		throw new Error("provider name cannot be empty");
-	}
+export function togglePriority(provider: string, configPath: string): boolean {
 	const text = readFileSync(configPath, "utf8");
-	const section = openaiSection(readConfig(configPath));
+	const section = openaiSection(configPath);
 	const providers = isRecord(section.providers) ? section.providers : {};
 	const current = isRecord(providers[provider]) ? providers[provider] : {};
 	const enabled = current.priority !== true;
@@ -215,5 +100,11 @@ export function togglePriority(
 	} finally {
 		rmSync(temporaryPath, { force: true });
 	}
-	return { enabled, loaded: parseSettings(next) };
+	return enabled;
+}
+
+/** 内存里的设置同步翻转结果，免得为读回刚写的文件再解析一遍。 */
+export function withPriority(settings: OpenAISettings, provider: string, enabled: boolean): OpenAISettings {
+	const { priority: _previous, ...rest } = settings.providers[provider] ?? {};
+	return { ...settings, providers: { ...settings.providers, [provider]: enabled ? { ...rest, priority: true } : rest } };
 }

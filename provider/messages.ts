@@ -13,7 +13,6 @@ export const msg = defineMessages({
 		verbosityFlag: "覆盖 OpenAI 回答详略：low、medium、high",
 		fastCommand: "开关当前 OpenAI 系供应商的加速档",
 		fastShortcut: "开关加速档",
-		configWarning: (warning: string) => `FireCode openai 配置：${warning}`,
 		compaction: {
 			unavailable: (reason: string) => `FireCode：原生压缩拿不到登录凭据（${reason}），/compact 已取消。请先登录该供应商再试。`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
@@ -56,7 +55,6 @@ export const msg = defineMessages({
 		verbosityFlag: "Override OpenAI response verbosity: low, medium, high",
 		fastCommand: "Toggle fast mode for the current OpenAI-family provider",
 		fastShortcut: "Toggle fast mode",
-		configWarning: (warning: string) => `FireCode openai config: ${warning}`,
 		compaction: {
 			unavailable: (reason: string) => `FireCode: native compaction has no login credentials (${reason}); /compact cancelled. Log in to this provider and try again.`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
