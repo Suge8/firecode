@@ -1823,20 +1823,14 @@ function mockReviewExtension(
 		version: 7, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
-		...base, phase: "reviewing", history: [], updatedAt: 1,
+		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,
 		slots: [{ model: "test/reviewer", thinking: "high", result: null }],
 	};
 	const settled = {
-		...base, phase: "settled", end: timeout ? "error" : "passed", updatedAt: 2,
-		history: [timeout
-			? {
-				round: 1, result: "error", error: TIMEOUT_DETAILS, elapsedMs: 1,
-				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "error", summary: "", details: "" }],
-			}
-			: {
-				round: 1, result: "passed", elapsedMs: 1,
-				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "ok", details: "" }],
-			}],
+		...base, phase: "settled", end: timeout ? "error" : "passed", updatedAt: 2, rounds: 1,
+		last: timeout
+			? { round: 1, result: "error", error: TIMEOUT_DETAILS, elapsedMs: 1, reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "error", summary: "", details: "" }] }
+			: { round: 1, result: "passed", elapsedMs: 1, reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "", details: "" }] },
 	};
 	return `export default function(pi) {
 		pi.registerCommand("fire-review", {

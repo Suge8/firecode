@@ -67,34 +67,39 @@ describe("result card", () => {
 });
 
 describe("checkpoint", () => {
-	// 单条快照体积曾随历史全文线性增长，一场五轮审查累计写入约 2MB：全文只写一次，之后的快照不再带它。
-	test("review text is stored once: later checkpoints stay small and a restore still has the full text", async () => {
+	// 快照曾带着整个历史：一场五轮审查累计写入约 2MB，十轮近 1MB 仍是平方增长。轮记录只写一次，快照有界。
+	test("a review writes a linear amount of checkpoint data and a restore still has every round's text", async () => {
 		const state = (await loadFirecodeModule("review/state.js")) as StateModule;
+		const { parseReviewOutput } = (await loadFirecodeModule("review/reviewer.js")) as { parseReviewOutput: (text: string) => { status: "failed"; summary: string; details: string } };
 		const { CheckpointWriter, readCheckpoint } = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
 		const entries: { type: "custom"; customType: string; data: unknown }[] = [];
 		const pi = { appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); } };
-		const limits = { maxRounds: 9, advisorAfterFailures: 9, advisor: { model: "p/a", thinking: "low" as const }, reviewers: [0, 1, 2].map((i) => ({ model: `p/m${i}`, thinking: "low" as const })) };
-		const body = "x".repeat(3000);
+		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: { model: "p/a", thinking: "low" as const }, reviewers: [0, 1, 2].map((i) => ({ model: `p/m${i}`, thinking: "low" as const })) };
+		// 真实解析器的输出：问题字段 3000 字，摘要取自它。
+		const vote = parseReviewOutput(["FAIL", "## 发现 1", "- 严重程度: 高", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
+		expect(vote.status).toBe("failed");
 		let current = state.reduce(state.reduce(state.initialState("run"), { type: "START", focus: "" }, limits, 1).state, { type: "ADVANCE" }, limits, 2).state;
 		const writer = new CheckpointWriter(pi as never);
-		const sizes: number[] = [];
-		for (let round = 1; round <= 5; round += 1) {
+		const written = () => entries.reduce((sum, entry) => sum + JSON.stringify(entry).length, 0);
+		const totals: number[] = [];
+		for (let round = 1; round <= 10; round += 1) {
 			for (const index of [0, 1, 2]) {
-				const result = { index, model: `p/m${index}`, thinking: "low" as const, status: "failed" as const, summary: "s", details: `FAIL ${body}` };
+				const result = { index, model: `p/m${index}`, thinking: "low" as const, ...vote };
 				current = state.reduce(current, { type: "REVIEWER_SETTLED", index, result }, limits, 10 + round).state;
 				writer.write(current);
-				sizes.push(JSON.stringify(entries.at(-1)).length);
 			}
 			for (const event of [{ type: "TURN_STARTED" }, { type: "TURN_ENDED", aborted: false }, { type: "ADVANCE" }] as const) {
 				current = state.reduce(current, event, limits, 100 + round).state;
 				writer.write(current);
 			}
+			totals.push(written());
 		}
-		// 同一进度（两票已落）的快照，第五轮与第一轮同量级，不随已收口轮数增长。
-		expect(sizes[13]).toBeLessThan(sizes[1] * 1.2);
+		// 线性增长时十轮累计是五轮的两倍；平方增长会接近四倍。
+		expect(totals[9]).toBeLessThan(totals[4] * 2.5);
 		const restored = readCheckpoint({ sessionManager: { getBranch: () => entries } });
-		expect(restored?.history).toHaveLength(5);
-		expect(restored?.history[0].reviewers[2].details).toBe(`FAIL ${body}`);
+		expect(restored?.history).toHaveLength(10);
+		expect(restored?.history[0].reviewers[2].details).toBe(vote.details);
+		expect(restored?.history[0].reviewers[2].summary).toBe(vote.summary);
 		// 只认当前版本。
 		const stale = entries.map((entry) => (entry.customType === "firecode-review-checkpoint" ? { ...entry, data: { ...(entry.data as object), version: 1 } } : entry));
 		expect(readCheckpoint({ sessionManager: { getBranch: () => stale } })).toBeUndefined();

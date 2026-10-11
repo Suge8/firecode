@@ -1,10 +1,11 @@
 /**
- * /fire-review 的持久化：custom entry（不进 LLM 上下文）存 reducer 状态快照。
+ * /fire-review 的持久化：custom entry（不进 LLM 上下文）。
  *
  * 一份会话分支上有三种记录：
- * - checkpoint：状态快照，append-only，最新一条为准；已收口轮次里各审查者的全文（details）不在其中，
- *   所以单条快照体积只随轮数线性增长的轮元数据，不随审查全文增长；
- * - 轮全文：每收口一轮追加一条，各审查者的 details 只在这里存一份，写入先于引用它的快照；
+ * - 轮记录：每收口一轮追加一条完整的 ReviewRound（含审查全文），只写一次，写入先于引用它的快照；
+ * - checkpoint 快照：append-only，最新一条为准。它不带 history，只带当前相的数据、轮数和末轮的轻量副本
+ *   （去掉审查全文与摘要；Master 单凭一条快照就能给出终态判定），所以每条快照体积有界，
+ *   一场审查的累计写入量随轮数线性增长；
  * - 拒绝记录：命令入口拒绝启动的原因（无 UI 的 Worker 里这是唯一出口）。
  * 校验只守版本与关键字段：数据是本代码写的，字段形状由类型保证，版本门挡住旧档，不做字段级兼容。
  */
@@ -13,7 +14,7 @@ import { isRecord } from "../jsonc.js";
 import { PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
 
 const CHECKPOINT_TYPE = "firecode-review-checkpoint";
-const DETAILS_TYPE = "firecode-review-round-details";
+const ROUND_TYPE = "firecode-review-round";
 const REFUSAL_TYPE = "firecode-review-refusal";
 
 const VERSION = 7;
@@ -29,21 +30,25 @@ export function refusalOf(entry: unknown): { id: string; message: string } | und
 	return typeof id === "string" && typeof message === "string" ? { id, message } : undefined;
 }
 
-/** 一个会话里一场审查的写入口：记得已经写过多少轮全文。写不进去时抛错，由执行器收口。 */
+type WithoutHistory<S> = S extends unknown ? Omit<S, "history"> : never;
+/** 快照：状态去掉 history，换成轮数与末轮轻量副本。 */
+export type Snapshot = WithoutHistory<ReviewState> & { rounds: number; last: ReviewRound | null };
+
+/** 一个会话里一场审查的写入口：记得已经写过多少轮。写不进去时抛错，由执行器收口。 */
 export class CheckpointWriter {
 	private written: number;
 
-	/** restored 是从会话恢复出来的状态（其历史全文已在会话里）；新审查不传。 */
+	/** restored 是从会话恢复出来的状态（其历史已在会话里）；新审查不传。 */
 	constructor(private readonly pi: ExtensionAPI, restored?: ReviewState) {
 		this.written = restored?.history.length ?? 0;
 	}
 
 	write(state: ReviewState): void {
 		for (const round of state.history.slice(this.written)) {
-			this.pi.appendEntry(DETAILS_TYPE, { runId: state.runId, round: round.round, details: round.reviewers.map((item) => item.details) });
+			this.pi.appendEntry(ROUND_TYPE, { runId: state.runId, round });
 			this.written += 1;
 		}
-		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...withoutDetails(state) });
+		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state) });
 	}
 }
 
@@ -52,39 +57,43 @@ export function sealCheckpoint(pi: ExtensionAPI, state: ReviewState): void {
 	new CheckpointWriter(pi, state).write({ ...state, phase: "settled", end: "cancelled", updatedAt: Date.now() } as ReviewState);
 }
 
-function withoutDetails(state: ReviewState): ReviewState {
-	return { ...state, history: state.history.map((round) => ({ ...round, reviewers: round.reviewers.map((item) => ({ ...item, details: "" })) })) };
+function snapshotOf(state: ReviewState): Snapshot {
+	const { history, ...rest } = state;
+	const last = history.at(-1);
+	return { ...rest, rounds: history.length, last: last ? light(last) : null } as Snapshot;
 }
 
-/** 会话记录里的一条是不是有效 checkpoint；是则给出状态（已收口轮的审查全文为空，需要全文用 readCheckpoint）。 */
-export function checkpointOf(entry: unknown): ReviewState | undefined {
+function light(round: ReviewRound): ReviewRound {
+	return { ...round, reviewers: round.reviewers.map((item) => ({ ...item, summary: "", details: "" })) };
+}
+
+/** 会话记录里的一条是不是有效快照。 */
+export function checkpointOf(entry: unknown): Snapshot | undefined {
 	if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CHECKPOINT_TYPE || !isStored(entry.data)) return undefined;
-	const { version: _version, ...state } = entry.data;
-	return state as ReviewState;
+	const { version: _version, ...snapshot } = entry.data;
+	return snapshot as Snapshot;
 }
 
-/** 读当前分支上最近一个 checkpoint 并补回已收口轮的审查全文；无、损坏或版本不匹配都返回 undefined。 */
+/** 读当前分支上最近一个快照并按轮记录补回 history；无、损坏、版本不匹配或轮记录对不上都返回 undefined。 */
 export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] } }): ReviewState | undefined {
 	const entries = ctx.sessionManager.getBranch();
 	const index = entries.findLastIndex((entry) => isRecord(entry) && entry.customType === CHECKPOINT_TYPE);
-	const state = checkpointOf(entries[index]);
-	if (!state) return undefined;
-	const details = new Map<number, string[]>();
+	const snapshot = checkpointOf(entries[index]);
+	if (!snapshot) return undefined;
+	const rounds = new Map<number, ReviewRound>();
 	for (const entry of entries.slice(0, index)) {
-		if (!isRecord(entry) || entry.customType !== DETAILS_TYPE || !isRecord(entry.data)) continue;
-		const { runId, round, details: list } = entry.data;
-		if (runId === state.runId && typeof round === "number" && Array.isArray(list)) details.set(round, list as string[]);
+		if (!isRecord(entry) || entry.customType !== ROUND_TYPE || !isRecord(entry.data) || entry.data.runId !== snapshot.runId) continue;
+		const round = entry.data.round as ReviewRound;
+		if (isRecord(round) && typeof round.round === "number" && Array.isArray(round.reviewers)) rounds.set(round.round, round);
 	}
-	return { ...state, history: state.history.map((round) => withDetails(round, details.get(round.round))) };
+	if (rounds.size !== snapshot.rounds) return undefined;
+	const { rounds: _rounds, last: _last, ...rest } = snapshot;
+	return { ...rest, history: [...rounds.values()].sort((a, b) => a.round - b.round) } as ReviewState;
 }
 
-function withDetails(round: ReviewRound, details: string[] = []): ReviewRound {
-	return { ...round, reviewers: round.reviewers.map((item, at) => ({ ...item, details: details[at] ?? "" })) };
-}
-
-function isStored(value: unknown): value is ReviewState & { version: number } {
+function isStored(value: unknown): value is Snapshot & { version: number } {
 	if (!isRecord(value) || value.version !== VERSION || typeof value.runId !== "string" || !PHASES.includes(value.phase as never)) return false;
-	if (!Array.isArray(value.history)) return false;
+	if (typeof value.rounds !== "number" || !(value.last === null || isRecord(value.last))) return false;
 	switch (value.phase) {
 		case "reviewing":
 			return Array.isArray(value.slots);

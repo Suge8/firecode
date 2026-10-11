@@ -40,9 +40,10 @@ describe("PASS/FAIL output contract", () => {
 	test("the verdict word tolerates markdown wrapping, backticks and case", async () => {
 		await loadAll();
 		const body = "\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
-		for (const first of ["PASS", "**PASS**", "__PASS__", "`PASS`", "  pass  ", "## PASS", "结论：**PASS**", "**`PASS`**", "PASS。"])
+		for (const first of ["PASS", "**PASS**", "__PASS__", "`PASS`", "  pass  ", "## PASS", "结论：**PASS**", "**`PASS`**", "PASS。", "**PASS**.", "**PASS**。", "**结论：PASS**"])
 			expect(`${first}:${parseReview(first + body).status}`).toBe(`${first}:passed`);
 		expect(parseReview("**FAIL**\n" + finding("x")).status).toBe("failed");
+		for (const first of ["**FAIL**.", "**FAIL**。", "**判定：FAIL**"]) expect(`${first}:${parseReview(first + "\n" + finding("x")).status}`).toBe(`${first}:failed`);
 		expect(parseReview("maybe" + body).status).toBe("error");
 	});
 
@@ -134,7 +135,7 @@ describe("advisor verdict parsing", () => {
 		});
 		expect(parseAdvisor("裁决：`narrow`\n只修阻塞项").verdict).toBe("narrow");
 		// 与审查者的判定行同一套装饰容忍。
-		for (const first of ["## stop", "**`stop`**", "stop。"]) expect(`${first}:${parseAdvisor(`${first}\n别修了`).verdict}`).toBe(`${first}:stop`);
+		for (const first of ["## stop", "**`stop`**", "stop。", "**stop**.", "**裁决：stop**"]) expect(`${first}:${parseAdvisor(`${first}\n别修了`).verdict}`).toBe(`${first}:stop`);
 	});
 
 	test("ambiguous or unparseable output falls back to continue", async () => {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { checkpointOf, refusalOf } from "./checkpoint.js";
+import { checkpointOf, refusalOf, type Snapshot } from "./checkpoint.js";
 import { msg } from "./messages.js";
-import { roundText, type ReviewState } from "./state.js";
+import { roundText } from "./state.js";
 
 export type ReviewOutcome =
 	| { status: "passed"; runId: string; rounds: number }
@@ -63,12 +63,11 @@ export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefine
 	return { round: state.round, settled: state.slots.filter((slot) => slot.result).length, total: state.slots.length };
 }
 
-function outcomeOf(latest: ReviewState): ReviewOutcome {
+function outcomeOf(latest: Snapshot): ReviewOutcome {
 	if (latest.phase === "idle") return { status: "none", runId: latest.runId };
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
 	const { runId } = latest;
-	const rounds = latest.history.length;
-	const last = latest.history.at(-1);
+	const { rounds, last } = latest;
 	switch (latest.end) {
 		case "passed":
 			return { status: "passed", runId, rounds };
