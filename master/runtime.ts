@@ -27,6 +27,8 @@ export interface MasterSetup {
 	interruptResumeMs: number;
 	/** 指挥官空闲时合并唤醒的安静窗口（见 outbox.ts）。 */
 	wakeQuietMs: number;
+	/** 事件投递失败后首次重试的间隔，其后翻倍到上限（见 outbox.ts）。 */
+	eventRetryMs: number;
 	/** 在飞子代理数的唯一发布口（跨会话保持上次发布值以便配对）。 */
 	publishInFlight(count: number): void;
 	/** 子代理名册的唯一发布口（内容没变不发）。 */
@@ -67,6 +69,8 @@ export interface WorkerLive {
 	/** 最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
 	lastOutputAt?: number;
 	currentTools: Map<string, CurrentTool>;
+	/** 已告知指挥官的子代理扩展错误（扩展 + 事件 + 原文）：同一处错误只报一次。 */
+	reportedErrors: Set<string>;
 	reviewProgress?: ReviewRoundProgress;
 	/** 最近一次落定的时刻：池起释放计时、列表“落定 X 前”与活动列表冻结耗时共用这一份。 */
 	idleAt?: number;
@@ -79,7 +83,7 @@ const LIST_WIDGET_KEY = "firecode-master-list";
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
-const newLive = (): WorkerLive => ({ currentTools: new Map(), viewPrompts: [], origin: "master" });
+const newLive = (): WorkerLive => ({ currentTools: new Map(), reportedErrors: new Set(), viewPrompts: [], origin: "master" });
 
 export class MasterRuntime {
 	readonly store: MasterStore;
@@ -196,8 +200,9 @@ export class MasterRuntime {
 		return next;
 	}
 
-	/** 同步读：档案仍是这一票时返回，否则 undefined（落定回调用，不抛）。 */
+	/** 同步读：会话未关闭且档案仍是这一票时返回，否则 undefined（落定回调用，不抛）。 */
 	find(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef | undefined {
+		if (this.closedValue) return undefined;
 		const current = this.store.find(identity.name);
 		return current?.sessionPath === identity.sessionPath ? current : undefined;
 	}

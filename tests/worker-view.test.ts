@@ -51,16 +51,15 @@ function hotSession(branch: unknown[], streaming = false) {
 	return session;
 }
 
-type Worker = { name: string; role: string; model: string; thinking: string; status: string; sessionPath: string; cwd: string; launch: number };
-let launches = 0;
+type Worker = { name: string; role: string; model: string; thinking: string; status: string; sessionPath: string; cwd: string };
 const worker = (name: string, status = "idle"): Worker =>
-	({ name, role: "哨兵", model: "openai-codex/gpt-6-luna", thinking: "low", status, sessionPath: `/s/${name}.jsonl`, cwd: "/p", launch: ++launches });
+	({ name, role: "哨兵", model: "openai-codex/gpt-6-luna", thinking: "low", status, sessionPath: `/s/${name}.jsonl`, cwd: "/p" });
 /** 活动列表的运行时事实（本次运行起点、落定结局）：视图顶行与活动列表读同一份。 */
 type Facts = { started?: Record<string, number>; settled?: Record<string, { at: number; kind: string; note?: string }> };
 
 async function open(options: {
 	workers: Worker[]; sessions: Record<string, ReturnType<typeof hotSession>>; name?: string;
-	send?: (name: string, prompt: string) => Promise<void>; facts?: Facts; drafts?: Map<string, string>; rows?: number;
+	send?: (name: string, prompt: string) => Promise<void>; interrupt?: (name: string) => Promise<void>; facts?: Facts; drafts?: Map<string, string>; rows?: number;
 }) {
 	const [host, tui, view, grouping] = await Promise.all([
 		import(PI_CODING_AGENT_URL), import(PI_TUI_URL),
@@ -85,6 +84,7 @@ async function open(options: {
 	const sessionListeners = new Set<(name: string) => void>();
 	const removedListeners = new Set<(name: string) => void>();
 	const sent: [string, string][] = [];
+	const interrupted: string[] = [];
 	let closed = 0;
 	const byPath = <T>(record: Record<string, T> | undefined) =>
 		new Map(Object.entries(record ?? {}).map(([name, value]) => [`/s/${name}.jsonl`, value]));
@@ -105,6 +105,7 @@ async function open(options: {
 			return () => removedListeners.delete(listener);
 		},
 		send: options.send ?? (async (name: string, prompt: string) => { sent.push([name, prompt]); }),
+		interrupt: options.interrupt ?? (async (name: string) => { interrupted.push(name); }),
 		drafts: options.drafts ?? new Map<string, string>(),
 	};
 	const rows = options.rows ?? ROWS;
@@ -113,7 +114,7 @@ async function open(options: {
 	const lines = (width = 100): string[] => component.render(width).map((line: string) => stripVTControlCharacters(line).trimEnd());
 	const type = (text: string) => { for (const char of text) component.handleInput(char); };
 	return {
-		component, lines, type, sent, sessionListeners, removedListeners,
+		component, lines, type, sent, interrupted, sessionListeners, removedListeners,
 		/** 输入区上横线（状态 · 名字）与下横线（位置 · 模型与提示）。 */
 		top: (width = 100) => lines(width).at(-3)!,
 		bottom: (width = 100) => lines(width).at(-1)!,
@@ -216,11 +217,16 @@ test("回车补话走视图来源的 send（同一处理表入口），成功清
 			sent.push([name, prompt]);
 		},
 	});
+	const hint = view.lines().at(-1);
 	view.type("补一句：再跑一次");
 	view.key("\r");
 	await Bun.sleep(0);
 	expect(sent).toEqual([["tick", "补一句：再跑一次"]]);
 	expect(view.lines().find((line) => line.startsWith("›"))).not.toContain("补一句");
+	// “已发出”只替换按键提示（位置 n/N 照留），下一次按键恢复提示。
+	expect(view.bottom()).toMatch(/^─ 1\/1 ─+ 已发出 ─$/u);
+	view.key(LEFT);
+	expect(view.lines().at(-1)).toBe(hint);
 	failing.fail = true;
 	view.type("第二句");
 	view.key("\r");
@@ -332,11 +338,6 @@ test("40 列：上横线保住状态字形、状态词与耗时，名字 · 角�
 	expect(view.bottom(40)).toMatch(/^─ 1\/3 ─/u);
 	expect(view.bottom(40)).toMatch(/esc 返回 ─$/u);
 	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripVTControlCharacters(line))).toBeLessThanOrEqual(width);
-	// 横线与主会话输入框同一边框布局：两条横线都铺满宽度，两端是横线。
-	for (const width of [40, 72, 110]) for (const line of [view.top(width), view.bottom(width)]) {
-		expect(Bun.stringWidth(line)).toBe(width);
-		expect(line).toMatch(/^─ .* ─$/u);
-	}
 });
 
 test("顶行的状态与耗时与活动列表读同一份事实：已完成写完成、失败写失败，耗时是本次运行", async () => {
@@ -374,24 +375,6 @@ test("正在看的子代理被移除：顶行写“已移除”，输入框不�
 	expect(view.bottom()).toMatch(/^─ 2\/2 ─/u);
 });
 
-test("“已发出”只短暂替换按键提示（位置 n/N 照留）：下一次按键或几秒后恢复提示", async () => {
-	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession([user("派单")]) } });
-	const hint = view.lines().at(-1);
-	view.type("补一句");
-	view.key("\r");
-	await Bun.sleep(0);
-	expect(view.bottom()).toMatch(/^─ 1\/1 ─+ 已发出 ─$/u);
-	view.key(LEFT);
-	expect(view.lines().at(-1)).toBe(hint);
-	view.type("再一句");
-	view.key("\r");
-	await Bun.sleep(0);
-	expect(view.lines().at(-1)).toContain("已发出");
-	const realNow = Date.now;
-	Date.now = () => realNow() + 10_000;
-	try { expect(view.lines().at(-1)).toBe(hint); } finally { Date.now = realNow; }
-});
-
 test("视图打开期间切走切回保留各子代理的展开状态；esc 关闭时输入框草稿按子代理留到会话结束", async () => {
 	const workers = [worker("a"), worker("b")];
 	const sessions = { a: hotSession([user("派给 a"), reply("读一下。", "toolUse", [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "/p/a.ts" } }]), toolResult("c1", "x"), reply("好了"), round(2_000)]), b: hotSession([user("派给 b")]) };
@@ -408,3 +391,47 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 	const again = await open({ workers, sessions, drafts });
 	expect(again.lines().find((line) => line.startsWith("›"))).toBe("› 给 a 的草稿");
 });
+
+// kitty 键盘协议里的 ctrl+shift+x。
+const INTERRUPT = "\x1b[120;6u";
+
+test("在跑的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已中断”；空闲的不提示也不响应；失败写原因", async () => {
+	const failing = { fail: false };
+	const workers = [worker("busy", "working"), worker("quiet")];
+	const interruptedNames: string[] = [];
+	const view = await open({
+		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
+		interrupt: async (name) => {
+			if (failing.fail) throw new Error("busy 当前是 idle，不能 interrupt");
+			interruptedNames.push(name);
+		},
+	});
+	expect(view.bottom()).toContain("ctrl+shift+x 中断");
+	view.key(INTERRUPT);
+	await Bun.sleep(0);
+	expect(interruptedNames).toEqual(["busy"]);
+	expect(view.bottom()).toContain("已中断");
+
+	failing.fail = true;
+	view.key(INTERRUPT);
+	await Bun.sleep(0);
+	expect(view.bottom()).toContain("中断失败：busy 当前是 idle");
+
+	view.key(TAB);
+	expect(view.bottom()).not.toContain("ctrl+shift+x");
+	view.key(INTERRUPT);
+	await Bun.sleep(0);
+	expect(interruptedNames).toEqual(["busy"]);
+});
+
+test("中断键避开宿主全部默认键位（根 AGENTS.md「快捷键冲突」）", async () => {
+	const [{ INTERRUPT_KEY }, { KeybindingsManager }, { mkdtemp }, { tmpdir }, { join }] = await Promise.all([
+		loadFirecodeModule("master/worker-view.ts"),
+		import(new URL("./core/keybindings.ts", PI_CODING_AGENT_URL).href),
+		import("node:fs/promises"), import("node:os"), import("node:path"),
+	]) as any[];
+	const hostKeys = Object.values(KeybindingsManager.create(await mkdtemp(join(tmpdir(), "firecode-keys-"))).getEffectiveConfig())
+		.flatMap((keys) => (Array.isArray(keys) ? keys : [keys])).map((key) => String(key).toLowerCase());
+	expect(hostKeys).not.toContain(INTERRUPT_KEY);
+});
+

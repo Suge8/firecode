@@ -3,7 +3,7 @@
  * 把整份名册发布在 `firecode:subagents` 频道（`{ workers }`，按启动序；停用时发空名册）。名册只是活动列表的投影，
  * 分组与动作文字取自 activity-list.ts 的 `workerPhase`，读者不要自己从会话文件推导。
  */
-import { launchSorted, workerPhase, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { workerPhase, type ActivityFacts, type RowKind } from "./activity-list.js";
 
 export const SUBAGENTS_CHANNEL = "firecode:subagents";
 
@@ -30,10 +30,9 @@ export interface SubagentsPayload {
 	workers: SubagentInfo[];
 }
 
-/** 按启动序投影整份名册。 */
+/** 按档案顺序（启动序）投影整份名册。 */
 export function subagentInfos(facts: ActivityFacts, now: number): SubagentInfo[] {
-	return launchSorted(facts).map((index): SubagentInfo => {
-		const worker = facts.workers[index];
+	return facts.workers.map((worker, index): SubagentInfo => {
 		const { kind, action, startedAt, settledAt } = workerPhase(facts, index, now);
 		return {
 			name: worker.name,

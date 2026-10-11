@@ -42,6 +42,7 @@ test("en：Master 事件的标题与正文不含中文", async () => {
 		masterEvent.review("a", { status: "none" }, ""),
 		masterEvent.resumeReminder("a"),
 		masterEvent.stranded("a", ["x", "y"]),
+		masterEvent.extensionError("a", "~/ext/x.ts", "agent_start", "boom"),
 		masterEvent.modelSwitched("a", "p/m/low", "p/n/low", "429"),
 	]) expect(produced.body).not.toMatch(CJK);
 });

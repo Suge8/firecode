@@ -7,21 +7,21 @@
  * 事件增量更新；打开期间看过的子代理各留一份记录与展开状态（切回原样），关闭时全部退订丢弃。草稿按子代理留在
  * 运行时内存里，到会话结束。
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE } from "../busy.js";
 import { onFrame } from "../flame.js";
 import { clip } from "../format.js";
 import { ClickAnchor, type Scroller } from "../tools/click-anchor.js";
-import { projectProcessGroups, type ProjectionEnv } from "../tools/group-view.js";
+import { projectProcessGroups, toggleToolDetails, type ProjectionEnv } from "../tools/group-view.js";
 import { ChatMirror, detachedTui, HostShapeError, type MirrorEntry } from "../tools/host.js";
 import { toolDefinitions } from "../tools/index.js";
 import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
-import { ANIMATING_KINDS, launchOrder, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { ANIMATING_KINDS, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
 import { msg } from "./messages.js";
 import type { MasterRuntime } from "./runtime.js";
 import { modelAtomText, type WorkerRef } from "./state.js";
@@ -30,14 +30,20 @@ import { modelAtomText, type WorkerRef } from "./state.js";
 const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
+/**
+ * 中断当前子代理的键。宿主默认键位里没有 ctrl+shift 组合（单个 ctrl+字母已被占满，根 AGENTS.md「快捷键冲突」），
+ * 浮层里宿主的全局键本就不生效，这里仍避开它们，免得用户在视图内外的肌肉记忆互相踩。
+ */
+export const INTERRUPT_KEY = "ctrl+shift+x";
 /** 名字被迫截短时至少留的宽度；再窄就不写名字。 */
 const MIN_NAME = 6;
 /** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。text 缺省的一项是模型原子的位置。 */
-const TAIL: { text?: string; drop: number }[] = [
+const TAIL: { text?: string; drop: number; working?: true }[] = [
 	{ drop: 2 },
 	{ text: msg.view.hints.tab, drop: 3 },
 	{ text: msg.view.hints.expand, drop: 0 },
 	{ text: msg.view.hints.expandAll, drop: 1 },
+	{ text: msg.view.hints.interrupt, drop: 2.5, working: true },
 	{ text: msg.view.hints.back, drop: Infinity },
 ];
 /** “已发出”替换按键提示的时长；任何按键也会提前收起。 */
@@ -56,6 +62,8 @@ interface WorkerViewSource {
 	onWorkerRemoved(listener: (name: string) => void): () => void;
 	/** 视图来源的 send：与指挥官 send 同一处理入口。 */
 	send(name: string, prompt: string): Promise<void>;
+	/** 与指挥官 interrupt 同一处理入口。 */
+	interrupt(name: string): Promise<void>;
 	/** 名字 → 没发出的草稿；随运行时活到会话结束，不持久化。 */
 	drafts: Map<string, string>;
 }
@@ -82,7 +90,10 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 		onSession: (listener) => active.onWorkerSession(listener),
 		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),
 		send: async (name, prompt) => {
-			await ACTION_HANDLERS.send(active, { worker: name, prompt, origin: "view" }, active.ctx);
+			await ACTION_HANDLERS.send(active, { worker: name, prompt }, active.ctx, "view");
+		},
+		interrupt: async (name) => {
+			await ACTION_HANDLERS.interrupt(active, { worker: name }, active.ctx, "master");
 		},
 		drafts: active.viewDrafts,
 	};
@@ -164,6 +175,7 @@ const roundEntryRenderer: EntryRenderer = (entry) => {
 
 /** 已释放的冷子代理：读一次会话文件，从最后一条沿 parentId 回到根，得到当前分支。 */
 function fileBranch(path: string): MirrorEntry[] {
+	if (!existsSync(path)) return []; // 第一条回复落盘之前还没有会话文件
 	type Line = MirrorEntry & { id?: string; parentId?: string | null };
 	const entries = new Map<string, Line>();
 	let leaf: Line | undefined;
@@ -252,7 +264,7 @@ export class WorkerView implements Component, Focusable {
 	}
 
 	private names(): string[] {
-		return launchOrder(this.source.facts());
+		return this.source.facts().workers.map((worker) => worker.name);
 	}
 
 	/** 换到某个子代理：草稿换成它的，记录与展开状态打开期间看过就原样接上。 */
@@ -307,7 +319,7 @@ export class WorkerView implements Component, Focusable {
 			ui: { theme: this.theme, getToolsExpanded: () => record.expanded },
 			busy: () => record.busy, headless: this.headless,
 			toggleRow: (row) => {
-				row.setExpanded(!(row as unknown as { expanded: boolean }).expanded);
+				toggleToolDetails(row, row.setExpanded);
 				this.tui.requestRender();
 			},
 			isOpen: (key) => record.overrides.has(key),
@@ -405,7 +417,7 @@ export class WorkerView implements Component, Focusable {
 				for (let room = visibleWidth(notice); room >= 1; room--) yield [lead, dim(clip(notice, room))];
 				return;
 			}
-			const tail = TAIL.filter((item) => item.text !== undefined || model);
+			const tail = TAIL.filter((item) => (item.text !== undefined || model) && (!item.working || worker?.status === "working"));
 			for (;;) {
 				yield [lead, dim(tail.map((item) => item.text ?? model).join(" · "))];
 				const weakest = tail.reduce((a, b) => (b.drop < a.drop ? b : a));
@@ -427,6 +439,7 @@ export class WorkerView implements Component, Focusable {
 		if (this.keys.matches(data, "app.clear")) return empty ? this.done() : this.clearInput();
 		if (this.keys.matches(data, "app.exit") && empty) return this.done();
 		if (this.keys.matches(data, "app.tools.expand")) return this.toggleAll();
+		if (matchesKey(data, INTERRUPT_KEY)) return void this.interrupt();
 		if (matchesKey(data, "tab")) return this.step(1);
 		if (matchesKey(data, "shift+tab")) return this.step(-1);
 		if (matchesKey(data, "pageUp")) return this.scroll(1 - this.bodyRows);
@@ -498,6 +511,17 @@ export class WorkerView implements Component, Focusable {
 			this.showNotice(msg.view.undelivered(error instanceof Error ? error.message : String(error)));
 		} finally {
 			this.sending = false;
+		}
+	}
+
+	/** 只对在跑的子代理有意义；其余状态静默忽略（提示行也不会显示这个键）。 */
+	private async interrupt(): Promise<void> {
+		if (this.removed || this.worker()?.status !== "working") return;
+		try {
+			await this.source.interrupt(this.name);
+			this.showNotice(msg.view.interrupted, NOTICE_MS);
+		} catch (error) {
+			this.showNotice(msg.view.interruptFailed(error instanceof Error ? error.message : String(error)));
 		}
 	}
 

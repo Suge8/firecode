@@ -22,7 +22,7 @@ export interface SettledFact {
 }
 
 export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "model" | "thinking" | "status" | "sessionPath" | "cwd" | "launch">[];
+	workers: readonly Pick<WorkerRef, "name" | "role" | "model" | "thinking" | "status" | "sessionPath" | "cwd">[];
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewRoundProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
@@ -74,16 +74,6 @@ interface Groups {
 	idle: Row[];
 	/** 有行在动：在跑、审查、卡住（耗时仍在走），需要动画时钟；落定行静止。 */
 	animating: boolean;
-}
-
-/** facts.workers 的下标，按档案里的启动序。 */
-export function launchSorted(facts: ActivityFacts): number[] {
-	return facts.workers.map((_, index) => index).sort((a, b) => facts.workers[a].launch - facts.workers[b].launch);
-}
-
-/** 子代理按启动序的名字：全过程视图按它换子代理，位置不随状态分组跳动。 */
-export function launchOrder(facts: ActivityFacts): string[] {
-	return launchSorted(facts).map((index) => facts.workers[index].name);
 }
 
 /** 一个子代理在活动列表里的分组（审查与在跑同组展示）；全过程视图顶行读同一份。 */
@@ -152,7 +142,7 @@ export function rowState(facts: ActivityFacts, index: number, now: number, theme
 
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
 	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
-	for (const index of launchSorted(facts)) {
+	for (let index = 0; index < facts.workers.length; index++) {
 		const { kind, row } = rowState(facts, index, now, theme);
 		groups.animating ||= ANIMATING_KINDS.has(kind);
 		groups[kind === "review" ? "running" : kind].push(row);
