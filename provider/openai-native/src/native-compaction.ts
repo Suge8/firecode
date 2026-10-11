@@ -1,175 +1,169 @@
-import { buildSessionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { buildSessionContext, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
-import { executeNativeCompaction, type NativeCompactionResult } from "./compact-client.js";
+import { msg, type WindowLoss } from "../../messages.js";
+import { executeNativeCompaction } from "./compact-client.js";
+import { type Auth, captureHostPayload, leadingPromptLength, type ResponsesPayload } from "./host-stream.js";
 import {
-	cloneStructuredValue,
-	createNativeCompactionDetails,
 	createNativeCompactionResult,
-	isNativeCompactionDetails,
-	resolveLatestNativeCompaction,
+	describeIdentity,
+	latestCompaction,
+	nativeIdentity,
+	sameBackend,
 } from "./native-details.js";
-import { rewriteNativeResponsesPayload, serializeLiveTailToResponsesInput } from "./native-replay.js";
-import {
-	resolveNativeCompactionRuntime,
-	resolveNativeCompactionTarget,
-	type ResponsesRequestPayload,
-} from "./native-runtime.js";
-import {
-	serializeMessagesToCompactRequest,
-	type NativeCompactionRequest,
-} from "./responses-input.js";
 
 type NativeCompactionHookResult = {
 	cancel?: boolean;
 	compaction?: CompactionResult;
 };
 
-function buildCompactionInstructions(systemPrompt: string, customInstructions?: string): string {
+/** 没有界面（print、rpc）时提示写到 stderr，不能无声。 */
+export function notify(ctx: ExtensionContext, message: string, level: "warning" | "error"): void {
+	if (ctx.hasUI) ctx.ui.notify(message, level);
+	else console.error(message);
+}
+
+function cancel(ctx: ExtensionContext, message: string): NativeCompactionHookResult {
+	notify(ctx, message, "error");
+	return { cancel: true };
+}
+
+async function resolveAuth(ctx: ExtensionContext, model: Model<Api>): Promise<Auth | string> {
+	try {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok) return auth.error;
+		return auth.apiKey ? { apiKey: auth.apiKey, headers: auth.headers } : "missing-api-key";
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function buildInstructions(systemPrompt: string, customInstructions?: string): string {
 	const guidance = customInstructions?.trim();
 	return guidance
 		? `${systemPrompt}\n\nAdditional user guidance for this manual /compact request:\n${guidance}`
 		: systemPrompt;
 }
 
-function reportCompactionFailure(ctx: ExtensionContext, message: string): void {
-	const fullMessage = `pi-openai-native: ${message}`;
-	if (ctx.hasUI) {
-		ctx.ui.notify(fullMessage, "error");
-		return;
-	}
-	console.error(fullMessage);
-}
-
-function cancelCompaction(ctx: ExtensionContext, message: string): NativeCompactionHookResult {
-	reportCompactionFailure(ctx, message);
-	return { cancel: true };
-}
-
-function failureMessage(result: Extract<NativeCompactionResult, { ok: false }>): string {
-	const status = result.status ? ` (HTTP ${result.status})` : "";
-	const detail = result.detail ? `: ${result.detail}` : "";
-	const message = `native compaction failed: ${result.reason}${status}${detail}`;
-	return message.endsWith(".") ? message : `${message}.`;
+/**
+ * 最近一次压缩是原生压缩，而当前模型用不了它的窗口：手动 /compact 取消（用户能切回去），
+ * 自动压缩不能卡死会话，回落宿主的摘要压缩并明说窗口里的旧历史不会进摘要。
+ */
+function windowUnusable(event: SessionBeforeCompactEvent, ctx: ExtensionContext, from: string): NativeCompactionHookResult | undefined {
+	if (event.reason === "manual") return cancel(ctx, msg.compaction.windowCancelled(from));
+	notify(ctx, msg.compaction.windowDropped(from), "warning");
+	return undefined;
 }
 
 export async function compactWithOpenAINative(
 	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
 ): Promise<NativeCompactionHookResult | undefined> {
-	if (event.signal.aborted) {
-		return { cancel: true };
+	if (event.signal.aborted) return { cancel: true };
+
+	const model = ctx.model;
+	const identity = nativeIdentity(model);
+	const latest = latestCompaction(event.branchEntries);
+	const prior = latest?.native?.details;
+	if (!model || !identity) return prior ? windowUnusable(event, ctx, describeIdentity(prior)) : undefined;
+	if (latest && !prior) return undefined;
+	if (prior && !sameBackend(prior, identity)) return windowUnusable(event, ctx, describeIdentity(prior));
+
+	const auth = await resolveAuth(ctx, model);
+	if (typeof auth === "string") return cancel(ctx, msg.compaction.unavailable(auth));
+
+	const system: AgentMessage = {
+		role: "system",
+		content: buildInstructions(ctx.getSystemPrompt(), event.customInstructions),
+		timestamp: Date.now(),
+	};
+	// 已有窗口时窗口代表此前的全部历史，只补压缩之后的条目；否则压缩整段会话（其开头的系统消息由上面的压缩指令取代）。
+	let history: AgentMessage[];
+	if (latest) {
+		history = event.branchEntries.slice(latest.index + 1).flatMap(sessionEntryToContextMessages);
+	} else {
+		const all = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages;
+		history = all[0]?.role === "system" ? all.slice(1) : all;
 	}
 
-	const target = resolveNativeCompactionTarget(ctx);
-	if (!target.ok) {
-		return undefined;
+	const result = await executeNativeCompaction({
+		model,
+		auth,
+		messages: [system, ...history],
+		priorWindow: prior?.compactedWindow,
+		signal: event.signal,
+	});
+	if (!result.ok) {
+		return result.reason === "aborted"
+			? { cancel: true }
+			: cancel(ctx, msg.compaction.failed(result.reason, result.status, result.detail));
 	}
-
-	const runtime = await resolveNativeCompactionRuntime(ctx, target.target);
-	if (!runtime.ok) {
-		return cancelCompaction(ctx, `native compaction is unavailable: ${runtime.reason}.`);
-	}
-
-	try {
-		const latestCompaction = resolveLatestNativeCompaction(event.branchEntries, runtime.runtime);
-		let request: NativeCompactionRequest;
-		if (latestCompaction.ok) {
-			const compactedWindow = latestCompaction.entry.details.compactedWindow.map(cloneStructuredValue);
-			request = {
-				model: runtime.runtime.model,
-				input: [
-					...compactedWindow,
-					...serializeLiveTailToResponsesInput({
-						model: runtime.runtime.currentModel,
-						entries: event.branchEntries.slice(latestCompaction.index + 1),
-					}),
-				],
-				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
-			};
-		} else if (latestCompaction.reason === "no-compaction") {
-			request = serializeMessagesToCompactRequest({
-				model: runtime.runtime.currentModel,
-				messages: buildSessionContext(
-					ctx.sessionManager.getEntries(),
-					ctx.sessionManager.getLeafId(),
-				).messages,
-				instructions: buildCompactionInstructions(ctx.getSystemPrompt(), event.customInstructions),
-			});
-		} else {
-			return undefined;
-		}
-
-		const result = await executeNativeCompaction({
-			runtime: runtime.runtime,
-			request,
-			signal: event.signal,
-		});
-		if (!result.ok) {
-			return result.reason === "aborted" ? { cancel: true } : cancelCompaction(ctx, failureMessage(result));
-		}
-
-		return {
-			compaction: createNativeCompactionResult({
-				firstKeptEntryId: event.preparation.firstKeptEntryId,
-				tokensBefore: event.preparation.tokensBefore,
-				details: createNativeCompactionDetails({
-					provider: runtime.runtime.provider,
-					api: runtime.runtime.api,
-					model: runtime.runtime.model,
-					baseUrl: runtime.runtime.baseUrl,
-					compactedWindow: result.compactedWindow,
-					createdAt: result.createdAt,
-				}),
-			}),
-		};
-	} catch (error) {
-		return cancelCompaction(ctx, `native compaction failed: ${error instanceof Error ? error.message : String(error)}`);
-	}
+	return {
+		compaction: createNativeCompactionResult({
+			firstKeptEntryId: event.preparation.firstKeptEntryId,
+			tokensBefore: event.preparation.tokensBefore,
+			identity,
+			compactedWindow: result.compactedWindow,
+		}),
+	};
 }
 
-/** 最近一次压缩是原生压缩却没能重放：请求照宿主原样发出，压缩窗口里的旧历史不在上下文里。 */
-export type NativeReplayDeclined = { ok: false; reason: string; compactionId: string };
+/** 最近一次压缩是原生压缩，这次请求却没能带上它的窗口：请求照宿主原样发出，窗口里的旧历史不在上下文里。 */
+export type WindowLossReport = WindowLoss & { ok: false; compactionId: string };
 
-function latestNativeCompaction(ctx: ExtensionContext) {
-	const latest = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "compaction");
-	return latest && isNativeCompactionDetails(latest.details) ? latest : undefined;
-}
+export type Replay = { ok: true; payload: ResponsesPayload } | WindowLossReport;
 
 /** 开关关着不重放；但最近一次压缩是原生的话，它的窗口里的旧历史同样不在上下文里。 */
-export function declineDisabledReplay(ctx: ExtensionContext): NativeReplayDeclined | undefined {
-	const latest = latestNativeCompaction(ctx);
-	return latest && { ok: false, reason: "nativeCompaction-disabled", compactionId: latest.id };
+export function declineDisabledReplay(ctx: ExtensionContext): WindowLossReport | undefined {
+	const native = latestCompaction(ctx.sessionManager.getBranch())?.native;
+	return native && { ok: false, kind: "disabled", from: describeIdentity(native.details), compactionId: native.id };
+}
+
+function sameItem(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
 }
 
 /**
- * undefined：没有原生压缩要重放（最近一次压缩不是原生的，或根本没压缩过）。
- * 只要最近一次压缩是原生的，当前请求没能重放（换了模型或供应商、请求体对不上……）就必须报出来，不能折叠成 undefined。
+ * 把宿主请求体里“压缩摘要 + 压缩时保留的那段”换成压缩窗口，其后的对话原样接上。
+ * 保留段有多长，让宿主对压缩那一刻的上下文再序列化一遍来量（不发请求），并要求它确是本次请求体系统提示之后的前缀：
+ * 前缀对不上就说明请求体的构造与会话记录脱节（例如上下文被别处改写），宁可不重放。
+ * undefined：没有原生压缩要重放。
  */
-export function replayOpenAINative(
-	payload: unknown,
-	ctx: ExtensionContext,
-): { ok: true; payload: ResponsesRequestPayload } | NativeReplayDeclined | undefined {
-	const latest = latestNativeCompaction(ctx);
-	if (!latest) {
-		return undefined;
-	}
-	const branchEntries = ctx.sessionManager.getBranch();
-	const declined = (reason: string): NativeReplayDeclined => ({ ok: false, reason, compactionId: latest.id });
-
-	const target = resolveNativeCompactionTarget(ctx, payload);
-	if (!target.ok) {
-		return target.reason === "missing-model" ? undefined : declined(target.reason);
-	}
-	const latestCompaction = resolveLatestNativeCompaction(branchEntries, target.target);
-	if (!latestCompaction.ok || !target.target.payload) {
-		return declined(latestCompaction.ok ? "unsupported-payload" : latestCompaction.reason);
-	}
-
-	const rewrite = rewriteNativeResponsesPayload({
-		model: target.target.currentModel,
-		payload: target.target.payload,
-		branchEntries,
-		compactionEntry: latestCompaction.entry,
+export async function replayOpenAINative(payload: unknown, ctx: ExtensionContext): Promise<Replay | undefined> {
+	const branch = ctx.sessionManager.getBranch();
+	const latest = latestCompaction(branch);
+	const native = latest?.native;
+	const model = ctx.model;
+	if (!latest || !native || !model) return undefined;
+	const lost = (kind: WindowLoss["kind"]): WindowLossReport => ({
+		ok: false,
+		kind,
+		from: describeIdentity(native.details),
+		compactionId: native.id,
 	});
-	return rewrite.ok ? rewrite : declined(rewrite.reason);
+
+	const identity = nativeIdentity(model);
+	if (!identity || !sameBackend(native.details, identity)) return lost("switched");
+	const auth = await resolveAuth(ctx, model);
+	const firstKept = branch.findIndex((entry, index) => index < latest.index && entry.id === native.firstKeptEntryId);
+	if (typeof auth === "string" || firstKept < 0) return lost("unreplayable");
+
+	// 宿主压缩后的上下文：压缩条目（系统消息与摘要）、保留段里的非系统消息，其后是压缩之后的全部条目。
+	const covered = [native, ...branch.slice(firstKept, latest.index).filter((entry) => !(entry.type === "message" && entry.message.role === "system"))];
+	const prefix = await captureHostPayload(model, covered.flatMap(sessionEntryToContextMessages), auth);
+	const input = (payload as Partial<ResponsesPayload> | null)?.input;
+	if (!prefix || !Array.isArray(input)) return lost("unreplayable");
+
+	// 系统提示不参与比对：不支持中途系统消息的模型把后来的更新折进首条提示，保留段之后的更新会让它与量出来的不同。
+	const keptItems = prefix.input.slice(leadingPromptLength(prefix.input));
+	const lead = leadingPromptLength(input);
+	if (!keptItems.every((item, index) => sameItem(item, input[lead + index]))) return lost("unreplayable");
+	return {
+		ok: true,
+		payload: {
+			...(payload as ResponsesPayload),
+			input: [...input.slice(0, lead), ...native.details.compactedWindow, ...input.slice(lead + keptItems.length)],
+		},
+	};
 }
