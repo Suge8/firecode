@@ -8,52 +8,43 @@
  * 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 summarizing：投递一个总结回合
  * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
+ * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 import type { ModelAtom, ReviewConfig } from "../config.js";
-import { msg, SUGGESTIONS_HEADING, termPattern } from "./messages.js";
+import { fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
-const ISSUE_LINE = new RegExp(`^[-*+]\\s*(?:\\*\\*)?${termPattern((terms) => terms.field.issue)}(?:\\*\\*)?\\s*[:：]\\s*(.+)$`, "iu");
+const ISSUE_LINE = fieldLine((terms) => terms.field.issue, { value: "(.+)$" });
 
 // 取值表是类型与 checkpoint 校验（checkpoint.ts）、顾问解析（advisor.ts）共用的唯一来源。
 export const PHASES = ["idle", "queued", "reviewing", "needs_fix", "awaiting_fix", "summarizing", "settled"] as const;
-export const REVIEWER_STATUSES = ["running", "passed", "failed", "error"] as const;
 export const ROUND_RESULTS = ["passed", "failed", "error", "stopped", "cancelled", "timed_out"] as const;
 export const ADVISOR_VERDICTS = ["continue", "stop", "narrow"] as const;
 export const STOP_REASONS = ["user", "shutdown", "timeout"] as const;
-export const REPAIR_STATUSES = ["pending", "running", "completed"] as const;
-export const SUMMARY_KINDS = ["passed", "max_rounds", "advisor_stop"] as const;
-export const SUMMARY_STATUSES = ["pending", "running"] as const;
+/** 修复回合与总结回合共用的投递生命周期：pending 待投递 → running 已进入回合 → done 回合正常结束（总结回合结束直接落 settled，不经 done）。 */
+export const TURN_STATUSES = ["pending", "running", "done"] as const;
 
 export type Phase = (typeof PHASES)[number];
-export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
 export type RoundResult = (typeof ROUND_RESULTS)[number];
 export type AdvisorVerdict = (typeof ADVISOR_VERDICTS)[number];
 export type StopReason = (typeof STOP_REASONS)[number];
+export type TurnStatus = (typeof TURN_STATUSES)[number];
+export type SummaryKind = "passed" | "max_rounds" | "advisor_stop";
 
-/** 单个审查者的输出（output 契约解析结果，纯数据）。 */
+/** 单个审查者的输出（output 契约解析结果，纯数据）。failed 含格式无效但以 FAIL 开头的票：原文进 details。 */
 export interface ReviewerResult extends ModelAtom {
 	index: number;
-	status: Exclude<ReviewerStatus, "running">;
+	status: "passed" | "failed" | "error";
 	/** 短摘要：PASS 一行收敛摘要 / FAIL 发现一句话。 */
 	summary: string;
-	/** 全文：PASS 摘要+证据锚点 / FAIL 发现列表。归档用。 */
+	/** 全文：PASS 摘要+证据锚点 / FAIL 发现列表（或原文）/ error 的故障说明。 */
 	details: string;
 }
 
-/** 审查中某个审查者的进行状态；settled 后携带完整结果。 */
-export interface ActiveReviewer extends ModelAtom {
-	index: number;
-	status: ReviewerStatus;
+/** 审查中某个审查者的席位；result 为 null 即还在审。 */
+export interface ReviewerSlot extends ModelAtom {
 	result: ReviewerResult | null;
-}
-
-/** 当前轮的审查者集合。 */
-export interface ActiveCheck {
-	round: number;
-	reviewers: ActiveReviewer[];
-	settledCount: number;
 }
 
 export interface AdvisorResult {
@@ -61,60 +52,26 @@ export interface AdvisorResult {
 	advice: string;
 }
 
-/** 一轮已收口的记录；只追加不改写。 */
+/** 一轮已收口的记录；只追加不改写。全文只存在 reviewers[].details 一处，其余文本按 roundText 推出。 */
 export interface ReviewRound {
 	round: number;
 	result: RoundResult;
-	/** 全文归档：PASS 摘要 / FAIL 发现列表 / advisor 建议等。 */
-	details: string;
 	reviewers: ReviewerResult[];
 	advisor?: AdvisorResult;
 	/** 取消 / 超时的终止原因。 */
 	reason?: StopReason;
+	/** result 为 error 时的故障说明（基础设施错误原文，或全员缺席时各审查者的故障汇总）。 */
+	error?: string;
 	elapsedMs: number;
 }
 
-/** 已判 FAIL 但尚未收口的轮：等顾问仲裁或直接投递反馈。 */
-export interface PendingRound {
-	round: number;
-	reviewers: ReviewerResult[];
-	details: string;
-}
-
-export type RepairStatus = (typeof REPAIR_STATUSES)[number];
-
-/** FAIL 后的修复回合。必须持久化，reload 才不会跳过尚未启动的反馈。 */
-export interface RepairState {
-	details: string;
-	advisor: AdvisorResult | null;
-	status: RepairStatus;
-}
-
-export type SummaryKind = (typeof SUMMARY_KINDS)[number];
-export type SummaryStatus = (typeof SUMMARY_STATUSES)[number];
-
-/** 质量裁决终态后的总结回合生命周期；持久化后 reload 才能重投未启动的总结。 */
-export interface SummaryState {
-	kind: SummaryKind;
-	status: SummaryStatus;
-}
-
-export interface ReviewState {
+interface Base {
 	runId: string;
-	phase: Phase;
 	/** 当前轮号（1 起）；queued 时 0。 */
 	round: number;
 	focus: string;
 	/** 已收口轮，只追加。 */
 	history: ReviewRound[];
-	/** reviewing 轮的活动检查；其余相为 null。 */
-	active: ActiveCheck | null;
-	/** FAIL 轮等待顾问收口（needs_fix）。 */
-	pending: PendingRound | null;
-	/** awaiting_fix 的反馈与修复回合生命周期。 */
-	repair: RepairState | null;
-	/** summarizing 的总结回合生命周期；其余相为 null。 */
-	summary: SummaryState | null;
 	/** 连续未通过轮数（顾问仲裁阈值）。 */
 	consecutiveFailures: number;
 	startedAt: number;
@@ -123,7 +80,17 @@ export interface ReviewState {
 	updatedAt: number;
 }
 
-/** reducer 需要的配置子集：轮数与顾问阈值、审查者（beginRound 时填入 active）、顾问模型。 */
+export type ReviewState = Base &
+	(
+		| { phase: "idle" | "queued" | "settled" }
+		| { phase: "reviewing"; slots: ReviewerSlot[] }
+		/** FAIL 轮等顾问仲裁：本轮全部审查结果，收口前不进 history。 */
+		| { phase: "needs_fix"; voters: ReviewerResult[] }
+		| { phase: "awaiting_fix"; turn: TurnStatus }
+		| { phase: "summarizing"; turn: TurnStatus }
+	);
+
+/** reducer 需要的配置子集：轮数与顾问阈值、审查者（beginRound 时填入 slots）、顾问模型。 */
 export type ReviewLimits = Pick<ReviewConfig, "maxRounds" | "advisorAfterFailures" | "advisor" | "reviewers">;
 
 export type ReviewEvent =
@@ -131,13 +98,12 @@ export type ReviewEvent =
 	| { type: "RECOVER" }
 	| { type: "REVIEWER_SETTLED"; index: number; result: ReviewerResult }
 	| { type: "ADVISOR_SETTLED"; result: AdvisorResult }
-	| { type: "ADVISOR_SKIPPED" }
+	/** 跳过顾问继续修复；带 message 表示顾问不可用（发可见卡），不带表示用户按 esc 跳过。 */
+	| { type: "ADVISOR_SKIPPED"; message?: string }
 	| { type: "INFRASTRUCTURE_ERROR"; details: string }
 	| { type: "ADVANCE" }
-	| { type: "REPAIR_STARTED" }
-	| { type: "REPAIR_COMPLETED" }
-	| { type: "SUMMARY_STARTED" }
-	| { type: "SUMMARY_SETTLED" }
+	| { type: "TURN_STARTED" }
+	| { type: "TURN_ENDED"; aborted: boolean }
 	| { type: "CANCEL"; reason: "user" | "shutdown" }
 	| { type: "TIMEOUT" };
 
@@ -151,7 +117,8 @@ export type CardData =
 	| { kind: "timeout" }
 	| { kind: "error"; message: string; elapsedMs?: number }
 	// advisor 卡的 elapsedMs 是咨询时长（进入 needs_fix 到裁决落定），不是轮时长。
-	| { kind: "advisor"; advisor: AdvisorResult; advisorModel: string; elapsedMs: number };
+	| { kind: "advisor"; advisor: AdvisorResult; advisorModel: string; elapsedMs: number }
+	| { kind: "skipped"; message: string };
 
 export type ReviewEffect =
 	| { kind: "advance" }
@@ -170,10 +137,6 @@ export function initialState(runId: string): ReviewState {
 		round: 0,
 		focus: "",
 		history: [],
-		active: null,
-		pending: null,
-		repair: null,
-		summary: null,
 		consecutiveFailures: 0,
 		startedAt: 0,
 		roundStartedAt: 0,
@@ -181,118 +144,67 @@ export function initialState(runId: string): ReviewState {
 	};
 }
 
-export function reduce(
-	state: ReviewState,
-	event: ReviewEvent,
-	limits: ReviewLimits,
-	now: number,
-): ReduceResult {
+/** 相无关的公共字段。 */
+function baseOf(state: ReviewState): Base {
+	const { runId, round, focus, history, consecutiveFailures, startedAt, roundStartedAt } = state;
+	return { runId, round, focus, history, consecutiveFailures, startedAt, roundStartedAt, updatedAt: state.updatedAt };
+}
+
+type PhaseData =
+	| { phase: "idle" | "queued" | "settled" }
+	| { phase: "reviewing"; slots: ReviewerSlot[] }
+	| { phase: "needs_fix"; voters: ReviewerResult[] }
+	| { phase: "awaiting_fix" | "summarizing"; turn: TurnStatus };
+
+/** 换相：公共字段沿用并盖上 patch，相数据整体替换，旧相的数据不会残留。 */
+function go(state: ReviewState, now: number, next: PhaseData, patch: Partial<Base> = {}): ReviewState {
+	return { ...baseOf(state), ...patch, updatedAt: now, ...next } as ReviewState;
+}
+
+const NOTHING = (state: ReviewState): ReduceResult => ({ state, effects: [] });
+
+export function reduce(state: ReviewState, event: ReviewEvent, limits: ReviewLimits, now: number): ReduceResult {
 	switch (event.type) {
 		case "START":
-			return onStart(state, event, now);
+			// 一律先排队：开审统一经执行器的 idle 门（ADVANCE），排队相不发卡——输入框边框已有排队提示。
+			return {
+				state: go(initialState(state.runId), now, { phase: "queued" }, { focus: event.focus.trim(), startedAt: now }),
+				effects: [{ kind: "advance" }],
+			};
 		case "RECOVER":
 			return onRecover(state);
 		case "REVIEWER_SETTLED":
 			return onReviewerSettled(state, event, limits, now);
 		case "ADVISOR_SETTLED":
-			return onAdvisorSettled(state, event, limits, now);
+			return onAdvisorSettled(state, event.result, limits, now);
 		case "ADVISOR_SKIPPED":
-			return onAdvisorSkipped(state, now);
+			return onAdvisorSkipped(state, event.message, now);
 		case "INFRASTRUCTURE_ERROR":
 			return onInfrastructureError(state, event.details, now);
 		case "ADVANCE":
 			return onAdvance(state, limits, now);
-		case "REPAIR_STARTED":
-			return updateRepairStatus(state, "pending", "running", now);
-		case "REPAIR_COMPLETED":
-			return updateRepairStatus(state, "running", "completed", now);
-		case "SUMMARY_STARTED":
-			return updateSummaryStatus(state, "pending", "running", now);
-		case "SUMMARY_SETTLED":
-			return onSummarySettled(state, now);
+		case "TURN_STARTED":
+			return state.phase === "awaiting_fix" || state.phase === "summarizing"
+				? state.turn === "pending" ? { state: go(state, now, { phase: state.phase, turn: "running" }), effects: [] } : NOTHING(state)
+				: NOTHING(state);
+		case "TURN_ENDED":
+			return onTurnEnded(state, event.aborted, now);
 		case "CANCEL":
-			return onInterrupted(state, now, "cancelled", event.reason, event.reason === "user" ? [{ kind: "notify_cancelled" }] : []);
+			return interrupt(state, now, "cancelled", event.reason, event.reason === "user" ? [{ kind: "notify_cancelled" }] : []);
 		case "TIMEOUT":
-			return onInterrupted(state, now, "timed_out", "timeout", [{ kind: "send_card", card: { kind: "timeout" } }]);
+			return interrupt(state, now, "timed_out", "timeout", [{ kind: "send_card", card: { kind: "timeout" } }]);
 	}
 }
 
-function onStart(
-	state: ReviewState,
-	event: Extract<ReviewEvent, { type: "START" }>,
-	now: number,
-): ReduceResult {
-	// 一律先排队：开审统一经执行器的 idle 门（ADVANCE），排队相不发卡——输入框边框已有排队提示。
-	return {
-		state: { ...initialState(state.runId), phase: "queued", focus: event.focus.trim(), startedAt: now, updatedAt: now },
-		effects: [{ kind: "advance" }],
-	};
-}
-
 function onRecover(state: ReviewState): ReduceResult {
-	if (state.phase === "idle" || state.phase === "settled")
-		return { state, effects: [] };
 	// reload 会中断尚未确认完成的修复/总结回合；重新投递同一份持久化内容，不能跳过。
-	const repair =
-		state.phase === "awaiting_fix" && state.repair && state.repair.status !== "completed"
-			? { ...state.repair, status: "pending" as const }
-			: state.repair;
-	const summary =
-		state.phase === "summarizing" && state.summary
-			? { ...state.summary, status: "pending" as const }
-			: state.summary;
-	// session_start 只恢复持久状态；宿主在所有 session_start handler 完成后
-	// 另发 resources_discover，执行器到那个正式边界才请求推进。
-	return { state: { ...state, repair, summary }, effects: [] };
+	// session_start 只恢复持久状态；宿主在所有 session_start handler 完成后另发 resources_discover，执行器到那个正式边界才请求推进。
+	if ((state.phase === "awaiting_fix" || state.phase === "summarizing") && state.turn === "running")
+		return { state: go(state, state.updatedAt, { phase: state.phase, turn: "pending" }), effects: [] };
+	return NOTHING(state);
 }
 
-function updateRepairStatus(
-	state: ReviewState,
-	expected: RepairStatus,
-	status: RepairStatus,
-	now: number,
-): ReduceResult {
-	if (state.phase !== "awaiting_fix" || state.repair?.status !== expected)
-		return { state, effects: [] };
-	return {
-		state: { ...state, repair: { ...state.repair, status }, updatedAt: now },
-		effects: [],
-	};
-}
-
-function updateSummaryStatus(
-	state: ReviewState,
-	expected: SummaryStatus,
-	status: SummaryStatus,
-	now: number,
-): ReduceResult {
-	if (state.phase !== "summarizing" || state.summary?.status !== expected)
-		return { state, effects: [] };
-	return {
-		state: { ...state, summary: { ...state.summary, status }, updatedAt: now },
-		effects: [],
-	};
-}
-
-/** 总结回合结束（或投递失败放弃）：无论何种结局都落 settled，总结是尽力而非必须。 */
-function onSummarySettled(state: ReviewState, now: number): ReduceResult {
-	if (state.phase !== "summarizing") return { state, effects: [] };
-	return {
-		state: { ...state, phase: "settled", summary: null, updatedAt: now },
-		effects: [],
-	};
-}
-
-/** 进入总结相的统一出口：携带意图，由 advance 在 idle 边界投递总结提示。 */
-function summarizing(kind: SummaryKind): Pick<ReviewState, "phase" | "summary"> {
-	return { phase: "summarizing", summary: { kind, status: "pending" } };
-}
-
-function onAdvance(
-	state: ReviewState,
-	limits: ReviewLimits,
-	now: number,
-): ReduceResult {
+function onAdvance(state: ReviewState, limits: ReviewLimits, now: number): ReduceResult {
 	if (state.phase === "queued")
 		return {
 			state: beginRound(state, 1, limits, now),
@@ -301,13 +213,22 @@ function onAdvance(
 				{ kind: "advance" },
 			],
 		};
-	if (state.phase !== "awaiting_fix" || state.repair?.status !== "completed")
-		return { state, effects: [] };
+	if (state.phase !== "awaiting_fix" || state.turn !== "done") return NOTHING(state);
 	// 开始卡只发第 1 轮：后续轮的边界由结果卡的轮号承担，重复开始卡只制造噪声。
-	return {
-		state: beginRound(state, state.round + 1, limits, now),
-		effects: [{ kind: "advance" }],
-	};
+	return { state: beginRound(state, state.round + 1, limits, now), effects: [{ kind: "advance" }] };
+}
+
+function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now: number): ReviewState {
+	const slots: ReviewerSlot[] = limits.reviewers.map((item) => ({ model: item.model, thinking: item.thinking, result: null }));
+	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
+}
+
+/** 修复回合结束：总结回合无论何种结局都落 settled（总结是尽力而非必须）；修复回合被中断按用户取消收尾。 */
+function onTurnEnded(state: ReviewState, aborted: boolean, now: number): ReduceResult {
+	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled" }), effects: [] };
+	if (state.phase !== "awaiting_fix" || state.turn !== "running") return NOTHING(state);
+	if (aborted) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
+	return { state: go(state, now, { phase: "awaiting_fix", turn: "done" }), effects: [] };
 }
 
 function onReviewerSettled(
@@ -316,249 +237,187 @@ function onReviewerSettled(
 	limits: ReviewLimits,
 	now: number,
 ): ReduceResult {
-	if (state.phase !== "reviewing" || !state.active) return { state, effects: [] };
-	const active = state.active;
-	const reviewers = active.reviewers.map((item) =>
-		item.index === event.index ? { ...item, status: event.result.status, result: event.result } : item,
-	);
-	const settledCount = active.settledCount + 1;
-	const nextActive: ActiveCheck = { ...active, reviewers, settledCount };
-	if (settledCount < reviewers.length)
-		return { state: { ...state, active: nextActive, updatedAt: now }, effects: [] };
-	return settleRound(state, nextActive, resultsOf(reviewers), limits, now);
+	if (state.phase !== "reviewing" || state.slots[event.index]?.result) return NOTHING(state);
+	const slots = state.slots.map((slot, index) => (index === event.index ? { ...slot, result: event.result } : slot));
+	const results = resultsOf(slots);
+	if (results.length < slots.length) return { state: go(state, now, { phase: "reviewing", slots }), effects: [] };
+	return settleRound(state, results, limits, now);
 }
 
-function settleRound(
-	state: ReviewState,
-	active: ActiveCheck,
-	settled: ReviewerResult[],
-	limits: ReviewLimits,
-	now: number,
-): ReduceResult {
-	const { result, details, feedbackDetails, summary } = aggregate(settled);
-	const base = { ...state, active: null, updatedAt: now };
-	const round = closeRound(state, now, { round: active.round, result, details, reviewers: settled });
-	const history = [...state.history, round];
-	if (result === "passed")
-		// 通过是质量裁决终态 → 总结回合。
-		return {
-			state: { ...base, ...summarizing("passed"), history },
-			effects: [
-				{
-					kind: "send_card",
-					card: {
-						kind: "pass",
-						round: active.round,
-						summary: appendClosedFindings(summary, state.history, active.round),
-						elapsedMs: round.elapsedMs,
-						totalElapsedMs: Math.max(0, now - state.startedAt),
-					},
-				},
-				{ kind: "advance" },
-			],
-		};
-	if (result === "error")
+function settleRound(state: ReviewState, results: ReviewerResult[], limits: ReviewLimits, now: number): ReduceResult {
+	const { round } = state;
+	const verdicts = results.filter((item) => item.status !== "error");
+	const all = sections(results);
+	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里点名，不阻止形成质量结论；
+	// 全员缺席才是基础设施不可用。否则一个供应商额度耗尽就会让整条审查通道停摆。
+	if (verdicts.length === 0) {
 		// 全员缺席是事故终态 → 直接收尾，不烧总结回合。
+		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error: all });
 		return {
-			state: { ...base, phase: "settled", history },
-			effects: [{ kind: "send_card", card: { kind: "error", message: details, elapsedMs: round.elapsedMs } }],
+			state: go(state, now, { phase: "settled" }, { history: [...state.history, closed] }),
+			effects: [{ kind: "send_card", card: { kind: "error", message: all, elapsedMs: closed.elapsedMs } }],
 		};
-	const consecutiveFailures = state.consecutiveFailures + 1;
-	if (active.round >= limits.maxRounds)
+	}
+	if (!verdicts.some((item) => item.status === "failed")) {
+		// 通过是质量裁决终态 → 总结回合。
+		const closed = closeRound(state, now, { round, result: "passed", reviewers: results });
+		const summary = appendClosedFindings(passSummary(verdicts, results.filter((item) => item.status === "error")), state.history, round);
 		return {
-			state: { ...base, ...summarizing("max_rounds"), consecutiveFailures, history },
+			state: go(state, now, { phase: "summarizing", turn: "pending" }, { history: [...state.history, closed] }),
 			effects: [
-				{ kind: "send_card", card: { kind: "stop", reason: "max_rounds", round: active.round, details, elapsedMs: round.elapsedMs } },
-				{ kind: "advance" },
-			],
-		};
-	// 每轮未通过都发一张可见的失败卡：用户要能看到本轮结论，
-	// 而不是只收到一条投给执行模型的隐藏反馈。
-	const failCard: ReviewEffect = {
-		kind: "send_card",
-		card: { kind: "fail", round: active.round, details, elapsedMs: round.elapsedMs },
-	};
-	if (consecutiveFailures >= limits.advisorAfterFailures)
-		// 顾问可能裁定 stop，反馈永远不会投递：此时不能提前宣布「已交回修复」；
-		// 卡里也不写「顾问介入中」——持久记录会过时，实况由输入框边框承担。
-		return {
-			state: {
-				...base,
-				phase: "needs_fix",
-				pending: { round: active.round, reviewers: settled, details: feedbackDetails },
-				consecutiveFailures,
-			},
-			effects: [failCard, { kind: "advance" }],
-		};
-	return {
-		state: {
-			...base,
-			phase: "awaiting_fix",
-			pending: null,
-			repair: { details: feedbackDetails, advisor: null, status: "pending" },
-			consecutiveFailures,
-			history,
-		},
-		effects: [failCard, { kind: "advance" }],
-	};
-}
-
-function onAdvisorSettled(
-	state: ReviewState,
-	event: Extract<ReviewEvent, { type: "ADVISOR_SETTLED" }>,
-	limits: ReviewLimits,
-	now: number,
-): ReduceResult {
-	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
-	const pending = state.pending;
-	const advisor = event.result;
-	// 咨询时长：needs_fix 相内只有顾问事件会迁移，updatedAt 即进入咨询的时刻。
-	const consultMs = Math.max(0, now - state.updatedAt);
-	if (advisor.verdict === "stop") {
-		const round = closeRound(state, now, { round: pending.round, result: "stopped", details: advisor.advice, reviewers: pending.reviewers, advisor });
-		return {
-			state: { ...state, ...summarizing("advisor_stop"), pending: null, history: [...state.history, round], updatedAt: now },
-			effects: [
-				{
-					kind: "send_card",
-					// findings 已在咨询前的失败卡显示；终止卡只承载顾问裁决，避免重复整张报告。
-					card: { kind: "stop", reason: "advisor", round: pending.round, details: advisor.advice, advisor, advisorModel: limits.advisor.model, elapsedMs: consultMs },
-				},
+				{ kind: "send_card", card: { kind: "pass", round, summary, elapsedMs: closed.elapsedMs, totalElapsedMs: Math.max(0, now - state.startedAt) } },
 				{ kind: "advance" },
 			],
 		};
 	}
+	const consecutiveFailures = state.consecutiveFailures + 1;
+	const elapsedMs = elapsedSince(state, now);
+	if (round >= limits.maxRounds) {
+		const closed = closeRound(state, now, { round, result: "failed", reviewers: results });
+		return {
+			state: go(state, now, { phase: "summarizing", turn: "pending" }, { history: [...state.history, closed], consecutiveFailures }),
+			effects: [
+				{ kind: "send_card", card: { kind: "stop", reason: "max_rounds", round, details: all, elapsedMs } },
+				{ kind: "advance" },
+			],
+		};
+	}
+	// 每轮未通过都发一张可见的失败卡：用户要能看到本轮结论，而不是只收到一条投给执行模型的隐藏反馈。
+	const failCard: ReviewEffect = { kind: "send_card", card: { kind: "fail", round, details: all, elapsedMs } };
+	if (consecutiveFailures >= limits.advisorAfterFailures)
+		// 顾问可能裁定 stop，反馈永远不会投递：此时不能提前宣布「已交回修复」；
+		// 卡里也不写「顾问介入中」——持久记录会过时，实况由输入框边框承担。
+		return { state: go(state, now, { phase: "needs_fix", voters: results }, { consecutiveFailures }), effects: [failCard, { kind: "advance" }] };
+	return toRepair(state, results, undefined, now, { consecutiveFailures }, [failCard, { kind: "advance" }]);
+}
+
+function onAdvisorSettled(state: ReviewState, advisor: AdvisorResult, limits: ReviewLimits, now: number): ReduceResult {
+	if (state.phase !== "needs_fix") return NOTHING(state);
+	// 咨询时长：needs_fix 相内只有顾问事件会迁移，updatedAt 即进入咨询的时刻。
+	const elapsedMs = Math.max(0, now - state.updatedAt);
+	const advisorModel = limits.advisor.model;
+	if (advisor.verdict === "stop") {
+		const closed = closeRound(state, now, { round: state.round, result: "stopped", reviewers: state.voters, advisor });
+		return {
+			state: go(state, now, { phase: "summarizing", turn: "pending" }, { history: [...state.history, closed] }),
+			effects: [
+				// findings 已在咨询前的失败卡显示；终止卡只承载顾问裁决，避免重复整张报告。
+				{ kind: "send_card", card: { kind: "stop", reason: "advisor", round: state.round, details: advisor.advice, advisor, advisorModel, elapsedMs } },
+				{ kind: "advance" },
+			],
+		};
+	}
+	// 失败卡已在咨询前发出；咨询完成只补中性的顾问建议卡。
+	return toRepair(state, state.voters, advisor, now, {}, [
+		{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel, elapsedMs } },
+		{ kind: "advance" },
+	]);
+}
+
+function onAdvisorSkipped(state: ReviewState, message: string | undefined, now: number): ReduceResult {
+	if (state.phase !== "needs_fix") return NOTHING(state);
+	return toRepair(state, state.voters, undefined, now, {}, [
+		...(message === undefined ? [] : [{ kind: "send_card", card: { kind: "skipped", message } } as const]),
+		{ kind: "advance" },
+	]);
+}
+
+/** 顾问没有叫停（继续/收窄/被跳过）或没到顾问阈值：把本轮收口为 failed，带着反馈进入修复。 */
+function toRepair(
+	state: ReviewState,
+	voters: ReviewerResult[],
+	advisor: AdvisorResult | undefined,
+	now: number,
+	patch: Partial<Base>,
+	effects: ReviewEffect[],
+): ReduceResult {
+	const closed = closeRound(state, now, { round: state.round, result: "failed", reviewers: voters, ...(advisor ? { advisor } : {}) });
 	return {
-		state: toRepair(state, pending, advisor, now),
-		// 失败卡已在咨询前发出；咨询完成只补中性的顾问建议卡。
-		effects: [
-			{ kind: "send_card", card: { kind: "advisor", advisor, advisorModel: limits.advisor.model, elapsedMs: consultMs } },
-			{ kind: "advance" },
-		],
+		state: go(state, now, { phase: "awaiting_fix", turn: "pending" }, { ...patch, history: [...state.history, closed] }),
+		effects,
 	};
 }
 
-function onAdvisorSkipped(state: ReviewState, now: number): ReduceResult {
-	if (state.phase !== "needs_fix" || !state.pending) return { state, effects: [] };
-	return { state: toRepair(state, state.pending, null, now), effects: [{ kind: "advance" }] };
+function onInfrastructureError(state: ReviewState, details: string, now: number): ReduceResult {
+	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
+	const round = reviewers && closeRound(state, now, { round: state.round, result: "error", reviewers, error: details });
+	return abort(state, now, round, [{ kind: "send_card", card: { kind: "error", message: details } }]);
 }
 
-/** 顾问没有叫停（继续/收窄/被跳过）：把待仲裁轮收口为 failed，带着反馈进入修复。 */
-function toRepair(state: ReviewState, pending: PendingRound, advisor: AdvisorResult | null, now: number): ReviewState {
-	const round = closeRound(state, now, {
-		round: pending.round,
-		result: "failed",
-		details: pending.details,
-		reviewers: pending.reviewers,
-		...(advisor ? { advisor } : {}),
-	});
-	return {
-		...state,
-		phase: "awaiting_fix",
-		pending: null,
-		repair: { details: pending.details, advisor, status: "pending" },
-		history: [...state.history, round],
-		updatedAt: now,
-	};
-}
-
-/** 取消与超时：收口在途轮，由 effects 区分用户可见的反馈。 */
-function onInterrupted(
+/** 取消与超时：收口在途轮（审查中或等顾问），由 effects 区分用户可见的反馈。 */
+function interrupt(
 	state: ReviewState,
 	now: number,
 	result: "cancelled" | "timed_out",
 	reason: StopReason,
 	effects: ReviewEffect[],
 ): ReduceResult {
-	return abort(state, now, interruptedRound(state, now, result, reason), effects);
-}
-
-function onInfrastructureError(
-	state: ReviewState,
-	details: string,
-	now: number,
-): ReduceResult {
-	const reviewers = state.active ? resultsOf(state.active.reviewers) : state.pending?.reviewers ?? [];
-	const round = state.round > 0
-		? closeRound(state, now, { round: state.round, result: "error", details, reviewers })
-		: undefined;
-	return abort(state, now, round, [{ kind: "send_card", card: { kind: "error", message: details } }]);
+	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
+	const round = reviewers && closeRound(state, now, { round: state.round, result, reviewers, reason });
+	return abort(state, now, round, effects);
 }
 
 /** 事故终态的统一出口：总结相已有质量裁决，静默收尾；其余相追加在途轮记录后直接 settled。 */
 function abort(state: ReviewState, now: number, round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
-	if (state.phase === "idle" || state.phase === "settled") return { state, effects: [] };
-	if (state.phase === "summarizing") return onSummarySettled(state, now);
-	return {
-		state: {
-			...state,
-			phase: "settled",
-			active: null,
-			pending: null,
-			repair: null,
-			history: round ? [...state.history, round] : state.history,
-			updatedAt: now,
-		},
-		effects,
-	};
+	if (state.phase === "idle" || state.phase === "settled") return NOTHING(state);
+	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled" }), effects: [] };
+	return { state: go(state, now, { phase: "settled" }, round ? { history: [...state.history, round] } : {}), effects };
 }
 
-function beginRound(
-	state: ReviewState,
-	round: number,
-	limits: ReviewLimits,
-	now: number,
-): ReviewState {
-	const reviewers: ActiveReviewer[] = limits.reviewers.map((item, index) => ({
-		index,
-		model: item.model,
-		thinking: item.thinking,
-		status: "running",
-		result: null,
-	}));
-	return {
-		...state,
-		phase: "reviewing",
-		round,
-		active: { round, reviewers, settledCount: 0 },
-		pending: null,
-		repair: null,
-		summary: null,
-		roundStartedAt: now,
-		updatedAt: now,
-	};
+function elapsedSince(state: ReviewState, now: number): number {
+	return state.roundStartedAt ? Math.max(0, now - state.roundStartedAt) : 0;
 }
 
-function resultsOf(reviewers: ActiveReviewer[]): ReviewerResult[] {
-	return reviewers.flatMap((item) => (item.result ? [item.result] : []));
+function closeRound(state: ReviewState, now: number, record: Omit<ReviewRound, "elapsedMs">): ReviewRound {
+	return { ...record, elapsedMs: elapsedSince(state, now) };
 }
 
-/** 展示与归档保留每个模型分节；修复反馈只携带 FAIL 票。 */
-function aggregate(reviewers: ReviewerResult[]): {
-	result: "passed" | "failed" | "error";
-	details: string;
-	feedbackDetails: string;
-	summary: string;
-} {
-	const verdicts = reviewers.filter((item) => item.status === "passed" || item.status === "failed");
-	const details = aggregateDetails(reviewers);
-	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里点名，不阻止形成质量结论；
-	// 全员缺席才是基础设施不可用。否则一个供应商额度耗尽就会让整条审查通道停摆。
-	if (verdicts.length === 0) return { result: "error", details, feedbackDetails: "", summary: "" };
-	const failed = verdicts.filter((item) => item.status === "failed");
-	if (failed.length > 0)
-		return { result: "failed", details, feedbackDetails: aggregateDetails(failed), summary: "" };
-	const absent = reviewers.filter((item) => item.status === "error");
-	return { result: "passed", details, feedbackDetails: "", summary: aggregatePassSummary(verdicts, absent) };
+export function resultsOf(slots: ReviewerSlot[]): ReviewerResult[] {
+	return slots.flatMap((slot) => (slot.result ? [slot.result] : []));
 }
 
-function aggregateDetails(reviewers: ReviewerResult[]): string {
-	return reviewers
-		.map((item) => `${modelLabel(item)}\n${item.details.trim()}`)
-		.join("\n\n");
+// ---- 文本：全文只在 reviewers[].details 一处，其余都从它推出 ----
+
+/** 每个审查者一节，展示与归档保留模型分节。 */
+export function sections(reviewers: ReviewerResult[]): string {
+	return reviewers.map((item) => `${modelLabel(item)}\n${item.details.trim()}`).join("\n\n");
 }
 
-function aggregatePassSummary(passed: ReviewerResult[], absent: ReviewerResult[]) {
+/**
+ * 一轮的文本：失败轮只含 FAIL 票（既是修复反馈也是往轮发现清单），顾问叫停是顾问意见，
+ * 故障轮是故障说明，取消与超时没有文本，通过轮含各审查者全文（建议区在其中）。
+ */
+export function roundText(round: ReviewRound): string {
+	switch (round.result) {
+		case "failed":
+			return findingsOf(round.reviewers);
+		case "stopped":
+			return round.advisor?.advice ?? "";
+		case "error":
+			return round.error ?? "";
+		case "passed":
+			return sections(round.reviewers);
+		default:
+			return "";
+	}
+}
+
+/** 修复反馈（与往轮发现清单）只含 FAIL 票。 */
+export function findingsOf(reviewers: ReviewerResult[]): string {
+	return sections(reviewers.filter((item) => item.status === "failed"));
+}
+
+/** 审查生命周期内：总结回合也算——占用标签持有到总结完成，Master 才不会在结果卡与总结之间的窗口提前结算、漏掉总结回复。 */
+export function isActive(state: ReviewState): boolean {
+	return state.phase !== "idle" && state.phase !== "settled";
+}
+
+/** 总结回合的类型由终态那一轮决定。 */
+export function summaryKindOf(round: ReviewRound | undefined): SummaryKind {
+	return round?.result === "passed" ? "passed" : round?.result === "stopped" ? "advisor_stop" : "max_rounds";
+}
+
+function passSummary(passed: ReviewerResult[], absent: ReviewerResult[]) {
 	const fallback = msg.summary.passedFallback;
 	const lines = passed.length === 1
 		? [passBody(passed[0]?.summary ?? "") || fallback]
@@ -567,12 +426,7 @@ function aggregatePassSummary(passed: ReviewerResult[], absent: ReviewerResult[]
 		lines.push(msg.summary.absent(absent.map((item) => ({ model: shortModel(item.model), reason: firstLine(item.details) }))));
 	const suggestions = [...new Set(passed.flatMap((item) => splitSuggestions(item.details)))];
 	if (suggestions.length === 0) return lines.join("\n");
-	return [
-		...lines,
-		"",
-		`## ${msg.terms.suggestions}`,
-		...suggestions.map((item) => `- ${item}`),
-	].join("\n");
+	return [...lines, "", `## ${msg.terms.suggestions}`, ...suggestions.map((item) => `- ${item}`)].join("\n");
 }
 
 function firstLine(text: string) {
@@ -595,16 +449,12 @@ export function shortModel(model: string) {
 	return model.split("/").at(-1) || model;
 }
 
-function appendClosedFindings(
-	summary: string,
-	history: ReviewRound[],
-	beforeRound: number,
-) {
+function appendClosedFindings(summary: string, history: ReviewRound[], beforeRound: number) {
 	const seen = new Set<string>();
 	const findings: { round: number; issue: string }[] = [];
 	for (const round of history) {
 		if (round.round >= beforeRound || round.result !== "failed") continue;
-		for (const line of round.details.split(/\r?\n/u)) {
+		for (const line of roundText(round).split(/\r?\n/u)) {
 			const match = ISSUE_LINE.exec(line.trim());
 			const issue = match?.[1]?.replace(/`([^`]+)`/gu, "$1").trim();
 			if (!issue) continue;
@@ -623,17 +473,4 @@ function appendClosedFindings(
 
 function modelLabel(item: ReviewerResult) {
 	return msg.summary.modelSection(item.index + 1, shortModel(item.model));
-}
-
-/** 被取消/超时打断的在途轮（审查中或等顾问）；其余相没有在途轮。 */
-function interruptedRound(state: ReviewState, now: number, result: RoundResult, reason: StopReason): ReviewRound | undefined {
-	if (state.phase === "reviewing" && state.active)
-		return closeRound(state, now, { round: state.active.round, result, details: "", reviewers: resultsOf(state.active.reviewers), reason });
-	if (state.phase === "needs_fix" && state.pending)
-		return closeRound(state, now, { round: state.pending.round, result, details: "", reviewers: state.pending.reviewers, reason });
-	return undefined;
-}
-
-function closeRound(state: ReviewState, now: number, record: Omit<ReviewRound, "elapsedMs">): ReviewRound {
-	return { ...record, elapsedMs: state.roundStartedAt ? Math.max(0, now - state.roundStartedAt) : 0 };
 }

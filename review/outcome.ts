@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { isCheckpointEntry, isValidCheckpoint, refusalOf } from "./checkpoint.js";
+import { checkpointOf, refusalOf } from "./checkpoint.js";
 import { msg } from "./messages.js";
-import type { ReviewState } from "./state.js";
+import { roundText, type ReviewState } from "./state.js";
 
 export type ReviewOutcome =
 	| { status: "passed"; runId: string; rounds: number }
@@ -58,12 +58,9 @@ export interface ReviewRoundProgress {
 }
 
 export function reviewProgressOf(entry: unknown): ReviewRoundProgress | undefined {
-	const active = checkpointOf(entry)?.active;
-	return active ? { round: active.round, settled: active.settledCount, total: active.reviewers.length } : undefined;
-}
-
-function checkpointOf(entry: unknown): ReviewState | undefined {
-	return isCheckpointEntry(entry) && isValidCheckpoint(entry.data) ? entry.data : undefined;
+	const state = checkpointOf(entry);
+	if (state?.phase !== "reviewing") return undefined;
+	return { round: state.round, settled: state.slots.filter((slot) => slot.result).length, total: state.slots.length };
 }
 
 function outcomeOf(latest: ReviewState): ReviewOutcome {
@@ -81,7 +78,7 @@ function outcomeOf(latest: ReviewState): ReviewOutcome {
 		return { status: "stopped", runId: latest.runId, rounds, ...(advice ? { advisorAdvice: advice } : {}) };
 	}
 	// 轮记录的 details 已写明故障形态（超时/供应商报错）；枚举名只是它缺失时的兜底。
-	return { status: "failed", runId: latest.runId, rounds, reason: last?.details?.trim() || result || "unknown" };
+	return { status: "failed", runId: latest.runId, rounds, reason: (last && roundText(last).trim()) || result || "unknown" };
 }
 
 function isMissingFile(error: unknown): boolean {

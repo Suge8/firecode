@@ -28,10 +28,10 @@ describe("review outcome reader", () => {
 	test("maps max-round and advisor terminal decisions to stopped", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "stopped-max-rounds.jsonl"))).toMatchObject({ status: "stopped" });
-		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped" });
+		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped", advisorAdvice: "stop here" });
 	});
 
-	test("error, cancelled or timed_out terminals surface as failed carrying the round details", async () => {
+	test("error, cancelled or timed_out terminals surface as failed carrying the failure text", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
 			status: "failed",

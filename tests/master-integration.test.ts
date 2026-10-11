@@ -1820,23 +1820,22 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 6, runId: "mock-review-run", round: 1, focus: "", pending: null, repair: null, summary: null,
-		consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 7, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
-		...base, seq: 1, phase: "reviewing", history: [], updatedAt: 1,
-		active: { round: 1, reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "running", result: null }], settledCount: 0 },
+		...base, phase: "reviewing", history: [], updatedAt: 1,
+		slots: [{ model: "test/reviewer", thinking: "high", result: null }],
 	};
 	const settled = {
-		...base, seq: 2, phase: "settled", active: null, updatedAt: 2,
+		...base, phase: "settled", updatedAt: 2,
 		history: [timeout
 			? {
-				round: 1, result: "error", details: TIMEOUT_DETAILS, elapsedMs: 1,
-				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "error", summary: "", details: TIMEOUT_DETAILS }],
+				round: 1, result: "error", error: TIMEOUT_DETAILS, elapsedMs: 1,
+				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "error", summary: "", details: "" }],
 			}
 			: {
-				round: 1, result: "passed", details: "verified", elapsedMs: 1,
-				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "ok", details: "verified" }],
+				round: 1, result: "passed", elapsedMs: 1,
+				reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "ok", details: "" }],
 			}],
 	};
 	return `export default function(pi) {

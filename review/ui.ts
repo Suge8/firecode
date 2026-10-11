@@ -47,8 +47,13 @@ class ReviewEditor extends CustomEditor {
 	}
 
 	override handleInput(data: string): void {
-		if (this.keys.matches(data, "app.interrupt") || this.keys.matches(data, "app.clear")) this.cancel();
-		// 审查期间不接受任何其他输入：插话会污染本轮审查的会话证据。
+		if (this.keys.matches(data, "app.interrupt") || this.keys.matches(data, "app.clear")) return this.cancel();
+		// 应用级按键（切模型、展开工具、退出……）与扩展快捷键照常工作；文字输入与提交一律吞掉：插话会污染本轮审查的会话证据。
+		if (this.onExtensionShortcut?.(data)) return;
+		if (this.keys.matches(data, "app.exit")) return this.onCtrlD?.();
+		for (const [action, handler] of this.actionHandlers) {
+			if (this.keys.matches(data, action)) return handler();
+		}
 	}
 
 	override render(width: number): string[] {
