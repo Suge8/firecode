@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 重建宣传录制用的临时现场：/tmp/firecode-promo/repo（演示仓库）与 /tmp/firecode-promo/agent（临时 Agent 目录）。
-# 用法：setup-demo.sh en|zh [advisorAfterFailures]   各 tape 在隐藏段调用（经 record.sh 填入语言），每次录制都从同一现场开始。
+# 用法：setup-demo.sh en|zh   各 tape 在隐藏段调用（经 record.sh 填入语言），每次录制都从同一现场开始。
 # Agent 目录装着与 ~/.pi/agent 同一份 firecode（claudeSub 开着）；auth.json 用链接，令牌换发写回原处。
 # zh 用本机配置（中文角色名）与本机 SYSTEM.md；en 用随包英文模板（英文角色名）与一份英文 SYSTEM.md，演示仓库也换英文。
 # 两种语言都必须有 SYSTEM.md：pi 默认系统提示会被 Anthropic 判为第三方应用，订阅请求直接 400。
@@ -24,7 +24,7 @@ zh) base=$src/extensions/firecode/config.jsonc ;;
 en) base=$(dirname "$0")/../../config.example.jsonc ;;
 *) echo "language must be en or zh" >&2 && exit 1 ;;
 esac
-sed -E -e "s/(\"advisorAfterFailures\": )[0-9]+/\1${2:-2}/" -e "s#^([[:space:]]*)(// )?\"language\": \"[a-z]+\"#\1\"language\": \"$lang\"#" "$base" \
+sed -E -e "s/(\"advisorAfterFailures\": )[0-9]+/\12/" -e "s#^([[:space:]]*)(// )?\"language\": \"[a-z]+\"#\1\"language\": \"$lang\"#" "$base" \
 	> "$agent/extensions/firecode/config.jsonc"
 grep -qE "^[[:space:]]*\"language\": \"$lang\"" "$agent/extensions/firecode/config.jsonc"
 

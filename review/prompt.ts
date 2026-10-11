@@ -3,7 +3,7 @@
  */
 import { wrapEnvelope } from "../deliver.js";
 import { msg } from "./messages.js";
-import type { AdvisorResult, ReviewState, SummaryKind } from "./state.js";
+import { roundText, type AdvisorResult, type ReviewState, type SummaryKind } from "./state.js";
 
 interface ReviewPromptInput {
 	scope: string;
@@ -47,7 +47,7 @@ function priorRoundsSection(history: ReviewState["history"], round: number): str
 			const advisor = entry.advisor
 				? `\n\n### ${msg.prompt.advisorRuling}（${entry.advisor.verdict}）\n${entry.advisor.advice}`
 				: "";
-			return `${msg.prompt.priorRound(entry.round)}\n${entry.details}${advisor}`;
+			return `${msg.prompt.priorRound(entry.round)}\n${roundText(entry)}${advisor}`;
 		})
 		.join("\n\n");
 	return `${msg.prompt.priorHeader}\n${body}`;

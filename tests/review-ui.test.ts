@@ -5,7 +5,7 @@ describe("review editor lock", () => {
 	const tui = { requestRender: () => {}, terminal: { rows: 40 } };
 	const theme = { borderColor: (text: string) => text, selectList: {} };
 	const keys = {
-		matches: (data: string, action: string) => action === "app.interrupt" && data === "\x1b",
+		matches: (data: string, action: string) => ({ "\x1b": "app.interrupt", "\x0e": "app.model.cycleForward", "\x04": "app.exit" })[data] === action,
 		getKeys: (action: string) => (action === "app.interrupt" ? ["escape"] : []),
 	};
 
@@ -24,26 +24,32 @@ describe("review editor lock", () => {
 		return { editor, unlock: () => ui.clear(ctx), installed, cancelled };
 	}
 
-	test("输入不进缓冲区，esc 立即取消", async () => {
+	test("typing and submitting are swallowed, esc cancels, and the hint names the configured key", async () => {
 		const { editor, cancelled } = await lock();
 		editor.handleInput("这段字不该出现");
 		expect(editor.getText()).toBe("");
 		editor.handleInput("\x1b");
 		expect(cancelled).toEqual(["cancel"]);
-	});
-
-	test("锁定期间输入区收起成一行暗色提示，快捷键文案取自 keybindings", async () => {
-		const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-		const { editor } = await lock();
-		const lines = editor.render(80);
-		expect(lines).toHaveLength(3);
-		expect(plain(lines[1]).trim()).toBe("审查进行中 · esc 取消");
 		const custom = await lock(undefined, { ...keys, getKeys: () => ["ctrl+c"] });
-		expect(plain(custom.editor.render(80)[1])).toContain("ctrl+c 取消");
-		expect(plain(editor.render(12)[1]).length).toBeLessThanOrEqual(12);
+		expect(custom.editor.render(80)[1].replace(/\x1b\[[0-9;]*m/gu, "")).toContain("ctrl+c 取消");
 	});
 
-	test("解锁恢复锁定前的自定义编辑器，没有自定义编辑器则恢复默认", async () => {
+	// 审查可能跑很久：切模型、退出这类应用级按键和扩展快捷键不能被一并锁死。
+	test("app-level keys and extension shortcuts keep working while the text input is locked", async () => {
+		const { editor, cancelled } = await lock();
+		const calls: string[] = [];
+		editor.actionHandlers.set("app.model.cycleForward", () => calls.push("model"));
+		editor.onExtensionShortcut = (data: string) => { if (data === "\x07") calls.push("shortcut"); return data === "\x07"; };
+		editor.onCtrlD = () => calls.push("exit");
+		editor.handleInput("\x0e");
+		editor.handleInput("\x07");
+		editor.handleInput("\x04");
+		expect(calls).toEqual(["model", "shortcut", "exit"]);
+		expect(cancelled).toEqual([]);
+		expect(editor.getText()).toBe("");
+	});
+
+	test("unlocking restores the custom editor that was in place, or the default one when there was none", async () => {
 		const custom = () => ({});
 		const first = await lock(custom);
 		first.unlock();

@@ -44,19 +44,16 @@ export function buildEvidence(
 	for (let index = rest.length - 1; index >= 0; index -= 1) {
 		const block = rest[index];
 		const cost = estimateTokens(block.text);
+		// 超预算就停：保留的必须是连续的最近后缀，省略标记才指得对位置。
 		if (used + cost > budgetTokens) {
-			omitted += 1;
-			continue;
+			omitted = index + 1;
+			break;
 		}
 		recent.push(block.text);
 		used += cost;
 	}
 	recent.reverse();
-	const text =
-		recent.length === 0
-			? anchor.text
-			: `${anchor.text}\n\n${omitted > 0 ? `${msg.evidence.gap(omitted)}\n\n` : ""}${recent.join("\n\n")}`;
-	return text;
+	return [anchor.text, ...(omitted > 0 ? [msg.evidence.gap(omitted)] : []), ...recent].join("\n\n");
 }
 
 type EvidenceBlock = { text: string; role?: "user" };

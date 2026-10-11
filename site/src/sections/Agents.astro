@@ -1,17 +1,19 @@
 ---
 import markUrl from "../../../design/brand/mark.svg?url";
-import emberUrl from "../../../design/promo/og-bg.jpg?url";
+import emberUrl from "../../../design/promo/og-bg.webp?url";
+import Rich from "../components/Rich.astro";
+import Story from "../components/Story.astro";
 import type { Lang } from "../i18n";
-import { copy, FALLBACK_INDEX, models, tallies, worker } from "./Agents.copy";
+import { demoModels } from "../repo";
+import { copy, FALLBACK_INDEX, tallies, WORKER_NAME } from "./Agents.copy";
 
 interface Props {
 	lang: Lang;
 }
 const { lang } = Astro.props;
 const t = copy[lang];
+const models = demoModels();
 const names = tallies.map((d) => t.agent(d.dir.slice(0, -1)));
-// 文案里反引号包住的片段按代码着色：拆开后奇数位是代码
-const segments = (text: string) => text.split("`").map((part, i) => ({ part, code: i % 2 === 1 }));
 ---
 
 <section class="section agents" id="agents" aria-labelledby="agents-title">
@@ -20,123 +22,113 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		<p class="section-lede">{t.lede}</p>
 	</div>
 
-	<div class="scene" style={`--ember: url(${emberUrl})`}>
-		<div class="ember" aria-hidden="true"></div>
-		<div class="scene-inner">
-			<div class="story">
-				<span class="rail" aria-hidden="true"><span class="rail-fill"></span></span>
-				<ol class="beats">
-					{
-						t.beats.map((beat) => (
-							<li class="beat">
-								<h3 class="item-title">{beat.title}</h3>
-								<p>{beat.body}</p>
-							</li>
-						))
-					}
-				</ol>
-			</div>
+	<div class="scene">
+		<div class="pin">
+			<div class="ember" aria-hidden="true" style={`--ember-image: url(${emberUrl})`}></div>
+			<div class="scene-inner">
+				<Story beats={t.beats} />
 
-			<figure class="window term" aria-label={t.terminalLabel}>
-				<div class="window-bar" aria-hidden="true"></div>
-				<div class="screen">
-					<p class="prompt"><span class="prompt-text">{t.task}</span></p>
-					<div class="talk">
-						<dl class="roster">
-							<div class="ln">
-								<dt>{t.role}</dt>
-								<dd>→ <span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span></dd>
-							</div>
-							<div class="ln">
-								<dt>{t.engineer}</dt>
-								<dd>→ <span class="model-primary">{models.engineer}</span></dd>
-							</div>
-						</dl>
-					</div>
-
-					<div class="stage">
-						<div class="panes">
-							{
-								tallies.map((d, i) => (
-									<div class="pane" data-fallback={i === FALLBACK_INDEX ? "" : undefined}>
-										<div class="pane-head">
-											<img class="pane-mark" src={markUrl} alt="" />
-											<b>{names[i]}</b>
-											<span class="dim role">{t.role}</span>
-											<span class="model">
-												<span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span>
-												{i === FALLBACK_INDEX && <span class="model-fallback">{models.fallback}</span>}
-											</span>
-										</div>
-										<span class="ln cmd">{t.countCmd(d.dir)}</span>
-										<span class="ln out">{t.files(d.files)}</span>
-										{i === FALLBACK_INDEX && <span class="ln fault">{t.fault}</span>}
-										{i === FALLBACK_INDEX && <span class="ln switch">{t.switched(models.fallback)}</span>}
-										<span class="ln cmd">{t.linesCmd(d.dir)}</span>
-										<span class="ln out">{t.lines(d.lines)}</span>
-										<span class="ln out">{t.largest(d.largest, d.largestLines)}</span>
-										<span class="ln done">{t.paneDone}</span>
-									</div>
-								))
-							}
+				<figure class="window term" aria-label={t.terminalLabel}>
+					<div class="window-bar" aria-hidden="true"></div>
+					<div class="screen">
+						<p class="prompt"><span class="prompt-text">{t.task}</span></p>
+						<div class="talk">
+							<dl class="roster">
+								<div class="ln">
+									<dt>{t.role}</dt>
+									<dd>→ <span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span></dd>
+								</div>
+								<div class="ln">
+									<dt>{t.engineer}</dt>
+									<dd>→ <span class="model-primary">{models.engineer}</span></dd>
+								</div>
+							</dl>
 						</div>
 
-						<div class="result">
-							<table>
-								<thead>
-									<tr><th>{t.table.dir}</th><th>{t.table.files}</th><th>{t.table.lines}</th><th>{t.table.largest}</th></tr>
-								</thead>
-								<tbody>
-									{
-										tallies.map((d) => (
-											<tr>
-												<td class="code">{d.dir}</td>
-												<td>{d.files}</td>
-												<td>{d.lines}</td>
-												<td><span class="code">{d.largest}</span> ({d.largestLines})</td>
-											</tr>
-										))
-									}
-								</tbody>
-							</table>
-							<p class="closing">{t.closing}</p>
-						</div>
-
-						<div class="flames" aria-hidden="true">
-							{tallies.map(() => <img class="flame" src={markUrl} alt="" />)}
-						</div>
-					</div>
-
-					<div class="dock">
-						<div class="activity">
-							<ul class="rows-live">
+						<div class="stage">
+							<div class="panes">
 								{
-									names.map((name) => (
-										<li>
-											<span class="spin" aria-hidden="true">⣿</span>
-											<b>{name}</b>
-											<span class="dim">{t.role} · {t.thinking}</span>
-										</li>
+									tallies.map((d, i) => (
+										<div class="pane" data-fallback={i === FALLBACK_INDEX ? "" : undefined}>
+											<div class="pane-head">
+												<img class="pane-mark" src={markUrl} alt="" />
+												<b>{names[i]}</b>
+												<span class="dim role">{t.role}</span>
+												<span class="model">
+													<span class="model-primary">{models.primary}<span class="model-mark" aria-hidden="true" /></span>
+													{i === FALLBACK_INDEX && <span class="model-fallback">{models.fallback}</span>}
+												</span>
+											</div>
+											<span class="ln cmd">{t.countCmd(d.dir)}</span>
+											<span class="ln out">{t.files(d.files)}</span>
+											{i === FALLBACK_INDEX && <span class="ln fault">{t.fault}</span>}
+											{i === FALLBACK_INDEX && <span class="ln switch">{t.switched(models.fallback)}</span>}
+											<span class="ln cmd">{t.linesCmd(d.dir)}</span>
+											<span class="ln out">{t.lines(d.lines)}</span>
+											<span class="ln out">{t.largest(d.largest, d.largestLines)}</span>
+											<span class="ln done">{t.paneDone}</span>
+										</div>
 									))
 								}
-							</ul>
-							<p class="rows-done fade-end">
-								<span class="ok">✓</span>
-								<span class="chip">{t.allDone}</span>
-								<span class="dim">{names.join(" · ")}</span>
-							</p>
+							</div>
+
+							<div class="result">
+								<table>
+									<thead>
+										<tr><th>{t.table.dir}</th><th>{t.table.files}</th><th>{t.table.lines}</th><th>{t.table.largest}</th></tr>
+									</thead>
+									<tbody>
+										{
+											tallies.map((d) => (
+												<tr>
+													<td class="code">{d.dir}</td>
+													<td>{d.files}</td>
+													<td>{d.lines}</td>
+													<td><span class="code">{d.largest}</span> ({d.largestLines})</td>
+												</tr>
+											))
+										}
+									</tbody>
+								</table>
+								<p class="closing">{t.closing}</p>
+							</div>
+
+							<div class="flames" aria-hidden="true">
+								{tallies.map(() => <img class="flame" src={markUrl} alt="" />)}
+							</div>
 						</div>
-						<div class="statusline">
-							<span class="word word-working">{t.working}</span>
-							<span class="word word-waiting">{t.waiting}</span>
-							<span class="word word-done ok">✓</span>
-							<span class="rule" aria-hidden="true"></span>
-							<span class="who">{t.master}</span>
+
+						<div class="dock">
+							<div class="activity">
+								<ul class="rows-live">
+									{
+										names.map((name) => (
+											<li>
+												<span class="spin" aria-hidden="true">⣿</span>
+												<b>{name}</b>
+												<span class="dim">{t.role} · {t.thinking}</span>
+											</li>
+										))
+									}
+								</ul>
+								<p class="rows-done fade-end">
+									<span class="ok">✓</span>
+									<span class="chip">{t.allDone}</span>
+									<span class="dim">{names.join(" · ")}</span>
+								</p>
+							</div>
+							<div class="statusline">
+								<span class="word word-working">{t.working}</span>
+								<span class="word word-waiting">{t.waiting}</span>
+								<span class="word word-done ok">✓</span>
+								<span class="rule" aria-hidden="true"></span>
+								<span class="who">{t.master}</span>
+							</div>
+							<div class="input" aria-hidden="true"><span class="caret"></span></div>
 						</div>
-						<div class="input" aria-hidden="true"><span class="caret"></span></div>
 					</div>
-				</div>
-			</figure>
+				</figure>
+			</div>
 		</div>
 	</div>
 
@@ -154,7 +146,9 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 					<ul>
 						{
 							t.answer.slice(1).map((item) => (
-								<li>{segments(item).map(({ part, code }) => (code ? <span class="code">{part}</span> : part))}</li>
+								<li>
+									<Rich text={item} />
+								</li>
 							))
 						}
 					</ul>
@@ -163,11 +157,11 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 					<div class="statusline">
 						<span class="ok">{t.workerDone}</span>
 						<span class="rule plain" aria-hidden="true"></span>
-						<b>{worker.name}</b>
+						<b>{WORKER_NAME}</b>
 						<span class="dim">· {t.engineer}</span>
 					</div>
 					<p class="input-line"><span class="dim">›</span> {t.placeholder}<span class="caret" aria-hidden="true"></span></p>
-					<p class="hints dim fade-end">1/1 · {worker.model} · {t.hints.join(" · ")}</p>
+					<p class="hints dim fade-end">1/1 · {models.engineerAtom} · {t.hints.join(" · ")}</p>
 				</div>
 			</div>
 		</figure>
@@ -175,9 +169,8 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 </section>
 
 <script>
-	import { gsap, reducedMotion, ScrollTrigger } from "../scroll";
+	import { gsap, reducedMotion, scrollStory } from "../scroll";
 
-	const SCROLL_VIEWPORTS = 2.6;
 	const FLAME_SIZE = 96;
 	// 火苗先横向分开再各自飞，避免同点出发时叠成一团
 	const FLAME_SPREAD = 90;
@@ -193,13 +186,11 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 	}
 
 	function play() {
-		scene.dataset.play = "";
 		const q = <T extends Element = HTMLElement>(selector: string) => gsap.utils.toArray<T>(selector, scene);
 		const stage = scene.querySelector<HTMLElement>(".stage")!;
 		const panes = q(".pane");
 		const marks = q(".pane-mark");
 		const flames = q(".flame");
-		const beats = q(".beat");
 		const fallbackPane = scene.querySelector<HTMLElement>(".pane[data-fallback]")!;
 
 		const prompt = splitChars(scene.querySelector(".prompt-text")!);
@@ -299,32 +290,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		showWord("working", BEATS[3] + 0.1);
 		showWord("done", BEATS[3] + 1.4);
 
-		// 当前拍：说明点亮，进度线跳到这一条的底边
-		const rail = scene.querySelector(".rail-fill");
-		const list = scene.querySelector<HTMLElement>(".beats")!;
-		let active = -1;
-		const setBeat = () => {
-			const now = BEATS.findLastIndex((time) => tl.time() >= time);
-			if (now === active) return;
-			active = now;
-			beats.forEach((li, i) => li.toggleAttribute("aria-current", i === now));
-			const li = beats[now];
-			gsap.to(rail, { scaleY: (li.offsetTop + li.offsetHeight) / list.offsetHeight, duration: 0.3, ease: "power2.out", overwrite: true });
-		};
-		setBeat();
-		tl.eventCallback("onUpdate", setBeat);
-
-		// 顶对齐钉住（顶部已让出导航高度）；整幕高过视口的极矮屏改为底边对齐，终端始终完整可见
-		const fits = scene.offsetHeight <= innerHeight;
-		ScrollTrigger.create({
-			trigger: scene,
-			animation: tl,
-			pin: true,
-			start: fits ? "top top" : "bottom bottom",
-			end: () => `+=${innerHeight * SCROLL_VIEWPORTS}`,
-			scrub: 0.6,
-			invalidateOnRefresh: true,
-		});
+		scrollStory({ track: scene, pin: scene.querySelector<HTMLElement>(".pin")!, timeline: tl, beats: BEATS });
 	}
 
 	// 每个字包一层行内 span：不改变断行（SplitText 的 inline-block 会让中文整句不可断、英文词被拆开），复制出来仍是原文
@@ -362,19 +328,33 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		overflow-x: clip;
 	}
 
-	/* 场景：说明列 + 终端。钉住时整幕在视口里居中；装饰火光不许撑出屏宽（钉住后 fixed 定位会逃出区块的裁切） */
+	/* 场景：说明列 + 终端。滚动播放时 .scene 是滚动轨道（多出 260svh 就是播完这一幕要滚的距离），.pin 用 sticky 钉住 */
 	.scene {
-		position: relative;
 		margin-top: clamp(48px, 8svh, 96px);
-		overflow-x: clip;
 	}
 
-	.scene[data-play] {
+	.scene[data-live] {
 		margin-top: 0;
 	}
 
-	/* 钉住时让出固定导航栏的高度；计入 offsetHeight，脚本据此判断整幕能否放进一屏 */
-	[data-play] .scene-inner {
+	/* 滚动距离用内容里的垫块给，不用 padding：sticky 只能在父元素的内容区里移动 */
+	.scene[data-live]::after {
+		content: "";
+		display: block;
+		height: 260svh;
+	}
+
+	.pin {
+		position: relative;
+	}
+
+	/* 钉住时让出固定导航栏的高度；比视口高时 scroll.ts 把 --stick-top 设成负值，底边贴住视口底 */
+	[data-live] .pin {
+		position: sticky;
+		top: var(--stick-top, 0);
+	}
+
+	[data-live] .scene-inner {
 		padding-block: calc(var(--nav-h) + 12px) 12px;
 	}
 
@@ -382,13 +362,13 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		position: absolute;
 		inset: -10% 0;
 		z-index: -1;
-		background: var(--ember) right bottom / cover no-repeat;
+		background: var(--ember-image) right bottom / cover no-repeat;
 		mask-image: radial-gradient(closest-side, black 30%, transparent);
 		opacity: 0.55;
 		pointer-events: none;
 	}
 
-	[data-play] .ember {
+	[data-live] .ember {
 		opacity: 0.25;
 	}
 
@@ -399,66 +379,6 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
 		gap: clamp(32px, 3.5vw, 48px);
 		align-items: start;
-	}
-
-	.story {
-		position: relative;
-		padding-left: 22px;
-	}
-
-	.rail {
-		display: none;
-		position: absolute;
-		inset: 4px auto 4px 0;
-		width: 2px;
-		border-radius: 2px;
-		background: var(--ring);
-	}
-
-	.rail-fill {
-		display: block;
-		height: 100%;
-		border-radius: inherit;
-		background: var(--accent);
-		transform-origin: top;
-		transform: scaleY(0);
-	}
-
-	[data-play] .rail {
-		display: block;
-	}
-
-	.beats {
-		display: grid;
-		gap: 28px;
-		padding: 0;
-		list-style: none;
-	}
-
-	.beat p {
-		margin-top: 6px;
-		color: var(--muted);
-		font-size: var(--text-body);
-		line-height: 1.55;
-		text-wrap: pretty;
-	}
-
-	.beat > * {
-		transition: opacity 320ms var(--ease-enter);
-	}
-
-	[data-play] .beat > * {
-		opacity: 0.5;
-	}
-
-	[data-play] .beat[aria-current] > * {
-		opacity: 1;
-	}
-
-	/* 中文按词断行，不在词中间折 */
-	:lang(zh) .agents :is(.section-lede, .beat p, .detail-copy p) {
-		word-break: keep-all;
-		overflow-wrap: anywhere;
 	}
 
 	/* 终端：复刻 pi 的会话界面，文字都是网页文字 */
@@ -510,11 +430,11 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		gap: 16px;
 	}
 
-	[data-play] .stage > :is(.panes, .result) {
+	[data-live] .stage > :is(.panes, .result) {
 		grid-area: 1 / 1;
 	}
 
-	[data-play] .result {
+	[data-live] .result {
 		align-self: center;
 	}
 
@@ -568,7 +488,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		opacity: 0;
 	}
 
-	[data-play] .pane[data-fallback] .model-primary {
+	[data-live] .pane[data-fallback] .model-primary {
 		opacity: 1;
 	}
 
@@ -658,7 +578,8 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		font-weight: 700;
 	}
 
-	.code {
+	.code,
+	.answer :global(code) {
 		color: var(--code);
 	}
 
@@ -673,7 +594,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		pointer-events: none;
 	}
 
-	[data-play] .flames {
+	[data-live] .flames {
 		display: block;
 	}
 
@@ -720,7 +641,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		visibility: hidden;
 	}
 
-	[data-play] .rows-live {
+	[data-live] .rows-live {
 		visibility: visible;
 	}
 
@@ -875,28 +796,6 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 			grid-template-columns: minmax(0, 1fr);
 		}
 
-		.story {
-			padding-left: 0;
-		}
-
-		[data-play] .rail {
-			display: none;
-		}
-
-		[data-play] .beats {
-			gap: 0;
-		}
-
-		[data-play] .beat {
-			grid-area: 1 / 1;
-			opacity: 0;
-			transition: opacity 320ms var(--ease-enter);
-		}
-
-		[data-play] .beat[aria-current] {
-			opacity: 1;
-		}
-
 		/* 单栏时窗格竖排：三栏放不下命令行，省掉命令行与窗格里的角色名（活动列表里还有） */
 		.panes {
 			grid-template-columns: minmax(0, 1fr);
@@ -935,6 +834,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 			gap: 10px;
 		}
 
+		/* 汇总表四列要在 320 宽放下，比终端正文小半档 */
 		table {
 			font-size: 11.5px;
 		}
@@ -944,8 +844,9 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 			padding: 4px 6px;
 		}
 
-		/* 窄屏让表头换行，列宽由数据决定 */
-		th {
+		/* 窄屏让表头换行、最大文件一栏在行数前折行，列宽由数据决定 */
+		th,
+		td:last-child {
 			white-space: normal;
 			vertical-align: bottom;
 		}
@@ -957,7 +858,7 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 			--mono-line: 1.4;
 		}
 
-		[data-play] .rows-live li:nth-child(n + 2) {
+		[data-live] .rows-live li:nth-child(n + 2) {
 			display: none;
 		}
 
@@ -966,24 +867,14 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 		}
 	}
 
-	/* 矮屏手机（如 390×667）：再省掉角色表，字号再收一档 */
+	/* 矮屏手机（如 390×667）：再省掉角色表、收紧间距；终端字号保持 12px 下限，放不下时由 scroll.ts 让底边贴住视口底 */
 	@media (max-width: 640px) and (max-height: 760px) {
-		/* 共享终端字号在矮屏上放不下整幕，只在这里再收一档 */
-		.scene .window {
-			font-size: 10.5px;
-		}
-
 		.scene-inner {
 			gap: 12px;
 		}
 
-		[data-play] .scene-inner {
+		[data-live] .scene-inner {
 			padding-bottom: 6px;
-		}
-
-		.beat p {
-			font-size: 0.9rem;
-			line-height: 1.45;
 		}
 
 		.scene .screen {
@@ -998,24 +889,13 @@ const segments = (text: string) => text.split("`").map((part, i) => ({ part, cod
 			padding-block: 6px;
 		}
 
-		[data-play] .talk {
+		[data-live] .talk {
 			display: none;
-		}
-
-		table {
-			font-size: 10.5px;
 		}
 
 		th,
 		td {
 			padding-inline: 5px;
-		}
-	}
-
-	/* 更矮的屏（如 360×640）：说明只留标题，四点内容区块导语里已经列过 */
-	@media (max-width: 640px) and (max-height: 700px) {
-		[data-play] .beat p {
-			display: none;
 		}
 	}
 </style>

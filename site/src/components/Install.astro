@@ -2,7 +2,8 @@
 import { INSTALL, site, type Lang } from "../i18n";
 
 // 安装命令与复制按钮；Hero 与 Closing 共用。复制逻辑用事件委托只挂一次，导航里的“安装”按钮也走它：
-// 任何带 data-copy-install 的按钮都会复制命令、置 data-state="done"，并把 data-copied 写进紧随其后的 aria-live 节点
+// 任何带 data-copy-install 的按钮都会复制命令、置 data-state="done"，并把 data-copied 写进紧随其后的 aria-live 节点；
+// 剪贴板被拒时播报 data-failed，并选中旁边的命令文字（有的话）方便手动复制
 interface Props {
 	lang: Lang;
 	class?: string;
@@ -12,8 +13,8 @@ const t = site[lang];
 ---
 
 <div class:list={["install", className]}>
-	<code><span class="prompt" aria-hidden="true">$</span>{INSTALL}</code>
-	<button type="button" class="copy" aria-label={t.copy} title={t.copy} data-copy-install data-copied={t.copied}>
+	<code>{INSTALL}</code>
+	<button type="button" class="copy" aria-label={t.copy} title={t.copy} data-copy-install data-copied={t.copied} data-failed={t.copyFailed}>
 		<svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
 		<svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
 	</button>
@@ -30,7 +31,16 @@ const t = site[lang];
 		const button = (event.target as Element).closest<HTMLButtonElement>("[data-copy-install]");
 		if (!button) return;
 		const live = button.nextElementSibling!;
-		await navigator.clipboard.writeText(INSTALL);
+		const copied = await navigator.clipboard.writeText(INSTALL).then(
+			() => true,
+			() => false,
+		);
+		if (!copied) {
+			live.textContent = button.dataset.failed!;
+			const code = button.parentElement!.querySelector("code");
+			if (code) getSelection()!.selectAllChildren(code);
+			return;
+		}
 		button.dataset.state = "done";
 		live.textContent = button.dataset.copied!;
 		clearTimeout(timers.get(button));
@@ -62,12 +72,16 @@ const t = site[lang];
 		white-space: nowrap;
 	}
 
-	.prompt {
+	/* 提示符画在样式里：不进读屏，也不进复制或选中的文字 */
+	code::before {
+		content: "$";
 		margin-right: 12px;
 		color: var(--accent);
 	}
 
 	.copy {
+		/* 命令放不下时缩的是命令，不是按钮 */
+		flex: none;
 		display: grid;
 		place-items: center;
 		width: 36px;
@@ -142,8 +156,23 @@ const t = site[lang];
 			font-size: 14px;
 		}
 
-		.prompt {
+		code::before {
 			margin-right: 8px;
+		}
+	}
+
+	/* 320 宽：去掉装饰用的提示符、再收一档字号，整条命令和复制按钮仍放得下 */
+	@media (max-width: 360px) {
+		.install {
+			padding-left: 14px;
+		}
+
+		code {
+			font-size: 12.5px;
+		}
+
+		code::before {
+			content: none;
 		}
 	}
 </style>

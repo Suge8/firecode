@@ -63,8 +63,10 @@ test("审查者按 en 提示词写的输出契约被解析；校验报错、证�
 	expect(passed.status).toBe("passed");
 
 	const missing = parseReviewOutput("FAIL\n## Finding 1: x\n- **Severity**: High\n- **Issue**: x");
-	expect(missing).toMatchObject({ status: "error" });
-	expect(missing.details).toBe("review output format invalid: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
+	// 格式无效但以 FAIL 开头的票仍按未通过计，违例说明与原文一并交出。
+	expect(missing).toMatchObject({ status: "failed" });
+	expect(missing.details).toContain("did not meet the format contract: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
+	expect(missing.details).toContain("- **Issue**: x");
 
 	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;
 	const entry = (role: string, content: string) => ({ type: "message", message: { role, content } });

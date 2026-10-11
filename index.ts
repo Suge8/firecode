@@ -64,7 +64,7 @@ export function registerFirecode(pi: ExtensionAPI, subsession = false): void {
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, reviewEnabled, featuresBroken);
+	registerReview(pi, { enabled: reviewEnabled, configBroken: featuresBroken });
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {
