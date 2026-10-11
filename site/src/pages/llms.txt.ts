@@ -1,3 +1,4 @@
-import { llmsTxt } from "../agent-docs";
+import type { APIRoute } from "astro";
+import { llmsTxt } from "../repo";
 
-export const GET = () => new Response(llmsTxt(), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+export const GET: APIRoute = ({ site }) => new Response(llmsTxt(site!), { headers: { "Content-Type": "text/plain; charset=utf-8" } });

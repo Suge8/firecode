@@ -1,17 +1,14 @@
 import type { Lang } from "../i18n";
 
-// gets 里用反引号包住的片段渲染成代码；"re\u2011review" 用不断行连字符，窄屏不在连字符处断开
-type Row = { name: string; cmd?: string; note?: string; reviewers: string; gets: string };
-
-// 闭环演示里的发现与修复取自 design/promo/review-loop 的真实录屏
+// 闭环演示里的发现与修复取自 design/promo/review-loop 的真实录屏；对比表只来自 README（repo.ts），这里只有表头首列的名字
 export const copy = {
 	en: {
 		title: "Fully automatic review and delivery.",
-		lede: "Just tell the commander what you want. On important or hard tasks it starts an adversarial review on its own, and only hands you the result once it passes.",
+		lede: "Just tell the commander what you want. On important or hard tasks it starts an adversarial review on its own and tells you how it ended.",
 		beats: [
 			{ title: "Your models review in parallel", body: "Any number of them, adversarially. A single FAIL sends the whole round back." },
 			{ title: "Every problem goes back to be fixed", body: "The agent fixes each finding at its root, and the next round starts on its own." },
-			{ title: "Reviewed again until it passes", body: "What reaches you is code that meets the bar and does what you asked." },
+			{ title: "Reviewed again until it settles", body: "The loop ends when the review passes, the advisor stops it, or the rounds run out, and you see which." },
 		],
 		model: "Model",
 		reviewing: "Reviewing",
@@ -28,25 +25,18 @@ export const copy = {
 		decisions: ["Continue fixing", "Narrow scope", "Stop fixing"],
 		manualTitle: "Or start it yourself",
 		manual: ["Run ", " any time."],
-		compare: "Fixed and re\u2011reviewed code, not a list of problems",
+		compare: "Fix and re\u2011review in a loop, not a one\u2011off list of problems",
 		play: "Play the recording",
-		cols: ["Tool", "Reviewers", "What you get"],
-		rows: <Row[]>[
-			{ name: "FireCode", reviewers: "Any number of models, reviewing adversarially", gets: "Fixed code that passed re\u2011review" },
-			{ name: "Claude Code", cmd: "/code-review", reviewers: "Several agents, Claude models only", gets: "A findings list; `--fix` applies it as-is" },
-			{ name: "Codex", cmd: "/review", reviewers: "One reviewer on your session's model", gets: "A findings list, no code changes" },
-			{ name: "Open Code Review", note: "Alibaba", reviewers: "One model, file by file", gets: "A findings list to fix yourself" },
-			{ name: "PR-Agent / Qodo", reviewers: "Specialist agents, one model", gets: "Comments and suggestions" },
-			{ name: "multi-model-review", note: "Pi", reviewers: "Several model families", gets: "One combined verdict" },
-		],
+		pause: "Pause the recording",
+		toolCol: "Tool",
 	},
 	zh: {
 		title: "审查交付全自动",
-		lede: "你只管告诉指挥官要做什么。遇到重要、难的任务，它会自动发起对抗审查，审查通过了才交给你。",
+		lede: "你只管告诉指挥官要做什么。遇到重要、难的任务，它会自动发起对抗审查，并告诉你审查怎么结束的。",
 		beats: [
 			{ title: "你配置的模型并行挑问题", body: "数量不限，对抗审查。只要有一票 FAIL，整轮就打回。" },
 			{ title: "挑出的问题打回去修", body: "代理逐条从根上修，修完自动进入下一轮。" },
-			{ title: "修完再审，直到通过", body: "交到你手里的，是质量过关、满足需求的代码。" },
+			{ title: "修完再审，直到有结论", body: "审查通过、顾问叫停或轮数用尽才结束，结局如实告诉你。" },
 		],
 		model: "模型",
 		reviewing: "审查中",
@@ -63,16 +53,9 @@ export const copy = {
 		decisions: ["继续修复", "收窄范围", "停止修复"],
 		manualTitle: "也可以手动发起",
 		manual: ["随时执行 ", " 即可。"],
-		compare: "交给你的是修好、复审通过的代码，不是问题清单",
+		compare: "修复与复审循环到有结论，不是一次性的问题清单",
 		play: "播放录屏",
-		cols: ["工具", "审查者", "交到你手里的是"],
-		rows: <Row[]>[
-			{ name: "FireCode", reviewers: "任意多个模型对抗审查", gets: "修好、复审通过的代码" },
-			{ name: "Claude Code", cmd: "/code-review", reviewers: "多个代理，只用 Claude 模型", gets: "问题清单；`--fix` 可照清单直接改" },
-			{ name: "Codex", cmd: "/review", reviewers: "一个审查者，用当前会话的模型", gets: "问题清单，不改代码" },
-			{ name: "Open Code Review", note: "阿里", reviewers: "同一个模型，逐文件审", gets: "问题清单，要你自己修" },
-			{ name: "PR-Agent / Qodo", reviewers: "分工代理，同一个模型", gets: "评论和修改建议" },
-			{ name: "multi-model-review", note: "Pi", reviewers: "多家模型", gets: "一份汇总结论" },
-		],
+		pause: "暂停录屏",
+		toolCol: "工具",
 	},
-} satisfies Record<Lang, unknown>;
+} satisfies Record<Lang, Record<string, unknown>>;

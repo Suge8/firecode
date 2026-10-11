@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { THINKING_LEVELS, type ModelAtom, type ThinkingLevelValue } from "../config.js";
 import { msg } from "./messages.js";
 
-const STATE_VERSION = 9;
+const STATE_VERSION = 10;
 export const WORKER_NAME = /^[a-z][a-z0-9_-]{0,31}$/u;
 
 export type WorkerStatus = "working" | "idle" | "reviewing";
@@ -18,12 +18,11 @@ export interface WorkerRef {
 	cwd?: string;
 	interruptedAt?: number;
 	/**
-	 * 启动序：start 在同步段按到达先后取的单调序号，活动列表与全过程视图按它排。必须持久化：并行 start 越过
+	 * 启动序：start 在同步段按到达先后取的单调序号，store 按它排序。必须持久化：并行 start 越过
 	 * await 后落盘的先后（以及任何落盘时刻）与到达先后不一致，恢复后若靠别的字段排会换序。
 	 */
 	launch: number;
 	reviewNeeded?: boolean;
-	disposition?: "pending" | "reminded";
 }
 
 export function modelAtomText(atom: Pick<ModelAtom, "model" | "thinking">): string {
@@ -37,21 +36,29 @@ export function masterStatePath(agentDir: string, sessionId: string): string {
 }
 
 /**
- * 池档案的唯一所有者：每次变更同步原子落盘（0600）。构造即加载——运行时不跨进程存活，所以载入时在飞的
- * working/reviewing 一律收敛为带 interruptedAt 的 idle（会话与审查义务保留，等指挥官续派）。
- * 旧版档案由所有者丢弃并记下版本，供上层告知；格式损坏明确失败，不当作空池。
+ * 池档案的唯一所有者：每次变更同步原子落盘（0600），池变空就删文件。构造即加载——运行时不跨进程存活，所以载入时
+ * 在飞的 working/reviewing 一律收敛为带 interruptedAt 的 idle（会话与审查义务保留，等指挥官续派），名字记在 recovered。
+ * 列表始终按启动序（launch）排列，读者不再二次排序。
+ * 旧版档案由所有者丢弃并记下版本，供上层告知；新版本（降级）与格式损坏明确失败，不删、不当作空池。
  */
 export class MasterStore {
 	private list: readonly WorkerRef[];
 	readonly discardedLegacyVersion?: number;
+	/** 本次载入从在飞收敛为 idle 的子代理名字：只有它们的回合是被会话重载打断的。 */
+	readonly recovered: readonly string[];
 
 	constructor(private readonly path: string, private readonly onChange?: () => void) {
 		const loaded = load(path);
 		this.discardedLegacyVersion = loaded.legacyVersion;
 		const now = Date.now();
-		this.list = loaded.workers.map((worker) =>
-			worker.status === "idle" ? worker : { ...worker, status: "idle", interruptedAt: now });
-		if (this.list.some((worker, index) => worker !== loaded.workers[index])) this.persist();
+		const recovered: string[] = [];
+		this.list = loaded.workers.map((worker) => {
+			if (worker.status === "idle") return worker;
+			recovered.push(worker.name);
+			return { ...worker, status: "idle", interruptedAt: now };
+		});
+		this.recovered = recovered;
+		if (recovered.length) this.persist();
 	}
 
 	get workers(): readonly WorkerRef[] {
@@ -68,15 +75,12 @@ export class MasterStore {
 		return worker;
 	}
 
-	/** 按名字新增或覆盖；名字与 sessionPath 各自唯一，身份（sessionPath）一经建立不可更换。 */
+	/** 按名字新增或覆盖；新增的按启动序插入。 */
 	upsert(worker: WorkerRef): void {
-		const owner = this.list.find((candidate) => candidate.sessionPath === worker.sessionPath);
-		if (owner && owner.name !== worker.name) throw new Error(msg.state.pathTaken(worker.sessionPath));
 		const existing = this.find(worker.name);
-		if (existing && existing.sessionPath !== worker.sessionPath) throw new Error(msg.state.pathChange(worker.name));
 		this.list = existing
 			? this.list.map((candidate) => (candidate === existing ? worker : candidate))
-			: [...this.list, worker];
+			: [...this.list, worker].sort(byLaunch);
 		this.commit();
 	}
 
@@ -94,6 +98,10 @@ export class MasterStore {
 	}
 
 	private persist(): void {
+		if (!this.list.length) {
+			rmSync(this.path, { force: true });
+			return;
+		}
 		mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
 		const temporary = `${this.path}.${process.pid}.${crypto.randomUUID()}.tmp`;
 		try {
@@ -105,6 +113,8 @@ export class MasterStore {
 		}
 	}
 }
+
+const byLaunch = (a: WorkerRef, b: WorkerRef) => a.launch - b.launch;
 
 function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 	let raw: string;
@@ -120,7 +130,8 @@ function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 	} catch {
 		throw new Error(msg.state.invalidJson(path));
 	}
-	if (typeof data?.version === "number" && data.version !== STATE_VERSION) {
+	if (typeof data?.version === "number" && data.version > STATE_VERSION) throw new Error(msg.state.newerVersion(path, data.version));
+	if (typeof data?.version === "number" && data.version < STATE_VERSION) {
 		rmSync(path, { force: true });
 		return { workers: [], legacyVersion: data.version };
 	}
@@ -129,7 +140,8 @@ function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 		|| new Set(workers.map((worker) => worker.name)).size !== workers.length
 		|| new Set(workers.map((worker) => worker.sessionPath)).size !== workers.length)
 		throw new Error(msg.state.invalidShape(path));
-	return { workers };
+	if (!workers.length) rmSync(path, { force: true });
+	return { workers: workers.sort(byLaunch) };
 }
 
 function isWorker(value: unknown): value is WorkerRef {
@@ -147,6 +159,5 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
-	if (typeof record.launch !== "number" || !Number.isInteger(record.launch) || record.launch <= 0) return false;
-	return record.disposition === undefined || record.disposition === "pending" || record.disposition === "reminded";
+	return typeof record.launch === "number" && Number.isInteger(record.launch) && record.launch > 0;
 }

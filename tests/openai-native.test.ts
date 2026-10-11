@@ -1,22 +1,17 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { fakePi } from "./fake-pi.ts";
-import { loadFirecodeModule, PI_AI_COMPAT_URL, PI_CODING_AGENT_URL, PI_PACKAGES } from "./loader.ts";
+import { loadFirecodeModule, PI_AI_COMPAT_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 /**
- * OpenAI 原生压缩的端到端：真实宿主的 SessionManager 与 Responses 转换器，只替换对 OpenAI 的 fetch。
- * 重放与压缩请求的期望值一律取自宿主自己的转换结果——对话中途的系统消息、工具与助手阶段稍有出入，
- * 重放比对就会失败、原生压缩白做。
+ * OpenAI 请求层的端到端：真实宿主的 SessionManager 与流，只替换对 OpenAI 的 fetch。
+ * 压缩请求与重放的期望值取自宿主自己对同一份会话构造的请求体——对话中途的系统消息、工具与助手阶段稍有出入，
+ * 重放就会放弃、原生压缩白做。
  */
-const { getModel, getModels } = (await import(PI_AI_COMPAT_URL)) as any;
+const { getModel, getModels, streamSimple } = (await import(PI_AI_COMPAT_URL)) as any;
 const { SessionManager, convertToLlm } = (await import(PI_CODING_AGENT_URL)) as any;
-const { convertResponsesMessages } = (await import(
-	pathToFileURL(join(PI_PACKAGES, "ai/src/api/openai-responses-shared.ts")).href
-)) as any;
-const { default: openAINativeExtension } = (await loadFirecodeModule("provider/openai-native/src/extension.ts")) as any;
 
 // 目录里开启与未开启 supportsMidConvoSystemMessages 的 Responses 模型各取代表；folded：中途系统消息被折进首条提示。
 const MODELS = [
@@ -25,7 +20,8 @@ const MODELS = [
 	{ provider: "openai-codex", id: "gpt-5.5", folded: false },
 	{ provider: "openai", id: "gpt-5-mini", folded: true },
 ] as const;
-const SHIM = "[OpenAI native compaction checkpoint]";
+const INSTRUCTIONS = "INSTRUCTIONS";
+const TRIGGER = { type: "compaction_trigger" };
 const directories: string[] = [];
 const savedFetch = globalThis.fetch;
 let clock = 0;
@@ -51,39 +47,55 @@ const answer = (value: string, id: string, phase = "final_answer") => ({
 });
 const readCall = (id: string) => ({ type: "toolCall", id: `${id}|fc_${id}`, name: "read", arguments: { path: "README.md" } });
 
-/** 宿主发给模型的请求体 input：先 convertToLlm 再转 Responses；压缩请求不带系统提示，普通请求在 openai 上带、在 codex 上走 instructions。 */
-function hostInput(model: any, messages: unknown[], leadingInPayload: boolean): unknown[] {
-	const compat = model.compat ?? {};
-	const codex = model.api === "openai-codex-responses";
-	return convertResponsesMessages(model, { messages: convertToLlm(messages) }, new Set([model.provider]), {
-		includeSystemPrompt: leadingInPayload && !codex,
-		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages ?? false,
-		supportsAdditionalTools: compat.supportsAdditionalTools ?? false,
-		supportsToolSearch: compat.supportsToolSearch ?? false,
-		toolOptions: codex
-			? { strict: null, supportsStrictMode: compat.supportsStrictMode ?? true, supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools ?? false }
-			: { supportsStrictMode: compat.supportsStrictMode ?? false, supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools ?? false },
+const jwt = (account: string) => {
+	const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64");
+	return `${part({ alg: "none" })}.${part({ "https://api.openai.com/auth": { chatgpt_account_id: account } })}.sig`;
+};
+const apiKeyFor = (model: any) => (model.provider === "openai-codex" ? jwt("acct_test") : "sk-test");
+
+/** 宿主对这批消息会发出的请求体：同一份会话交给宿主自己的流，在发出前截下 onPayload 的参数。 */
+async function hostPayload(model: any, messages: unknown[]): Promise<any> {
+	let captured: unknown;
+	const stream = streamSimple(model, { messages: convertToLlm(messages) }, {
+		apiKey: apiKeyFor(model),
+		onPayload: (payload: unknown) => { captured = payload; throw new Error("captured"); },
+	});
+	for await (const _ of stream);
+	return captured;
+}
+
+/** Responses 接口对输入条目 id 与 call_id 的格式要求（宿主转换时按同一规则规整）。 */
+function malformedIds(items: any[]): string[] {
+	return items.flatMap((item) => {
+		const problems: string[] = [];
+		if (item.call_id !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(item.call_id)) problems.push(`call_id ${item.call_id}`);
+		if (item.type === "function_call" && item.id !== undefined && !item.id.startsWith("fc_")) problems.push(`function_call id ${item.id}`);
+		if (item.type === "custom_tool_call" && item.id !== undefined && !item.id.startsWith("ctc_")) problems.push(`custom_tool_call id ${item.id}`);
+		return problems;
 	});
 }
 
-type Setup = { model: any; openai?: Record<string, unknown>; systemPrompt?: string; hasUI?: boolean; sm?: any };
+const firstIndex = (items: any[], needle: string) => items.findIndex((item) => JSON.stringify(item.content ?? "").includes(needle));
 
-/** 在真实会话上装配扩展；返回会话、两个宿主钩子的调用入口与通知记录。 */
-function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "INSTRUCTIONS", hasUI = false, sm = undefined }: Setup) {
+type Setup = { model: any; openai?: Record<string, unknown>; hasUI?: boolean; sm?: any; auth?: unknown };
+
+/** 在真实会话上装配扩展（配置文件里只有 openai 节）；返回会话、宿主钩子的调用入口与通知记录。 */
+async function harness({ model, openai = { nativeCompaction: true }, hasUI = false, sm = undefined, auth = undefined }: Setup) {
 	const directory = mkdtempSync(join(tmpdir(), "firecode-openai-native-"));
 	directories.push(directory);
-	const configPath = join(directory, "config.jsonc");
-	writeFileSync(configPath, JSON.stringify({ openai }));
+	const { registerOpenAINative } = (await loadFirecodeModule("provider/openai-native/index.ts", {
+		configJsonc: JSON.stringify({ openai }),
+	})) as any;
 	const fake = fakePi();
-	openAINativeExtension(fake.pi, configPath, "ctrl+shift+s");
+	registerOpenAINative(fake.pi);
 	sm ??= SessionManager.inMemory(directory);
 	const notices: [string, string][] = [];
 	const ctx = (current = model) => ({
 		cwd: directory,
 		hasUI,
 		model: current,
-		getSystemPrompt: () => systemPrompt,
-		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
+		getSystemPrompt: () => INSTRUCTIONS,
+		modelRegistry: { getApiKeyAndHeaders: async () => auth ?? { ok: true, apiKey: apiKeyFor(current) } },
 		sessionManager: sm,
 		ui: { notify: (message: string, level: string) => notices.push([level, message]), setStatus() {}, theme: { fg: (_: string, value: string) => value } },
 	});
@@ -91,20 +103,22 @@ function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "I
 		sm,
 		notices,
 		/** 宿主的 /compact：以第 firstKept 条起保留；成功时按宿主做法把结果追加成压缩条目。 */
-		async compact(firstKeptEntryId: string, options: { current?: any; customInstructions?: string; signal?: AbortSignal } = {}) {
+		async compact(firstKeptEntryId: string, options: { current?: any; customInstructions?: string; reason?: string } = {}) {
 			const result = await fake.fire("session_before_compact", {
 				branchEntries: sm.getBranch(),
-				signal: options.signal ?? new AbortController().signal,
+				signal: new AbortController().signal,
 				customInstructions: options.customInstructions,
+				reason: options.reason ?? "manual",
 				preparation: { firstKeptEntryId, tokensBefore: 4096 },
 			}, ctx(options.current));
 			if (result?.compaction) sm.appendCompaction(result.compaction.summary, result.compaction.firstKeptEntryId, result.compaction.tokensBefore, result.compaction.details);
 			return result;
 		},
-		/** 宿主下一次请求：payload 是宿主自己的转换结果，返回扩展改写后的请求体（未改写为 undefined）。 */
+		/** 宿主下一次请求：payload 是宿主自己的流构造的请求体，result 是扩展改写后的请求体（未改写为 undefined）。 */
 		async request(extra: unknown[] = [], current = model) {
 			const messages = sm.buildSessionContext().messages;
-			const payload = { model: current.id, instructions: systemPrompt, input: [...hostInput(current, messages, true), ...extra] };
+			const payload = await hostPayload(current, messages);
+			if (extra.length) payload.input.push(...extra);
 			return { payload, messages, result: await fake.fire("before_provider_request", { payload }, ctx(current)) };
 		},
 	};
@@ -114,14 +128,15 @@ function harness({ model, openai = { nativeCompaction: true }, systemPrompt = "I
 function stubFetch(...responses: Array<() => Response>) {
 	const calls: { url: string; raw: string; body: any }[] = [];
 	globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
-		const raw = String(init?.body);
-		calls.push({ url: String(url), raw, body: JSON.parse(raw) });
+		// Codex 的 SSE 请求体按宿主做法 zstd 压缩。
+		const body = init?.body;
+		const raw = typeof body === "string" ? body : body instanceof Uint8Array ? new TextDecoder().decode(Bun.zstdDecompressSync(body)) : "";
+		calls.push({ url: String(url), raw, body: raw ? JSON.parse(raw) : undefined });
 		return responses[Math.min(calls.length, responses.length) - 1]();
 	}) as typeof fetch;
 	return calls;
 }
-const compacted = (encrypted: string) => () =>
-	Response.json({ created_at: "2026-04-12T00:00:00.000Z", output: [{ type: "message", role: "assistant", content: [] }, { type: "compaction", encrypted_content: encrypted }] });
+const compacted = (encrypted: string) => () => Response.json({ output: [{ type: "message", role: "assistant", content: [] }, { type: "compaction", encrypted_content: encrypted }] });
 
 /** 压缩前的会话：被总结的旧轮次与保留窗口。返回保留窗口的首条 id。 */
 function oldHistory(sm: any, model: any): string {
@@ -145,35 +160,40 @@ function newTurns(sm: any, model: any) {
 	sm.appendMessage(user("follow up"));
 }
 
+const SHIM = "[OpenAI native compaction checkpoint]";
+
 for (const { provider, id, folded } of MODELS) {
 	const model = getModel(provider, id);
 
-	test(`${provider}/${id}: /compact sends the host's history, the shim is persisted, and replay equals the host body with options applied`, async () => {
-		const h = harness({ model, openai: { nativeCompaction: true, providers: { [provider]: { textVerbosity: "high", priority: true } } } });
+	test(`${provider}/${id}: /compact sends the host's history, the checkpoint is persisted, and replay equals the host body with options applied`, async () => {
+		const h = await harness({ model, openai: { nativeCompaction: true, providers: { [provider]: { textVerbosity: "high", priority: true } } } });
 		const kept = oldHistory(h.sm, model);
 		const calls = stubFetch(compacted("enc-1"));
 		const context = h.sm.buildSessionContext().messages;
 
 		const result = await h.compact(kept, { customInstructions: "Keep the release notes." });
 
+		const instructions = `${INSTRUCTIONS}\n\nAdditional user guidance for this manual /compact request:\nKeep the release notes.`;
+		const hostRequest = await hostPayload(model, [system({ content: instructions }), ...context.slice(1)]);
 		expect(calls).toHaveLength(1);
-		expect(calls[0].body.input).toEqual([...hostInput(model, context, false), { type: "compaction_trigger" }]);
-		expect(calls[0].body.instructions).toBe("INSTRUCTIONS\n\nAdditional user guidance for this manual /compact request:\nKeep the release notes.");
+		expect(calls[0].body.input).toEqual([...hostRequest.input, TRIGGER]);
+		expect(calls[0].body.instructions).toBe(hostRequest.instructions);
+		expect([calls[0].body.instructions, ...calls[0].body.input.filter((item: any) => item.role === "developer").map((item: any) => item.content)]).toContain(instructions);
 		expect(result.compaction).toMatchObject({ summary: SHIM, firstKeptEntryId: kept, tokensBefore: 4096 });
 		const window = result.compaction.details.compactedWindow;
-		// 保留窗口只留各轮用户消息；中途系统更新在支持时也留（以 developer 角色）。
+		// 保留窗口只留各轮用户消息与压缩项：工具往返和系统提示不进窗口（系统提示每次请求自带）。
 		expect(window.at(-1)).toEqual({ type: "compaction", encrypted_content: "enc-1" });
 		expect(window.slice(0, -1).filter((item: any) => item.role === "user").map((item: any) => item.content[0].text)).toEqual(["ancient question", "old question"]);
 		expect(window.some((item: any) => item.type === "function_call")).toBe(false);
+		expect(JSON.stringify(window)).not.toContain(INSTRUCTIONS);
 
 		newTurns(h.sm, model);
-		const { payload, messages, result: rewritten } = await h.request();
+		const { payload, result: rewritten } = await h.request();
 		const leading = model.api === "openai-codex-responses" ? 0 : 1;
-		const keptLength = hostInput(model, messages.slice(0, messages.findIndex((message: any) => message.content?.[0]?.text === "new question")), true).length;
 		expect(rewritten).toEqual({
 			...payload,
-			input: [...payload.input.slice(0, leading), ...window, ...payload.input.slice(keptLength)],
-			text: { verbosity: "high" },
+			input: [...payload.input.slice(0, leading), ...window, ...payload.input.slice(firstIndex(payload.input, "new question"))],
+			text: { ...payload.text, verbosity: "high" },
 			service_tier: "priority",
 		});
 		// 不支持中途系统消息的模型：更新已折进首条提示，其后的输入里没有它。
@@ -182,28 +202,100 @@ for (const { provider, id, folded } of MODELS) {
 		expect(replayed.includes("NEW PLAN")).toBe(!folded);
 		expect(replayed).toContain("Release notes say green.");
 	});
+}
 
-	test(`${provider}/${id}: tools added mid-conversation ${folded ? "are folded into the prompt" : "cannot be replayed, so the request is left to the host"}`, async () => {
-		const h = harness({ model, hasUI: true });
-		const kept = oldHistory(h.sm, model);
-		stubFetch(compacted("enc"));
+test("tools added mid-conversation are replayed as the host sent them", async () => {
+	const model = getModel("openai", "gpt-6.1-sol");
+	const h = await harness({ model, hasUI: true });
+	const kept = oldHistory(h.sm, model);
+	stubFetch(compacted("enc"));
+	await h.compact(kept);
+	h.sm.appendMessage(user("new question"));
+	h.sm.appendMessage(system({ toolsAdded: [{ name: "tool_b", description: "b", parameters: { type: "object", properties: {} } }] }));
+	h.sm.appendMessage(user("use the new tool"));
+
+	const { payload, result } = await h.request();
+
+	expect(h.notices).toEqual([]);
+	expect(JSON.stringify(result.input)).toContain("enc");
+	expect(JSON.stringify(result.input)).toContain("tool_b");
+	expect(result.input.slice(-(payload.input.length - firstIndex(payload.input, "new question")))).toEqual(payload.input.slice(firstIndex(payload.input, "new question")));
+});
+
+test("a native compaction keeps replaying when assistant text carries no phase", async () => {
+	const model = getModel("openai", "gpt-6.1-sol");
+	const h = await harness({ model, hasUI: true });
+	const kept = oldHistory(h.sm, model);
+	stubFetch(compacted("enc"));
+	await h.compact(kept);
+	h.sm.appendMessage(user("new question"));
+	h.sm.appendMessage(assistant(model, [{ type: "text", text: "No phase here.", textSignature: JSON.stringify({ v: 1, id: "msg_nophase" }) }]));
+	h.sm.appendMessage(user("follow up"));
+
+	const { result } = await h.request();
+
+	expect(h.notices).toEqual([]);
+	expect(JSON.stringify(result.input)).toContain("enc");
+	expect(JSON.stringify(result.input)).toContain("No phase here.");
+});
+
+const GRAMMAR_TOOL = {
+	name: "codemode",
+	description: "Run code",
+	parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+	constrainedSampling: { type: "grammar", variants: { openai_lark: "start: /.+/" } },
+};
+const codeCall = (id: string) => ({ type: "toolCall", id: `${id}|ctc_${id}`, name: "codemode", arguments: { code: "1 + 1" } });
+
+for (const { provider, id } of [MODELS[0], MODELS[1]]) {
+	test(`${provider}/${id}: grammar-constrained tool calls are compacted and replayed`, async () => {
+		const model = getModel(provider, id);
+		const h = await harness({ model, hasUI: true });
+		h.sm.appendMessage(system({ content: "Base prompt", toolsAdded: [GRAMMAR_TOOL] }));
+		h.sm.appendMessage(user("ancient question"));
+		const kept = h.sm.appendMessage(user("old question"));
+		h.sm.appendMessage(assistant(model, [codeCall("call_old")], "toolUse"));
+		h.sm.appendMessage(toolResult("call_old|ctc_call_old", "2"));
+		h.sm.appendMessage(assistant(model, [answer("old answer", "msg_old")]));
+		const calls = stubFetch(compacted("enc"));
 		await h.compact(kept);
 		h.sm.appendMessage(user("new question"));
-		h.sm.appendMessage(system({ toolsAdded: [{ name: "tool_b", description: "b", parameters: { type: "object", properties: {} } }] }));
-		h.sm.appendMessage(user("use the new tool"));
+		h.sm.appendMessage(assistant(model, [codeCall("call_new")], "toolUse"));
+		h.sm.appendMessage(toolResult("call_new|ctc_call_new", "2"));
+		h.sm.appendMessage(user("follow up"));
 
 		const { result } = await h.request();
-		await h.request();
 
-		expect(result === undefined).toBe(!folded);
-		// 放弃重放时旧历史不在上下文里：提醒用户，且同一次压缩只提醒一次。
-		expect(h.notices).toEqual(folded ? [] : [["warning", expect.stringContaining("unsupported-tool-additions")]]);
+		expect(malformedIds(calls[0].body.input)).toEqual([]);
+		expect(h.notices).toEqual([]);
+		expect(JSON.stringify(result.input)).toContain("enc");
+		expect(result.input.some((item: any) => item.type === "custom_tool_call" && item.call_id === "call_new")).toBe(true);
 	});
 }
 
-test("a kept window holding another provider's messages still replays, ids notwithstanding", async () => {
+test("tool call ids from another provider reach the compaction request in a form the Responses API accepts", async () => {
 	const model = getModel("openai", "gpt-6.1-sol");
-	const h = harness({ model, hasUI: true });
+	const h = await harness({ model });
+	h.sm.appendMessage(system({ content: "Base prompt" }));
+	const kept = h.sm.appendMessage(user("old question"));
+	const longId = `toolu_${"x".repeat(70)}.y`;
+	h.sm.appendMessage(assistant({ provider: "anthropic", api: "anthropic-messages", id: "claude" }, [
+		{ type: "toolCall", id: "toolu_01.weird:id", name: "read", arguments: { path: "a" } },
+		{ type: "toolCall", id: longId, name: "read", arguments: { path: "b" } },
+	], "toolUse"));
+	h.sm.appendMessage(toolResult("toolu_01.weird:id", "A"));
+	h.sm.appendMessage(toolResult(longId, "B"));
+	const calls = stubFetch(compacted("enc"));
+
+	await h.compact(kept);
+
+	expect(calls[0].body.input.some((item: any) => item.type === "function_call")).toBe(true);
+	expect(malformedIds(calls[0].body.input)).toEqual([]);
+});
+
+test("a kept window holding another provider's messages still replays", async () => {
+	const model = getModel("openai", "gpt-6.1-sol");
+	const h = await harness({ model, hasUI: true });
 	h.sm.appendMessage(system({ content: "Base prompt" }));
 	const kept = h.sm.appendMessage(user("old question"));
 	h.sm.appendMessage(assistant({ provider: "xai", api: "openai-completions", id: "grok-4.6" }, [
@@ -217,53 +309,38 @@ test("a kept window holding another provider's messages still replays, ids notwi
 	const result = await h.compact(kept);
 	newTurns(h.sm, model);
 
-	const { payload, messages, result: rewritten } = await h.request();
+	const { payload, result: rewritten } = await h.request();
 
-	const keptLength = hostInput(model, messages.slice(0, messages.findIndex((message: any) => message.content?.[0]?.text === "new question")), true).length;
 	expect(calls).toHaveLength(1);
-	expect(h.notices).toEqual([]);
-	expect(rewritten.input).toEqual([payload.input[0], ...result.compaction.details.compactedWindow, ...payload.input.slice(keptLength)]);
-	expect(JSON.stringify(rewritten.input)).not.toContain("Unsigned answer.");
-});
-
-test("another provider's opaque reasoning never reaches the compaction request, its visible text does", async () => {
-	const model = getModel("openai", "gpt-5-mini");
-	const h = harness({ model });
-	h.sm.appendMessage(system({ content: "Base prompt" }));
-	const kept = h.sm.appendMessage(user("Inspect the repository."));
-	h.sm.appendMessage(assistant({ provider: "xai", api: "openai-completions", id: "grok-4.6" }, [
-		{ type: "thinking", thinking: "Foreign reasoning summary.", thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_xai", summary: [], encrypted_content: "xai-encrypted" }) },
-		{ type: "text", text: "Reading the repository." },
-	]));
-	h.sm.appendMessage(assistant(model, [
-		{ type: "thinking", thinking: "Own reasoning.", thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_own", summary: [], encrypted_content: "own-encrypted" }) },
-		answer("Done.", "msg_done"),
-	]));
-	const calls = stubFetch(compacted("enc"));
-
-	await h.compact(kept);
-
+	// 别家的不透明推理不发往 OpenAI，可见文字照发。
 	expect(calls[0].raw).not.toContain("xai-encrypted");
-	expect(calls[0].raw).toContain("own-encrypted");
 	expect(calls[0].raw).toContain("Foreign reasoning summary.");
 	expect(calls[0].raw).toContain("Reading the repository.");
+	expect(h.notices).toEqual([]);
+	expect(rewritten.input).toEqual([payload.input[0], ...result.compaction.details.compactedWindow, ...payload.input.slice(firstIndex(payload.input, "new question"))]);
+	expect(JSON.stringify(rewritten.input)).not.toContain("Unsigned answer.");
 });
 
 test("repeated /compact reuses the latest stored window plus the live tail, and replay uses only the latest window", async () => {
 	const model = getModel("openai", "gpt-5-mini");
-	const h = harness({ model });
+	const h = await harness({ model });
 	const kept = oldHistory(h.sm, model);
 	const calls = stubFetch(compacted("enc-1"), compacted("enc-2"));
 	await h.compact(kept);
 	newTurns(h.sm, model);
 	const tailStart = h.sm.getEntries().findIndex((entry: any) => entry.message?.content?.[0]?.text === "new question");
-	const tail = h.sm.getEntries().slice(tailStart).map((entry: any) => entry.message);
 	const firstWindow = h.sm.getEntries().find((entry: any) => entry.type === "compaction").details.compactedWindow;
 
 	await h.compact(h.sm.getEntries()[tailStart + 3].id);
 
-	expect(calls[1].body.input).toEqual([...firstWindow, ...hostInput(model, tail.filter((message: any) => message.role !== "system"), false), { type: "compaction_trigger" }]);
+	const input = calls[1].body.input;
+	const windowStart = input.findIndex((item: any) => item.type === "compaction");
+	// 系统提示之后依次是上次的窗口、压缩之后的对话、触发项；上次的窗口不重复前面的历史。
+	expect(input.slice(windowStart - (firstWindow.length - 1), windowStart + 1)).toEqual(firstWindow);
+	expect(input.at(-1)).toEqual(TRIGGER);
+	expect(calls[1].raw).toContain("Release notes say green.");
 	expect(calls[1].raw).not.toContain("compacted into the following summary");
+	expect(calls[1].raw).not.toContain("ancient answer");
 	h.sm.appendMessage(user("after second"));
 	const { result } = await h.request();
 	const replayed = JSON.stringify(result.input);
@@ -274,7 +351,7 @@ test("repeated /compact reuses the latest stored window plus the live tail, and 
 
 test("a trailing provider-authored developer prompt keeps its place at the end of the replayed request", async () => {
 	const model = getModel("openai", "gpt-6.1-sol");
-	const h = harness({ model });
+	const h = await harness({ model });
 	const kept = oldHistory(h.sm, model);
 	stubFetch(compacted("enc"));
 	await h.compact(kept);
@@ -287,87 +364,161 @@ test("a trailing provider-authored developer prompt keeps its place at the end o
 	expect(JSON.stringify(result.input)).toContain("enc");
 });
 
-test("lone surrogates never reach the compaction request", async () => {
-	const model = getModel("openai", "gpt-5-mini");
-	const h = harness({ model, systemPrompt: "Prefix \ud800" });
-	h.sm.appendMessage(system({ content: "Base prompt" }));
-	const kept = h.sm.appendMessage(user("Hello \udc00"));
-	h.sm.appendMessage(assistant(model, [answer("Hi \ud800", "msg_1")]));
-	const calls = stubFetch(compacted("enc"));
+test("a streamed compaction response (SSE) is accepted", async () => {
+	const model = getModel("openai-codex", "gpt-6.1-sol");
+	const h = await harness({ model });
+	const kept = oldHistory(h.sm, model);
+	const item = { type: "compaction", encrypted_content: "streamed" };
+	stubFetch(() => new Response(
+		[
+			`data: ${JSON.stringify({ type: "response.output_item.done", item })}`,
+			"",
+			`data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
+			"",
+			"data: [DONE]",
+			"",
+		].join("\n"),
+		{ status: 200, headers: { "content-type": "text/event-stream" } },
+	));
 
-	await h.compact(kept);
+	const result = await h.compact(kept);
 
-	expect(calls[0].raw).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/iu);
+	expect(result.compaction.details.compactedWindow.at(-1)).toEqual(item);
 });
 
-test("fails open: the request goes out as Pi built it, and the user is told whenever a native compaction's history is left out", async () => {
+// 原生压缩没有可用窗口时请求照宿主原样发出；旧历史不在上下文里，用户要知道，但同一次压缩只提醒一次。
+test("switching away from the model that made a native compaction: requests go out as the host built them, with one warning", async () => {
+	const model = getModel("openai", "gpt-5-mini");
+	const h = await harness({ model, hasUI: true });
+	const calls = stubFetch(compacted("enc"));
+	await h.compact(oldHistory(h.sm, model));
+	h.sm.appendMessage(user("after native"));
+
+	expect((await h.request([], getModel("openai", "gpt-5.5"))).result).toBeUndefined();
+	expect((await h.request([], getModel("openai", "gpt-5.5"))).result).toBeUndefined();
+	expect((await h.request([], getModels("anthropic")[0])).result).toBeUndefined();
+
+	expect(h.notices).toEqual([["warning", expect.stringContaining("openai/gpt-5-mini")]]);
+	expect(calls).toHaveLength(1);
+});
+
+test("/compact after switching away from a native compaction: manual is cancelled, automatic falls back to the host summary with a warning", async () => {
 	const model = getModel("openai", "gpt-5-mini");
 	const other = getModel("openai", "gpt-5.5");
-	const anthropic = getModels("anthropic")[0];
+	const h = await harness({ model, hasUI: true });
+	const kept = oldHistory(h.sm, model);
+	const calls = stubFetch(compacted("enc"));
+	await h.compact(kept);
+	h.notices.length = 0;
+
+	expect(await h.compact(kept, { current: other })).toEqual({ cancel: true });
+	expect(h.notices).toEqual([["error", expect.stringContaining("openai/gpt-5-mini")]]);
+
+	h.notices.length = 0;
+	expect(await h.compact(kept, { current: other, reason: "threshold" })).toBeUndefined();
+	expect(h.notices).toEqual([["warning", expect.stringContaining("openai/gpt-5-mini")]]);
+	expect(calls).toHaveLength(1);
+});
+
+test("without a native compaction nothing is sent or warned: legacy summaries, other providers, proxies, switch off", async () => {
+	const model = getModel("openai", "gpt-5-mini");
+	const proxy = { ...model, provider: "custom-litellm", baseUrl: "https://proxy.example.com/v1" };
 	const calls = stubFetch(compacted("enc"));
 
-	const legacy = harness({ model, hasUI: true });
+	const legacy = await harness({ model, hasUI: true });
 	const legacyKept = oldHistory(legacy.sm, model);
 	legacy.sm.appendCompaction("Legacy Pi summary", legacyKept, 100);
 	legacy.sm.appendMessage(user("after legacy"));
 	expect(await legacy.compact(legacyKept)).toBeUndefined();
 	expect((await legacy.request()).result).toBeUndefined();
-
-	const native = harness({ model, hasUI: true });
-	const nativeKept = oldHistory(native.sm, model);
-	await native.compact(nativeKept);
-	expect(calls).toHaveLength(1);
-	native.sm.appendMessage(user("after native"));
-	expect((await native.request()).result).toBeDefined();
-	expect((await native.request([], other)).result).toBeUndefined();
-	expect(native.notices).toEqual([["warning", expect.stringContaining("latest-native-compaction-mismatch")]]);
-	expect((await native.request([], other)).result).toBeUndefined();
-	expect(native.notices).toHaveLength(1);
-
-	// 换到不支持原生压缩的供应商：旧历史同样不在上下文里，同样提醒；同一次压缩只提醒一次。
-	const switched = harness({ model, hasUI: true });
-	await switched.compact(oldHistory(switched.sm, model));
-	switched.sm.appendMessage(user("after switching"));
-	expect((await switched.request([], anthropic)).result).toBeUndefined();
-	expect((await switched.request([], anthropic)).result).toBeUndefined();
-	expect(switched.notices).toEqual([["warning", expect.stringContaining("unsupported-provider")]]);
-	expect(calls).toHaveLength(2);
-
-	// 压缩不是原生的：没有原生历史可丢，不提醒。
 	expect(legacy.notices).toEqual([]);
-	expect(await native.compact(nativeKept, { current: other })).toBeUndefined();
-	expect(await native.compact(nativeKept, { current: anthropic })).toBeUndefined();
 
-	// 开关关着：不压缩、不改写，没有压缩过也不提醒；
-	const off = harness({ model, openai: { nativeCompaction: false }, hasUI: true });
+	const other = await harness({ model, hasUI: true });
+	const otherKept = oldHistory(other.sm, model);
+	expect(await other.compact(otherKept, { current: getModels("anthropic")[0] })).toBeUndefined();
+	expect(await other.compact(otherKept, { current: proxy })).toBeUndefined();
+
+	const off = await harness({ model, openai: { nativeCompaction: false }, hasUI: true });
 	expect(await off.compact(oldHistory(off.sm, model))).toBeUndefined();
-	expect(calls).toHaveLength(2);
 	expect((await off.request()).result).toBeUndefined();
 	expect(off.notices).toEqual([]);
+	expect(calls).toHaveLength(0);
+});
 
-	// 但会话里已有原生压缩（之后才关的开关）时，旧历史不在上下文里，同样提醒一次。
-	const disabled = harness({ model, openai: { nativeCompaction: false }, hasUI: true, sm: native.sm });
-	expect((await disabled.request()).result).toBeUndefined();
-	expect((await disabled.request()).result).toBeUndefined();
-	expect(disabled.notices).toEqual([["warning", expect.stringContaining("nativeCompaction-disabled")]]);
+test("turning nativeCompaction off after a native compaction warns once that the old history is out of context", async () => {
+	const model = getModel("openai", "gpt-5-mini");
+	const on = await harness({ model });
+	stubFetch(compacted("enc"));
+	await on.compact(oldHistory(on.sm, model));
+	on.sm.appendMessage(user("after native"));
+
+	const off = await harness({ model, openai: { nativeCompaction: false }, hasUI: true, sm: on.sm });
+
+	expect((await off.request()).result).toBeUndefined();
+	expect((await off.request()).result).toBeUndefined();
+	expect(off.notices).toEqual([["warning", expect.stringContaining("openai.nativeCompaction")]]);
+});
+
+test("a manual /compact without login credentials is cancelled and says why", async () => {
+	const model = getModel("openai", "gpt-5-mini");
+	const h = await harness({ model, hasUI: true, auth: { ok: true, apiKey: undefined } });
+	const kept = oldHistory(h.sm, model);
+	const calls = stubFetch(compacted("enc"));
+
+	expect(await h.compact(kept)).toEqual({ cancel: true });
+
+	expect(calls).toHaveLength(0);
+	expect(h.notices).toEqual([["error", expect.stringContaining("/compact 已取消")]]);
 });
 
 test.each([
-	["over the context window", () => new Response(
+	["the conversation is over the context window", () => new Response(
 		`data: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "context_length_exceeded", message: "Too long." } } })}\n\ndata: [DONE]\n`,
 		{ status: 200 },
-	), 'native compaction failed: input-too-large (HTTP 200): {"code":"context_length_exceeded","message":"Too long."}.'],
-	["rejected by the API", () => Response.json({ error: { message: "Invalid input type 'compaction_trigger'." } }, { status: 400 }),
-		"native compaction failed: non-2xx (HTTP 400): Invalid input type 'compaction_trigger'."],
-])("a native compaction %s cancels /compact with the full reason instead of falling back", async (_name, response, reason) => {
+	), ["超出了模型的上下文窗口", "Too long."]],
+	["the API rejects the request", () => Response.json({ error: { message: "Invalid input type 'compaction_trigger'." } }, { status: 400 }),
+		["接口拒绝了请求", "HTTP 400", "Invalid input type 'compaction_trigger'."]],
+	["the response fails for another reason", () => Response.json({ status: "failed", error: { code: "server_error", message: "The response failed." } }),
+		["接口报告压缩失败", "server_error"]],
+	["the response holds no compaction item", () => Response.json({ output: [{ type: "message", role: "assistant", content: [] }] }),
+		["接口没有返回压缩结果"]],
+])("when %s, /compact is cancelled with the reason instead of falling back", async (_name, response, phrases) => {
 	const model = getModel("openai", "gpt-5-mini");
-	const h = harness({ model, hasUI: true });
+	const h = await harness({ model, hasUI: true });
 	const kept = oldHistory(h.sm, model);
 	const calls = stubFetch(response);
 
 	expect(await h.compact(kept)).toEqual({ cancel: true });
 
 	expect(calls).toHaveLength(1);
-	expect(h.notices).toEqual([["error", `pi-openai-native: ${reason}`]]);
+	expect(h.notices).toHaveLength(1);
+	expect(h.notices[0][0]).toBe("error");
+	for (const phrase of phrases) expect(h.notices[0][1]).toContain(phrase);
 	expect(h.sm.getEntries().some((entry: any) => entry.type === "compaction")).toBe(false);
 });
+
+// verbosity 与 priority 作用于请求体：OpenAI Responses 带 verbosity，xAI 只带 priority，命令行参数覆盖配置。
+test.each([
+	["openai-codex Responses: configured verbosity and priority", getModel("openai-codex", "gpt-6.1-sol"), undefined, { text: { verbosity: "low" }, service_tier: "priority" }],
+	["a command-line verbosity overrides the config", getModel("openai-codex", "gpt-6.1-sol"), "high", { text: { verbosity: "high" }, service_tier: "priority" }],
+	["an invalid command-line verbosity drops only verbosity", getModel("openai-codex", "gpt-6.1-sol"), "invalid", { service_tier: "priority" }],
+	["another Responses provider gets verbosity without priority", { ...getModel("openai", "gpt-5.5"), provider: "rc" }, undefined, { text: { verbosity: "high" } }],
+	["xAI Completions gets priority without verbosity", { provider: "xai", api: "openai-completions", id: "grok-4.6" }, undefined, { service_tier: "priority" }],
+])("%s", async (_name, model, flag, added) => {
+	const settings = { nativeCompaction: true, providers: { "openai-codex": { textVerbosity: "low", priority: true }, rc: { textVerbosity: "high" }, xai: { priority: true } } };
+	const h = await harness({ model, openai: settings });
+	const fake = fakePi({ getFlag: () => flag });
+	const { registerOpenAINative } = (await loadFirecodeModule("provider/openai-native/index.ts", { configJsonc: JSON.stringify({ openai: settings }) })) as any;
+	registerOpenAINative(fake.pi);
+	const payload = { model: model.id, input: [] };
+
+	const rewritten = await fake.fire("before_provider_request", { payload }, {
+		model,
+		hasUI: false,
+		sessionManager: h.sm,
+		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
+	});
+
+	expect(rewritten).toEqual({ ...payload, ...added });
+});
+

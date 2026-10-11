@@ -224,21 +224,17 @@ test("身份：改名、换模型各自重报，同一身份不重发", async ()
 	expect(herdr.requests.filter((request) => request.method === "pane.report_metadata").map((request) => request.params.title)).toEqual(["身份-A", "身份-B", "身份-A"]);
 });
 
-test("送达失败重试一次；其后的事件继续补发", async () => {
+test("送达失败重试一次；两次都失败就停手，下一个事件继续补发", async () => {
 	idle = true;
-	const herdr = await herdrStub(1);
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("x"));
-	await pi.settled();
-	expect(trace(herdr.requests)).toEqual(["idle", "idle", "report_metadata"]);
-});
+	const retried = await herdrStub(1);
+	const first = await register(retried.path);
+	await first.fire("session_start", {}, context("x"));
+	await first.settled();
+	expect(trace(retried.requests)).toEqual(["idle", "idle", "report_metadata"]);
 
-test("连续两次送达失败后停手；下一个事件继续补发", async () => {
-	idle = true;
 	const herdr = await herdrStub(2);
 	const pi = await register(herdr.path);
-	const ctx = context("x");
-	await pi.fire("session_start", {}, ctx);
+	await pi.fire("session_start", {}, context("x"));
 	await pi.settled();
 	expect(trace(herdr.requests)).toEqual(["idle", "idle"]);
 	await pi.fire("session_info_changed", {}, context("改名"));
@@ -283,15 +279,15 @@ test("子会话不接管 pane：同一 herdr 环境下主会话投影，子会�
 	const herdr = await herdrStub();
 	await register(herdr.path);
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: JSON.stringify({ features: await featuresOnly() }) }) as any;
-	const sessionStartRequests = async (subsession: boolean) => {
-		herdr.requests.length = 0;
+	const start = async (subsession: boolean, file: string) => {
 		const fake = fakePi({ registerProvider() {}, getThinkingLevel: () => "medium" });
 		registerFirecode(fake.pi, subsession);
-		const base = context("x");
+		const base = context("x", { file });
 		await fake.fire("session_start", {}, { ...base, cwd: "/tmp", hasUI: true, ui: new Proxy({}, { get: () => () => {} }), sessionManager: { ...base.sessionManager, getBranch: () => [], getEntries: () => [], getSessionId: () => "s" } });
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		return herdr.requests.length;
 	};
-	expect(await sessionStartRequests(true)).toBe(0);
-	expect(await sessionStartRequests(false)).toBeGreaterThan(0);
+	await start(true, "/sessions/sub.jsonl");
+	await start(false, "/sessions/main.jsonl");
+	// 主会话的请求一到，同一时间窗里子会话若会发请求也早已到了。
+	while (!herdr.requests.some((request) => request.params.resume_argv)) await new Promise((resolve) => setTimeout(resolve, 5));
+	expect(herdr.requests.map((request) => request.params.resume_argv?.[2]).filter(Boolean)).toEqual(["/sessions/main.jsonl"]);
 });

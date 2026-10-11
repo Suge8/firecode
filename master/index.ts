@@ -24,6 +24,8 @@ const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
 const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
 const INTERRUPT_RESUME_MS = 5 * 60_000;
+/** 事件投递失败后的首次重试间隔，之后逐次翻倍（上限见 outbox.ts）。 */
+const EVENT_RETRY_MS = 5_000;
 /**
  * 一批结果陆续返回时，最后一条后静默这么久才唤醒空闲的指挥官：合并唤醒，单条结果最多多等这一下。
  * 这是业务语义的等待：“这一批还会不会马上再来一条”没有事件能回答。同批结果相邻间隔约 2～3 秒，而唤醒回合本身要数秒，
@@ -35,6 +37,7 @@ interface MasterDependencies {
 	pool: InProcessSessionPool;
 	interruptResumeMs?: number;
 	wakeQuietMs?: number;
+	eventRetryMs?: number;
 }
 
 export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies): void {
@@ -69,9 +72,10 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
 		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
 		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
+		eventRetryMs: dependencies.eventRetryMs ?? EVENT_RETRY_MS,
 		publishInFlight,
 		publishRoster,
-		// 事件末尾的“当前任务”耗时是给指挥官的时间信号（Opus 5.5 据已用时间安排并行）；起点只取 busy.ts。
+		// 事件末尾的“当前任务”耗时是给指挥官的时间信号；起点只取 busy.ts。
 		sessionSince: () => busyView(pi).since,
 	};
 	let runtime: MasterRuntime | undefined;
@@ -89,7 +93,8 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		if (active.store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(msg.command.legacyPool(active.store.discardedLegacyVersion), "warning");
 		active.render();
-		for (const worker of active.store.workers) if (worker.interruptedAt) armInterruptReminder(active, worker);
+		// 只有本次载入收敛的子代理是被重载打断的；指挥官自己 interrupt 的、早已提醒过的不再提醒。
+		for (const name of active.store.recovered) armInterruptReminder(active, active.store.require(name));
 		active.outbox.replayUnacked(ctx);
 	};
 	/** 会话关闭先清空当前 runtime，再释放池、订阅与定时器：迟到任务不写状态、投递、UI 或持久化。 */
@@ -100,7 +105,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		// 遗弃在飞子代理不是歇下：带 teardown 归零，busy.ts 只结束本段。
 		publishInFlight(0, true);
 		publishRoster([]);
-		await setup.pool.disposeAll();
+		await setup.pool.disposeWorkers();
 		setTools(false);
 	};
 
@@ -117,6 +122,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 				return;
 			}
 			if (runtime) {
+				if (!(await confirmStop(runtime, ctx))) return;
 				await deactivate();
 				ctx.ui.notify(msg.command.off, "info");
 				return;
@@ -187,7 +193,7 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_TOOL));
-			return ACTION_HANDLERS[params.action as Action](active, params, ctx);
+			return ACTION_HANDLERS[params.action as Action](active, params, ctx, "master");
 		},
 	});
 
@@ -202,6 +208,12 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	});
 
 	pi.on("session_shutdown", () => deactivate());
+}
+
+/** 关闭会中断在跑的子代理：有界面时先让用户确认；无界面（print、rpc）照旧直接关。 */
+async function confirmStop(active: MasterRuntime, ctx: ExtensionContext): Promise<boolean> {
+	const running = active.store.workers.filter((worker) => worker.status !== "idle").length;
+	return !running || !ctx.hasUI || ctx.ui.confirm(msg.command.confirmOffTitle, msg.command.confirmOff(running));
 }
 
 function loadMasterPrompts(): { master: string; worker: string; error?: string } {

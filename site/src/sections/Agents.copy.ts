@@ -10,11 +10,10 @@ export const tallies = [
 // 演示里出故障并切到 fallback 的那一个：录屏中 review/ 也是最后一个回来的
 export const FALLBACK_INDEX = 1;
 
-// 角色模型取自 config.example.jsonc：researcher 的主模型与 fallback，engineer 的主模型
-export const models = { primary: "claude-haiku-5-5/low", fallback: "gpt-6-luna/medium", engineer: "claude-sonnet-5-5/high" } as const;
+// 角色模型不在这里：构建时从 config.example.jsonc 读（repo.ts 的 demoModels）
 
-// 子代理视图里的固定部分，取自 shot-worker-view 截图
-export const worker = { name: "parse-duration", model: "anthropic/claude-sonnet-5-5/high" } as const;
+// 子代理视图里的子代理名，取自 shot-worker-view 截图
+export const WORKER_NAME = "parse-duration";
 
 export const copy = {
 	en: {

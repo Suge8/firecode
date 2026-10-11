@@ -1,5 +1,5 @@
 ---
-import bgUrl from "../../../design/promo/og-bg.jpg?url";
+import bgUrl from "../../../design/promo/og-bg.webp?url";
 import logoUrl from "../../../design/brand/logo-dark.svg?url";
 import Install from "../components/Install.astro";
 import { NPM, REPO, type Lang } from "../i18n";
@@ -16,7 +16,7 @@ const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
 <section class="closing" id="closing" aria-labelledby="closing-title" style={`--bg-image:url(${bgUrl})`}>
 	<div class="glow" aria-hidden="true"></div>
 	<div class="call">
-		<h2 id="closing-title">{t.title.map((line) => <span>{line}</span>)}</h2>
+		<h2 id="closing-title" class="display">{t.title.map((line) => <span class="line"><span>{line}</span></span>)}</h2>
 		<Install lang={lang} class="closing-install" />
 		<p class="lede">{t.lede.map((line) => <span>{line} </span>)}</p>
 	</div>
@@ -34,25 +34,18 @@ const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
 
 <script>
 	import { gsap, reducedMotion } from "../scroll";
-	import { SplitText } from "gsap/SplitText";
 
 	if (!reducedMotion) {
-		gsap.registerPlugin(SplitText);
 		const closing = document.querySelector<HTMLElement>("#closing")!;
 		const title = closing.querySelector<HTMLElement>("h2")!;
 
-		SplitText.create(title, {
-			type: "lines",
-			mask: "lines",
-			autoSplit: true,
-			onSplit: (self) =>
-				gsap.from(self.lines, {
-					yPercent: 110,
-					duration: 1.1,
-					ease: "expo.out",
-					stagger: 0.09,
-					scrollTrigger: { trigger: title, start: "top 85%", once: true },
-				}),
+		// 与首屏标题同一种入场：每行从自己的裁切窗口下沿升起
+		gsap.from(title.querySelectorAll(".line > span"), {
+			yPercent: 110,
+			duration: 1.1,
+			ease: "expo.out",
+			stagger: 0.09,
+			scrollTrigger: { trigger: title, start: "top 85%", once: true },
 		});
 
 		gsap
@@ -116,37 +109,6 @@ const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
 		text-align: center;
 	}
 
-	h2 {
-		font-size: var(--text-display);
-		font-weight: 650;
-		font-stretch: var(--stretch-display);
-		line-height: 1;
-		letter-spacing: -0.045em;
-	}
-
-	/* 固定按短语分行，不交给浏览器拆散 */
-	/* 与首屏 h1 同一套字阶，收尾不比首屏大 */
-	h2 {
-		font-size: var(--text-display);
-		font-weight: 680;
-		font-stretch: var(--stretch-display);
-		line-height: 0.98;
-		letter-spacing: -0.038em;
-	}
-
-	/* 固定按短语分行，每行不再折断 */
-	h2 > span {
-		display: block;
-		white-space: nowrap;
-	}
-
-	:lang(zh) h2 {
-		font-size: min(calc(var(--text-display) * 0.88), 11vw);
-		font-stretch: 100%;
-		letter-spacing: -0.02em;
-		line-height: 1.12;
-	}
-
 	.closing :global(.closing-install) {
 		margin-top: clamp(36px, 6svh, 56px);
 	}
@@ -162,10 +124,6 @@ const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
 	/* 两句各占一行 */
 	.lede > span {
 		display: block;
-	}
-
-	:lang(zh) .lede {
-		word-break: keep-all;
 	}
 
 	.foot {
@@ -229,13 +187,5 @@ const contributing = `${REPO}/blob/main/.github/CONTRIBUTING.md`;
 		background: oklch(0.75 0.15 50 / 0.06);
 		mask: var(--logo) center / contain no-repeat;
 		pointer-events: none;
-	}
-	/* 手机上收窄宽度轴与字号，"Works out of the box." 在 360 宽整行放得下 */
-	@media (max-width: 480px) {
-		:lang(en) h2 {
-			font-size: min(var(--text-display), 8.4vw);
-			font-stretch: 104%;
-			letter-spacing: -0.03em;
-		}
 	}
 </style>

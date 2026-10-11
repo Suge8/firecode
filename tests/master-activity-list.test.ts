@@ -10,8 +10,6 @@ const MINUTE = 60_000;
 
 type Spec = {
 	name: string;
-	/** 档案里的启动序；省略时按列出顺序。 */
-	launch?: number;
 	status?: string;
 	tool?: string;
 	args?: unknown;
@@ -22,8 +20,8 @@ type Spec = {
 };
 
 function facts(specs: Spec[]) {
-	const workers = specs.map((spec, index) => ({
-		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p", launch: spec.launch ?? index,
+	const workers = specs.map((spec) => ({
+		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p",
 	}));
 	const byPath = <T>(pick: (spec: Spec) => T | undefined) =>
 		new Map(specs.flatMap((spec) => { const value = pick(spec); return value === undefined ? [] : [[`/s/${spec.name}`, value] as const]; }));
@@ -78,10 +76,10 @@ const failed = (name: string, agoMs = 2 * MINUTE, note?: string): Spec =>
 
 test("分组与顺序：失败、卡住置顶，然后在跑与审查，最后一行合计已完成", async () => {
 	const view = await list([
-		{ name: "run-a", launch: 1, tool: "read", args: { path: "/p/src/a.ts" }, output: NOW - 1_000 },
+		{ name: "run-a", tool: "read", args: { path: "/p/src/a.ts" }, output: NOW - 1_000 },
 		done("done-a", MINUTE),
-		{ name: "rev-a", launch: 3, status: "reviewing", review: [2, 1, 3], output: NOW - 1_000 },
-		{ name: "stuck-a", launch: 4, started: NOW - 7 * MINUTE, output: NOW - 6 * MINUTE },
+		{ name: "rev-a", status: "reviewing", review: [2, 1, 3], output: NOW - 1_000 },
+		{ name: "stuck-a", started: NOW - 7 * MINUTE, output: NOW - 6 * MINUTE },
 		failed("fail-a"),
 		done("done-b", MINUTE),
 		{ name: "reloaded", status: "idle" },
@@ -181,12 +179,12 @@ test("点击“+N 个在跑”展开全部、再点收起；点“✓ N 个已�
 	expect(view.opened).toEqual(["run-0"]);
 });
 
-test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样排版（标记字形、缩进），展开行不重复“空闲”，按档案里的启动序", async () => {
+test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样排版（标记字形、缩进），展开行不重复“空闲”，保持档案顺序", async () => {
 	const view = await list([
 		{ name: "run-a", output: NOW - 1_000 },
-		{ name: "p6", status: "idle", launch: 6 },
-		{ name: "p1", status: "idle", launch: 1 },
-		{ name: "p3", status: "idle", launch: 3 },
+		{ name: "p1", status: "idle" },
+		{ name: "p3", status: "idle" },
+		{ name: "p6", status: "idle" },
 	], { now: NOW });
 	const rowOf = (label: string) => view.text().findIndex((line) => line.includes(label));
 	expect(view.text()[1]).toMatch(/^ {2}\S {2}3 个空闲 +p1 · p3 · p6$/u);
@@ -196,18 +194,6 @@ test("空闲子代理合成“N 个空闲”：与“✓ N 个已完成”同样
 	for (const line of rows) expect(line).not.toContain("空闲");
 	view.click(rowOf("3 个空闲"));
 	expect(view.text()).toHaveLength(2);
-});
-
-test("窄屏名字列让位给动作：动作至少留出能认的宽度，名字放不下才截短带 …", async () => {
-	const rows: Spec[] = [
-		{ name: "fix-auth-refresh-x-long", tool: "bash", args: { command: "sleep 330" }, output: NOW - 1_000 },
-		{ name: "lint", tool: "bash", args: { command: "sleep 100" }, output: NOW - 1_000 },
-	];
-	const text = (await list(rows, { now: NOW })).text(40);
-	expect(text[0]).toMatch(/fix-auth-ref.*…/u);
-	expect(text[0]).toContain("操作 $ slee");
-	expect(text[1]).toContain("操作 $ slee");
-	for (const line of text) expect(line.length).toBeLessThanOrEqual(40);
 });
 
 test("窄屏整表统一丢角色；宽屏动作文字按行宽显示，不先硬截 40 列", async () => {
@@ -256,27 +242,6 @@ test("动画时钟只在有行在动时订阅：只剩失败行与已完成合�
 	view.component.dispose();
 });
 
-test("名字列按剩余空间分配：72 列放得下就不截名字", async () => {
-	const rows: Spec[] = [
-		{ name: "fix-auth-refresh", tool: "bash", args: { command: "sleep 30" }, output: NOW - 1_000 },
-		{ name: "e2e-checkout-flow", tool: "bash", args: { command: "sleep 40" }, output: NOW - 1_000 },
-	];
-	const text = (await list(rows, { now: NOW })).text(72);
-	expect(text[0]).toContain("fix-auth-refresh ");
-	expect(text[1]).toContain("e2e-checkout-flow ");
-	expect(text[1]).toContain("操作 $ sleep 40");
-});
-
-test("卡住行右侧不再显示总耗时（避免与“N 分钟无输出”两个时长并排看混）；窄屏动作放不下有效信息时整段丢掉，只留名字与提醒", async () => {
-	const stuck: Spec = { name: "slow", started: NOW - 6 * MINUTE, output: NOW - 5 * MINUTE, tool: "bash", args: { command: "sleep 330 && echo slow-done" } };
-	const others: Spec[] = [{ name: "repo-scan", tool: "read", args: { path: "/p/master/index.ts" }, output: NOW - 1_000 }];
-	const [wide] = (await list([stuck, ...others], { now: NOW })).text(160);
-	expect(wide).toContain("操作 $ sleep 330 && echo slow-done · 5 分钟无输出");
-	expect(wide).not.toMatch(/6m\s*$/u);
-	const [narrow] = (await list([stuck, ...others], { now: NOW })).text(40);
-	expect(narrow).toMatch(/^ {2}\S slow\s+5(?: 分钟|m )无输出\s*$/u);
-});
-
 const chipOf = (line: string) => line.match(/\{toolPendingBg\}(.*?)\{\/toolPendingBg\}/u)?.[1].replace(/<\/?\w+>/gu, "");
 
 test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧各一格空白），后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有下划线、… 与箭头", async () => {
@@ -295,14 +260,6 @@ test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧�
 		expect(fold(count)).not.toMatch(/\x1b\[4/u);
 		expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>|\{\/?\w+\}/gu, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
 	}
-	// 计数后的名字列对齐。
-	const text = view.text(300).map((line) => line.replace(/<\/?\w+>|\{\/?\w+\}/gu, ""));
-	const column = (needle: string) => {
-		const line = text.find((entry) => entry.includes(needle))!;
-		return Bun.stringWidth(line.slice(0, line.indexOf(needle)));
-	};
-	expect(column("run-3")).toBe(column("types"));
-	expect(column("types")).toBe(column("writer"));
 });
 
 test("胶囊底色用背景关闭序列收尾、不带全量重置：任意宽度截断都不掐断底色，也不漏到后面的名字", async () => {

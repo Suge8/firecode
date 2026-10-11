@@ -3,6 +3,7 @@ import { msg } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import { ADVISOR_VERDICTS, type AdvisorResult, type AdvisorVerdict } from "./state.js";
 import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
+import { verdictWord } from "./verdict.js";
 
 interface RunAdvisorOptions {
 	config: ReviewModelConfig;
@@ -12,6 +13,7 @@ interface RunAdvisorOptions {
 	runSession: ReviewSessionRunner;
 }
 
+/** 顾问会话没有产出时抛错，由执行器改成“顾问不可用，已跳过”并继续修复。 */
 export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorResult> {
 	const result = await options.runSession({
 		config: options.config,
@@ -37,7 +39,7 @@ export function parseAdvisorOutput(text: string): AdvisorResult {
 	for (let index = 0; index < lines.length && scanned < VERDICT_SCAN_LINES; index += 1) {
 		if (!lines[index].trim()) continue;
 		scanned += 1;
-		const parsed = normalizeVerdict(lines[index]);
+		const parsed = ADVISOR_VERDICTS.find((word) => word === verdictWord(lines[index]));
 		if (parsed) {
 			verdict = parsed;
 			verdictIndex = index;
@@ -50,16 +52,9 @@ export function parseAdvisorOutput(text: string): AdvisorResult {
 		.trim();
 	if (!verdict) {
 		// 把首行原文带回去：顾问会话跑完即释放、原始输出不落盘，这是事后诊断解析失败的唯一线索。
-		const sample = firstLine.slice(0, 80);
-		return {
-			verdict: "continue",
-			advice: msg.advisor.unparseable(sample),
-		};
+		return { verdict: "continue", advice: msg.advisor.unparseable(firstLine.slice(0, 80)) };
 	}
-	return {
-		verdict,
-		advice: advice || msg.advisor.noAdvice,
-	};
+	return { verdict, advice: advice || msg.advisor.noAdvice };
 }
 
 function unwrapCodeFence(lines: string[]) {
@@ -68,17 +63,4 @@ function unwrapCodeFence(lines: string[]) {
 		/^```\w*\s*$/u.test(lines[0].trim()) &&
 		/^```\s*$/u.test(lines.at(-1)?.trim() ?? "");
 	return fenced ? lines.slice(1, -1) : lines;
-}
-
-function normalizeVerdict(line: string): AdvisorVerdict | undefined {
-	const normalized = line
-		.trim()
-		.replace(/^\*{1,2}(.+?)\*{1,2}$/u, "$1")
-		.replace(/^#{1,6}\s*/u, "")
-		.replace(/^(?:(?:verdict|裁决|结论)\s*[:：]\s*)/iu, "")
-		// 提示词里裁决词本身带反引号展示，模型照抄 `continue` 很常见，剔掉包裹的反引号。
-		.replace(/^`+(.+?)`+$/u, "$1")
-		.trim()
-		.toLowerCase();
-	return ADVISOR_VERDICTS.find((verdict) => verdict === normalized);
 }

@@ -1,7 +1,4 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
@@ -63,8 +60,10 @@ test("审查者按 en 提示词写的输出契约被解析；校验报错、证�
 	expect(passed.status).toBe("passed");
 
 	const missing = parseReviewOutput("FAIL\n## Finding 1: x\n- **Severity**: High\n- **Issue**: x");
-	expect(missing).toMatchObject({ status: "error" });
-	expect(missing.details).toBe("review output format invalid: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
+	// 格式无效但以 FAIL 开头的票仍按未通过计，违例说明与原文一并交出。
+	expect(missing).toMatchObject({ status: "failed" });
+	expect(missing.details).toContain("did not meet the format contract: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
+	expect(missing.details).toContain("- **Issue**: x");
 
 	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;
 	const entry = (role: string, content: string) => ({ type: "message", message: { role, content } });
@@ -88,7 +87,7 @@ test("修复反馈与顾问卡在 en 下是英文", async () => {
 	expect(advisor.details.lines[0]).toBe("**Model · adv**");
 });
 
-test("session：en 下 /quota 与 /tokens 输出英文", async () => {
+test("session：en 下 /quota 输出英文", async () => {
 	const configJsonc = JSON.stringify({ language: "en" });
 	const { fakePi } = await import("./fake-pi.ts");
 
@@ -113,27 +112,6 @@ test("session：en 下 /quota 与 /tokens 输出英文", async () => {
 	expect(notices.at(-1)).toContain("Codex: 5h 80% left");
 	expect(notices.at(-1)).toContain("Claude: 5h 100% left | Weekly 63% left");
 	expect(notices.join("\n")).not.toMatch(CJK);
-
-	const { registerStats } = await loadFirecodeModule("session/stats.ts", { configJsonc }) as any;
-	const stats = fakePi();
-	registerStats(stats.pi);
-	const printed: string[] = [];
-	const log = console.log;
-	// /tokens 扫描 Agent 目录下的会话：指到空目录，不读开发者真实的历史会话（那要十几秒）。
-	const agentDir = mkdtempSync(join(tmpdir(), "firecode-i18n-"));
-	const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = agentDir;
-	console.log = (line: string) => void printed.push(line);
-	try {
-		await stats.commands.get("tokens").handler("7", { mode: "print", hasUI: false });
-	} finally {
-		console.log = log;
-		if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-		rmSync(agentDir, { recursive: true, force: true });
-	}
-	expect(printed.join("\n")).toContain("# Token usage");
-	expect(printed.join("\n")).not.toMatch(CJK);
 });
 
 test("观察员：en 时建议信封与系统提示都是英文，zh 时是中文", async () => {

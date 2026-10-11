@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not work as described
+body:
+  - type: input
+    id: firecode
+    attributes:
+      label: FireCode version
+      description: "npm: pi-firecode version"
+    validations:
+      required: true
+  - type: input
+    id: pi
+    attributes:
+      label: Pi version
+      description: Output of `pi --version`
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      description: As in your config, "provider/model"
+    validations:
+      required: true
+  - type: dropdown
+    id: herdr
+    attributes:
+      label: Running inside herdr?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: config.jsonc
+      description: Contents of `extensions/firecode/config.jsonc` in your Pi agent directory. Remove anything private.
+      render: jsonc
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Steps to reproduce, and any message FireCode showed.
+    validations:
+      required: true

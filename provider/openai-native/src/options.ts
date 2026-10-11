@@ -1,8 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { isTextVerbosity, type OpenAISettings, type TextVerbosity } from "../../../config.js";
 import { isRecord } from "../../../jsonc.js";
-import { STATUS_KEYS } from "../../../status-keys.js";
-import { isTextVerbosity, type OpenAINativeSettings, type TextVerbosity } from "./config.js";
-import { isOpenAIResponsesApi } from "./native-runtime.js";
+import { isOpenAIResponsesApi } from "./native-details.js";
 
 const PRIORITY_MODEL_IDS = new Set([
 	"gpt-5.5",
@@ -25,7 +24,7 @@ export function supportsFastMode(model: Model<Api> | undefined): boolean {
 	return isOpenAIResponsesModel(model) && PRIORITY_MODEL_IDS.has(model.id);
 }
 
-export function fastModeEnabled(model: Model<Api> | undefined, settings: OpenAINativeSettings): boolean {
+export function fastModeEnabled(model: Model<Api> | undefined, settings: OpenAISettings): boolean {
 	if (!model || !supportsFastMode(model)) {
 		return false;
 	}
@@ -34,7 +33,7 @@ export function fastModeEnabled(model: Model<Api> | undefined, settings: OpenAIN
 
 function resolveTextVerbosity(
 	model: Model<Api>,
-	settings: OpenAINativeSettings,
+	settings: OpenAISettings,
 	verbosityOverride: unknown,
 ): TextVerbosity | undefined {
 	if (verbosityOverride !== undefined) {
@@ -46,7 +45,7 @@ function resolveTextVerbosity(
 export function applyOpenAIOptions(
 	payload: Record<string, unknown>,
 	model: Model<Api> | undefined,
-	settings: OpenAINativeSettings,
+	settings: OpenAISettings,
 	verbosityOverride: unknown,
 ): Record<string, unknown> {
 	const configuredProvider = model ? settings.providers[model.provider] : undefined;

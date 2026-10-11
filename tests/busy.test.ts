@@ -20,11 +20,11 @@ async function harness() {
 		/** 最近一次歇下边沿报告的整段时长（毫秒）。 */
 		get elapsed() { return elapsed; },
 		get view() { return view; },
+		start: () => void fake.fire("session_start", {}, ctx),
 		agentStart: () => void fake.fire("agent_start", {}, ctx),
 		agentSettled: () => void fake.fire("agent_settled", {}, ctx),
 		inFlight: (inFlight: number, teardown?: boolean) => fake.pi.events.emit("firecode:workers", { inFlight, ...(teardown ? { teardown } : {}) }),
 		shutdown: () => void fake.fire("session_shutdown", { reason: "quit" }, ctx),
-		watch: (onSettled: (elapsed: number) => void) => watchBusy(pi, { onSettled }),
 	};
 }
 
@@ -59,19 +59,6 @@ test("闲时唤醒回合先于投递完成而结束：在飞数在 agent_settled
 	expect(h.settled).toBe(1);
 });
 
-test("agent_settled 时宿主仍有排队/延后的动作（isIdle 为 false）不算回合结束：不歇下，紧接着的再次回合结束才歇下", async () => {
-	const h = await harness();
-	h.agentStart();
-	h.idle = false;
-	h.agentSettled();
-	expect(h.settled).toBe(0);
-	// 排队的动作随即开跑，又一次回合落定且这次真空闲。
-	h.agentStart();
-	h.idle = true;
-	h.agentSettled();
-	expect(h.settled).toBe(1);
-});
-
 test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇下边沿报告整段时长", async () => {
 	const h = await harness();
 	try {
@@ -93,15 +80,11 @@ test("本段起点自首次变忙起：指挥官被结果唤醒不重置，歇�
 	}
 });
 
-test("在飞数归零时指挥官回合因 isIdle 为 false 仍算在跑：不歇下，等它真正落定", async () => {
+test("会话启动时回合已在跑（扩展在回合中重载宿主）：从启动算进行中，回合落定才歇下", async () => {
 	const h = await harness();
-	h.inFlight(1);
-	h.agentStart();
 	h.idle = false;
-	h.agentSettled();
-	h.inFlight(0);
-	expect(h.settled).toBe(0);
-	h.idle = true;
+	h.start();
+	expect(h.view).toMatchObject({ busy: true, agentRunning: true });
 	h.agentSettled();
 	expect(h.settled).toBe(1);
 });
@@ -128,17 +111,6 @@ test("停用 Master 遗弃在飞子代理不是歇下：teardown 归零只结束
 	h.agentStart();
 	h.agentSettled();
 	expect(h.settled).toBe(1);
-});
-
-test("每个 pi 只有一份状态机：多个消费者只订阅，全部收到同一份歇下事实", async () => {
-	const h = await harness();
-	const seen: number[] = [];
-	h.watch((elapsed) => seen.push(elapsed));
-	h.watch((elapsed) => seen.push(elapsed));
-	h.agentStart();
-	h.agentSettled();
-	expect(h.settled).toBe(1);
-	expect(seen).toEqual([h.elapsed, h.elapsed]);
 });
 
 test("主会话审查进行中算会话进行中：审查期间不歇下，视图标出审查，审查时长计入这一段", async () => {

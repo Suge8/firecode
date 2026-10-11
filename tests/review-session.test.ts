@@ -35,7 +35,7 @@ async function runner() {
 	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => createReviewSessionRunner(pool)(options) };
 }
 
-const config = { model: "provider/model", thinking: "high", tools: ["read", "bash", "write", "edit"], timeoutMs: 1_000 };
+const config = { model: "provider/model", thinking: "high", tools: ["read", "bash"], timeoutMs: 1_000 };
 const base = (pool: unknown) => ({
 	pool,
 	config,
@@ -102,5 +102,14 @@ describe("review in-process session", () => {
 		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
 		const { runReviewSession } = await runner();
 		expect(await runReviewSession({ ...base(runtime.pool), config: { ...config, timeoutMs: 5 } })).toEqual({ kind: "timeout" });
+	});
+
+	test("an extension failing inside the reviewer session becomes part of that vote's error", async () => {
+		const runtime = fakeRuntime(async () => {
+			(runtime.pool.options!.onExtensionError as (error: Event) => void)({ extensionPath: "ext.ts", event: "tool_call", error: "boom" });
+		});
+		const { runReviewSession } = await runner();
+		const result = await runReviewSession(base(runtime.pool));
+		expect(result).toEqual({ kind: "error", message: "子会话里的扩展在 tool_call 出错：boom" });
 	});
 });

@@ -2,9 +2,12 @@
 import markUrl from "../../../design/brand/mark.svg?url";
 import loopEn from "../../../design/promo/review-loop.mp4?url";
 import loopZh from "../../../design/promo/review-loop.zh.mp4?url";
-import posterEn from "../../../design/promo/review-loop-poster.jpg?url";
-import posterZh from "../../../design/promo/review-loop-poster.zh.jpg?url";
+import posterEn from "../../../design/promo/review-loop-poster.webp?url";
+import posterZh from "../../../design/promo/review-loop-poster.zh.webp?url";
+import Rich from "../components/Rich.astro";
+import Story from "../components/Story.astro";
 import type { Lang } from "../i18n";
+import { reviewTable } from "../repo";
 import { copy } from "./Review.copy";
 
 interface Props {
@@ -21,32 +24,19 @@ const rounds = [
 	{ key: "r1", verdicts: ["FAIL", "FAIL", "PASS"] },
 	{ key: "r2", verdicts: ["PASS", "PASS", "PASS"] },
 ] as const;
-const segments = (text: string) => text.split("`");
-// 中文按词组断行：Chrome 的 keep-all 只在空格处断，所以在标点后补零宽空格作为断点
-const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：；])/g, "$1\u200B") : text);
+const table = reviewTable(lang);
+const cols = [t.toolCol, ...table.cols];
 ---
 
 <section class="section review" id="review" aria-labelledby="review-title">
 	<div class="section-inner">
 		<h2 class="section-title" id="review-title">{t.title}</h2>
-		<p class="section-lede">{phrases(t.lede)}</p>
+		<p class="section-lede">{t.lede}</p>
 	</div>
 
 	<div class="loop">
 		<div class="stage">
-			<div class="story">
-				<span class="rail" aria-hidden="true"><span class="rail-fill"></span></span>
-				<ol class="beats">
-					{
-						t.beats.map((beat) => (
-							<li class="beat">
-								<h3 class="item-title">{beat.title}</h3>
-								<p>{phrases(beat.body)}</p>
-							</li>
-						))
-					}
-				</ol>
-			</div>
+			<Story beats={t.beats} />
 
 			<div class="console-wrap">
 				<div class="heat" aria-hidden="true">
@@ -75,7 +65,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 									))
 								}
 							</ul>
-							<p class="result fail"><span class="sign" aria-hidden="true">✕</span><b>{t.failed}</b><span class="detail">{phrases(t.finding)}</span></p>
+							<p class="result fail"><span class="sign" aria-hidden="true">✕</span><b>{t.failed}</b><span class="detail">{t.finding}</span></p>
 						</div>
 
 						<div class="block" data-block="fix">
@@ -120,17 +110,18 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 					<div class="window-bar">/fire-review</div>
 					<div class="frame">
 						<video src={video} poster={poster} preload="none" muted playsinline loop aria-label={t.videoLabel}></video>
-						<button type="button" class="play" aria-label={t.play} title={t.play}>
-							<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"></path></svg>
+						<button type="button" class="play" aria-label={t.play} title={t.play} data-play={t.play} data-pause={t.pause}>
+							<svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"></path></svg>
+							<svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
 						</button>
 					</div>
 				</div>
-				<figcaption>{phrases(t.video)}</figcaption>
+				<figcaption>{t.video}</figcaption>
 			</figure>
 			<div class="notes">
 				<div class="note">
 					<h3 class="item-title">{t.advisorTitle}</h3>
-					<p>{phrases(t.advisor)}</p>
+					<p>{t.advisor}</p>
 					<p class="decisions">
 						{t.decisions.map((decision, i) => [i > 0 && <span class="sep" aria-hidden="true"> · </span>, <span class="choice">{decision}</span>])}
 					</p>
@@ -143,31 +134,31 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		</div>
 
 		<div class="compare">
-			<h3 class="subtitle compare-title">{phrases(t.compare)}</h3>
+			<h3 class="subtitle compare-title">{t.compare}</h3>
 			<table>
 				<thead>
 					<tr>
-						{t.cols.map((col) => <th scope="col">{col}</th>)}
+						{cols.map((col) => <th scope="col">{col}</th>)}
 					</tr>
 				</thead>
 				<tbody>
 					{
-						t.rows.map((row, i) => (
-							<tr class:list={{ us: i === 0 }}>
+						table.rows.map((row) => (
+							<tr class:list={{ us: row.self }}>
 								<th scope="row">
-									{i === 0 && <img src={markUrl} alt="" width="16" height="20" />}
+									{row.self && <img src={markUrl} alt="" width="16" height="20" />}
 									<span class="name">{row.name}</span>
 									{row.cmd && <code>{row.cmd}</code>}
 									{row.note && <span class="note-tag">{row.note}</span>}
 								</th>
-								<td data-label={t.cols[1]}>{row.reviewers}</td>
-								<td data-label={t.cols[2]} class="gets">
-									{i === 0 ? (
+								<td data-label={cols[1]}>{row.reviewers}</td>
+								<td data-label={cols[2]} class="gets">
+									{row.self ? (
 										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
 									) : (
 										<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" /></svg>
 									)}
-									<span>{segments(row.gets).map((part, j) => (j % 2 ? <code>{part}</code> : part))}</span>
+									<span><Rich text={row.gets} /></span>
 								</td>
 							</tr>
 						))
@@ -179,55 +170,69 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 </section>
 
 <script>
-	import { gsap, reducedMotion } from "../scroll";
+	import { gsap, reducedMotion, scrollStory } from "../scroll";
 
 	const SPARKS_PER_FAIL = 14;
-	const DIM = 0.45;
 	const GHOST = 0.1;
-	const NARROW = "(max-width: 860px)";
-	// 手机上录屏字太小，只给封面和播放按钮，点开全屏看
+	// FAIL 的火星往上方扇形飞；贴着屏幕右缘时往右的那部分被区块裁掉
+	const SPARK_ANGLES = [-160, -20];
+	// 手机上录屏字太小，点播放时进全屏看
 	const PHONE = "(max-width: 640px)";
 	// 中英两版录屏都在第 8 秒左右发起审查；首播从这里开始，开场的输入过程等循环回来再看
 	const FIRST_PLAY_AT = 8;
-	// 每一拍在时间轴上的起点，进度条与当前条目按它跳
+	// 每一拍在时间轴上的起点，与说明列的三条一一对应
 	const BEATS = [0, 3.6, 5.4];
 
 	const root = document.querySelector<HTMLElement>("#review")!;
 	const loop = root.querySelector<HTMLElement>(".loop")!;
 	const footage = root.querySelector<HTMLElement>(".footage")!;
 	const video = footage.querySelector("video")!;
+	const toggle = footage.querySelector<HTMLButtonElement>(".play")!;
 
-	if (reducedMotion || matchMedia(PHONE).matches) playOnClick(matchMedia(PHONE).matches);
-	else autoplay();
+	controlVideo();
 	if (!reducedMotion) {
 		animateLoop();
 		revealCompare();
 	}
 
-	function start() {
+	// 录屏：一个播放/暂停按钮盖住画面，任何时候都能停。允许动效且不是手机时进入视口自动播放、离开就停；
+	// 用户手动暂停后不再自动续播
+	function controlVideo() {
+		let userPaused = false;
+		const sync = () => {
+			const playing = !video.paused;
+			footage.toggleAttribute("data-playing", playing);
+			const label = playing ? toggle.dataset.pause! : toggle.dataset.play!;
+			toggle.setAttribute("aria-label", label);
+			toggle.title = label;
+		};
+		video.addEventListener("play", sync);
+		video.addEventListener("pause", sync);
+		toggle.addEventListener("click", () => {
+			userPaused = !video.paused;
+			if (userPaused) return video.pause();
+			if (matchMedia(PHONE).matches) enterFullscreen();
+			play();
+		});
+		if (reducedMotion) return;
+		new IntersectionObserver(
+			([entry]) => {
+				if (userPaused || matchMedia(PHONE).matches) return;
+				if (entry.isIntersecting) play();
+				else video.pause();
+			},
+			{ threshold: 0.35 },
+		).observe(video);
+	}
+
+	function play() {
 		if (video.currentTime === 0) video.currentTime = FIRST_PLAY_AT;
 		video.play().catch((error: DOMException) => {
 			if (error.name !== "AbortError") throw error;
 		});
 	}
 
-	// 只在视口内播放，离开就暂停
-	function autoplay() {
-		new IntersectionObserver(([entry]) => (entry.isIntersecting ? start() : video.pause()), { threshold: 0.35 }).observe(video);
-	}
-
-	// 减少动效或手机：只显示封面与播放按钮，用户点了才播；手机进全屏播放，退出全屏即停
-	function playOnClick(fullscreen: boolean) {
-		footage.toggleAttribute("data-manual", true);
-		video.addEventListener("play", () => footage.toggleAttribute("data-playing", true));
-		video.addEventListener("pause", () => footage.toggleAttribute("data-playing", false));
-		video.addEventListener("click", () => video.pause());
-		footage.querySelector(".play")!.addEventListener("click", () => {
-			if (fullscreen) enterFullscreen();
-			start();
-		});
-	}
-
+	// 手机：进全屏播放，退出全屏即停
 	function enterFullscreen() {
 		const leave = () => {
 			video.controls = false;
@@ -248,16 +253,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 
 	// 滚动推进闭环：第 1 轮并行审查 → FAIL 迸火星 → 修复 → 第 2 轮全员 PASS、火势收成余温、绿光落定
 	function animateLoop() {
-		loop.classList.add("is-live");
-		const narrow = matchMedia(NARROW).matches;
-		// 窄屏三拍叠在同一位置轮换，宽屏并列、未轮到的压暗
-		const dim = narrow ? 0 : DIM;
-		// 窄屏 FAIL 贴着屏幕右缘，火星只往左上飞
-		const [minAngle, maxAngle] = narrow ? [-170, -100] : [-150, -30];
 		const q = gsap.utils.selector(loop);
-		const beats = q(".beat");
-		const list = loop.querySelector<HTMLElement>(".beats")!;
-		const rail = loop.querySelector<HTMLElement>(".rail-fill")!;
 		const block = (key: string) => loop.querySelector<HTMLElement>(`[data-block="${key}"]`)!;
 		const r1 = block("r1");
 		const fix = block("fix");
@@ -268,7 +264,6 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 			for (let i = 0; i < SPARKS_PER_FAIL; i++) host.append(document.createElement("i"));
 		}
 
-		gsap.set(beats, { opacity: (i: number) => (i === 0 ? 1 : dim) });
 		// 未轮到的行先以骨架透出，终端不至于大半空着
 		gsap.set([...lines(r1), ...lines(fix), ...lines(r2)], { opacity: GHOST, y: 4 });
 		gsap.set(q(".pending"), { opacity: 1 });
@@ -277,33 +272,18 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		gsap.set(q(".heat"), { opacity: 0, scale: 0.6 });
 		gsap.set(q(".calm"), { scale: 0.8 });
 
-		// 进度条跳到当前拍：宽屏到该条目底边，窄屏三拍叠放时按拍数均分
-		let active = -1;
-		const syncBeat = () => {
-			const now = BEATS.findLastIndex((time) => tl.time() >= time);
-			if (now === active) return;
-			active = now;
-			beats.forEach((beat, i) => beat.toggleAttribute("aria-current", i === now));
-			const beat = beats[now] as HTMLElement;
-			const reach = narrow ? (now + 1) / beats.length : (beat.offsetTop + beat.offsetHeight) / list.offsetHeight;
-			rail.style.transform = `scaleY(${reach})`;
-		};
-
-		const tl = gsap.timeline({
-			defaults: { ease: "none" },
-			scrollTrigger: { trigger: loop, start: "top top", end: "bottom bottom", scrub: 0.6 },
-			onUpdate: syncBeat,
-		});
-
+		const tl = gsap.timeline({ defaults: { ease: "none" } });
 		const enter = (targets: Element[], at: number) =>
 			tl.to(targets, { opacity: 1, y: 0, duration: 0.4, stagger: 0.2, ease: "power2.out" }, at);
+		// 判定落下时停掉“审查中”的脉冲，不让藏起来的字继续每帧重绘
 		const verdict = (cell: Element, at: number) => {
-			tl.to(cell.querySelector(".pending"), { opacity: 0, duration: 0.1 }, at - 0.15);
+			const pending = cell.querySelector(".pending");
+			tl.to(pending, { opacity: 0, duration: 0.1 }, at - 0.15).set(pending, { animationName: "none" }, at - 0.05);
 			tl.to(cell.querySelector(".verdict"), { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(3)" }, at);
 			for (const spark of cell.querySelectorAll(".sparks i")) burst(spark, at);
 		};
 		const burst = (spark: Element, at: number) => {
-			const angle = gsap.utils.random(minAngle, maxAngle) * (Math.PI / 180);
+			const angle = gsap.utils.random(SPARK_ANGLES[0], SPARK_ANGLES[1]) * (Math.PI / 180);
 			const distance = gsap.utils.random(40, 140);
 			gsap.set(spark, { rotation: (angle * 180) / Math.PI + 90, opacity: 0 });
 			tl.fromTo(
@@ -321,14 +301,6 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 				at + gsap.utils.random(0, 0.08),
 			);
 		};
-		// 窄屏叠放时先淡出上一拍再淡入下一拍，滚到中途也不会两段字叠在一起
-		const focus = (index: number) => {
-			const at = BEATS[index];
-			beats.forEach((beat, i) => {
-				if (i === index) tl.to(beat, { opacity: 1, duration: 0.3 }, narrow ? at + 0.15 : at);
-				else tl.to(beat, { opacity: dim, duration: narrow ? 0.15 : 0.3 }, at);
-			});
-		};
 		const cells = (el: HTMLElement) => [...el.querySelectorAll(".cell")];
 		const [, fixAt, passAt] = BEATS;
 
@@ -338,11 +310,9 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		tl.to(q(".tint-fail"), { opacity: 1, duration: 0.6 }, 1.6);
 		enter([r1.querySelector(".result")!], 2.6);
 
-		focus(1);
 		enter(lines(fix), fixAt + 0.2);
 		tl.to(q(".heat"), { opacity: 0.6, scale: 0.85, duration: 1.2 }, fixAt + 0.6);
 
-		focus(2);
 		enter(lines(r2).slice(0, -1), passAt + 0.2);
 		cells(r2).forEach((cell, i) => verdict(cell, passAt + 1.4 + i * 0.25));
 		tl.to(q(".heat"), { opacity: 0.25, scale: 0.7, duration: 1, ease: "power2.inOut" }, passAt + 1.4);
@@ -353,7 +323,8 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		tl.to(flare, { opacity: 1, duration: 0.16, ease: "power2.out" }, passAt + 2.7);
 		tl.to(flare, { opacity: 0, duration: 0.16, ease: "power2.in" }, passAt + 2.86);
 		tl.to({}, { duration: 1 }, passAt + 3.2);
-		syncBeat();
+
+		scrollStory({ track: loop, pin: root.querySelector<HTMLElement>(".stage")!, timeline: tl, beats: BEATS });
 	}
 
 	function revealCompare() {
@@ -371,20 +342,8 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 
 <style>
 	.review {
-		/* 信息小字：全局 --faint 在暗底上对比不足 */
-		--meta: #7a716a;
 		/* 火星与光晕会伸出终端，横向裁在区块内，不撑宽页面 */
 		overflow-x: clip;
-	}
-
-	:lang(zh) .section-lede,
-	:lang(zh) .beat p,
-	:lang(zh) .detail,
-	:lang(zh) figcaption,
-	:lang(zh) .note p,
-	:lang(zh) .compare-title {
-		word-break: keep-all;
-		overflow-wrap: anywhere;
 	}
 
 	/* ---------- 闭环舞台 ---------- */
@@ -393,9 +352,15 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		margin-top: clamp(48px, 7svh, 88px);
 	}
 
-	.loop.is-live {
-		height: 300svh;
+	.loop[data-live] {
 		margin-top: 0;
+	}
+
+	/* 滚动播放时：轨道在钉住层后垫出 200svh，就是播完这一幕要滚的距离（sticky 只能在父元素的内容区里移动，所以不用 padding） */
+	.loop[data-live]::after {
+		content: "";
+		display: block;
+		height: 200svh;
 	}
 
 	.stage {
@@ -408,55 +373,11 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		margin-inline: auto;
 	}
 
-	/* 钉住时顶对齐，顶部让出导航 */
-	.is-live .stage {
+	/* 钉住时顶对齐，顶部让出导航；比视口高时 scroll.ts 把 --stick-top 设成负值，底边贴住视口底 */
+	[data-live] .stage {
 		position: sticky;
-		top: 0;
-		height: 100svh;
+		top: var(--stick-top, 0);
 		padding-top: calc(var(--nav-h) + clamp(12px, 5svh, 56px));
-	}
-
-	.story {
-		position: relative;
-		padding-left: 22px;
-	}
-
-	.rail {
-		display: none;
-		position: absolute;
-		inset: 4px auto 4px 0;
-		width: 2px;
-		border-radius: 2px;
-		background: var(--ring);
-	}
-
-	.is-live .rail {
-		display: block;
-	}
-
-	.rail-fill {
-		display: block;
-		height: 100%;
-		border-radius: inherit;
-		background: var(--accent);
-		transform-origin: top;
-		transform: scaleY(0);
-		transition: transform 300ms var(--ease-move);
-	}
-
-	.beats {
-		display: grid;
-		gap: 28px;
-		padding: 0;
-		list-style: none;
-	}
-
-	.beat p {
-		margin-top: 6px;
-		color: var(--muted);
-		font-size: var(--text-body);
-		line-height: 1.55;
-		text-wrap: pretty;
 	}
 
 	.console-wrap {
@@ -492,7 +413,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		opacity: 0;
 	}
 
-	.is-live .heat i {
+	[data-live] .heat i {
 		animation: ember 3.2s linear infinite;
 	}
 
@@ -602,7 +523,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		opacity: 0;
 	}
 
-	.is-live .pending {
+	[data-live] .pending {
 		animation: pulse 1.4s ease-in-out infinite;
 	}
 
@@ -723,10 +644,11 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		aspect-ratio: 1160 / 684;
 	}
 
+	/* 播放/暂停按钮盖住整个画面：点画面任意处切换。播放中圆钮只在悬停或键盘聚焦时露出 */
 	.play {
 		position: absolute;
 		inset: 0;
-		display: none;
+		display: grid;
 		place-items: center;
 		width: 100%;
 		border: 0;
@@ -751,12 +673,26 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 		position: relative;
 		width: 18px;
 		height: 18px;
-		margin-left: 3px;
 		color: var(--accent);
 	}
 
-	[data-manual]:not([data-playing]) .play {
-		display: grid;
+	.play .icon-play {
+		margin-left: 3px;
+	}
+
+	[data-playing] .icon-play,
+	.footage:not([data-playing]) .icon-pause {
+		display: none;
+	}
+
+	[data-playing] .play:not(:hover, :focus-visible)::before,
+	[data-playing] .play:not(:hover, :focus-visible) svg {
+		opacity: 0;
+	}
+
+	.play::before,
+	.play svg {
+		transition: opacity var(--duration-state) var(--ease-enter);
 	}
 
 	@media (hover: hover) and (pointer: fine) {
@@ -799,7 +735,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 	}
 
 	.note code,
-	.gets code,
+	.gets :global(code),
 	th code {
 		font-size: 0.9em;
 		color: var(--accent-hot);
@@ -945,27 +881,15 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 
 	/* ---------- 窄屏 ---------- */
 
-	@media (max-width: 860px) {
+	/* 单栏：与 Agents 同一断点，说明列的叠放轮换在 Story 组件里 */
+	@media (max-width: 960px) {
 		.stage {
 			grid-template-columns: minmax(0, 1fr);
 			gap: 20px;
 		}
 
-		.is-live .stage {
+		[data-live] .stage {
 			padding-top: calc(var(--nav-h) + 12px);
-		}
-
-		.beats {
-			gap: 20px;
-		}
-
-		/* 窄屏滚动时三拍叠在同一位置轮换，只显示当前一拍，把高度让给终端 */
-		.is-live .beats {
-			grid-template-areas: "beat";
-		}
-
-		.is-live .beat {
-			grid-area: beat;
 		}
 
 		.notes {
@@ -1018,11 +942,7 @@ const phrases = (text: string) => (lang === "zh" ? text.replace(/([，。、：�
 	}
 
 	/* 矮屏（如 360×640）：收紧终端行距与留白，整个终端留在一屏内 */
-	@media (max-width: 860px) and (max-height: 700px) {
-		.is-live .beat p {
-			display: none;
-		}
-
+	@media (max-width: 960px) and (max-height: 700px) {
 		.console {
 			line-height: 1.5;
 		}

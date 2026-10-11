@@ -29,7 +29,7 @@ const notice = (...parts: (string | undefined)[]): MasterEvent => ({ body: lines
 
 /**
  * 一次运行里用户在子代理全过程视图直接说的话（按顺序）。有就在标题结果词后注明来源、正文先列原话：
- * 指挥官据此知道这次运行不是它派的，只记下不向用户复述；成败、发落、在飞数与普通 send 完全相同。
+ * 指挥官据此知道这次运行不是它派的，只记下不向用户复述；成败、在飞数与普通 send 完全相同。
  */
 type ViewPrompts = readonly string[];
 const runTitle = (name: string, word: string, view: ViewPrompts) => `${name} ${word}${view.length ? msg.event.viewMark : ""}`;
@@ -63,6 +63,8 @@ export const masterEvent = {
 	},
 	/** 只给会话重载打断的回合：指挥官自己发起的 interrupt 它知道现场，不提醒。 */
 	resumeReminder: (name: string) => notice(`${name} ${msg.event.pendingResume}`, msg.event.pendingResumeBody),
+	extensionError: (name: string, extension: string, event: string, error: string) =>
+		notice(`${name} ${msg.event.extensionError}`, msg.event.extensionErrorBody(extension, event, error)),
 	stranded: (name: string, texts: string[]) =>
 		notice(`${name} ${msg.event.stranded}`, msg.event.strandedBody(texts.length), texts.join("\n---\n")),
 	modelSwitched: (name: string, from: string, to: string, reason: string) =>

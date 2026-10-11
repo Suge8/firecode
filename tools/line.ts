@@ -12,7 +12,6 @@ import {
 	partsWidth,
 	sizePart,
 } from "./parts.js";
-import { takeDuration } from "./timing.js";
 
 export const RAIL = "▏ ";
 /**
@@ -52,6 +51,8 @@ type RenderContext = {
 	isPartial: boolean;
 	isError: boolean;
 	expanded: boolean;
+	/** 宿主给的真实执行耗时；工具还在跑、没跑或导出 HTML 时为 undefined。 */
+	durationMs?: number;
 };
 
 type ResultContent = { type: string; text?: string };
@@ -221,8 +222,7 @@ export function makeResultRenderer(sized: boolean) {
 		const state = context.state;
 		const { displayText, chars } = resultText(result, options.expanded || context.isError);
 		if (sized) state.chars = chars;
-		const durationMs = takeDuration(context.toolCallId);
-		if (durationMs !== undefined) state.durationMs = durationMs;
+		if (context.durationMs !== undefined) state.durationMs = context.durationMs;
 		state.errorText = context.isError ? displayText : "";
 		return options.expanded && displayText !== ""
 			? new ExpandedResult(displayText, theme)

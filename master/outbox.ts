@@ -12,7 +12,8 @@ import type { MasterRuntime } from "./runtime.js";
 
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
-const EVENT_RETRY_MS = 5_000;
+/** 投递失败的重试间隔从 MasterSetup.eventRetryMs 起逐次翻倍，封顶于此。 */
+const EVENT_RETRY_MAX_MS = 60_000;
 /** 指挥官空闲时，从第一条结果入队起最多等这么久就唤醒，即使结果还在陆续到达。 */
 const WAKE_MAX_MS = 6_000;
 
@@ -29,9 +30,14 @@ export class Outbox {
 	/** 已交给 deliver、尚未确认送达的事件：投递完成前对应子代理仍算在飞。 */
 	private readonly delivering = new Set<PendingMasterEvent>();
 	private flushTimer?: NodeJS.Timeout;
-	private retrying = false;
+	/** 连续投递失败的次数：重试间隔翻倍的指数；一次成功归零。 */
+	private failures = 0;
+	/** 重试计时已挂上：这期间入队的事件等重试一并带走，不另开计时。 */
+	private retryScheduled = false;
 	/** 空闲合并窗口里第一条事件入队的时刻。 */
 	private firstQueuedAt?: number;
+	/** 发件箱收口时中止悬而未决的前门唤起：停用后的回合不再补投旧事件。 */
+	private readonly closing = new AbortController();
 
 	constructor(private readonly active: MasterRuntime) {}
 
@@ -70,6 +76,7 @@ export class Outbox {
 
 	close(): void {
 		clearTimeout(this.flushTimer);
+		this.closing.abort();
 	}
 
 	/**
@@ -80,7 +87,7 @@ export class Outbox {
 	private push(event: PendingMasterEvent): void {
 		this.queued.push(event);
 		this.active.schedulePublish();
-		if (this.retrying) return;
+		if (this.retryScheduled) return;
 		const quiet = this.active.setup.wakeQuietMs;
 		if (!this.active.ctx.isIdle() || quiet <= 0) {
 			if (!this.flushTimer || this.firstQueuedAt !== undefined) this.schedule(0);
@@ -104,37 +111,37 @@ export class Outbox {
 		const { active } = this;
 		if (active.closed) return;
 		this.flushTimer = undefined;
-		this.retrying = false;
+		this.retryScheduled = false;
 		this.firstQueuedAt = undefined;
 		if (!this.queued.length) return;
 		const batch = this.queued.splice(0);
 		for (const event of batch) this.delivering.add(event);
-		const send = batch.every((event) => event.inform) ? inform : deliver;
-		send(active.setup.pi, active.ctx, {
+		const envelope = {
 			customType: MASTER_EVENT_TYPE,
 			content: batch.map((event) => wrapEnvelope("firecode_master_event", event.content)).join("\n\n"),
-		}).then(() => {
+		};
+		const sent = batch.every((event) => event.inform)
+			? (async () => inform(active.setup.pi, envelope))()
+			: deliver(active.setup.pi, active.ctx, envelope, this.closing.signal);
+		sent.then(() => {
 			if (active.closed) return;
+			this.failures = 0;
 			for (const event of batch) this.delivering.delete(event);
 			try {
 				active.setup.pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
 			} catch (error) {
 				active.ctx.ui.notify(msg.outbox.ackFailed(String(error)), "warning");
 			}
-			for (const event of batch) {
-				if (!event.worker) continue;
-				const worker = active.store.find(event.worker);
-				if (worker?.status === "idle" && worker.disposition !== "reminded")
-					active.store.upsert({ ...worker, disposition: "pending" });
-			}
 			active.schedulePublish();
 		}, (error) => {
 			if (active.closed) return;
 			for (const event of batch) this.delivering.delete(event);
 			this.queued.unshift(...batch);
-			active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
-			this.retrying = true;
-			this.schedule(EVENT_RETRY_MS);
+			// 一串连续失败只提示一次；之后静默退避重试，直到送达。
+			if (!this.failures) active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
+			this.retryScheduled = true;
+			this.schedule(Math.min(active.setup.eventRetryMs * 2 ** this.failures, EVENT_RETRY_MAX_MS));
+			this.failures++;
 		});
 	}
 

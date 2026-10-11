@@ -76,8 +76,6 @@ export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
 	let desired: Projection = { title: "", agent: "", working: false, released: false };
 	let sent: Sent = {};
 	let running: Promise<void> | undefined;
-	/** 重载时回合已在跑：busy.ts 没见过 agent_start，到下一次 agent_settled 为止算 working。 */
-	let carriedRun = false;
 	let view: BusyView | undefined;
 
 	const request = (method: string, params: Record<string, unknown>) => {
@@ -135,7 +133,7 @@ export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
 		desired = { ...desired, ...patch };
 		if (enabled) void kick();
 	};
-	const project = () => update({ working: Boolean(view?.busy) || carriedRun, label: view ? labelOf(view) : undefined });
+	const project = () => update({ working: Boolean(view?.busy), label: view ? labelOf(view) : undefined });
 
 	watchBusy(pi, {
 		onChange: (next) => {
@@ -143,17 +141,12 @@ export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
 			project();
 		},
 	});
-	pi.on("agent_settled", () => {
-		carriedRun = false;
-		project();
-	});
 
 	const syncIdentity = (ctx: ExtensionContext) => {
 		if (ctx.mode === "tui") update(identityOf(ctx, pi));
 	};
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		carriedRun = !ctx.isIdle();
 		enabled = true;
 		desired = { ...desired, ...identityOf(ctx, pi), resume: resumeOf(ctx) };
 		project();

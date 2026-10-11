@@ -5,7 +5,7 @@ import { parseJsonc } from "../jsonc.ts";
 import { FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
-test("binds exactly the shortcuts declared by preset key fields", async () => {
+test("示例配置里预设声明的快捷键恰好都被绑定，没写 key 的预设不占键", async () => {
 	const configJsonc = readFileSync(join(FIRECODE_DIR, "config.example.jsonc"), "utf8");
 	const { presets } = parseJsonc(configJsonc) as { presets: Record<string, { key?: string }> };
 	const declared = Object.values(presets)
@@ -32,7 +32,10 @@ const PRESET_CONFIG = JSON.stringify({
 	},
 });
 
-/** 宿主替身：模型、思考档与工具集都由宿主记在会话里，并在 session_start 之前按记录恢复（真实宿主的工具集随运行记入 transcript）。 */
+/**
+ * 宿主替身：模型、思考档与工具集都由宿主记在会话里，并在 session_start 之前按记录恢复（真实宿主的工具集随运行记入 transcript）。
+ * 重开会话时宿主重新调用扩展工厂函数，预设的内存状态随旧实例消失，只剩会话分支里的记录——reopen 按此重建实例。
+ */
 async function presetHost() {
 	const { registerPresets } = await loadFirecodeModule("session/presets.ts", { configJsonc: PRESET_CONFIG });
 	const models: Record<string, { provider: string; id: string }> = {
@@ -42,7 +45,8 @@ async function presetHost() {
 		"test/plain": { provider: "test", id: "plain" },
 	};
 	const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, recordedTools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined };
+	const state = { model: models["test/base"], thinking: "medium", tools: DEFAULT_TOOLS, recordedTools: DEFAULT_TOOLS, branch: [] as unknown[], status: undefined as string | undefined, flag: undefined as string | undefined };
+	let fake: ReturnType<typeof install>;
 	const emit = (name: string, event: unknown = {}) => fake.fire(name, event, ctx);
 	const ctx = {
 		get model() { return state.model; },
@@ -50,7 +54,8 @@ async function presetHost() {
 		sessionManager: { getEntries: () => state.branch, getBranch: () => state.branch },
 		ui: { notify() {}, setStatus: (_key: string, text?: string) => { state.status = text; }, theme: { fg: (_color: string, text: string) => text } },
 	};
-	const fake = fakePi({
+	const install = () => fakePi({
+		getFlag: () => state.flag,
 		getThinkingLevel: () => state.thinking,
 		setThinkingLevel: (level: string) => { state.thinking = level; },
 		setModel: async (model: typeof state.model) => {
@@ -64,12 +69,17 @@ async function presetHost() {
 		getAllTools: () => DEFAULT_TOOLS.map((name) => ({ name })),
 		appendEntry: (customType: string, data: unknown) => state.branch.push({ type: "custom", customType, data }),
 	});
-	(registerPresets as (pi: unknown) => void)(fake.pi);
-	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再发 session_start。 */
-	const reopen = async (restoredModel: string) => {
+	const mount = () => {
+		fake = install();
+		(registerPresets as (pi: unknown) => void)(fake.pi);
+	};
+	mount();
+	/** 重开会话：宿主先按记录恢复模型（可能回落到别的模型）与工具集，再建新实例、发 session_start。 */
+	const reopen = async (restoredModel: string, event: unknown = {}) => {
 		state.model = models[restoredModel];
 		state.tools = state.recordedTools;
-		await emit("session_start");
+		mount();
+		await emit("session_start", event);
 	};
 	const instructions = () => fake.systemPrompt("BASE", ctx);
 	const preset = (name: string) => fake.commands.get("preset").handler(name, ctx);
@@ -95,8 +105,9 @@ test("重开会话时宿主恢复的模型已不是预设的：预设失效，�
 	await host.reopen("test/base");
 	expect(await host.instructions()).toBe("BASE");
 	expect(host.state.status).toBeUndefined();
-	// 失效只清预设自己的状态（名字与指令），宿主恢复的工具集不动。
-	expect(host.state.tools).toEqual(["read", "bash"]);
+	// 失效时工具集还原为应用预设之前的，模型不动（宿主恢复的是哪个就是哪个）。
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
 	await host.reopen("test/deep");
 	expect(await host.instructions()).toBe("BASE");
 	expect(host.state.status).toBeUndefined();
@@ -117,24 +128,61 @@ test("会话中手动切走预设模型即失效且记入会话；切到另一�
 	await host.emit("model_select", { model: host.state.model, previousModel, source: "set" });
 	expect(host.state.status).toBeUndefined();
 	expect(await host.instructions()).toBe("BASE");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
 	await host.reopen("test/base");
 	expect(host.state.status).toBeUndefined();
 });
 
-test("清除预设后重开不复活；新会话（空记录）不继承上一个会话的预设", async () => {
+test("清除预设真正恢复：重开会话后清除，模型、思考档与工具集回到应用预设之前；清除后重开不复活", async () => {
 	const host = await presetHost();
 	await host.emit("session_start");
 	await host.preset("deep");
+	expect(host.state.thinking).toBe("high");
+	await host.reopen("test/deep");
+	expect(host.state.status).toBe("Deep");
 	await host.preset("（无）");
-	await host.reopen("test/deep");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
+	expect(host.state.thinking).toBe("medium");
+	expect(host.state.status).toBeUndefined();
+	await host.reopen("test/base");
 	expect(host.state.status).toBeUndefined();
 	expect(await host.instructions()).toBe("BASE");
+});
 
+test("没写工具集的预设回到快照工具集：从带工具集的预设切过去不继承限制", async () => {
+	const host = await presetHost();
+	await host.emit("session_start");
 	await host.preset("deep");
-	host.state.branch = [];
-	await host.reopen("test/deep");
+	await host.preset("quick");
+	expect(host.state.status).toBe("Quick");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+});
+
+test("启动时命令行预设盖在已恢复的预设上：快照仍是最初的，清除后回到最初", async () => {
+	const host = await presetHost();
+	await host.emit("session_start");
+	await host.preset("deep");
+	host.state.flag = "quick";
+	await host.reopen("test/deep", { reason: "startup" });
+	expect(host.state.status).toBe("Quick");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	await host.preset("（无）");
+	expect(host.state.model).toEqual({ provider: "test", id: "base" });
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
+	expect(host.state.thinking).toBe("medium");
+});
+
+test("命令行预设只在启动时应用：重载、恢复会话不再套用它", async () => {
+	const host = await presetHost();
+	host.state.flag = "deep";
+	await host.emit("session_start", { reason: "startup" });
+	expect(host.state.status).toBe("Deep");
+	await host.preset("（无）");
+	await host.reopen("test/base", { reason: "reload" });
 	expect(host.state.status).toBeUndefined();
-	expect(await host.instructions()).toBe("BASE");
+	expect(host.state.tools).toEqual(host.DEFAULT_TOOLS);
 });
 
 test("预设的模型套用失败（找不到或没有凭据）就整套不套：不设预设名、不注入指令、不改工具与模型", async () => {

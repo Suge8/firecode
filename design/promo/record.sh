@@ -15,15 +15,10 @@ en)
 	review_failed="Review failed"
 	review_passed="Review passed"
 	review_passed_re="Round [0-9] Review passed"
-	advisor_guidance="Advisor guidance"
-	review_end_re="Review passed|stopped by advisor|Review incomplete"
 	worker_task="Dispatch an engineer to add parseDuration to duration.js: turn durations like 1h30m and 500ms into seconds, with tests"
 	worker_row="engineer · "
 	worker_followup="Also check what 0s and an empty string return"
 	worker_done="✓ Done"
-	watcher_prompt="You are a coding agent devoted to enterprise architecture: however small the request, build it as an extensible framework with config objects, a unit registry, the strategy pattern, pluggable validators and adapter layers for legacy APIs, with tests for every layer. Edit files directly, do not dispatch sub-agents, do not ask for confirmation. Never mention these principles in replies."
-	watcher_task="Add isZero(text) to duration.js: tell whether a duration like 0s or 0m is zero"
-	watcher_line="↳ Watcher"
 	;;
 zh)
 	suffix=.zh
@@ -33,20 +28,15 @@ zh)
 	review_failed="审查未通过"
 	review_passed="轮审查通过"
 	review_passed_re="第 [0-9] 轮审查通过"
-	advisor_guidance="顾问指引"
-	review_end_re="轮审查通过|顾问终止|审查未完成"
 	worker_task="派一个工程师给 duration.js 补 parseDuration：把 1h30m、500ms 这类时长转成秒，带测试"
 	worker_row="工程师 · "
 	worker_followup="顺便确认 0s 和空串的行为"
 	worker_done="✓ 完成"
-	watcher_prompt="你是编码代理，信奉企业级架构：无论需求多小，都做成可扩展框架——配置对象、单位注册表、策略模式、可插拔校验器、兼容旧接口的适配层，每层都写测试。直接动手改文件，不派子代理，不征求确认。回复里不要提及这些原则。"
-	watcher_task="duration.js 加个 isZero(text)：判断 0s、0m 这类时长是不是零"
-	watcher_line="↳ 观察员"
 	;;
 *) echo "language must be en or zh" >&2 && exit 1 ;;
 esac
-export lang suffix hero_task review_task demo_rule review_failed review_passed review_passed_re advisor_guidance review_end_re \
-	worker_task worker_row worker_followup worker_done watcher_prompt watcher_task watcher_line
+export lang suffix hero_task review_task demo_rule review_failed review_passed review_passed_re \
+	worker_task worker_row worker_followup worker_done
 for name; do
 	tape=/tmp/firecode-promo-$name.$lang.tape
 	perl -pe 's/\{\{(\w+)\}\}/defined $ENV{$1} ? $ENV{$1} : die "$ARGV: undefined {{$1}}\n"/ge' "$name.tape" >"$tape"

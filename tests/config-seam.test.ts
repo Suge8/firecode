@@ -19,7 +19,7 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	expect([...fake.messageRenderers.keys()]).toEqual(["firecode-review-card"]);
 	const warnings: string[] = [];
 	for (let occurrence = 0; occurrence < 2; occurrence++)
-		await fake.fire("session_start", {}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+		await fake.fire("session_start", {}, { isIdle: () => true, ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 	expect(warnings).toEqual([
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
 		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
@@ -43,84 +43,53 @@ async function loadFrom(configJsonc: string) {
 	return (loadConfig as () => any)();
 }
 
-test("Master 角色对象严格解析原子与 fallback", async () => {
+test("Master 角色表按模型原子解析，fallback 一并带出", async () => {
 	const features = await featuresOnly("master");
-	const load = (master: unknown) => loadFrom(JSON.stringify({ features, master }));
-	const valid = await load({
-		roles: {
-			工程师: { model: "test/shared/medium", use: "实现", fallback: ["test/backup/high"] },
-			哨兵: { model: "test/shared/low", use: "盯守" },
+	const loaded = await loadFrom(JSON.stringify({
+		features,
+		master: {
+			roles: {
+				工程师: { model: "test/shared/medium", use: "实现", fallback: ["test/backup/high"] },
+				哨兵: { model: "test/shared/low", use: "盯守" },
+			},
 		},
-	});
-	expect(valid.problems).toEqual([]);
-	expect(valid.master.config.roles).toEqual([
-		{
-			role: "工程师", model: "test/shared", thinking: "medium", use: "实现",
-			fallback: [{ model: "test/backup", thinking: "high" }],
-		},
+	}));
+	expect(loaded.problems).toEqual([]);
+	expect(loaded.master.config.roles).toEqual([
+		{ role: "工程师", model: "test/shared", thinking: "medium", use: "实现", fallback: [{ model: "test/backup", thinking: "high" }] },
 		{ role: "哨兵", model: "test/shared", thinking: "low", use: "盯守", fallback: [] },
 	]);
-
-	const { problems } = await load({
-		roles: {
-			工程师: {
-				model: "invalid-model/high", thinking: "medium", use: "旧写法",
-				fallback: ["test/a/low", "test/b/low", "test/c/low"],
-			},
-			哨兵: { model: "test/model/turbo", use: "坏档" },
-			调研员: { model: "test/model", use: "漏写思考档" },
-		},
-	});
-	expect(problems).toContain("未知字段 master.roles.工程师.thinking");
-	expect(problems).toContain(
-		"master.roles.工程师.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：invalid-model）",
-	);
-	expect(problems).toContain("master.roles.哨兵.model 必须是“provider/model/thinking”字符串（思考档无效：turbo）");
-	// 两段式旧写法同时踩中两项校验，仍然只报一条并给出目标形状。
-	expect(problems).toContain(
-		"master.roles.调研员.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：test；思考档无效：model）",
-	);
-	expect(problems).toContain("master.roles.工程师.fallback 必须是至多 2 项的数组");
-
-	expect((await load({ roles: {} })).problems).toContain("master.roles 必须是至少包含一个角色的对象");
-	expect((await load({ models: [{ role: "工程师", model: "test/model/low", use: "旧数组" }] })).problems)
-		.toContain("未知字段 master.models");
 });
 
-test("review 节：旧的 { model, thinking } 写法、未知键与空工具表都被报出，而不是静默回退", async () => {
-	const { problems } = await loadFrom(JSON.stringify({
-		review: {
-			advisor: { model: "p/m", thinking: "max" },
-			reviewers: [{ model: "p/r", thinking: "high" }],
-			background: { cmd: "pi" },
-			tools: "read",
-		},
-	}));
-	expect(problems).toContain("review.advisor 必须是“provider/model/thinking”字符串");
-	expect(problems).toContain("review.reviewers[0] 必须是“provider/model/thinking”字符串");
-	expect(problems).toContain("未知字段 review.background");
-	expect(problems).toContain("review.tools 必须是字符串数组");
-
-	const emptyTools = await loadFrom(JSON.stringify({
-		review: { advisor: "p/a/max", reviewers: ["p/r/high"], maxRounds: 5, advisorAfterFailures: 2, timeoutMinutes: 20, tools: [] },
-	}));
-	expect(emptyTools.problems).toContain("review.tools 必须是非空字符串数组");
-});
-
-// review 写成字符串/数组/null 时曾被静默当成空对象，于是全套默认模型上阵。
-test("review 节不是对象时被报出，不静默按默认值上阵；缺失的显式字段逐项报出", async () => {
-	for (const bad of ['"typo"', "[]", "null", "3"]) {
-		const { problems } = await loadFrom(`{ "review": ${bad} }`);
-		expect(`${bad}:${problems.some((item) => item.startsWith("review"))}`).toBe(`${bad}:true`);
+// 旧写法与手误一律报出并拒绝启动对应功能，不静默回退成默认值（回退会拿用户没选的模型真实发起调用）。
+test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动", async () => {
+	const features = await featuresOnly("master", "review");
+	const rejected: [string, unknown, string][] = [
+		["master 旧的分字段写法", { master: { roles: { 工程师: { model: "p/m/high", thinking: "medium", use: "x" } } } }, "未知字段 master.roles.工程师.thinking"],
+		["master 两段式原子", { master: { roles: { 调研员: { model: "test/model", use: "x" } } } }, "master.roles.调研员.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：test；思考档无效：model）"],
+		["master fallback 超过两项", { master: { roles: { 工程师: { model: "p/m/low", use: "x", fallback: ["p/a/low", "p/b/low", "p/c/low"] } } } }, "master.roles.工程师.fallback 必须是至多 2 项的数组"],
+		["master 空角色表", { master: { roles: {} } }, "master.roles 必须是至少包含一个角色的对象"],
+		["master 旧数组写法", { master: { models: [] } }, "未知字段 master.models"],
+		["review 旧的 { model, thinking } 对象", { review: { advisor: { model: "p/m", thinking: "max" } } }, "review.advisor 必须是“provider/model/thinking”字符串"],
+		["review 未知键", { review: { background: { cmd: "pi" } } }, "未知字段 review.background"],
+		["review 不是对象", { review: "typo" }, "review 必须是对象"],
+		["review 缺失的显式字段", { review: { maxRounds: 3 } }, "review.timeoutMinutes 必须显式配置"],
+		["review.tools 不是数组", { review: { tools: "read" } }, "review.tools 必须是非空字符串数组"],
+		["review.tools 为空", { review: { tools: [] } }, "review.tools 必须是非空字符串数组"],
+		["review.tools 含写入工具", { review: { tools: ["read", "edit"] } }, "review.tools 不能包含 write 或 edit：审查者只读"],
+		["preset 旧三字段", { presets: { old: { provider: "test", model: "model", thinkingLevel: "high" } } }, "未知字段 presets.old.thinkingLevel"],
+		["已删除的 keys.cyclePreset", { keys: { cyclePreset: "ctrl+shift+u" } }, "未知字段 keys.cyclePreset"],
+		["已删除的 tools 节", { tools: { replyLines: 3 } }, "未知配置节 tools"],
+		["已删除的 features.rename", { features: { rename: true } }, "未知开关 features.rename，可用："],
+	];
+	for (const [name, section, expected] of rejected) {
+		const loaded = await loadFrom(JSON.stringify({ features, ...(section as object) }));
+		expect(`${name}: ${loaded.problems.some((problem: string) => problem.startsWith(expected))}`).toBe(`${name}: true`);
 	}
-	const { problems } = await loadFrom(`{ "review": { "maxRounds": 3 } }`);
-	expect(problems.filter((item) => item.startsWith("review"))).toEqual([
-		"review.advisorAfterFailures 必须显式配置",
-		"review.timeoutMinutes 必须显式配置",
-		"review.tools 必须显式配置",
-		"review.advisor 必须是“provider/model/thinking”字符串",
-		"review.reviewers 必须包含 1–5 个模型原子",
-	]);
+	const broken = await loadFrom(JSON.stringify({ features, master: { roles: { 工程师: { model: "bad", use: "x" } } } }));
+	expect(broken.master.error).toContain("Master 配置有问题");
+	const bareReview = await loadFrom(JSON.stringify({ features, review: { advisor: "p/a/max", reviewers: ["p/r/high"] } }));
+	expect(bareReview.review.error).toContain("review.maxRounds 必须显式配置");
 });
 
 // features.review 写成字符串 "false" 时因 `!== false` 仍会启用，而启用 review 意味着真实模型调用，必须报出来而不是静默放行。
@@ -132,34 +101,45 @@ test("features 不是对象时报出并全部关闭；开关不是布尔时报�
 	expect((await loadFrom(`{ "features": { "review": "false" } }`)).problems.join()).toContain("features.review 必须是 true 或 false");
 });
 
-test("已删除的配置项不被静默忽略：features.rename、keys.rename 与 keys.cyclePreset 报未知字段，tools 节报未知配置节", async () => {
-	const { loadConfig } = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({ features: { rename: true }, keys: { rename: "ctrl+r", cyclePreset: "ctrl+shift+u" }, tools: { replyLines: 3 } }),
-	});
-	const { problems } = (loadConfig as () => { problems: string[] })();
-	expect(problems.some((problem) => problem.startsWith("未知开关 features.rename"))).toBeTrue();
-	expect(problems).toContain("未知字段 keys.rename");
-	expect(problems).toContain("未知字段 keys.cyclePreset");
-	expect(problems).toContain("未知配置节 tools");
+test("配置文件读不出来时只报文件级那一条：尾逗号与 BOM 照常读，真有语法错不刷各节的派生问题", async () => {
+	const features = await featuresOnly("review", "master", "watcher");
+	const lenient = await loadFrom("\uFEFF" + `{ "features": ${JSON.stringify(features)}, "keys": { "fast": "alt+f", }, // note
+	}`);
+	expect(lenient.problems.filter((problem: string) => problem.includes("解析失败"))).toEqual([]);
+	expect(lenient.config.keys.fast).toBe("alt+f");
+
+	const broken = await loadFrom(`{ "features": { "review": true }, "master" `);
+	expect(broken.problems).toHaveLength(1);
+	expect(broken.problems[0]).toContain("config.jsonc 解析失败");
+	for (const section of [broken.review, broken.master, broken.watcher]) {
+		expect(section.error).toContain("解析失败");
+		expect(section.error).not.toContain("必须");
+	}
 });
 
-test("preset 只认模型原子，旧的三字段写法被拒", async () => {
-	const { loadConfig } = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({
-			presets: {
-				new: { model: "test/model/high", key: "alt+1" },
-				old: { provider: "test", model: "model", thinkingLevel: "high" },
+test("openai 节：字段拼错、类型不对都报问题，写错的字段按省略处理", async () => {
+	const features = await featuresOnly("openaiNative");
+	const loaded = await loadFrom(JSON.stringify({
+		features,
+		openai: {
+			nativeCompaction: "yes",
+			experimental: 1,
+			providers: {
+				"openai-codex": { textVerbosity: "loud", priority: "on", extra: true },
+				xai: { priority: true },
+				bad: "x",
 			},
-		}),
-	});
-	const loaded = (loadConfig as () => { config: any; problems: string[] })();
-
-	expect(loaded.config.presets.new.model).toEqual({ model: "test/model", thinking: "high" });
-	expect(loaded.problems).toContain("未知字段 presets.old.provider");
-	expect(loaded.problems).toContain("未知字段 presets.old.thinkingLevel");
-	expect(loaded.problems).toContain(
-		"presets.old.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：model；思考档无效：model）",
-	);
+		},
+	}));
+	expect(loaded.problems).toEqual([
+		"未知字段 openai.experimental",
+		"openai.nativeCompaction 必须是 true 或 false",
+		"未知字段 openai.providers.openai-codex.extra",
+		"openai.providers.openai-codex.textVerbosity 必须是 low 或 medium 或 high",
+		"openai.providers.openai-codex.priority 必须是 true 或 false",
+		"openai.providers.bad 必须是对象",
+	]);
+	expect(loaded.config.openai).toEqual({ nativeCompaction: false, providers: { xai: { priority: true } } });
 });
 
 test("公共配置模板可解析并启用完整推荐工作流", async () => {
@@ -184,7 +164,7 @@ test("功能关闭时它那一节的配置错误不全局警告；开启时照�
 		const fake = fakePi();
 		(registerFirecode as (pi: unknown) => void)(fake.pi);
 		const warnings: string[] = [];
-		await fake.fire("session_start", {}, { ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+		await fake.fire("session_start", {}, { isIdle: () => true, ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
 		return warnings.filter((message) => message.includes("master.roles"));
 	};
 	expect(await warningsFor(false)).toEqual([]);
@@ -202,6 +182,7 @@ async function seedHarness(options: { configJsonc: string | null; subsession?: b
 	registerFirecode(fake.pi, options.subsession ?? false);
 	const notices: [string, string][] = [];
 	const sessionStart = () => fake.fire("session_start", {}, {
+		isIdle: () => true,
 		mode: "tui",
 		hasUI: options.hasUI ?? true,
 		cwd: "/tmp",

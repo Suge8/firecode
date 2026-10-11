@@ -1,5 +1,6 @@
 ---
 import type { Lang } from "../i18n";
+import { coreTable } from "../repo";
 import { copy } from "./Core.copy";
 
 interface Props {
@@ -8,20 +9,21 @@ interface Props {
 const { lang } = Astro.props;
 const t = copy[lang];
 
-// 数据取自 README「核心极轻」表（2026 年 10 月实测）；min≠max 的是区间
-const rows = [
-	{ name: "FireCode", tools: "2", min: 926, max: 926 },
-	{ name: "omp", tools: "2", min: 3140, max: 3140 },
-	{ name: "Codex CLI", tools: "5–6", min: 4766, max: 9378 },
-	{ name: "pi-subagents", tools: "2–3", min: 4703, max: 23182 },
-];
-const SCALE = 25000;
-const TICKS = [0, 5, 10, 15, 20, 25];
-const ratio = Math.round(rows[3].max / rows[0].max);
+// 数据只来自 README「核心极轻」表；min≠max 的是区间，加粗的那行是 FireCode
+const { headTools, headChars, rows } = coreTable(lang);
+const self = rows.find((row) => row.self)!;
+const heaviest = rows.reduce((top, row) => (row.max > top.max ? row : top));
+// 横轴按最大值向上取整到 5k，每 5k 一格
+const TICK = 5000;
+const SCALE = Math.ceil(heaviest.max / TICK) * TICK;
+const TICKS = Array.from({ length: SCALE / TICK + 1 }, (_, i) => i * TICK);
 const fmt = new Intl.NumberFormat("en-US");
-const punch = t.punch.map((phrase) => phrase.replace("{n}", String(ratio)).split(/\[(.+?)\]/));
-// 条形里的字符纹理只作装饰：通用的工具定义 JSON 形状，表达“这里每一格都是字符”
-const texture = '{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},'.repeat(24);
+const punch = t.punch.map((phrase) =>
+	phrase
+		.replace("{name}", heaviest.name)
+		.replace("{n}", String(Math.round(heaviest.max / self.max)))
+		.split(/\[(.+?)\]/),
+);
 ---
 
 <section class="section core" id="core" aria-labelledby="core-title">
@@ -34,30 +36,29 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		<figure class="chart" aria-labelledby="core-caption">
 			<div class="row legend" aria-hidden="true">
 				<span class="name"></span>
-				<span class="tools">{t.headTools}</span>
+				<span class="tools">{headTools}</span>
 				<span class="track-head"></span>
-				<span class="value">{t.headChars}</span>
+				<span class="value">{headChars}</span>
 			</div>
-			<div class="plot">
+			<div class="plot" style={`--grid-step:${(TICK / SCALE) * 100}%`}>
 			<span class="gridlines" aria-hidden="true"></span>
 			{
-				rows.map((row, index) => (
-					<div class:list={["row", { self: index === 0 }]} style={`--min:${row.min / SCALE};--max:${row.max / SCALE};--solid:${row.min / row.max}`}>
+				rows.map((row) => (
+					<div class:list={["row", { self: row.self }]} style={`--max:${row.max / SCALE};--solid:${row.min / row.max}`}>
 						<span class="name">{row.name}</span>
 						<span class="tools">{t.tools(row.tools)}</span>
 						<span class="track" aria-hidden="true">
 							<span class="bar">
-								{/* FireCode 的条太窄，纹理会碎成乱码，只留纯色和光晕 */}
-								<span class="solid">{index > 0 && <span class="grain">{texture}</span>}</span>
+								<span class="solid" />
 								{row.max > row.min && <span class="range" />}
 							</span>
 						</span>
 						<span class="value">
-							<span data-count={row.min}>{fmt.format(row.min)}</span>
+							{fmt.format(row.min)}
 							{row.max > row.min && (
 								<>
 									<span class="dash">–</span>
-									<span data-count={row.max}>{fmt.format(row.max)}</span>
+									{fmt.format(row.max)}
 								</>
 							)}
 						</span>
@@ -69,7 +70,7 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 				<span class="name"></span>
 				<span class="tools"></span>
 				<span class="ticks">
-					{TICKS.map((tick) => <span style={`--at:${(tick * 1000) / SCALE}`}>{tick === 0 ? "0" : `${tick}k`}</span>)}
+					{TICKS.map((tick) => <span style={`--at:${tick / SCALE}`}>{tick === 0 ? "0" : `${tick / 1000}k`}</span>)}
 				</span>
 				<span class="value"></span>
 			</div>
@@ -125,40 +126,22 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 	// HTML 里已是终态；只有允许动效时才从零播放一次
 	if (!reducedMotion) {
 		const core = document.querySelector<HTMLElement>("#core")!;
-		const fmt = new Intl.NumberFormat("en-US");
-		const count = (el: HTMLElement, duration: number) => {
-			const target = Number(el.dataset.count);
-			const state = { v: 0 };
-			el.textContent = "0";
-			return gsap.to(state, {
-				v: target,
-				duration,
-				ease: "power3.out",
-				onUpdate: () => (el.textContent = fmt.format(Math.round(state.v))),
-			});
-		};
 
 		const chart = core.querySelector<HTMLElement>(".chart")!;
 		const rows = gsap.utils.toArray<HTMLElement>(".row:not(.legend, .axis)", chart);
 		const tl = gsap.timeline({ scrollTrigger: { trigger: chart, start: "top 72%", once: true } });
-		// 整段入场压在 1.2 秒内：柱子 0.9 秒、数字 0.8 秒，结论稍晚一拍与柱子一同出现
+		// 整段入场压在 1.2 秒内：柱子 0.9 秒，结论稍晚一拍与柱子一同出现；数字始终是真值（读屏与页内搜索读得到）
 		tl.from(chart.querySelectorAll(".legend, .axis, figcaption"), { opacity: 0, duration: 0.4, ease: "power2.out" }, 0);
 		rows.forEach((row, index) => {
 			const at = 0.05 + index * 0.06;
 			const bar = row.querySelector(".bar")!;
 			const range = row.querySelector(".range");
-			const [low, high] = row.querySelectorAll<HTMLElement>("[data-count]");
 			tl.from(row.querySelectorAll(".name, .tools, .value"), { opacity: 0, y: 8, duration: 0.5, ease: "power3.out" }, at);
 			// 起止用同一单位才能插值；结束后清掉裁切，放出 FireCode 条形的光晕
 			tl.fromTo(bar, { clipPath: "inset(-24px 100% -24px 0%)" }, { clipPath: "inset(-24px 0% -24px 0%)", duration: 0.9, ease: "expo.out", clearProps: "clipPath" }, at);
-			tl.add(count(low, 0.8), at);
-			if (range && high) {
-				tl.from(range, { opacity: 0, duration: 0.4, ease: "power2.out" }, at + 0.3);
-				tl.add(count(high, 0.8), at + 0.1);
-			}
+			if (range) tl.from(range, { opacity: 0, duration: 0.4, ease: "power2.out" }, at + 0.3);
 		});
 
-		// 两位数不计数，直接淡入
 		tl.from(core.querySelector(".punch"), { opacity: 0, y: 8, duration: 0.5, ease: "power3.out" }, 0.35);
 
 		const also = core.querySelector<HTMLElement>(".also")!;
@@ -181,10 +164,6 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		--trigger-col: 13rem;
 		--trigger-gap: 24px;
 		overflow: clip;
-	}
-
-	:lang(zh) :is(.section-lede, figcaption, .punch, dd) {
-		word-break: keep-all;
 	}
 
 	/* 对比图 */
@@ -254,7 +233,7 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 
 	.dash {
 		margin-inline: 0.08em;
-		color: var(--faint);
+		color: var(--meta);
 	}
 
 	.plot {
@@ -265,7 +244,7 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		position: relative;
 	}
 
-	/* 整图一层网格线：每 5k 一条，含 0 与 25k，与下方刻度标签对齐 */
+	/* 整图一层网格线：每个刻度一条，含两端，与下方刻度标签对齐 */
 	.gridlines {
 		--line: oklch(1 0 0 / 0.05);
 		position: absolute;
@@ -273,7 +252,7 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		left: calc(var(--name-col) + var(--tools-col) + 48px);
 		right: calc(var(--value-col) + 24px);
 		background:
-			repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 20%),
+			repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px var(--grid-step)),
 			linear-gradient(to left, var(--line) 0 1px, transparent 1px);
 		pointer-events: none;
 	}
@@ -300,7 +279,10 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		background: oklch(0.3 0.012 50);
 	}
 
-	.grain {
+	/* 条形里的字符纹理只作装饰：通用的工具定义 JSON 形状，表达“这里每一格都是字符”。只写在样式里一份，不进页面文字。
+	   FireCode 的条太窄，纹理会碎成乱码，只留纯色和光晕 */
+	.row:not(.self) .solid::before {
+		content: '{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}},{"type":"function","name":"","description":"","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":[]}}';
 		position: absolute;
 		inset: 3px 0 0 4px;
 		color: oklch(0.36 0.013 50);
@@ -308,7 +290,6 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 		font-size: 9px;
 		line-height: 13px;
 		word-break: break-all;
-		user-select: none;
 	}
 
 	.range {
@@ -524,7 +505,7 @@ const texture = '{"type":"function","name":"","description":"","parameters":{"ty
 	}
 	/* 柱宽太窄时代码纹理只剩碎字 */
 	@media (max-width: 640px) {
-		.grain {
+		.solid::before {
 			display: none;
 		}
 	}
