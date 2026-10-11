@@ -51,7 +51,7 @@ export function currentWorkerAction(worker: CompactWorker, live: WorkerLive | un
 		try {
 			since ??= statSync(worker.session).mtimeMs;
 		} catch {
-			// 缺失档案仍可 list；真正恢复时由 send 明确报错。
+			// 会话文件还不存在（第一条回复落盘前）仍可 list。
 		}
 		return { kind: "idle" as const, ...(since ? { since } : {}) };
 	}

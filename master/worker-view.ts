@@ -7,7 +7,7 @@
  * 事件增量更新；打开期间看过的子代理各留一份记录与展开状态（切回原样），关闭时全部退订丢弃。草稿按子代理留在
  * 运行时内存里，到会话结束。
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE } from "../busy.js";
@@ -175,6 +175,7 @@ const roundEntryRenderer: EntryRenderer = (entry) => {
 
 /** 已释放的冷子代理：读一次会话文件，从最后一条沿 parentId 回到根，得到当前分支。 */
 function fileBranch(path: string): MirrorEntry[] {
+	if (!existsSync(path)) return []; // 第一条回复落盘之前还没有会话文件
 	type Line = MirrorEntry & { id?: string; parentId?: string | null };
 	const entries = new Map<string, Line>();
 	let leaf: Line | undefined;

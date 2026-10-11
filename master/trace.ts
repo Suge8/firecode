@@ -30,7 +30,7 @@ export function workerTrace(worker: WorkerRef, session: AgentSession | undefined
 function messagesOf(worker: WorkerRef, session: AgentSession | undefined): readonly TraceMessage[] {
 	if (session) return session.messages as readonly TraceMessage[];
 	try {
-		if (!existsSync(worker.sessionPath)) throw new Error(msg.action.traceMissing);
+		if (!existsSync(worker.sessionPath)) return []; // 第一条回复落盘之前还没有会话文件
 		return SessionManager.open(worker.sessionPath, dirname(worker.sessionPath), worker.cwd).buildSessionContext().messages as readonly TraceMessage[];
 	} catch (error) {
 		throw new Error(msg.action.traceUnreadable(worker.name, error instanceof Error ? error.message : String(error)));

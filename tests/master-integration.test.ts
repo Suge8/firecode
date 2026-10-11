@@ -1530,9 +1530,12 @@ test("有子代理在跑时关闭指挥官模式先确认：拒绝则保持原�
 	expect(headless.activeTools).not.toContain("subagents");
 });
 
-test("有子代理在跑时同意关闭：确认后才关，子代理被中断，档案保留，重新启用后在池里变为空闲待续派", async () => {
+test("有子代理在跑时同意关闭：确认后才关，子代理被中断，档案保留，重新启用后变为空闲；它还没写过会话文件，send 在同一路径新开会话续派", async () => {
 	const harness = await setup(true, { confirmAnswer: true });
-	faux.setResponses([async () => { await Bun.sleep(5_000); return fauxAssistantMessage("不会等到"); }]);
+	faux.setResponses([async (_context: any, options: any) => {
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中断");
+	}]);
 	await harness.execute({ action: "start", worker: "busy", prompt: "慢", role: "工程师", thinking: "low" });
 	await harness.command("");
 	expect(harness.confirmations).toHaveLength(1);
@@ -1543,7 +1546,35 @@ test("有子代理在跑时同意关闭：确认后才关，子代理被中断�
 	await harness.command("");
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({ name: "busy", status: "idle", interruptedAt: expect.any(Number) });
+	// 第一条回复之前被中断：宿主还没写会话文件，没有上下文可恢复。
+	expect(existsSync(worker.session)).toBe(false);
+	expect((await harness.execute({ action: "tail", worker: "busy" })).content[0].text).toContain("近况");
+
+	faux.setResponses([fauxAssistantMessage("续派完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "busy", prompt: "重新来" });
+	await delivered;
+	expect(harness.messages.at(-1).message.content).toContain("busy 已返回\n回复：\n续派完成");
+	expect(existsSync(worker.session)).toBe(true);
+	expect((await harness.list().then((result) => result.details as any)).workers[0]).toMatchObject({ session: worker.session, status: "idle" });
 	await harness.command("");
+});
+
+test("子代理在第一条回复前随会话关闭被打断（还没有会话文件）：review 在同一路径新开会话完成审查", async () => {
+	const harness = await setup(true, { review: true, mockReview: true, confirmAnswer: true });
+	faux.setResponses([async (_context: any, options: any) => {
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("已中断");
+	}]);
+	const started = await harness.execute({ action: "start", worker: "early", prompt: "开始", role: "工程师", review: true });
+	await harness.command("");
+	await harness.command("");
+	expect(existsSync((started.details as any).worker.session)).toBe(false);
+
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "early" });
+	await delivered;
+	expect(titleOf(harness.messages.at(-1).message.content)).toBe("early 审查通过（1 轮）");
 });
 
 test("tail：错误在前，只取最后一条外部输入之后，工具调用只留名字与简短参数；热会话与已释放的冷会话读到同一份", async () => {

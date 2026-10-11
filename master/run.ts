@@ -2,6 +2,7 @@
  * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视与中断续跑提醒。
  * 所有 await 之后的写回经 runtime.current/commit 重读档案：kill 赢过迟到的异步写回。
  */
+import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { MasterRole, ModelAtom } from "../config.js";
 import { wrapEnvelope } from "../deliver.js";
@@ -26,7 +27,11 @@ interface WorkerTerminal {
 	errorMessage?: string;
 }
 
-/** 新建（start）或恢复（send/review 冷启动）Worker 会话；会话路径是档案身份的唯一事实源。 */
+/**
+ * 新建（start）或恢复（send/review 冷启动）Worker 会话；会话路径是档案身份的唯一事实源。
+ * 恢复时文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放（宿主此前没写文件），没有任何上下文可恢复，
+ * 就在同一路径上新开；这也包括文件被人删掉的情形，那时同样没有东西可恢复。
+ */
 export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean): Promise<AgentSession> {
 	const { pool, exclusions } = active.setup;
 	const model = await pool.resolveModel(worker.model);
@@ -39,7 +44,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
 		contextFiles: true,
-		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume ? { resume: true } : {}) },
+		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume && existsSync(worker.sessionPath) ? { resume: true } : {}) },
 		onExtensionError: (error) => reportExtensionError(active, worker, error),
 	});
 	if (active.closed) {

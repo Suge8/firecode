@@ -97,7 +97,6 @@ export const msg = defineMessages({
 			cwdGone: (name: string, cwd: string) => `${name} 的 cwd 已不存在：${cwd}；send 请带 cwd 指向新检出`,
 			traceUnreadable: (name: string, reason: string) => `无法读取子代理 ${name} 会话：${reason}`,
 			traceHeader: (name: string, status: string) => `子代理 ${name} 近况（${status}）`,
-			traceMissing: "会话文件不存在",
 			traceError: (reason: string) => `错误：${reason}`,
 		},
 		run: {
@@ -263,7 +262,6 @@ export const msg = defineMessages({
 			cwdGone: (name: string, cwd: string) => `The cwd of ${name} no longer exists: ${cwd}; pass cwd to send to point it at a new checkout`,
 			traceUnreadable: (name: string, reason: string) => `Cannot read the session of Worker ${name}: ${reason}`,
 			traceHeader: (name: string, status: string) => `Trace of Worker ${name} (${status})`,
-			traceMissing: "the session file does not exist",
 			traceError: (reason: string) => `Error: ${reason}`,
 		},
 		run: {
