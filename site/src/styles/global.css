@@ -2,23 +2,25 @@
 	color-scheme: dark;
 
 	/* 颜色 */
-	--bg: #0c0a09;
-	--surface: #141110;
+	/* --bg 由 Landing.astro 写在 <html> 上（与浏览器主题色同一处），火焰着色器也读它 */
 	--terminal: #171515;
 	--fg: #f5f1ec;
 	--muted: #988d84;
+	/* 信息小字：在页面底与终端底上都不低于 4.5:1 */
+	--meta: #8a8079;
+	/* 只用于装饰线与图形，不用于文字 */
 	--faint: #5c544e;
 	--accent: #ff7a0f;
 	--accent-hot: #ffb547;
-	--ember: #c2410c;
 	--pass: #4ade80;
 	--fail: #f87171;
 	--ring: oklch(1 0 0 / 0.09);
 	--hover: oklch(1 0 0 / 0.06);
 
-	/* 字体：中文落到 Noto Sans SC（按字符分片加载，只下载用到的） */
-	--font-sans: "Mona Sans Variable", "Noto Sans SC Variable", "PingFang SC", system-ui, sans-serif;
-	--font-mono: "Maple Mono", "Noto Sans SC Variable", ui-monospace, "SF Mono", Menlo, monospace;
+	/* 字体：西文自带，中文用系统字体（不下载中文网络字体） */
+	--font-cjk: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC";
+	--font-sans: "Mona Sans Variable", var(--font-cjk), system-ui, sans-serif;
+	--font-mono: "Maple Mono", ui-monospace, "SF Mono", Menlo, var(--font-cjk), monospace;
 
 	/* 字阶：标题用 Mona Sans 的宽度轴。全站只有这几档：首屏与收尾大标题 display、区块标题 title、
 	   区块内小标题 subtitle、条目标题 item；字重分别固定为 680 / 640 / 620 / 620 */
@@ -52,6 +54,13 @@
 *::after {
 	box-sizing: border-box;
 	margin: 0;
+}
+
+/* 中文只在标点、空格处换行，不在词中间折；一行里实在没有断点时才折开，不撑破容器。
+   用 break-word 而不是 anywhere：后者会把收缩适应宽度的小元素（刻度、标签）压成一字一行 */
+html:lang(zh) {
+	word-break: keep-all;
+	overflow-wrap: break-word;
 }
 
 html {
@@ -93,6 +102,46 @@ pre {
 	overflow: hidden;
 	clip-path: inset(50%);
 	white-space: nowrap;
+}
+
+/* 首屏与收尾的大标题：同一套字阶，收尾不比首屏大；每行一个 .line，入场时从行内裁切窗口下沿升起 */
+.display {
+	font-size: var(--text-display);
+	font-weight: 680;
+	font-stretch: var(--stretch-display);
+	line-height: 0.98;
+	letter-spacing: -0.038em;
+}
+
+.display .line {
+	display: block;
+	overflow: clip;
+	/* 上下留出字形的升部与降部 */
+	padding-block: 0.04em 0.1em;
+	margin-block: -0.04em -0.1em;
+	white-space: nowrap;
+}
+
+.display .line > span {
+	display: block;
+}
+
+/* 中文行不折断（.line 不换行）：9.6vw 让九个字的一行在 320 宽两侧留白内放得下 */
+:lang(zh) .display {
+	font-size: min(calc(var(--text-display) * 0.88), 9.6vw);
+	font-weight: 700;
+	font-stretch: 100%;
+	letter-spacing: -0.02em;
+	line-height: 1.12;
+}
+
+/* 手机上收窄宽度轴，英文标题每行整行放得下 */
+@media (max-width: 480px) {
+	:lang(en) .display {
+		font-size: min(var(--text-display), 8.4vw);
+		font-stretch: 104%;
+		letter-spacing: -0.03em;
+	}
 }
 
 /* 区块共用骨架：外层负责上下留白，内层限宽 */
@@ -177,7 +226,7 @@ pre {
 	text-wrap: pretty;
 }
 
-:lang(zh) :is(.section-title, h1) {
+:lang(zh) .section-title {
 	font-stretch: 100%;
 	letter-spacing: -0.01em;
 	line-height: 1.15;
@@ -189,12 +238,20 @@ pre {
 	}
 }
 
+/* 区块不在视口里时暂停其中的循环动画（光标闪烁、转圈、余烬）；scroll.ts 维护 data-offscreen。
+   需要 !important：各区块用 animation 简写声明循环动画，简写会把播放状态重置为 running */
+[data-offscreen] * {
+	animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
 	*::after {
 		animation-duration: 0.01ms !important;
 		animation-delay: 0ms !important;
+		/* 循环动画只走一遍就停在原样，否则 0.01ms 一圈会每帧重算样式 */
+		animation-iteration-count: 1 !important;
 		transition-duration: 0.01ms !important;
 	}
 }

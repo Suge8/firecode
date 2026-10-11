@@ -1,0 +1,9 @@
+---
+// 文案里反引号包住的片段渲染成 <code>（README 表格单元、演示里的回答都用这个写法）
+interface Props {
+	text: string;
+}
+const { text } = Astro.props;
+---
+
+{text.split("`").map((part, i) => (i % 2 ? <code>{part}</code> : part))}

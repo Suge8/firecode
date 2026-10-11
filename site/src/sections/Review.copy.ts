@@ -1,9 +1,6 @@
 import type { Lang } from "../i18n";
 
-// gets 里用反引号包住的片段渲染成代码；"re\u2011review" 用不断行连字符，窄屏不在连字符处断开
-type Row = { name: string; cmd?: string; note?: string; reviewers: string; gets: string };
-
-// 闭环演示里的发现与修复取自 design/promo/review-loop 的真实录屏
+// 闭环演示里的发现与修复取自 design/promo/review-loop 的真实录屏；对比表只来自 README（repo.ts），这里只有表头首列的名字
 export const copy = {
 	en: {
 		title: "Fully automatic review and delivery.",
@@ -30,15 +27,8 @@ export const copy = {
 		manual: ["Run ", " any time."],
 		compare: "Fixed and re\u2011reviewed code, not a list of problems",
 		play: "Play the recording",
-		cols: ["Tool", "Reviewers", "What you get"],
-		rows: <Row[]>[
-			{ name: "FireCode", reviewers: "Any number of models, reviewing adversarially", gets: "Fixed code that passed re\u2011review" },
-			{ name: "Claude Code", cmd: "/code-review", reviewers: "Several agents, Claude models only", gets: "A findings list; `--fix` applies it as-is" },
-			{ name: "Codex", cmd: "/review", reviewers: "One reviewer on your session's model", gets: "A findings list, no code changes" },
-			{ name: "Open Code Review", note: "Alibaba", reviewers: "One model, file by file", gets: "A findings list to fix yourself" },
-			{ name: "PR-Agent / Qodo", reviewers: "Specialist agents, one model", gets: "Comments and suggestions" },
-			{ name: "multi-model-review", note: "Pi", reviewers: "Several model families", gets: "One combined verdict" },
-		],
+		pause: "Pause the recording",
+		toolCol: "Tool",
 	},
 	zh: {
 		title: "审查交付全自动",
@@ -65,14 +55,7 @@ export const copy = {
 		manual: ["随时执行 ", " 即可。"],
 		compare: "交给你的是修好、复审通过的代码，不是问题清单",
 		play: "播放录屏",
-		cols: ["工具", "审查者", "交到你手里的是"],
-		rows: <Row[]>[
-			{ name: "FireCode", reviewers: "任意多个模型对抗审查", gets: "修好、复审通过的代码" },
-			{ name: "Claude Code", cmd: "/code-review", reviewers: "多个代理，只用 Claude 模型", gets: "问题清单；`--fix` 可照清单直接改" },
-			{ name: "Codex", cmd: "/review", reviewers: "一个审查者，用当前会话的模型", gets: "问题清单，不改代码" },
-			{ name: "Open Code Review", note: "阿里", reviewers: "同一个模型，逐文件审", gets: "问题清单，要你自己修" },
-			{ name: "PR-Agent / Qodo", reviewers: "分工代理，同一个模型", gets: "评论和修改建议" },
-			{ name: "multi-model-review", note: "Pi", reviewers: "多家模型", gets: "一份汇总结论" },
-		],
+		pause: "暂停录屏",
+		toolCol: "工具",
 	},
-} satisfies Record<Lang, unknown>;
+} satisfies Record<Lang, Record<string, unknown>>;

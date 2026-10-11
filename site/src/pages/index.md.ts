@@ -1,3 +1,3 @@
-import { markdown, readmeMarkdown } from "../agent-docs";
+import { markdown, readmeMarkdown } from "../repo";
 
-export const GET = async () => markdown(await readmeMarkdown("en"));
+export const GET = () => markdown(readmeMarkdown("en"));
