@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { reviewVoter } from "./review-vote.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
 
@@ -55,11 +56,12 @@ test("审查卡：machine 预览在 en 下取自同源字段名，切换语言�
 
 test("审查者按 en 提示词写的输出契约被解析；校验报错、证据截断标记与会话证据标签都是英文", async () => {
 	const configJsonc = JSON.stringify({ language: "en" });
-	const { parseReviewOutput } = await loadFirecodeModule("review/reviewer.ts", { configJsonc }) as any;
-	const passed = parseReviewOutput("PASS\nLooks right.\nEvidence: files=src/a.ts; commands=bun test");
+	const voter = await reviewVoter({ configJsonc });
+	const passed = await voter.vote("PASS\nLooks right.\nEvidence: files=src/a.ts; commands=bun test");
 	expect(passed.status).toBe("passed");
 
-	const missing = parseReviewOutput("FAIL\n## Finding 1: x\n- **Severity**: High\n- **Issue**: x");
+	const missing = await voter.vote("FAIL\n## Finding 1: x\n- **Severity**: High\n- **Issue**: x");
+	await voter.close();
 	// 格式无效但以 FAIL 开头的票仍按未通过计，违例说明与原文一并交出。
 	expect(missing).toMatchObject({ status: "failed" });
 	expect(missing.details).toContain("did not meet the format contract: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");

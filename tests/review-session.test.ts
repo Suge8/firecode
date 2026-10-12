@@ -27,12 +27,12 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	return { pool, session };
 }
 
-/** 经生产入口 createReviewSessionRunner 跑一场审查会话：池在构造时注入，其余是每次调用的选项。 */
+/** 经生产入口 runReviewSession 跑一场审查会话。 */
 async function runner() {
-	const { createReviewSessionRunner } = await loadFirecodeModule("review/session.js") as {
-		createReviewSessionRunner: (pool: unknown) => (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	const { runReviewSession } = await loadFirecodeModule("review/session.js") as {
+		runReviewSession: (pool: unknown, options: Record<string, unknown>) => Promise<Record<string, unknown>>;
 	};
-	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => createReviewSessionRunner(pool)(options) };
+	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => runReviewSession(pool, options) };
 }
 
 const config = { model: "provider/model", thinking: "high", tools: ["read", "bash"], timeoutMs: 1_000 };

@@ -15,7 +15,6 @@ import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from 
 import { msg } from "./messages.js";
 import { sessionLabel } from "./ui.js";
 import { errorText, Run, type RunHost } from "./run.js";
-import { createReviewSessionRunner } from "./session.js";
 import { CANCEL_REVIEW_ARG } from "./outcome.js";
 import { initialState, isActive } from "./state.js";
 
@@ -37,7 +36,7 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 	let current: Run | undefined;
 	const host: RunHost = {
 		pi,
-		runSession: createReviewSessionRunner(pool),
+		pool,
 		ended: (run) => {
 			if (current === run) current = undefined;
 		},

@@ -1630,7 +1630,7 @@ test("审查中的子代理被 interrupt：审查以取消收场（终态 checkp
 
 test("Master 关闭只释放落盘的子代理：同池里进行中的审查会话（内存会话）不受影响，照常出结果", async () => {
 	const harness = await setup(true);
-	const { createReviewSessionRunner } = await loadFirecodeModule("review/session.js") as any;
+	const { runReviewSession } = await loadFirecodeModule("review/session.js") as any;
 	let reviewerStarted!: () => void;
 	const started = new Promise<void>((resolve) => { reviewerStarted = resolve; });
 	let finishReview!: () => void;
@@ -1648,7 +1648,7 @@ test("Master 关闭只释放落盘的子代理：同池里进行中的审查会�
 	]);
 	const startedWorker = await harness.execute({ action: "start", worker: "alongside", prompt: "慢", role: "工程师" });
 	const workerPath = (startedWorker.details as any).worker.session;
-	const review = createReviewSessionRunner(harness.pool)({
+	const review = runReviewSession(harness.pool, {
 		config: { model: "test/reviewer", thinking: "low", tools: [], timeoutMs: 30_000 },
 		prompt: { system: "审查者", user: "审" },
 		cwd: harness.cwd,

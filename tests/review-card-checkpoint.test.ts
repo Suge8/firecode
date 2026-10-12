@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
+import { reviewVoter } from "./review-vote.ts";
 
 type BuildCard = typeof import("../review/card.js").buildCard;
 type CardInput = Parameters<BuildCard>[0];
@@ -70,13 +71,14 @@ describe("checkpoint", () => {
 	// 快照曾带着整个历史：一场五轮审查累计写入约 2MB，十轮近 1MB 仍是平方增长。轮记录只写一次，快照有界。
 	test("a review writes a linear amount of checkpoint data and a restore still has every round's text", async () => {
 		const state = (await loadFirecodeModule("review/state.js")) as StateModule;
-		const { parseReviewOutput } = (await loadFirecodeModule("review/reviewer.js")) as { parseReviewOutput: (text: string) => { status: "failed"; summary: string; details: string } };
 		const { CheckpointWriter, readCheckpoint } = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
 		const entries: { type: "custom"; customType: string; data: unknown }[] = [];
 		const pi = { appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); } };
 		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: { model: "p/a", thinking: "low" as const }, reviewers: [0, 1, 2].map((i) => ({ model: `p/m${i}`, thinking: "low" as const })) };
-		// 真实解析器的输出：问题字段 3000 字，摘要取自它。
-		const vote = parseReviewOutput(["FAIL", "## 发现 1", "- 严重程度: 高", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
+		// 真实审查会话的这一票：问题字段 3000 字，摘要取自它。
+		const voter = await reviewVoter();
+		const vote = await voter.vote(["FAIL", "## 发现 1", "- 严重程度: 高", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
+		await voter.close();
 		expect(vote.status).toBe("failed");
 		let current = state.reduce(state.reduce(state.initialState("run"), { type: "START", focus: "" }, limits, 1).state, { type: "ADVANCE" }, limits, 2).state;
 		const writer = new CheckpointWriter(pi as never);

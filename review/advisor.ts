@@ -2,7 +2,8 @@
 import { msg } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import { ADVISOR_VERDICTS, type AdvisorResult, type AdvisorVerdict } from "./state.js";
-import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
+import { runReviewSession, type ReviewModelConfig } from "./session.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { verdictWord } from "./verdict.js";
 
 interface RunAdvisorOptions {
@@ -10,12 +11,12 @@ interface RunAdvisorOptions {
 	prompt: PromptLayers;
 	cwd: string;
 	signal?: AbortSignal;
-	runSession: ReviewSessionRunner;
+	pool: InProcessSessionPool;
 }
 
 /** 顾问会话没有产出时抛错，由执行器改成“顾问不可用，已跳过”并继续修复。 */
 export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorResult> {
-	const result = await options.runSession({
+	const result = await runReviewSession(options.pool, {
 		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
@@ -30,7 +31,7 @@ export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorRes
  * 其余行（含前言）并入 advice；完全识别不出才回落 continue。 */
 const VERDICT_SCAN_LINES = 8;
 
-export function parseAdvisorOutput(text: string): AdvisorResult {
+function parseAdvisorOutput(text: string): AdvisorResult {
 	const lines = unwrapCodeFence(text.trim().split(/\r?\n/));
 	const firstLine = lines.find((line) => line.trim()) ?? "";
 	let verdict: AdvisorVerdict | undefined;

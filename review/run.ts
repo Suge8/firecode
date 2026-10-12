@@ -18,7 +18,8 @@ import { buildEvidence } from "./evidence.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, type PromptLayers } from "./prompt.js";
 import { runReviewer } from "./reviewer.js";
-import type { ReviewModelConfig, ReviewSessionRunner } from "./session.js";
+import type { InProcessSessionPool } from "../spawn.js";
+import type { ReviewModelConfig } from "./session.js";
 import {
 	type CardData,
 	findingsOf,
@@ -44,7 +45,7 @@ function overallTimeoutMs(config: ReviewConfig) {
 
 export interface RunHost {
 	readonly pi: ExtensionAPI;
-	readonly runSession: ReviewSessionRunner;
+	readonly pool: InProcessSessionPool;
 	/** 这场审查已收尾：宿主侧不再持有它。 */
 	ended(run: Run): void;
 }
@@ -291,7 +292,7 @@ export class Run {
 			prompt,
 			cwd: this.ctx.cwd,
 			signal,
-			runSession: this.host.runSession,
+			pool: this.host.pool,
 		}).catch((error): ReviewerResult => ({
 			index,
 			model: slot.model,
@@ -314,7 +315,7 @@ export class Run {
 				history: state.history,
 				round: state.round,
 			});
-			const result = await runAdvisor({ config: this.modelConfig(this.config.advisor), prompt, cwd: this.ctx.cwd, signal, runSession: this.host.runSession });
+			const result = await runAdvisor({ config: this.modelConfig(this.config.advisor), prompt, cwd: this.ctx.cwd, signal, pool: this.host.pool });
 			if (!signal.aborted) this.dispatch({ type: "ADVISOR_SETTLED", result });
 		} catch (error) {
 			if (!signal.aborted) this.dispatch({ type: "ADVISOR_SKIPPED", message: errorText(error) });
