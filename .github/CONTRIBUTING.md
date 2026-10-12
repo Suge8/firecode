@@ -20,6 +20,8 @@ bun run typecheck
 bun test
 ```
 
+`evals/` is a maintainer-only tool for evaluating delegation. It needs the maintainer's own login credentials and spends real money, so contributors do not need to run it.
+
 The website in `site/` has its own dependencies; check it with `cd site && bun install && bun run check && bun run build`. Vercel builds it on push to `main` only when `site/`, `design/`, `README.md`, `README.zh-CN.md`, `config.example.jsonc` or `jsonc.ts` change. The site reads the tagline and the two tables from the README, so keep their format; see `site/AGENTS.md`.
 
 ## Releasing

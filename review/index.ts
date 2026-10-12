@@ -13,6 +13,7 @@ import type { InProcessSessionPool } from "../spawn.js";
 import { registerCardRenderer } from "./card.js";
 import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from "./checkpoint.js";
 import { msg } from "./messages.js";
+import { sessionLabel } from "./ui.js";
 import { errorText, Run, type RunHost } from "./run.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
 import { CANCEL_REVIEW_ARG } from "./outcome.js";
@@ -92,7 +93,9 @@ export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken 
 	 * 这里只按新会话的 checkpoint 恢复，quit 之外不 settle。
 	 */
 	function resume(ctx: ExtensionContext): void {
-		const checkpoint = readCheckpoint(ctx);
+		const checkpoint = readCheckpoint(ctx, () => {
+			if (ctx.hasUI) ctx.ui.notify(msg.notify.checkpointDamaged(sessionLabel(ctx)), "error");
+		});
 		if (!checkpoint || !isActive(checkpoint)) return;
 		// 配置问题的告警由入口统一聚合；这里保留活动 checkpoint，修好后继续恢复。
 		const loaded = loadConfig().review;

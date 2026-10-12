@@ -84,7 +84,7 @@ export class ReviewUi {
 	}
 
 	private showTitle(ctx: ExtensionContext, round: number): void {
-		const who = ctx.sessionManager.getSessionName() || basename(ctx.sessionManager.getCwd());
+		const who = sessionLabel(ctx);
 		this.titleShown = true;
 		ctx.ui.setTitle(`${msg.ui.reviewing}${round > 0 ? ` R${round}` : ""}${who ? ` · ${who}` : ""}`);
 	}
@@ -95,7 +95,20 @@ export class ReviewUi {
 	}
 }
 
-/** 与宿主默认终端标题同一写法。 */
+/** 向用户指认会话：会话名，没有名字时用工作目录名。 */
+export function sessionLabel(ctx: ExtensionContext): string {
+	return ctx.sessionManager.getSessionName() || basename(ctx.sessionManager.getCwd());
+}
+
+/**
+ * 与宿主默认终端标题同一写法，手抄自 pi 的 InteractiveMode.updateTerminalTitle
+ * （packages/coding-agent/src/modes/interactive/interactive-mode.ts）。
+ * 宿主没有不依赖格式的还原办法，v1.1.0 源码核对过：ctx.ui.setTitle 只是直写终端的 OSC，没有“交还宿主”的取值；
+ * updateTerminalTitle 是私有方法，只在启动、会话切换与 session_info_changed 时被宿主自己调用，
+ * 扩展触发后者的唯一公开入口 pi.setSessionName 会往会话里追加一条 session_info 记录；
+ * APP_TITLE 也没有从包入口导出（官方示例 titlebar-spinner 同样手抄）。
+ * 不改标题则看不到终端标签页里的审查状态，审查进度在输入框边框上已有。保留标题，宿主标题格式变化时同步这里。
+ */
 function restoredTitle(ctx: ExtensionContext): string {
 	const name = ctx.sessionManager.getSessionName();
 	const dir = basename(ctx.sessionManager.getCwd());
