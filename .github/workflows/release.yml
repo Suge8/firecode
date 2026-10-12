@@ -1,6 +1,6 @@
 name: Release
 
-# GitHub Release 发布时自动发布到 npm；workflow_dispatch 用于补发已存在的 tag。
+# GitHub Release 发布时自动发布到 npm；workflow_dispatch 用于发布失败后重跑同一个 tag。
 # 用 npm Trusted Publishing（OIDC），仓库里没有 npm 令牌；provenance 由 npm 自动附上。
 # npmjs.com 上的一次性配置见 .github/CONTRIBUTING.md。
 on:
