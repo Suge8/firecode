@@ -54,6 +54,10 @@ export function scrollStory({ track, pin, timeline, beats }: Story) {
 	};
 	timeline.eventCallback("onUpdate", sync);
 
+	// 钉上之前停在第 0 帧：ScrollTrigger 接管前时间轴一帧都没渲染过，各元素会露出 DOM 原样（窗格、汇总表、状态行全叠在一起）。
+	// 先走到末尾再回到开头，每个 set 与 fromTo 都记下了起止值，回到 0 时画面就是第一拍之前的样子
+	timeline.progress(1, true).progress(0, true);
+
 	// 时间轴从钉上播到松开，滚动距离恰好是垫块高度
 	const stick = () => pin.style.setProperty("--stick-top", `${stickTop()}px`);
 	stick();
