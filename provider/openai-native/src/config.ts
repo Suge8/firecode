@@ -1,10 +1,11 @@
 /** 加速档开关写回配置：只改 `openai` 节，文件其余部分含注释原样保留。读取与校验在根 config.ts。 */
 import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { OpenAISettings } from "../../../config.js";
+import { CONFIG_PATH } from "../../../config-file.js";
 import { isRecord, parseJsonc } from "../../../jsonc.js";
 
-function openaiSection(configPath: string): Record<string, unknown> {
-	const root = parseJsonc(readFileSync(configPath, "utf8"));
+function openaiSection(): Record<string, unknown> {
+	const root = parseJsonc(readFileSync(CONFIG_PATH, "utf8"));
 	if (!isRecord(root)) throw new Error("expected a JSON object");
 	return isRecord(root.openai) ? root.openai : {};
 }
@@ -85,18 +86,18 @@ function replaceOpenAISection(text: string, section: Record<string, unknown>): s
  * 翻转某供应商的 priority 并写回配置，返回翻转后的开关。读-改-写之间不加锁：两个 Pi 进程同一瞬间切换才会丢一次更新，
  * 不值得为此维护锁文件（崩溃后的陈旧锁会让切换永久报错）。
  */
-export function togglePriority(provider: string, configPath: string): boolean {
-	const text = readFileSync(configPath, "utf8");
-	const section = openaiSection(configPath);
+export function togglePriority(provider: string): boolean {
+	const text = readFileSync(CONFIG_PATH, "utf8");
+	const section = openaiSection();
 	const providers = isRecord(section.providers) ? section.providers : {};
 	const current = isRecord(providers[provider]) ? providers[provider] : {};
 	const enabled = current.priority !== true;
 	const next = { ...section, providers: { ...providers, [provider]: { ...current, priority: enabled } } };
 
-	const temporaryPath = `${configPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	const temporaryPath = `${CONFIG_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
-		writeFileSync(temporaryPath, replaceOpenAISection(text, next), { encoding: "utf8", mode: statSync(configPath).mode & 0o777 });
-		renameSync(temporaryPath, configPath);
+		writeFileSync(temporaryPath, replaceOpenAISection(text, next), { encoding: "utf8", mode: statSync(CONFIG_PATH).mode & 0o777 });
+		renameSync(temporaryPath, CONFIG_PATH);
 	} finally {
 		rmSync(temporaryPath, { force: true });
 	}

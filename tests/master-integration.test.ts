@@ -5,6 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { dirname, join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
+import type { Timing } from "../timing.ts";
+import { installFaux } from "./faux-host.ts";
 import { until } from "./until.ts";
 import {
 	featuresOnly,
@@ -16,7 +18,7 @@ import {
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
 
-const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { fauxAssistantMessage, fauxToolCall } = await import(PI_AI_COMPAT_URL) as any;
 const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 const TEST_ROLES = {
 	工程师: { model: "test/worker/medium", use: "测试" },
@@ -31,7 +33,7 @@ let directory: string | undefined;
 afterEach(async () => {
 	setSystemTime();
 	delete (globalThis as any).__reviewTick;
-	delete (globalThis as any).__modelGate;
+	delete (globalThis as any).__loadGate;
 	delete (globalThis as any).__inputGate;
 	delete (globalThis as any).__masterActive;
 	delete (globalThis as any).__pool;
@@ -296,7 +298,7 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 
 test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async () => {
 	// 窗口远大于两条结果之间的间隔：用例按条件推进，间隔只有几毫秒。
-	const harness = await setup(true, { wakeQuietMs: 300 });
+	const harness = await setup(true, { timing: { wakeQuietMs: 300 } });
 	harness.idle = true;
 	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
 	faux.setResponses(gates.map((gate, index) => async () => { await gate.promise; return fauxAssistantMessage(`结果 ${index}`); }));
@@ -324,7 +326,7 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async
 
 test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达", async () => {
 	// 窗口远大于用例超时：送达若等了窗口，用例会超时失败，不靠墙钟阈值判断。
-	const harness = await setup(true, { wakeQuietMs: 60_000 });
+	const harness = await setup(true, { timing: { wakeQuietMs: 60_000 } });
 	harness.idle = false;
 	faux.setResponses([fauxAssistantMessage("忙时结果")]);
 	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
@@ -545,7 +547,7 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	await mkdir(dirname(sessionPath), { recursive: true });
 	const options = {
 		cwd: harness.cwd,
-		model: faux.getModel(),
+		model: await harness.pool.resolveModel("test/worker"),
 		thinking: "medium",
 		tools: [],
 		systemPrompt: { mode: "replace", text: "test" },
@@ -562,12 +564,12 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 });
 
 test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会话扩展先收到 session_shutdown", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10, shutdownProbe: true });
+	const harness = await setup(true, { timing: { idleSessionMs: 10 }, shutdownProbe: true });
 	const sessionPath = join(directory!, "sessions", "subagents", "pool-idle.jsonl");
 	await mkdir(dirname(sessionPath), { recursive: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const spawned = await harness.pool.spawn({
-		cwd: harness.cwd, model: faux.getModel(), thinking: "medium", tools: [],
+		cwd: harness.cwd, model: await harness.pool.resolveModel("test/worker"), thinking: "medium", tools: [],
 		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
 		persistence: { type: "file", sessionPath },
 	});
@@ -581,7 +583,7 @@ test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会�
 });
 
 test("reviewing 中的 Worker 回合早已落定也不会被 idle 超时释放", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10, mockReview: true, review: true, reviewProgressOnly: true, reviewFixTurn: true });
+	const harness = await setup(true, { timing: { idleSessionMs: 10 }, mockReview: true, review: true, reviewProgressOnly: true, reviewFixTurn: true });
 	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("修复完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const result = await harness.execute({ action: "start", worker: "review-hot", prompt: "完成", role: "工程师" });
@@ -606,7 +608,7 @@ test("kill 等 Worker 的 session_shutdown 收口完成后才返回", async () =
 });
 
 test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10 });
+	const harness = await setup(true, { timing: { idleSessionMs: 10 } });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const started = await harness.execute({
@@ -777,7 +779,7 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 });
 
 test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待续跑”，首次 send 自动注入现场自检", async () => {
-	const harness = await setup(true, { interruptResumeMs: 10 });
+	const harness = await setup(true, { timing: { interruptResumeMs: 10 } });
 	let resumedPrompt = "";
 	faux.setResponses([
 		async (_context: any, options: any) => {
@@ -821,7 +823,7 @@ test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待
 });
 
 test("会话重载打断的回合：恢复后补挂续跑提醒，提醒说清是重载打断而不是“外部中断后无人接手”", async () => {
-	const harness = await setup(false, { interruptResumeMs: 10 });
+	const harness = await setup(false, { timing: { interruptResumeMs: 10 } });
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
@@ -1011,10 +1013,10 @@ test("kill 赢过正在准备的 send/review，异步写回不会复活已删档
 });
 
 test("start 准备期间被 kill：start 不报成功、不调模型、不留热会话", async () => {
-	const harness = await setup();
+	const harness = await setup(true, { loadGate: true });
 	faux.setResponses([fauxAssistantMessage("被 kill 的子代理不应执行")]);
 	const gate = Promise.withResolvers<void>();
-	(globalThis as any).__modelGate = gate.promise;
+	(globalThis as any).__loadGate = gate.promise;
 	const starting = harness.execute({ action: "start", worker: "racy", prompt: "做事", role: "工程师" });
 	let workers: any[] = [];
 	await until(async () => (workers = (await harness.list()).details.workers).length > 0);
@@ -1379,7 +1381,7 @@ test("send 只覆盖 thinking 时沿用当前角色与模型", async () => {
 });
 
 test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地切换并入会话记录", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 10 });
+	const harness = await setup(true, { timing: { idleSessionMs: 10 } });
 	faux.setResponses([
 		fauxAssistantMessage("第一轮"),
 		fauxAssistantMessage("沿用完成"),
@@ -1473,7 +1475,7 @@ test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", asyn
 });
 
 test("恢复会话时早已中断的子代理不再提醒；被会话重载打断的提醒后被 ack 也不会再来", async () => {
-	const harness = await setup(false, { interruptResumeMs: 300 });
+	const harness = await setup(false, { timing: { interruptResumeMs: 300 } });
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
@@ -1491,7 +1493,7 @@ test("恢复会话时早已中断的子代理不再提醒；被会话重载打�
 });
 
 test("投递失败后按退避自动重试：只提示一次，最终送达且只送达一次", async () => {
-	const harness = await setup(true, { failDeliveries: 2, eventRetryMs: 150 });
+	const harness = await setup(true, { failDeliveries: 2, timing: { eventRetryMs: 150 } });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	await harness.execute({ action: "start", worker: "retry", prompt: "只回复完成", role: "工程师", thinking: "low" });
 	await until(() => harness.notices.some((notice) => notice.includes("投递失败")));
@@ -1660,7 +1662,7 @@ test("Master 关闭只释放落盘的子代理：同池里进行中的审查会�
 });
 
 test("tail：错误在前，只取最后一条外部输入之后，工具调用只留名字与简短参数；热会话与已释放的冷会话读到同一份", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 30 });
+	const harness = await setup(true, { timing: { idleSessionMs: 30 } });
 	faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("read", { path: "AGENTS.md", offset: 1 }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("第一段完成"),
@@ -1716,7 +1718,7 @@ test("子代理会话里的扩展出错：同一处错误只告知指挥官一�
 });
 
 test("看过一眼（getSession）不改变空闲释放：空闲会话照常到期释放，释放后池档案与会话文件仍在", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 40 });
+	const harness = await setup(true, { timing: { idleSessionMs: 40 } });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const started = await harness.execute({ action: "start", worker: "viewed", prompt: "执行", role: "工程师" });
@@ -1728,7 +1730,7 @@ test("看过一眼（getSession）不改变空闲释放：空闲会话照常到�
 });
 
 test("send 准备失败时空闲票的释放计时补回：失败后热会话仍按时释放", async () => {
-	const harness = await setup(true, { idleTimeoutMs: 60, roles: { ...TEST_ROLES, 无密钥: { model: "nokey/model/low", use: "没有认证" } } });
+	const harness = await setup(true, { timing: { idleSessionMs: 60 }, roles: { ...TEST_ROLES, 无密钥: { model: "nokey/model/low", use: "没有认证" } } });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const started = await harness.execute({ action: "start", worker: "prep", prompt: "执行", role: "工程师" });
@@ -1755,8 +1757,8 @@ test.each([[false, false], [true, true]])("子代理按目标 cwd 的项目信�
 });
 
 async function setup(activate = true, options: {
-	idleTimeoutMs?: number;
-	interruptResumeMs?: number;
+	/** 缩短池的等待时限（pool.timing 是全插件唯一的时间注入点）。 */
+	timing?: Partial<Timing>;
 	review?: boolean;
 	mockReview?: boolean;
 	/** 子会话里装真实的 review，用这份顶层配置（含 review 节）加载：复现真实配置问题下的命令入口。 */
@@ -1771,10 +1773,8 @@ async function setup(activate = true, options: {
 	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
 	inputGate?: boolean;
 	autoActivate?: boolean;
-	/** 指挥官空闲时合并唤醒的安静窗口；测试默认 0（立即唤醒）。 */
-	wakeQuietMs?: number;
-	/** 事件投递失败后的首次重试间隔；默认让重试远在测试之外。 */
-	eventRetryMs?: number;
+	/** 子会话加载扩展时卡在 globalThis.__loadGate 上：复现 start 准备期间被 kill 的现场。 */
+	loadGate?: boolean;
 	/** 有界面：/fire-master 关闭时会弹确认，返回值由 confirmAnswer 决定。 */
 	confirmAnswer?: boolean;
 	/** 在子会话里装一个事件处理器抛错的扩展：复现子代理扩展出错。 */
@@ -1817,7 +1817,7 @@ async function setup(activate = true, options: {
 	if (options.workerReview) {
 		const configJsonc = JSON.stringify({ features: await featuresOnly("review"), ...options.workerReview });
 		await writeFile(join(extensions, "real-review.ts"),
-			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi, { pool: globalThis.__pool }); }`);
+			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi, globalThis.__pool); }`);
 	}
 	if (options.throwingExtension)
 		await writeFile(join(extensions, "throwing.ts"), `export default function(pi) {
@@ -1825,42 +1825,14 @@ async function setup(activate = true, options: {
 		}`);
 	if (options.shutdownProbe)
 		await writeFile(join(extensions, "shutdown-probe.ts"), shutdownProbeExtension(join(directory, "shutdown.log")));
-	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
+	if (options.loadGate)
+		await writeFile(join(extensions, "load-gate.ts"), "export default async function() { await globalThis.__loadGate; }");
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	faux = registerFauxProvider();
-	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/reviewer", "test/advisor", "nokey/model"], ["nokey"]);
+	const { SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("spawn.js");
-	const modelRuntime = await ModelRuntime.create({
-		authPath: join(agentDir, "auth.json"),
-		modelsPath: join(agentDir, "models.json"),
-	});
-	const fauxModel = faux.getModel();
-	const alternateModel = { ...fauxModel, id: "worker-2", name: "Worker 2" };
-	modelRuntime.registerProvider(fauxModel.provider, {
-		baseUrl: fauxModel.baseUrl,
-		api: fauxModel.api,
-		models: [fauxModel, alternateModel].map((model) => ({
-			id: model.id,
-			name: model.name,
-			api: model.api,
-			reasoning: model.reasoning,
-			input: model.input,
-			cost: model.cost,
-			contextWindow: model.contextWindow,
-			maxTokens: model.maxTokens,
-			baseUrl: model.baseUrl,
-		})),
-	});
-	if (!modelRuntime.hasConfiguredAuth("faux")) throw new Error("测试 Faux 模型认证未载入");
-	const pool = new (spawnModule as any).InProcessSessionPool({
-		modelRuntime,
-		resolveModel: async (id: string) => {
-			await (globalThis as any).__modelGate;
-			if (id.startsWith("nokey/")) return { ...fauxModel, provider: "nokey", id: "model" };
-			return id === "test/worker-2" ? alternateModel : fauxModel;
-		},
-		...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
-	});
+	// 测试默认立即唤醒指挥官、让事件重试远在测试之外；用例按需缩短别的等待。
+	const pool = new (spawnModule as any).InProcessSessionPool({ timing: { wakeQuietMs: 0, eventRetryMs: 3_600_000, ...options.timing } });
 	const moduleOptions = {
 		extraFiles: options.promptFiles,
 		configJsonc: JSON.stringify({
@@ -1960,12 +1932,7 @@ async function setup(activate = true, options: {
 	};
 	// 与入口一致：会话进行中的状态机先于 Master 安装（入口最先注册轮记录器），Master 才拉得到起点。
 	(await loadFirecodeModule("busy.ts") as any).busyView(pi);
-	module.registerMaster(pi, {
-		pool,
-		...(options.interruptResumeMs === undefined ? {} : { interruptResumeMs: options.interruptResumeMs }),
-		wakeQuietMs: options.wakeQuietMs ?? 0,
-		eventRetryMs: options.eventRetryMs ?? 3_600_000,
-	});
+	module.registerMaster(pi, pool);
 	const command = (args: string) => commands.get("fire-master").handler(args, ctx);
 	if (activate) await command("");
 	return {
@@ -2006,8 +1973,6 @@ async function setup(activate = true, options: {
 			await fake.fire("session_start", {}, ctx);
 		},
 		agentDir,
-		model: fauxModel,
-		modelRuntime,
 		commandTool: tools.get("subagents"),
 		listTool: tools.get("subagents_list"),
 		systemPrompt: (initial: string) => fake.systemPrompt(initial, ctx),

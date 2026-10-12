@@ -1,12 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
+import { installFaux } from "./faux-host.ts";
 import { until } from "./until.ts";
-import { loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { loadFirecodeModule, featuresOnly, PI_AI_COMPAT_URL, PI_AI_URL, TEST_REVIEW_CONFIG } from "./loader.ts";
+
+const { fauxAssistantMessage } = await import(PI_AI_COMPAT_URL) as any;
+const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
 type CheckpointModule = typeof import("../review/checkpoint.js");
@@ -23,10 +27,51 @@ const flush = async () => {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
-/** 入口把进程里唯一的池传给 registerReview；这里给每次注册一个默认池，用例要脚本化会话时再用 runSession 覆盖。 */
+/**
+ * 审查者与顾问是真实的进程内会话，开在测试 Agent 目录的真实 models.json 里：供应商只有 faux，
+ * 它的回答由用例经 script 脚本化（每个会话按自己看到的上下文回答，不依赖请求顺序）。
+ */
+const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+let faux: any;
+let agentDir: string;
+beforeAll(async () => {
+	agentDir = await mkdtemp(join(tmpdir(), "firecode-review-agent-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	faux = await installFaux(agentDir, ["p/one", "p/two", "test/advisor", "test/reviewer"]);
+});
+afterAll(async () => {
+	faux.unregister();
+	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+	await rm(agentDir, { recursive: true, force: true });
+});
+
+const contentText = (content: unknown): string =>
+	typeof content === "string" ? content : ((content ?? []) as { text?: string }[]).map((part) => part.text ?? "").join("");
+/** 会话收到的系统提示与最新一条用户消息。 */
+const systemOf = (context: any): string => getCurrentSystemPrompt(context.messages) ?? "";
+const userOf = (context: any): string => contentText(context.messages.findLast((message: any) => message.role === "user")?.content);
+
+/** 每个会话的回答；返回 undefined 表示该会话的供应商报错（额度不足）。 */
+function script(reply: (context: any, model: { provider: string; id: string }) => string | undefined) {
+	faux.setResponses(Array.from({ length: 30 }, () => (context: any, _options: unknown, _state: unknown, model: any) => {
+		const text = reply(context, model);
+		return text === undefined ? fauxAssistantMessage([], { stopReason: "error", errorMessage: "额度不足" }) : fauxAssistantMessage(text);
+	}));
+}
+
+/** 会话开始后一直不回答；收到取消（流的 signal 中止）时记录下来。 */
+function hang(onStart?: () => void, onAbort?: () => void) {
+	return (_context: unknown, options?: { signal?: AbortSignal }) => new Promise<never>(() => {
+		onStart?.();
+		options?.signal?.addEventListener("abort", () => onAbort?.(), { once: true });
+	});
+}
+
+/** 入口把进程里唯一的池传给 registerReview；这里给每次注册一个新池。 */
 async function loadReviewModule(path: string, options?: Parameters<typeof loadFirecodeModule>[1]) {
 	const [review, spawn] = await Promise.all([loadFirecodeModule(path, options), loadFirecodeModule("spawn.js")]) as any[];
-	return { ...review, registerReview: (pi: unknown, extra: object = {}) => review.registerReview(pi, { pool: new spawn.InProcessSessionPool(), ...extra }) };
+	return { ...review, registerReview: (pi: unknown, extra: object = {}) => review.registerReview(pi, new spawn.InProcessSessionPool(), extra) };
 }
 
 async function loadAll() {
@@ -114,7 +159,7 @@ function makePi(sessionManager: MockSessionManager) {
 async function loadReviewWithVerdict(
 	verdict: string,
 	maxRounds?: number,
-	{ top = {}, onSession }: { top?: Record<string, unknown>; onSession?: (options: { prompt: { system: string; user: string } }) => void } = {},
+	{ top = {}, onSession }: { top?: Record<string, unknown>; onSession?: (prompt: { system: string; user: string }) => void } = {},
 ) {
 	const review = (await loadReviewModule("review/index.js", {
 		configJsonc: reviewConfig({
@@ -131,12 +176,13 @@ async function loadReviewWithVerdict(
 	return {
 		...checkpoint,
 		...outcome,
-		registerReview: (pi: unknown) => review.registerReview(pi, {
-			runSession: async (options: { prompt: { system: string; user: string } }) => {
-				onSession?.(options);
-				return { kind: "output", text: verdict };
-			},
-		}),
+		registerReview: (pi: unknown) => {
+			script((context) => {
+				onSession?.({ system: systemOf(context), user: userOf(context) });
+				return verdict;
+			});
+			review.registerReview(pi);
+		},
 	};
 }
 
@@ -213,7 +259,7 @@ describe("registerReview wiring", () => {
 		const systems: string[] = [];
 		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict, undefined, {
 			top: { language: "en" },
-			onSession: (options) => systems.push(options.prompt.system),
+			onSession: (prompt) => systems.push(prompt.system),
 		});
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -272,7 +318,7 @@ describe("registerReview wiring", () => {
 	test("the reviewer's evidence leaves out the review's own envelopes, whether custom messages or front-door user messages", async () => {
 		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
 		const prompts: string[] = [];
-		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict, undefined, { onSession: (options) => prompts.push(options.prompt.user) });
+		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict, undefined, { onSession: (prompt) => prompts.push(prompt.user) });
 		const sessionManager = makeSessionManager();
 		const message = (role: string, content: string) => ({ type: "message", message: { role, content } });
 		sessionManager.entries.push(
@@ -315,8 +361,7 @@ describe("registerReview wiring", () => {
 	}, 20_000);
 
 	test("headless session shutdown cancels the active review session", async () => {
-		let started!: () => void;
-		const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
+		const started = Promise.withResolvers<void>();
 		const module = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as {
@@ -327,24 +372,20 @@ describe("registerReview wiring", () => {
 		};
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi, {
-			runSession: ({ signal }: { signal?: AbortSignal }) => new Promise((resolve) => {
-				started();
-				signal?.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true });
-			}),
-		});
+		faux.setResponses([hang(started.resolve)]);
+		module.registerReview(pi);
 		const ctx = makeHeadlessCtx(sessionManager);
+		ctx.cwd = tmpdir();
 		const command = fireReview(registered);
 		await command.handler("", ctx);
-		await sessionStarted;
+		await started.promise;
 		await registered.fire("session_shutdown", { reason: "quit" }, ctx);
 		await flush();
 		expect(checkpoint.readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	}, 10_000);
 
 	test("/fire-review --cancel stops the running review the way esc does: reviewer aborted, terminal checkpoint cancelled, occupancy released", async () => {
-		let started!: () => void;
-		const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
+		const started = Promise.withResolvers<void>();
 		const module = (await loadReviewModule("review/index.js", {
 			configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
 		})) as { registerReview: (pi: unknown, options?: unknown) => void };
@@ -354,19 +395,16 @@ describe("registerReview wiring", () => {
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		let aborted = false;
-		module.registerReview(pi, {
-			runSession: ({ signal }: { signal?: AbortSignal }) => new Promise((resolve) => {
-				started();
-				signal?.addEventListener("abort", () => { aborted = true; resolve({ kind: "aborted" }); }, { once: true });
-			}),
-		});
+		faux.setResponses([hang(started.resolve, () => { aborted = true; })]);
+		module.registerReview(pi);
 		const ctx = makeHeadlessCtx(sessionManager);
+		ctx.cwd = tmpdir();
 		const command = fireReview(registered);
 		await command.handler("", ctx);
-		await sessionStarted;
+		await started.promise;
 		await command.handler("--cancel", ctx);
+		await until(() => aborted);
 		await flush();
-		expect(aborted).toBe(true);
 		expect(checkpoint.readCheckpoint({ sessionManager })).toMatchObject({ phase: "settled", end: "cancelled" });
 		expect(registered.emitted.at(-1)).toEqual(RELEASED);
 		// 不是拒绝：没有留下拒绝记录。
@@ -508,14 +546,12 @@ describe("review runtime is per session", () => {
 		const b = makeSessionManager();
 		const first = makePi(a);
 		const second = makePi(b);
-		registerReview(first.pi as never, {
-			runSession: () => new Promise(() => {}),
-		});
-		registerReview(second.pi as never, {
-			runSession: () => new Promise(() => {}),
-		});
+		faux.setResponses([hang(), hang()]);
+		registerReview(first.pi as never);
+		registerReview(second.pi as never);
 		const ctxA = makeCtx(a);
 		const ctxB = makeCtx(b);
+		ctxA.cwd = ctxB.cwd = tmpdir();
 		const command = (registered: ReturnType<typeof makePi>["registered"]) =>
 			registered.commands.get("fire-review") as { handler: (args: string, ctx: unknown) => Promise<void> };
 		await command(first.registered).handler("", ctxA);
@@ -684,12 +720,11 @@ describe("reload recovery actually resumes the loop", () => {
 			roundStartedAt: Date.now(),
 			updatedAt: Date.now(),
 		});
-		module.registerReview(pi, {
-			runSession: async () => {
-				await writeFile(marker, "started");
-				return { kind: "empty" };
-			},
-		});
+		faux.setResponses([async () => {
+			await writeFile(marker, "started");
+			return fauxAssistantMessage("");
+		}]);
+		module.registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
 		await registered.fire("session_start", {}, ctx);
@@ -980,11 +1015,9 @@ async function loadTwoReviewers(answer: (model: string) => string | undefined) {
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
 	return {
 		readCheckpoint: checkpoint.readCheckpoint,
-		registerReview: (pi: unknown) => review.registerReview(pi, {
-			runSession: async ({ config }: { config: { model: string } }) => {
-				const text = answer(config.model);
-				return text === undefined ? { kind: "error", message: "额度不足" } : { kind: "output", text };
-			},
-		}),
+		registerReview: (pi: unknown) => {
+			script((_context, model) => answer(`${model.provider}/${model.id}`));
+			review.registerReview(pi);
+		},
 	};
 }

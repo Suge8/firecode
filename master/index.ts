@@ -23,24 +23,8 @@ import { modelAtomText } from "./state.js";
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
 const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
-const INTERRUPT_RESUME_MS = 5 * 60_000;
-/** 事件投递失败后的首次重试间隔，之后逐次翻倍（上限见 outbox.ts）。 */
-const EVENT_RETRY_MS = 5_000;
-/**
- * 一批结果陆续返回时，最后一条后静默这么久才唤醒空闲的指挥官：合并唤醒，单条结果最多多等这一下。
- * 这是业务语义的等待：“这一批还会不会马上再来一条”没有事件能回答。同批结果相邻间隔约 2～3 秒，而唤醒回合本身要数秒，
- * 1.5 秒足以把紧挨着的并进一次唤醒，回合开跑后再到的走句缝。
- */
-const WAKE_QUIET_MS = 1_500;
 
-interface MasterDependencies {
-	pool: InProcessSessionPool;
-	interruptResumeMs?: number;
-	wakeQuietMs?: number;
-	eventRetryMs?: number;
-}
-
-export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencies): void {
+export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): void {
 	const all = loadConfig();
 	const loaded = all.master;
 	const prompts = loadMasterPrompts();
@@ -65,14 +49,11 @@ export function registerMaster(pi: ExtensionAPI, dependencies: MasterDependencie
 	};
 	const setup: MasterSetup = {
 		pi,
-		pool: dependencies.pool,
+		pool,
 		roster,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
 		workerPrompt: prompts.worker,
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
-		interruptResumeMs: dependencies.interruptResumeMs ?? INTERRUPT_RESUME_MS,
-		wakeQuietMs: dependencies.wakeQuietMs ?? WAKE_QUIET_MS,
-		eventRetryMs: dependencies.eventRetryMs ?? EVENT_RETRY_MS,
 		publishInFlight,
 		publishRoster,
 		// 事件末尾的“当前任务”耗时是给指挥官的时间信号；起点只取 busy.ts。

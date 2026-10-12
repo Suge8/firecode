@@ -10,7 +10,7 @@
 
 `Run.release()` 中止在途工作与投递、停看门狗、放占用、还界面、通知宿主不再持有；它幂等，释放后的 dispatch 一律忽略。
 
-`registerReview(pi, options)` 的 `options`：`enabled`（用户关闭时只封存遗留的活动 checkpoint）、`configBroken`（features 配置坏掉不是关闭，保留 checkpoint）、`pool`（审查/顾问会话开在这个池里：进程里唯一的子会话池，由根 `index.ts` 传入，本模块不自建）、`runSession`（审查/顾问会话执行器，测试注入脚本化会话用，给了就不需要 `pool`；两者都没有时注册即报错）。会话级状态的隔离方式见 `index.ts` 头注释。
+`registerReview(pi, pool, options)`：`pool` 是审查/顾问会话开在其中的、进程里唯一的子会话池，由根 `index.ts` 传入，本模块不自建；`options` 有 `enabled`（用户关闭时只封存遗留的活动 checkpoint）与 `configBroken`（features 配置坏掉不是关闭，保留 checkpoint）。没有会话执行器的注入口：测试用 faux 供应商经真实审查会话。会话级状态的隔离方式见 `index.ts` 头注释。
 
 reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被根级 `spawn.ts` 的池释放时同样先收到 quit 再 dispose。
 

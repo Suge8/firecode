@@ -140,7 +140,7 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 	if (active.closed) return;
 	const live = active.liveOf(worker.name);
 	clearTimeout(live.interruptTimer);
-	const delay = Math.max(0, (worker.interruptedAt ?? Date.now()) + active.setup.interruptResumeMs - Date.now());
+	const delay = Math.max(0, (worker.interruptedAt ?? Date.now()) + active.setup.pool.timing.interruptResumeMs - Date.now());
 	live.interruptTimer = setTimeout(() => {
 		if (active.closed || active.live.get(worker.name) !== live) return;
 		live.interruptTimer = undefined;
