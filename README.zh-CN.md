@@ -21,7 +21,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-<p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.zh.gif" width="860"></p>
+<p align="center"><img alt="说个任务：子代理并行干活，各自送审，没过的打回重修，指挥官汇总终审后才交到你手里" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/flow.zh.gif" width="480"></p>
 
 ## 为什么用 FireCode
 
@@ -54,6 +54,8 @@
 ## 清晰的子代理状态
 
 每个子代理都列在输入框上方，点一下就能看它的完整过程，并直接跟它说话。
+
+<p align="center"><img alt="指挥官并行派出三个子代理" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.zh.gif" width="760"></p>
 
 <p align="center"><img alt="子代理的完整过程，在它自己的输入框里补一句话" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.zh.png" width="720"></p>
 
