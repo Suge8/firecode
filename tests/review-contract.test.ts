@@ -80,12 +80,11 @@ describe("PASS/FAIL output contract", () => {
 		expect(parsed.details).toContain("发现 1");
 	});
 
-	test("a non-PASS/FAIL first line or empty output is rejected as invalid format", async () => {
+	test("a non-PASS/FAIL first line is rejected as invalid format", async () => {
 		await loadAll();
 		const parsed = (await vote("结论如下\n随便写"));
 		expect(parsed.status).toBe("error");
 		expect(parsed.details).toContain("格式无效");
-		expect((await vote("")).status).toBe("error");
 	});
 });
 

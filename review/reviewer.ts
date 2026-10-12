@@ -36,7 +36,6 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
  */
 function parseReviewOutput(text: string): ParseOutcome {
 	const trimmed = text.trim();
-	if (!trimmed) return contractViolation(msg.reviewer.empty);
 	const [firstLine = "", ...rest] = trimmed.split(/\r?\n/);
 	const verdict = verdictWord(firstLine);
 	const body = rest.join("\n").trim();
@@ -57,7 +56,7 @@ function parseReviewOutput(text: string): ParseOutcome {
 			details: issue ? [msg.reviewer.failFormatNote(issue), body].filter(Boolean).join("\n\n") : body,
 		};
 	}
-	return contractViolation(msg.reviewer.invalidFirstLine(tail(firstLine.trim() || msg.reviewer.empty)));
+	return contractViolation(msg.reviewer.invalidFirstLine(tail(firstLine.trim())));
 }
 
 function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>): ParseOutcome {

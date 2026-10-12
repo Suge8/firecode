@@ -171,7 +171,6 @@ export const msg = defineMessages({
 			},
 		},
 		reviewer: {
-			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `第一行必须是 PASS 或 FAIL；实际是：${actual}`,
 			formatInvalid: (issue: string) => `审查输出格式无效：${issue}`,
 			failFormatNote: (issue: string) => `（审查者的 FAIL 输出未满足格式契约：${issue}。以下为原文，仍按未通过处理）`,
@@ -299,7 +298,6 @@ export const msg = defineMessages({
 			},
 		},
 		reviewer: {
-			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `first line must be PASS or FAIL; actual: ${actual}`,
 			formatInvalid: (issue: string) => `review output format invalid: ${issue}`,
 			failFormatNote: (issue: string) => `(The reviewer's FAIL output did not meet the format contract: ${issue}. Original text follows and still counts as a failure.)`,
