@@ -15,7 +15,7 @@ import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from 
 import { msg } from "./messages.js";
 import { sessionLabel } from "./ui.js";
 import { errorText, Run, type RunHost } from "./run.js";
-import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
+import { createReviewSessionRunner } from "./session.js";
 import { CANCEL_REVIEW_ARG } from "./outcome.js";
 import { initialState, isActive } from "./state.js";
 
@@ -24,25 +24,20 @@ export interface ReviewOptions {
 	enabled?: boolean;
 	/** features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。 */
 	configBroken?: boolean;
-	/** 审查/顾问会话开在这个池里：进程里唯一的子会话池，由入口传入，本模块不自建。 */
-	pool?: InProcessSessionPool;
-	/** 审查/顾问会话的执行器；测试注入脚本化会话用，给了就不需要 pool。 */
-	runSession?: ReviewSessionRunner;
 }
 
-export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken = false, pool, runSession }: ReviewOptions = {}): void {
+/** pool：审查/顾问会话开在这个池里，进程里唯一的子会话池，由入口传入，本模块不自建。 */
+export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false }: ReviewOptions = {}): void {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
 		return;
 	}
-	const sessionRunner = runSession ?? (pool && createReviewSessionRunner(pool));
-	if (!sessionRunner) throw new Error("registerReview needs a session pool or a session runner");
 	let current: Run | undefined;
 	const host: RunHost = {
 		pi,
-		runSession: sessionRunner,
+		runSession: createReviewSessionRunner(pool),
 		ended: (run) => {
 			if (current === run) current = undefined;
 		},

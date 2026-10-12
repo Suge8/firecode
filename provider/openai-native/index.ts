@@ -1,6 +1,5 @@
 /** OpenAI / Codex 请求层：verbosity、Fast（priority）、可选原生压缩。 */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_PATH } from "../../config-file.js";
 import { loadConfig, type OpenAISettings } from "../../config.js";
 import { isRecord } from "../../jsonc.js";
 import { STATUS_KEYS } from "../../status-keys.js";
@@ -28,7 +27,7 @@ export function registerOpenAINative(pi: ExtensionAPI): void {
 			return;
 		}
 		try {
-			const enabled = togglePriority(ctx.model.provider, CONFIG_PATH);
+			const enabled = togglePriority(ctx.model.provider);
 			settings = withPriority(settings, ctx.model.provider, enabled);
 			updateFastStatus(ctx, settings);
 			ctx.ui.notify(msg.fastToggled(enabled), "info");

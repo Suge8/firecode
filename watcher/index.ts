@@ -25,11 +25,6 @@ import { renderTurn } from "./transcript.js";
 /** 观察会话自身上下文占比超过此值即重建。 */
 const CONTEXT_RESET_PERCENT = 70;
 
-interface WatcherDependencies {
-	pool: InProcessSessionPool;
-	createObserver?: typeof createObserver;
-}
-
 interface WatcherRuntime {
 	ctx: ExtensionContext;
 	pending: string[];
@@ -38,7 +33,7 @@ interface WatcherRuntime {
 	observer?: Observer;
 }
 
-export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependencies): void {
+export function registerWatcher(pi: ExtensionAPI, pool: InProcessSessionPool): void {
 	registerWatcherCardRenderer(pi);
 	const loaded = loadConfig().watcher;
 	// 配置有问题时拒绝启动：静默回退会拿用户没配的模型真实发起观察。
@@ -50,8 +45,6 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 		return;
 	}
 	const config = loaded.config;
-	const pool = dependencies.pool;
-	const spawnObserver = dependencies.createObserver ?? createObserver;
 	let runtime: WatcherRuntime | undefined;
 	let reviewActive = false;
 	/** 还没送达的最近一条发言；只有一条在途，新建议或会话失效时中止它。 */
@@ -115,7 +108,7 @@ export function registerWatcher(pi: ExtensionAPI, dependencies: WatcherDependenc
 					const cwd = owner.ctx.cwd;
 					const model = await pool.resolveModel(config.model);
 					if (runtime !== owner) return;
-					observer = await spawnObserver({
+					observer = await createObserver({
 						cwd,
 						model,
 						thinking: config.thinking,

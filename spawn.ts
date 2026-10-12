@@ -21,8 +21,8 @@ import {
 import type { ThinkingLevelValue } from "./config.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
+import { DEFAULT_TIMING, type Timing } from "./timing.js";
 
-const IDLE_SESSION_TIMEOUT_MS = 10 * 60_000;
 /** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
 const BUILTIN_CODEMODE: InlineExtension = { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true };
 
@@ -78,10 +78,8 @@ interface PoolEnvironment {
 	 * 否则 FireCode 在会话中途更新后，主会话与子会话会跑两个版本，彼此的落盘约定（如审查 checkpoint 版本）对不上。
 	 */
 	firecode?: ExtensionFactory;
-	modelRuntime?: ModelRuntime;
-	idleTimeoutMs?: number;
-	/** 模型原子 id（provider/model）解析；默认用池内缓存的一份 ModelRuntime。 */
-	resolveModel?: (id: string) => Promise<Model<any>>;
+	/** 覆盖默认时限（见 timing.ts）：全插件唯一的时间注入点，只给端到端测试缩短等待用。 */
+	timing?: Partial<Timing>;
 }
 
 /** 全插件唯一的进程内子会话入口：模型解析、单写者登记与热会话生命周期都在这里。 */
@@ -89,15 +87,17 @@ export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
 	private runtime?: Promise<ModelRuntime>;
 	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
+	readonly timing: Timing;
 
-	constructor(private readonly environment: PoolEnvironment = {}) {}
+	constructor(private readonly environment: PoolEnvironment = {}) {
+		this.timing = { ...DEFAULT_TIMING, ...environment.timing };
+	}
 
 	/**
 	 * 把 "provider/model" 解析成模型。ModelRuntime 每个池只建一次（auth.json 与 models.json 只读一次），解析与建子会话共用；
 	 * 扩展注册的 provider 在这里不可见，只能用内置 provider 与 models.json 里的模型。
 	 */
 	async resolveModel(id: string): Promise<Model<any>> {
-		if (this.environment.resolveModel) return this.environment.resolveModel(id);
 		const runtime = await this.modelRuntime();
 		const slash = id.indexOf("/");
 		const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
@@ -187,9 +187,7 @@ export class InProcessSessionPool {
 
 	private modelRuntime(): Promise<ModelRuntime> {
 		const agentDir = getAgentDir();
-		this.runtime ??= this.environment.modelRuntime
-			? Promise.resolve(this.environment.modelRuntime)
-			: ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
+		this.runtime ??= ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
 		return this.runtime;
 	}
 
@@ -211,7 +209,7 @@ export class InProcessSessionPool {
 		const held = this.held.get(sessionPath);
 		if (!held) return;
 		this.clearTimer(held);
-		held.timer = setTimeout(() => void this.release(held), this.environment.idleTimeoutMs ?? IDLE_SESSION_TIMEOUT_MS);
+		held.timer = setTimeout(() => void this.release(held), this.timing.idleSessionMs);
 		held.timer.unref?.();
 	}
 

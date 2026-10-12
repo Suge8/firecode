@@ -65,14 +65,14 @@ export function registerFirecode(
 	if (subsession) {
 		if (config.features.master !== false) registerWorkerGuard(pi);
 	} else {
-		if (config.features.watcher !== false) registerWatcher(pi, { pool });
-		if (config.features.master !== false) registerMaster(pi, { pool });
+		if (config.features.watcher !== false) registerWatcher(pi, pool);
+		if (config.features.master !== false) registerMaster(pi, pool);
 	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, { enabled: reviewEnabled, configBroken: featuresBroken, pool });
+	registerReview(pi, pool, { enabled: reviewEnabled, configBroken: featuresBroken });
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {

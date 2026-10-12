@@ -36,7 +36,7 @@ async function scene(options: { withMaster?: boolean; scroll?: boolean; regular?
 		const [{ registerMaster }, { InProcessSessionPool }] = await Promise.all([
 			loadFirecodeModule("master/index.ts"), loadFirecodeModule("spawn.ts"),
 		]);
-		registerMaster(api, { pool: new InProcessSessionPool() });
+		registerMaster(api, new InProcessSessionPool());
 	}
 	const chat = new tui.Container();
 	// regular 模式用宿主真实的主屏渲染器：它在改动落到视口之外时清屏整屏重画，fullRedraws 计数。
