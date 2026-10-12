@@ -1,7 +1,7 @@
 {
 	"$schema": "https://openapi.vercel.sh/vercel.json",
 	"framework": "astro",
-	"ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} HEAD -- . ../design ../README.md ../README.zh-CN.md ../config.example.jsonc ../jsonc.ts",
+	"ignoreCommand": "base=${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}; git cat-file -e \"$base^{commit}\" 2>/dev/null || exit 1; git diff --quiet \"$base\" HEAD -- . ../design ../README.md ../README.zh-CN.md ../config.example.jsonc ../jsonc.ts",
 	"headers": [
 		{ "source": "/_astro/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
 		{ "source": "/", "headers": [{ "key": "Vary", "value": "Accept" }] },
