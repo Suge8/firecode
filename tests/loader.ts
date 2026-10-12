@@ -84,7 +84,6 @@ async function rewriteImports(directory: string): Promise<void> {
 		const source = (await readFile(path, "utf8"))
 			.replaceAll('"@earendil-works/pi-coding-agent"', JSON.stringify(PI_CODING_AGENT_URL))
 			.replaceAll('"@earendil-works/pi-ai"', JSON.stringify(PI_AI_URL))
-			.replaceAll('"@earendil-works/pi-ai/compat"', JSON.stringify(PI_AI_COMPAT_URL))
 			.replaceAll('"@earendil-works/pi-tui"', JSON.stringify(PI_TUI_URL));
 		await writeFile(path, source);
 	}

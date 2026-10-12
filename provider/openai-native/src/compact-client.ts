@@ -1,7 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { isRecord } from "../../../jsonc.js";
-import { type Auth, leadingPromptLength, postThroughHost } from "./host-stream.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { leadingPromptLength, postThroughHost } from "./host-stream.js";
 
 const COMPACTION_TRIGGER = { type: "compaction_trigger" } as const;
 const RETAINED_MESSAGE_TOKEN_BUDGET = 64_000;
@@ -208,8 +209,8 @@ function buildCompactedWindow(input: Record<string, unknown>[], compactionItem: 
  * 历史上曾把正常触发线（窗口 − 预留）上的压缩全部误拒。
  */
 export async function executeNativeCompaction(args: {
+	ctx: ExtensionContext;
 	model: Model<Api>;
-	auth: Auth;
 	/** 第一条是系统提示（压缩指令），其后是要压缩的对话。 */
 	messages: AgentMessage[];
 	/** 上一次压缩留下的窗口：它代表消息之前的全部历史，接在系统提示之后。 */
@@ -217,7 +218,7 @@ export async function executeNativeCompaction(args: {
 	signal: AbortSignal;
 }): Promise<NativeCompactionResult> {
 	let retained: Record<string, unknown>[] = [];
-	const posted = await postThroughHost(args.model, args.messages, args.auth, {
+	const posted = await postThroughHost(args.ctx, args.model, args.messages, {
 		signal: args.signal,
 		rewrite: ({ model, instructions, input }) => {
 			const lead = leadingPromptLength(input);

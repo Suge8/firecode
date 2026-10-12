@@ -1,10 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { buildSessionContext, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { msg, type WindowLoss } from "../../messages.js";
 import { executeNativeCompaction } from "./compact-client.js";
-import { type Auth, captureHostPayload, leadingPromptLength, type ResponsesPayload } from "./host-stream.js";
+import { captureHostPayload, leadingPromptLength, type ResponsesPayload } from "./host-stream.js";
 import {
 	createNativeCompactionResult,
 	describeIdentity,
@@ -27,16 +26,6 @@ export function notify(ctx: ExtensionContext, message: string, level: "warning" 
 function cancel(ctx: ExtensionContext, message: string): NativeCompactionHookResult {
 	notify(ctx, message, "error");
 	return { cancel: true };
-}
-
-async function resolveAuth(ctx: ExtensionContext, model: Model<Api>): Promise<Auth | string> {
-	try {
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		if (!auth.ok) return auth.error;
-		return auth.apiKey ? { apiKey: auth.apiKey, headers: auth.headers } : "missing-api-key";
-	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
-	}
 }
 
 function buildInstructions(systemPrompt: string, customInstructions?: string): string {
@@ -70,9 +59,6 @@ export async function compactWithOpenAINative(
 	if (latest && !prior) return undefined;
 	if (prior && !sameBackend(prior, identity)) return windowUnusable(event, ctx, describeIdentity(prior));
 
-	const auth = await resolveAuth(ctx, model);
-	if (typeof auth === "string") return cancel(ctx, msg.compaction.unavailable(auth));
-
 	const system: AgentMessage = {
 		role: "system",
 		content: buildInstructions(ctx.getSystemPrompt(), event.customInstructions),
@@ -88,8 +74,8 @@ export async function compactWithOpenAINative(
 	}
 
 	const result = await executeNativeCompaction({
+		ctx,
 		model,
-		auth,
 		messages: [system, ...history],
 		priorWindow: prior?.compactedWindow,
 		signal: event.signal,
@@ -145,13 +131,12 @@ export async function replayOpenAINative(payload: unknown, ctx: ExtensionContext
 
 	const identity = nativeIdentity(model);
 	if (!identity || !sameBackend(native.details, identity)) return lost("switched");
-	const auth = await resolveAuth(ctx, model);
 	const firstKept = branch.findIndex((entry, index) => index < latest.index && entry.id === native.firstKeptEntryId);
-	if (typeof auth === "string" || firstKept < 0) return lost("unreplayable");
+	if (firstKept < 0) return lost("unreplayable");
 
 	// 宿主压缩后的上下文：压缩条目（系统消息与摘要）、保留段里的非系统消息，其后是压缩之后的全部条目。
 	const covered = [native, ...branch.slice(firstKept, latest.index).filter((entry) => !(entry.type === "message" && entry.message.role === "system"))];
-	const prefix = await captureHostPayload(model, covered.flatMap(sessionEntryToContextMessages), auth);
+	const prefix = await captureHostPayload(ctx, model, covered.flatMap(sessionEntryToContextMessages));
 	const input = (payload as Partial<ResponsesPayload> | null)?.input;
 	if (!prefix || !Array.isArray(input)) return lost("unreplayable");
 
