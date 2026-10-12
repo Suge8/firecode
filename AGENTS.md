@@ -47,7 +47,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 
-OpenAI 原生压缩经宿主的 `@earendil-works/pi-ai/compat` 入口（`streamSimple`）走宿主流，不自带 Responses 序列化。升级 pi 时核对这个入口还在；宿主删掉它时，迁到宿主当时对扩展公开的等价接口（`provider/openai-native/src/host-stream.ts` 是唯一使用处）。
+OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主流，不自带 Responses 序列化，也不自己解析鉴权（宿主在注册表里解析 apiKey、headers、baseUrl、env）。`provider/openai-native/src/host-stream.ts` 是唯一使用处。升级 pi 时要确认显式传入的 `onPayload` 优先，且不重入：宿主若让注册表调用也触发 `before_provider_request`（上游 [pi#9773](https://github.com/earendil-works/pi/issues/9773)），本扩展自己的钩子会在压缩请求里被再次调用，须保证它不对这类请求重放或改写。
 
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 

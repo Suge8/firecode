@@ -77,10 +77,10 @@ function malformedIds(items: any[]): string[] {
 
 const firstIndex = (items: any[], needle: string) => items.findIndex((item) => JSON.stringify(item.content ?? "").includes(needle));
 
-type Setup = { model: any; openai?: Record<string, unknown>; hasUI?: boolean; sm?: any; auth?: unknown };
+type Setup = { model: any; openai?: Record<string, unknown>; hasUI?: boolean; sm?: any; loggedIn?: boolean; baseUrl?: string };
 
 /** 在真实会话上装配扩展（配置文件里只有 openai 节）；返回会话、宿主钩子的调用入口与通知记录。 */
-async function harness({ model, openai = { nativeCompaction: true }, hasUI = false, sm = undefined, auth = undefined }: Setup) {
+async function harness({ model, openai = { nativeCompaction: true }, hasUI = false, sm = undefined, loggedIn = true, baseUrl = undefined }: Setup) {
 	const directory = mkdtempSync(join(tmpdir(), "firecode-openai-native-"));
 	directories.push(directory);
 	const { registerOpenAINative } = (await loadFirecodeModule("provider/openai-native/index.ts", {
@@ -95,7 +95,12 @@ async function harness({ model, openai = { nativeCompaction: true }, hasUI = fal
 		hasUI,
 		model: current,
 		getSystemPrompt: () => INSTRUCTIONS,
-		modelRegistry: { getApiKeyAndHeaders: async () => auth ?? { ok: true, apiKey: apiKeyFor(current) } },
+		// 与宿主注册表一致：鉴权由它解析，解析出的 baseUrl 覆盖模型地址；没登录时流以缺凭据报错结束。
+		modelRegistry: {
+			getApiKeyAndHeaders: async (m: any) => ({ ok: true, apiKey: loggedIn ? apiKeyFor(m) : undefined, baseUrl }),
+			streamSimple: (m: any, context: unknown, options: object) =>
+				streamSimple(baseUrl ? { ...m, baseUrl } : m, context, { ...options, apiKey: loggedIn ? apiKeyFor(m) : undefined }),
+		},
 		sessionManager: sm,
 		ui: { notify: (message: string, level: string) => notices.push([level, message]), setStatus() {}, theme: { fg: (_: string, value: string) => value } },
 	});
@@ -461,7 +466,7 @@ test("turning nativeCompaction off after a native compaction warns once that the
 
 test("a manual /compact without login credentials is cancelled and says why", async () => {
 	const model = getModel("openai", "gpt-5-mini");
-	const h = await harness({ model, hasUI: true, auth: { ok: true, apiKey: undefined } });
+	const h = await harness({ model, hasUI: true, loggedIn: false });
 	const kept = oldHistory(h.sm, model);
 	const calls = stubFetch(compacted("enc"));
 
@@ -469,6 +474,17 @@ test("a manual /compact without login credentials is cancelled and says why", as
 
 	expect(calls).toHaveLength(0);
 	expect(h.notices).toEqual([["error", expect.stringContaining("/compact 已取消")]]);
+});
+
+test("the compaction request goes to the baseUrl the credentials resolve to", async () => {
+	const model = getModel("openai", "gpt-5-mini");
+	const h = await harness({ model, baseUrl: "https://proxy.example/v1" });
+	const kept = oldHistory(h.sm, model);
+	const calls = stubFetch(compacted("enc"));
+
+	await h.compact(kept);
+
+	expect(calls.map((call) => call.url)).toEqual(["https://proxy.example/v1/responses"]);
 });
 
 test.each([
@@ -516,7 +532,6 @@ test.each([
 		model,
 		hasUI: false,
 		sessionManager: h.sm,
-		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
 	});
 
 	expect(rewritten).toEqual({ ...payload, ...added });
