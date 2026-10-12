@@ -11,7 +11,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../jsonc.js";
-import { isActive, PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
+import { PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
 
 const CHECKPOINT_TYPE = "firecode-review-checkpoint";
 const ROUND_TYPE = "firecode-review-round";
@@ -76,8 +76,8 @@ export function checkpointOf(entry: unknown): Snapshot | undefined {
 
 /**
  * 读当前分支上最近一个快照并按轮记录补回 history；没有存档、旧版本存档（格式升级不迁移）都返回 undefined 且不出声。
- * 存档损坏（同版本但字段无效，或未收口的审查缺轮记录）也返回 undefined，但先调 onDamaged：
- * 调用方借此告诉用户这场审查的进度读不出来。已收口的审查没有进度可丢，缺轮记录不算损坏。
+ * 存档损坏（同版本但字段无效，或快照记的轮数与轮记录条数对不上，不分审查是否已收口）也返回 undefined，
+ * 但先调 onDamaged：调用方借此告诉用户这场审查的进度读不出来。
  */
 export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] } }, onDamaged?: () => void): ReviewState | undefined {
 	const entries = ctx.sessionManager.getBranch();
@@ -96,7 +96,7 @@ export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] }
 		if (isRecord(round) && typeof round.round === "number" && Array.isArray(round.reviewers)) rounds.set(round.round, round);
 	}
 	if (rounds.size !== snapshot.rounds) {
-		if (isActive(snapshot)) onDamaged?.();
+		onDamaged?.();
 		return undefined;
 	}
 	const { rounds: _rounds, last: _last, ...rest } = snapshot;

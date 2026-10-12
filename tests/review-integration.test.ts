@@ -524,6 +524,18 @@ describe("an unreadable checkpoint is reported, not silently dropped", () => {
 		expect(registered.emitted).toEqual([]);
 	});
 
+	test("a settled review with missing round records is reported too", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seed(pi, { ...initialState("damaged-settled"), phase: "settled", end: "passed", startedAt: 1, updatedAt: 1 } as never);
+		(checkpoints(sessionManager)[0] as { data: { rounds: number } }).data.rounds = 2;
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		expect(ctx.notices).toHaveLength(1);
+	});
+
 	test("a snapshot with invalid fields is reported too", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();

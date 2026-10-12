@@ -413,7 +413,7 @@ export function findingsOf(reviewers: ReviewerResult[]): string {
 }
 
 /** 审查生命周期内：总结回合也算——占用标签持有到总结完成，Master 才不会在结果卡与总结之间的窗口提前结算、漏掉总结回复。 */
-export function isActive(state: Pick<ReviewState, "phase">): boolean {
+export function isActive(state: ReviewState): boolean {
 	return state.phase !== "idle" && state.phase !== "settled";
 }
 
