@@ -21,7 +21,9 @@
 		"fast": "ctrl+shift+s"
 	},
 
-	// nativeCompaction uses OpenAI's native context compaction; priority pays more for faster output and is off by default.
+	// nativeCompaction uses OpenAI's native context compaction. The result can only be continued by the same model and base URL:
+	// after a model switch a manual /compact is cancelled with an explanation and automatic compaction falls back to a normal summary.
+	// Set it to false to always use normal summaries. priority pays more for faster output and is off by default.
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {
@@ -30,6 +32,7 @@
 	},
 
 	// New sessions activate the Master by default. Role names are yours to choose; the Master picks a role by its "use".
+	// Sub-agents, reviewers and the watcher only find models from Pi's built-in providers or models.json, not from other extensions' providers.
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],

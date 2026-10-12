@@ -12,7 +12,7 @@
 
 <h3 align="center">Install one extension. Uninstall the rest.</h3>
 
-<p align="center">Parallel Workers under one Master, multi-model code review and a cleaner terminal for <a href="https://pi.dev">Pi</a>. One install, works out of the box.</p>
+<p align="center">Parallel sub-agents, multi-model code review and a cleaner terminal for <a href="https://pi.dev">Pi</a>. One install, works out of the box.</p>
 
 <p align="center">
   <a href="https://firecode.si"><img alt="Website" src="https://img.shields.io/badge/website-firecode.si-FF7A0F"></a>
@@ -21,7 +21,58 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-<p align="center"><img alt="The Master dispatching three Workers in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
+<p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
+
+## Why FireCode
+
+- **Works out of the box.** The recommended config is written on first launch; swap in the models you are logged in to. The UI and the prompts follow your system language.
+- **Sub-agents under control.** Run them in parallel, pick a model per role, switch automatically on failure, step in any time.
+- **Hands-off review.** Complex work is reviewed by several models and sent back to be fixed until it passes. You see how each review ended.
+- **An ultra-light core.** Built the Pi way: minimal, so your context stays lean.
+- **Low visual load.** Focus on the results that matter. Everything in between folds away until you open it.
+
+## Fully automatic review and delivery
+
+Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: any number of models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
+
+<p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
+
+Other reviewers mostly hand you a list of problems. FireCode keeps fixing and re-reviewing:
+
+| | Reviewers | What you get |
+| --- | --- | --- |
+| **FireCode** | Any number of models, reviewing adversarially | **Fixed code, re-reviewed** |
+| Claude Code `/code-review` | One sub-agent of your session | A findings list; `--fix` applies it |
+| Codex `/review` | One reviewer on your session's model | A summary of the issues |
+| Open Code Review (Alibaba) | One model, a sub-agent per file group | Line comments to fix yourself |
+| Qodo | Specialist agents plus a judge | Ranked findings; can apply a fix |
+| PR-Agent (open source) | One model call per tool | Comments and code suggestions |
+| multi-model-review (Pi) | Several model families | One combined verdict |
+
+<sub>Checked against each product's docs on 2026-10-12.</sub>
+
+## Clear sub-agent status
+
+Every sub-agent sits above the input box. Click one to read its whole run and talk to it directly.
+
+<p align="center"><img alt="A sub-agent's full run with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
+
+## An ultra-light core
+
+Built the Pi way: sub-agents add just two small tools, and review and the watcher add none. Here is what sub-agent tools cost on every request:
+
+| | Sub-agent tools | Characters |
+| --- | --- | --- |
+| **FireCode** | 2 | **1,713** |
+| pi-subagents (0.77.0) | 2–3 | 1,561–4,918 |
+| omp (18.10.1) | 2 | 3,369 |
+| Codex CLI (0.162.1) | 5–6 | 5,045–9,641 |
+
+<sub>Tool definitions sent to the model (name, description and parameters), default settings, measured 2026-10-12.</sub>
+
+## Also in the box
+
+`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · OpenAI native compaction · Works with Claude subscription login
 
 ## Install
 
@@ -29,75 +80,9 @@
 pi install npm:pi-firecode
 ```
 
-Requires Pi 1.1.0 or newer. Start Pi again and FireCode is active.
+Restart Pi (1.1.0+) and it's ready. The config is created on first launch at `~/.pi/agent/extensions/firecode/config.jsonc`: put in the models you use, and turn anything off with `"features": { "<name>": false }`.
 
-Before you use it:
-
-- **Models.** The default config assumes you are logged in to Anthropic (Claude), OpenAI Codex and DeepSeek. Worker roles, reviewers, the advisor, the watcher and presets each name a model as `"provider/model/thinking"`. Edit them in `~/.pi/agent/extensions/firecode/config.jsonc` (the Pi agent directory, or `$PI_CODING_AGENT_DIR`) and restart Pi.
-- **Which models work.** Workers, reviewers and the watcher run as in-process sessions. They only resolve models from Pi's built-in providers or `models.json`; a model that comes from another extension's provider is not found there.
-- **herdr.** FireCode reports the pane's agent state itself. Uninstall herdr's official Pi integration (`herdr integration uninstall pi`) and do not click "install" for Pi in herdr's settings, or the two overwrite each other.
-- **Turn parts off.** `"features": { "<name>": false }` in the same file; the names are listed there.
-- **Safety.** Workers and reviewers have a `bash` tool that is not sandboxed. The guard on Worker `edit`/`write` (current checkout and the temp directory only) prevents accidents; it is not a security boundary. For isolation, run Pi in a container or a read-only mount.
-
-## First run
-
-1. Start Pi. If `config.jsonc` is missing, FireCode writes the recommended one and uses it at once. Put in the models you can use and restart.
-2. Describe a multi-part task. The Master (commander) splits it and starts Workers, listed above the input box. Click one to read its whole run or talk to it.
-3. On a complex task the Master sends the result to review before handing it back. Run `/fire-review` yourself at any time.
-
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `/fire-master` | Turn Master mode on or off for this session (new sessions start with it on); `/fire-master status` lists the Workers |
-| `/fire-review [focus]` | Adversarial review of what this session has done so far |
-| `/fire-watch` | Turn the watcher on or off for this session: a cheap model that speaks up only when work drifts (off in new sessions) |
-| `/preset` | Switch model, thinking level and tools in one go; `--preset` at startup; the template binds `Alt+1`–`Alt+6` |
-| `/quota` | Remaining Codex and Claude subscription quota |
-| `/tokens [days]` | Token and cost totals from your session files |
-| `/fast` | Toggle OpenAI/xAI fast mode (`Ctrl+Shift+S`) |
-
-Pi's session-rename key (`Ctrl+R` by default) renames the session from the input box. In a Worker's full-run view, `Ctrl+Shift+X` interrupts it; a Worker under review is interrupted by cancelling the review, and its review obligation is kept. `/fire-review --cancel` stops a running review by hand.
-
-OpenAI native compaction (`openai.nativeCompaction`, on in the template) uses OpenAI/Codex's own context compaction. The result is an encrypted window that only the same model and base URL can continue from; after you switch models FireCode tells you it cannot be continued. A manual `/compact` is cancelled with an explanation when the window is unavailable; automatic compaction falls back to a normal summary with a warning. To always use normal summaries, set `nativeCompaction` to `false` and restart.
-
-## Review and delivery
-
-Tell the Master what you want. On complex tasks it sends the work to an adversarial review: any number of models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again. It ends when the review passes, the advisor model stops it after repeated failures, or the round limit is reached; the result card says which. Failures, timeouts and cancellations are reported as such, not as a pass.
-
-<p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
-
-Other tools report findings, and some can apply a fix once. FireCode repeats fix and review until the review passes, the advisor stops it or the round limit is reached:
-
-| | Reviewers | What you get |
-| --- | --- | --- |
-| **FireCode** | Any number of models, reviewing adversarially | **Fixed code, re-reviewed** |
-| Claude Code `/code-review` | One forked subagent of your Claude Code session | A findings list; `--fix` applies it to your working tree |
-| Codex `/review` | One reviewer, on your session's model (or `review_model`) | A summary of the issues it finds |
-| Open Code Review (Alibaba) | One configured model; changed files are bundled, one sub-agent per bundle | Line-level review comments to fix yourself |
-| Qodo | Specialized agents in parallel, plus a judge agent | Ranked findings on the PR; Qodo can generate and apply the fix |
-| PR-Agent (open source) | One LLM call per tool, any configured model | Review comments and code suggestions |
-| multi-model-review (Pi) | Several model families that cross-check each other | One synthesized verdict |
-
-The competitor rows were checked on 2026-10-12 against: [Claude Code docs, Code Review](https://code.claude.com/docs/en/code-review) (the "Review a diff locally" section), [Codex slash commands](https://developers.openai.com/codex/cli/slash-commands) and [Codex's review task](https://github.com/openai/codex/blob/27065a9/codex-rs/core/src/tasks/review.rs), [Open Code Review README](https://github.com/alibaba/open-code-review/blob/357c3f0/README.md), [Qodo docs](https://docs.qodo.ai/code-review), [PR-Agent README](https://github.com/The-PR-Agent/pr-agent), and [multi-model-review](https://github.com/Scott-Meyer/multi-model-review) (npm 0.2.2). These products change; check a row against its source before relying on it.
-
-## Clear Worker status
-
-Every Worker sits above the input box. Click one to read its whole run and talk to it directly. In the main view, each turn folds into one summary line (what it is doing now, then `✓ duration · speed`); thinking, tool calls and Worker results open when you click.
-
-<p align="center"><img alt="A Worker's full run with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
-
-## An ultra-light core
-
-The Master adds just two small tools, and review and the watcher add none. Here is what the Worker tool definitions cost on every request (name, description and parameters sent to the model, measured 2026-10-12):
-
-| | Worker tools | Characters |
-| --- | --- | --- |
-| **FireCode** | 2 | **1,713** |
-| pi-subagents (0.77.0) | 2–3 | 1,561–4,918 |
-| omp (18.10.1) | 2 | 3,369 |
-| Codex CLI (0.162.1) | 5–6 | 5,045–9,641 |
-
-How it was measured: the JSON length of each tool's `name`, `description` and `parameters`. FireCode counts `subagents` and `subagents_list` with the template's roles and an English interface (1,022 with a Chinese one). pi-subagents 0.77.0 ([commit 5852aa0](https://github.com/nicobailon/pi-subagents/tree/5852aa08ccd55e8c64dd16e69d1b96a17e92b8aa), 2026-10-11; default settings) registers `subagent` (3,357), `bg_wait` (1,133) and the loader `subagents_enable` (428). The low end is what stays in the request while only the loader and `bg_wait` are active, on models that can take a tool mid-conversation; once delegation is enabled, or by default on other models, it is 4,490–4,918. To reproduce the pi-subagents numbers, load its `index.ts` against a stub `ExtensionAPI` that records `registerTool` calls (tools are registered in `src/extension/index.ts`, `src/extension/tool-activation.ts` and `src/runs/background/wait-tool.ts`) and measure each recorded tool the same way. omp (`@oh-my-pi/pi-coding-agent` 18.10.1, [commit 5d0aaff](https://github.com/can1357/oh-my-pi/tree/5d0aaffaf1f987503ce129a642fb6e30339615af), 2026-10-12; default settings) sends two: `task` (2,856) and `wait` (513); the interactive session also sends the user-question tool `ask`, which is not counted, and other API formats change the total by under 50 characters. Codex CLI 0.162.1 ([commit 092d3ac](https://github.com/openai/codex/tree/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d), 2026-10-09) sends five by default (`multi_agent_v1`: `spawn_agent` 6,581, `send_input` 1,561, `wait_agent` 703, `close_agent` 515, `resume_agent` 281; 9,641 in total) and six with `features.multi_agent_v2 = true` (`spawn_agent` 2,652, `followup_task` 606, `wait_agent` 611, `send_message` 462, `interrupt_agent` 384, `list_agents` 330; 5,045 in total); each `spawn_agent` description lists the models the account can use, here the five bundled in the binary (837 characters in the default version), so the figure moves with the model list. To reproduce the omp and Codex numbers, install each from npm into a temporary directory and run it once non-interactively (`omp -p`, `codex exec`) against a local HTTP server that records request bodies and returns a one-word reply, with a fake key (omp: a provider in `models.yml`; Codex: a `model_providers` entry with `wire_api = "responses"`); the tool definitions are the `tools` field of the first request, measured the same way. Tool definitions only: the Master prompt adds about 8,500 characters to the system prompt (the English file is 8,527, the Chinese 6,625) plus one line per role.
+- Using herdr? Run `herdr integration uninstall pi` first; FireCode reports the pane state itself.
+- Sub-agents and reviewers can run `bash` without a sandbox. Run Pi in a container if you need isolation.
 
 [Contributing](.github/CONTRIBUTING.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · MIT © Suge8
