@@ -21,7 +21,7 @@ const fmt = new Intl.NumberFormat("en-US");
 const punch = t.punch.map((phrase) =>
 	phrase
 		.replace("{name}", heaviest.name)
-		.replace("{n}", String(Math.round(heaviest.max / self.max)))
+		.replace("{n}", (heaviest.max / self.max).toFixed(1))
 		.split(/\[(.+?)\]/),
 );
 ---
