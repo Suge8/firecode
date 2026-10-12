@@ -1,5 +1,5 @@
 /**
- * 类型检查：宿主类型取自 pi-mono 源码，定位与测试同源（tests/loader.ts 的 PI_PACKAGES）。
+ * 类型检查：宿主类型取自 pi-mono 源码，定位与测试同源（scripts/pi-source.ts）。
  * tsconfig.json 继承 .pi-mono/tsconfig.json，因此这里把 .pi-mono 链到定位到的 pi-mono 根，并用它自带的 tsc。
  */
 import { lstatSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";

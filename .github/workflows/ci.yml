@@ -4,16 +4,20 @@ on:
   pull_request:
   push:
     branches: [main]
+  # 发布流程复用这些检查，ref 是要检查的 tag。
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # 发布流程在 main 上手动触发时 github.ref 也是 main，不带 inputs.ref 会互相取消。
+  group: ci-${{ github.ref }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-
-env:
-  PI_VERSION: v1.1.0
 
 jobs:
   check:
@@ -21,6 +25,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -28,17 +34,9 @@ jobs:
         with:
           bun-version: 1.x
 
-      # pi-mono 放在仓库之外：测试 loader 会复制整个仓库目录。
-      - name: Fetch pi-mono
-        run: |
-          git clone --depth 1 --branch "$PI_VERSION" https://github.com/earendil-works/pi "$RUNNER_TEMP/pi"
-          npm ci --ignore-scripts --prefix "$RUNNER_TEMP/pi"
-          npm run hydrate:model-data --prefix "$RUNNER_TEMP/pi"
-          echo "PI_PACKAGES_DIR=$RUNNER_TEMP/pi/packages" >> "$GITHUB_ENV"
-
-      # pi-smoke 用例会真实启动 pi 可执行文件，并按 package.json 加载 dist/index.js。
-      - name: Install pi CLI
-        run: npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION#v}"
+      # pi 源码与版本见 scripts/pi-source.ts；测试、类型检查和 pi-smoke 都从默认缓存目录找到它。
+      - name: Set up dev environment
+        run: bun run setup
 
       - name: Build
         run: bun run build

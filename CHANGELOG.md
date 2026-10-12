@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-12
+
+### Changed
+
+- 1.3.0 was never published to npm. From 1.3.1 on, GitHub Actions publishes the package to npm with a provenance attestation.
+- For contributors: `bun run setup` fetches the pinned pi sources that tests and the type check need.
+
 ## [1.3.0] - 2026-10-12
 
 ### Added
@@ -190,7 +197,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/Suge8/firecode/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Suge8/firecode/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/Suge8/firecode/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Suge8/firecode/compare/v1.1.0...v1.2.0

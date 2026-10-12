@@ -292,7 +292,7 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 	}
 });
 
-test("指挥官空闲时陆续到达的一批结果合并成一次唤醒；指挥官在跑时照旧立即句缝送达", async () => {
+test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async () => {
 	const harness = await setup(true, { wakeQuietMs: 80 });
 	harness.idle = true;
 	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
@@ -315,14 +315,17 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒；指�
 		"firecode-master-event-ack",
 	]);
 
-	// 指挥官在跑：不等窗口，立即经 steer 送达。
+	await harness.command("");
+});
+
+test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达", async () => {
+	// 窗口远大于用例超时：送达若等了窗口，用例会超时失败，不靠墙钟阈值判断。
+	const harness = await setup(true, { wakeQuietMs: 60_000 });
 	harness.idle = false;
 	faux.setResponses([fauxAssistantMessage("忙时结果")]);
 	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const sentAt = Date.now();
-	await harness.execute({ action: "send", worker: "batch-a", prompt: "再来" });
+	await harness.execute({ action: "start", worker: "busy", prompt: "做", role: "工程师" });
 	await steered;
-	expect(Date.now() - sentAt).toBeLessThan(80);
 	expect(harness.messages.at(-1).options).toEqual({ deliverAs: "steer" });
 	await harness.command("");
 });
