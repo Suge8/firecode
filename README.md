@@ -21,7 +21,7 @@
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-<p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="860"></p>
+<p align="center"><img alt="Give it a task: sub-agents work in parallel, each result is reviewed, the rejected one is fixed, and the commander reviews the merged work before it reaches you" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/flow.gif" width="480"></p>
 
 ## Why FireCode
 
@@ -54,6 +54,8 @@ Other reviewers mostly hand you a list of problems. FireCode keeps fixing and re
 ## Clear sub-agent status
 
 Every sub-agent sits above the input box. Click one to read its whole run and talk to it directly.
+
+<p align="center"><img alt="The commander dispatching three sub-agents in parallel" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/hero.gif" width="760"></p>
 
 <p align="center"><img alt="A sub-agent's full run with a follow-up typed into its own input box" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/shot-worker-view.png" width="720"></p>
 

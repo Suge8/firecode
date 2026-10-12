@@ -1,0 +1,72 @@
+---
+interface Props {
+	play: string;
+	pause: string;
+}
+const { play, pause } = Astro.props;
+---
+
+<button type="button" class="play" aria-label={play} title={play} data-play={play} data-pause={pause}>
+	<svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"></path></svg>
+	<svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
+</button>
+
+<style>
+	.play {
+		position: absolute;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		width: 100%;
+		border: 0;
+		background: none;
+		cursor: pointer;
+	}
+
+	.play::before {
+		content: "";
+		position: absolute;
+		width: 44px;
+		height: 44px;
+		border-radius: 50%;
+		background: oklch(0.16 0.01 50 / 0.82);
+		box-shadow: 0 0 0 1px oklch(0.75 0.16 55 / 0.45);
+		transition:
+			scale var(--duration-state) var(--ease-enter),
+			box-shadow var(--duration-state) var(--ease-enter),
+			opacity var(--duration-state) var(--ease-enter);
+	}
+
+	.play svg {
+		position: relative;
+		width: 18px;
+		height: 18px;
+		color: var(--accent);
+		transition: opacity var(--duration-state) var(--ease-enter);
+	}
+
+	.play .icon-play {
+		margin-left: 3px;
+	}
+
+	.play[data-playing] .icon-play,
+	.play:not([data-playing]) .icon-pause {
+		display: none;
+	}
+
+	.play[data-playing]:not(:hover, :focus-visible)::before,
+	.play[data-playing]:not(:hover, :focus-visible) svg {
+		opacity: 0;
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		.play:hover::before {
+			scale: 1.08;
+			box-shadow: 0 0 0 1px var(--accent);
+		}
+	}
+
+	.play:active::before {
+		scale: 0.92;
+	}
+</style>
