@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 let disposeGroups: (() => void) | undefined;
 afterEach(async () => {
+	setSystemTime();
 	disposeGroups?.();
 	disposeGroups = undefined;
 });
@@ -329,7 +330,8 @@ test("宿主的文字选择不被浮层吃掉：按下、拖动与正文点击�
 
 test("40 列：上横线保住状态字形、状态词与耗时，名字 · 角色先让；下横线保住位置 n/N 与“esc 返回”，模型与其余提示先让", async () => {
 	const workers = [worker("fix-auth-refresh", "working"), worker("b"), worker("c")];
-	const now = Date.now();
+	const now = 1_800_000_000_000;
+	setSystemTime(new Date(now));
 	const view = await open({
 		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
 		facts: { started: { "fix-auth-refresh": now - 65_000 } },
