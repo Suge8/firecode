@@ -2,28 +2,17 @@
  * 在测试里加载 FireCode 模块：扩展运行时由 pi 注入 `@earendil-works/*`，
  * 测试环境没有这层注入，因此把插件目录复制到临时目录并把包名改写到 pi 源码。
  */
-import { existsSync, realpathSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { chmod, cp, link, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
-import { delimiter, dirname, extname, join, relative, sep } from "node:path";
+import { dirname, extname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { requirePiPackages } from "../scripts/pi-source.ts";
 
 export const FIRECODE_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
-function piPackagesDirectory(): string {
-	if (process.env.PI_PACKAGES_DIR) return process.env.PI_PACKAGES_DIR;
-	for (const directory of (process.env.PATH ?? "").split(delimiter)) {
-		const executable = join(directory, process.platform === "win32" ? "pi.exe" : "pi");
-		if (!existsSync(executable)) continue;
-		const resolved = realpathSync(executable);
-		const marker = `${sep}packages${sep}coding-agent${sep}`;
-		const boundary = resolved.lastIndexOf(marker);
-		if (boundary >= 0) return join(resolved.slice(0, boundary), "packages");
-	}
-	throw new Error("Cannot locate Pi sources; set PI_PACKAGES_DIR to the pi-mono packages directory");
-}
-
-export const PI_PACKAGES = piPackagesDirectory();
+/** 定位顺序见 scripts/pi-source.ts：PI_PACKAGES_DIR → setup 的缓存目录 → PATH 里的开发版 pi。 */
+export const PI_PACKAGES = requirePiPackages();
 export const PI_CODING_AGENT_URL = pathToFileURL(join(PI_PACKAGES, "coding-agent/src/index.ts")).href;
 export const PI_AI_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
 export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.ts")).href;
