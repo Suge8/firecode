@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { loadFirecodeModule } from "./loader.ts";
+import { until } from "./until.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
 /** 着色主题：把语义色写成可见标签，断言“黄色”“红色”这类语义而不是 ANSI。 */
@@ -232,8 +233,7 @@ test("动画时钟只在有行在动时订阅：只剩失败行与已完成合�
 	let specs: Spec[] = [{ name: "a", output: Date.now() }];
 	const view = await list(() => specs);
 	view.component.sync();
-	await Bun.sleep(250);
-	expect(view.renders).toBeGreaterThan(1);
+	await until(() => view.renders > 1);
 	specs = [failed("a", 5_000), done("b", 5_000)].map((spec) => ({ ...spec, settled: [Date.now() - 5_000, spec.settled![1]] as Spec["settled"] }));
 	view.component.sync();
 	const settled = view.renders;

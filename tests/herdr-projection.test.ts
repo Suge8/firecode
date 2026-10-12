@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule } from "./loader.js";
 import { fakePi } from "./fake-pi.ts";
+import { until } from "./until.ts";
 
 type Module = {
 	registerHerdrProjection: (pi: unknown) => () => Promise<void>;
@@ -288,6 +289,6 @@ test("子会话不接管 pane：同一 herdr 环境下主会话投影，子会�
 	await start(true, "/sessions/sub.jsonl");
 	await start(false, "/sessions/main.jsonl");
 	// 主会话的请求一到，同一时间窗里子会话若会发请求也早已到了。
-	while (!herdr.requests.some((request) => request.params.resume_argv)) await new Promise((resolve) => setTimeout(resolve, 5));
+	await until(() => herdr.requests.some((request) => request.params.resume_argv));
 	expect(herdr.requests.map((request) => request.params.resume_argv?.[2]).filter(Boolean)).toEqual(["/sessions/main.jsonl"]);
 });

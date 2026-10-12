@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
+import { until } from "./until.ts";
 import {
 	featuresOnly,
 	loadFirecodeModule,
@@ -74,7 +75,7 @@ test("一条发言投递失败只丢弃这一条并提示，观察员继续工�
 	let attempt = harness.next();
 	await harness.turnEnd(3, "继续");
 	await attempt;
-	await Bun.sleep(5);
+	await until(() => harness.notices.some((notice) => notice.includes("投递失败")));
 	expect(harness.messages).toHaveLength(0);
 	expect(harness.notices.some((notice) => notice.includes("投递失败"))).toBe(true);
 	expect(harness.notices.some((notice) => notice.includes("观察员已停止"))).toBe(false);
@@ -118,7 +119,7 @@ test("Master 关闭时释放子代理会话，不掐断与它共用池的观察�
 	}, fauxAssistantMessage("已提交")]);
 	const delivered = harness.next();
 	await harness.turnEnd(3, "评估进行中");
-	await Bun.sleep(20);
+	await until(() => faux.getPendingResponseCount() === 1);
 	await harness.pool.disposeWorkers();
 	release();
 	await delivered;
@@ -197,7 +198,7 @@ test("供应商报错时观察员停用并提示原因，不装作还在工作",
 	const harness = await setup();
 	faux.appendResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "invalid x-api-key" })]);
 	await harness.turnEnd(1, "继续");
-	await Bun.sleep(50);
+	await until(() => harness.notices.length > 0);
 
 	expect(harness.notices).toEqual(["观察员已停止：invalid x-api-key"]);
 	expect(harness.statuses.has("watcher")).toBeFalse();
@@ -442,7 +443,7 @@ test("Observer 创建中切换会话时释放迟到资源且不执行旧评估",
 	await harness.sessionStart(nextContext.ctx);
 	oldContext.retire();
 	releaseCreation(lateObserver);
-	await Bun.sleep(0);
+	await until(() => lateDisposals === 1);
 
 	expect(lateEvaluations).toBe(0);
 	expect(lateDisposals).toBe(1);

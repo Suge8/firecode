@@ -5,6 +5,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
+import { until } from "./until.ts";
 import { loadFirecodeModule, featuresOnly, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
@@ -137,12 +138,6 @@ async function loadReviewWithVerdict(
 			},
 		}),
 	};
-}
-
-/** 等真实计时器驱动的状态落定（例如 2s 的回执超时）；条件满足即返回。 */
-async function until(condition: () => boolean, timeoutMs = 10_000) {
-	const deadline = Date.now() + timeoutMs;
-	while (!condition() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 /** 宿主按前门送达的最近一条用户消息开回合：agent_start，随后记录这条用户消息（deliver 以此确认送达）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。 */

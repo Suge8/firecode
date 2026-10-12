@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { until } from "./until.ts";
 import { FIRECODE_DIR, PI_AI_COMPAT_URL, PI_AI_URL, PI_CODING_AGENT_URL } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
@@ -112,7 +113,7 @@ export default function (pi) {
 	try {
 		await session.bindExtensions({ mode: "print" });
 		await session.prompt("/wake");
-		while (!(globalThis as any).__wakeOrder.includes("agent_start")) await new Promise((resolve) => setTimeout(resolve, 5));
+		await until(() => (globalThis as any).__wakeOrder.includes("agent_start"));
 		await session.waitForIdle();
 		// 唤醒回合的第一条用户消息就是这条正文原样：deliver 据此确认送达，而不是见到任何 agent_start 就算。
 		expect((globalThis as any).__wakeOrder).toEqual(["returned-void", "agent_start", "user:woken from extension"]);
@@ -207,7 +208,7 @@ export default function (pi) {
 		await session.bindExtensions({ mode: "print" });
 		for (let turn = 1; turn <= 3; turn++) await session.prompt(`message ${turn} ${"word ".repeat(200)}`);
 		const compacting = session.compact();
-		while (!session.isCompacting) await new Promise((resolve) => setTimeout(resolve, 1));
+		await until(() => session.isCompacting);
 		const delivered = (globalThis as any).__deliverDuringCompaction();
 		const early = await Promise.race([delivered.then(() => "resolved"), new Promise((resolve) => setTimeout(() => resolve("pending"), 50))]);
 		expect(early).toBe("pending");
@@ -253,7 +254,7 @@ export default function (pi) {
 	for (let turn = 1; turn <= 3; turn++) await session.prompt(`message ${turn}`);
 	const firstAssistant = session.sessionManager.getEntries().find((entry: any) => entry.type === "message" && entry.message.role === "assistant");
 	const navigating = session.navigateTree(firstAssistant.id, { summarize: true });
-	while (!session.isCompacting) await new Promise((resolve) => setTimeout(resolve, 1));
+	await until(() => session.isCompacting);
 	const delivered = (globalThis as any).__deliverDuringSummary();
 	const early = await Promise.race([delivered.then(() => "resolved"), new Promise((resolve) => setTimeout(() => resolve("pending"), 100))]);
 	const onCurrentBranch = () => session.sessionManager.getBranch().some((entry: any) =>
