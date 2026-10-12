@@ -77,7 +77,7 @@ export function checkpointOf(entry: unknown): Snapshot | undefined {
 /**
  * 读当前分支上最近一个快照并按轮记录补回 history；没有存档、旧版本存档（格式升级不迁移）都返回 undefined 且不出声。
  * 存档损坏（同版本但字段无效，或快照记的轮数与轮记录条数对不上，不分审查是否已收口）也返回 undefined，
- * 但先调 onDamaged：调用方借此告诉用户这场审查的进度读不出来。
+ * 但先调 onDamaged：调用方借此告诉用户这场审查的进度读不出来，并写一份空的已收口存档作废它（否则每次开会话都重复提示）。
  */
 export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] } }, onDamaged?: () => void): ReviewState | undefined {
 	const entries = ctx.sessionManager.getBranch();
