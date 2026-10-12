@@ -24,7 +24,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 ## 持久化
 
-三种记录与快照内容见 `checkpoint.ts` 头注释。恢复时 `readCheckpoint` 按轮记录补回内存里的 `history`，条数对不上按没有 checkpoint 处理。Master 读结果的 `outcome.ts` 只读快照里的 `rounds` 与 `last`，不读轮记录。
+三种记录与快照内容见 `checkpoint.ts` 头注释。恢复时 `readCheckpoint` 按轮记录补回内存里的 `history`，没有存档与旧版本存档按没有处理、无提示；同版本存档损坏（字段无效，或快照记的轮数与轮记录条数对不上，不分审查是否已收口）作废并经 `onDamaged` 在 `session_start` 提示用户重新 `/fire-review`，同时追加一份空的已收口（取消）存档作废它，同一会话只提示一次；关闭 review 的入口不传 `onDamaged`，不提示也不写。Master 读结果的 `outcome.ts` 只读快照里的 `rounds` 与 `last`，不读轮记录。
 
 写入口是 `CheckpointWriter`（记得已写过多少轮全文）；没有写入凭证或并发写者检测——同一会话文件只有一个活动运行时。存储格式变化直接升 `VERSION`，旧档按没有处理，不写迁移。持久化失败不能当成功继续：通知、尽力补写终态（否则重启会把磁盘上的活动 checkpoint 恢复成幽灵审查）、释放。
 
@@ -38,7 +38,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 `ReviewProgress` 只有审查相的票数可数；进度只读 reducer 的当前状态，不另派生逐审查者工具进度或摘要，也不为它设计时器。`ReviewUi` 每场审查一个实例，各自记着要还原的标题与编辑器；终端标题是“审查中 R轮次 · 会话名”。
 
-`ui.ts` 等待模型时接管编辑器：只拦文字输入与提交（插话会污染本轮审查的会话证据），应用级按键（切模型、退出……）与扩展快捷键照常工作；esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 与 `summarizing` 相把输入交还用户。接管时保存 `getEditorComponent()` 的当前工厂，解锁还原它（可能是别的扩展设置的自定义编辑器，不是宿主默认）；锁定期间输入区收起成一行暗色“审查进行中 · esc 取消”（快捷键文案取自 keybindings），上下边框取自被包住的编辑器。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。终端标题还原时手抄宿主默认标题格式（宿主没有公开接口，升级 pi 时核对 `APP_TITLE`）。无 TUI 的会话照常运行完整审查循环，不访问 UI；取消由会话退出或总体 watchdog 负责，结果卡仍写入会话记录。
+`ui.ts` 等待模型时接管编辑器：只拦文字输入与提交（插话会污染本轮审查的会话证据），应用级按键（切模型、退出……）与扩展快捷键照常工作；esc/Ctrl+C 随时取消审查（顾问阶段 esc 跳过咨询），`awaiting_fix` 与 `summarizing` 相把输入交还用户。接管时保存 `getEditorComponent()` 的当前工厂，解锁还原它（可能是别的扩展设置的自定义编辑器，不是宿主默认）；锁定期间输入区收起成一行暗色“审查进行中 · esc 取消”（快捷键文案取自 keybindings），上下边框取自被包住的编辑器。按键必须经 keybindings/终端转义序列匹配，不能只比裸 `\x1b`。终端标题还原时手抄宿主默认标题格式（宿主没有公开接口，理由与源码位置见 `ui.ts` 的 `restoredTitle`，升级 pi 时核对 `APP_TITLE`）。无 TUI 的会话照常运行完整审查循环，不访问 UI；取消由会话退出或总体 watchdog 负责，结果卡仍写入会话记录。
 
 审查会话的最终回复取会话事件中完整的 assistant 消息。
 

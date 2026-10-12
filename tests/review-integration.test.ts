@@ -501,6 +501,87 @@ describe("registerReview wiring", () => {
 	});
 });
 
+describe("an unreadable checkpoint is reported, not silently dropped", () => {
+	/** 把上次会话留下的活动 checkpoint 的轮数改成 2：快照记 2 轮，但没有任何轮记录。 */
+	function seedMismatched(pi: Parameters<typeof seed>[0], sessionManager: MockSessionManager) {
+		seed(pi, { ...initialState("damaged"), phase: "queued", startedAt: 1, updatedAt: 1 });
+		const entry = checkpoints(sessionManager)[0] as { data: { rounds: number } };
+		entry.data.rounds = 2;
+	}
+
+	test("a snapshot whose round count has no matching round records tells the user to rerun /fire-review", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seedMismatched(pi, sessionManager);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		await flush();
+		expect(ctx.notices).toHaveLength(1);
+		expect(ctx.notices[0]).toContain("firecode-test");
+		expect(ctx.notices[0]).toContain("/fire-review");
+		expect(registered.emitted).toEqual([]);
+	});
+
+	test.each([
+		["active", { phase: "queued" }],
+		["settled", { phase: "settled", end: "passed" }],
+	] as const)("a damaged %s checkpoint is reported once; reopening the same session stays silent", async (_name, state) => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seed(pi, { ...initialState("damaged-once"), ...state, startedAt: 1, updatedAt: 1 } as never);
+		(checkpoints(sessionManager)[0] as { data: { rounds: number } }).data.rounds = 2;
+		registerReview(pi as never);
+		const first = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, first);
+		expect(first.notices).toHaveLength(1);
+
+		const { pi: pi2, registered: registered2 } = makePi(sessionManager);
+		registerReview(pi2 as never);
+		const second = makeCtx(sessionManager);
+		await registered2.fire("session_start", { type: "session_start", reason: "resume" }, second);
+		await flush();
+		expect(second.notices).toEqual([]);
+		expect(registered2.emitted).toEqual([]);
+	});
+
+	test("a settled review with missing round records is reported too", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seed(pi, { ...initialState("damaged-settled"), phase: "settled", end: "passed", startedAt: 1, updatedAt: 1 } as never);
+		(checkpoints(sessionManager)[0] as { data: { rounds: number } }).data.rounds = 2;
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		expect(ctx.notices).toHaveLength(1);
+	});
+
+	test("a snapshot with invalid fields is reported too", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seedMismatched(pi, sessionManager);
+		(checkpoints(sessionManager)[0] as { data: { runId: unknown } }).data.runId = 7;
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		expect(ctx.notices).toHaveLength(1);
+	});
+
+	test("no checkpoint at all stays silent", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		expect(ctx.notices).toEqual([]);
+	});
+});
+
 describe("review runtime is per session", () => {
 	test("two sessions in one process each run their own review", async () => {
 		await loadAll();

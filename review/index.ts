@@ -13,6 +13,7 @@ import type { InProcessSessionPool } from "../spawn.js";
 import { registerCardRenderer } from "./card.js";
 import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from "./checkpoint.js";
 import { msg } from "./messages.js";
+import { sessionLabel } from "./ui.js";
 import { errorText, Run, type RunHost } from "./run.js";
 import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
 import { CANCEL_REVIEW_ARG } from "./outcome.js";
@@ -92,13 +93,23 @@ export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken 
 	 * 这里只按新会话的 checkpoint 恢复，quit 之外不 settle。
 	 */
 	function resume(ctx: ExtensionContext): void {
-		const checkpoint = readCheckpoint(ctx);
+		const checkpoint = readCheckpoint(ctx, () => voidDamaged(pi, ctx));
 		if (!checkpoint || !isActive(checkpoint)) return;
 		// 配置问题的告警由入口统一聚合；这里保留活动 checkpoint，修好后继续恢复。
 		const loaded = loadConfig().review;
 		if ("error" in loaded) return;
 		current = new Run(host, ctx, loaded.config, checkpoint, new CheckpointWriter(pi, checkpoint));
 		current.resume();
+	}
+}
+
+/** 提示存档损坏并写一份空的已收口存档作废它：之后读到的是有效存档，同一会话不再重复提示。 */
+function voidDamaged(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (ctx.hasUI) ctx.ui.notify(msg.notify.checkpointDamaged(sessionLabel(ctx)), "error");
+	try {
+		sealCheckpoint(pi, initialState(randomUUID()));
+	} catch (error) {
+		if (ctx.hasUI) ctx.ui.notify(msg.notify.cannotSealOld(errorText(error)), "error");
 	}
 }
 
