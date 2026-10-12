@@ -30,7 +30,7 @@ Releases are published to npm by [release.yml](workflows/release.yml) when a Git
 2. Merge that to `main`.
 3. On GitHub, create a Release with a new tag `v<version>` on `main` and publish it. The workflow publishes the package.
 
-To publish a tag that already exists (a failed run, or a tag made before the workflow existed), run the Release workflow from the Actions tab and enter the tag. The checks run the tag's own code, so tags without `bun run setup` (v1.3.0 and earlier) cannot be published this way.
+To publish a tag that already exists (a failed run, or a tag made before the workflow existed), run the Release workflow from the Actions tab and enter the tag. The checks run the tag's own code; for tags older than the setup script (v1.3.0 and earlier) CI takes the dev tooling (`scripts/pi-source.ts`, `scripts/setup.ts`, `scripts/typecheck.ts`, `tests/loader.ts`, `tests/pi-smoke.test.ts`) from the commit the workflow was started on.
 
 One-time npm setup (package settings on npmjs.com → Settings → Trusted publishing → GitHub Actions; the CLI equivalent needs npm ≥ 11.15 and 2FA: `npm trust github pi-firecode --repo Suge8/firecode --file release.yml --allow-publish`):
 

@@ -34,9 +34,22 @@ jobs:
         with:
           bun-version: 1.x
 
+      # 补发早于 setup 脚本的旧 tag（如 v1.3.0）时，开发工具取自触发流程的提交，代码仍是该 tag 的。
+      - name: Fetch dev tooling for older tags
+        if: hashFiles('scripts/setup.ts') == ''
+        uses: actions/checkout@v7
+        with:
+          path: .tooling
+      - name: Install dev tooling for older tags
+        if: hashFiles('scripts/setup.ts') == ''
+        run: |
+          cp .tooling/scripts/pi-source.ts .tooling/scripts/setup.ts .tooling/scripts/typecheck.ts scripts/
+          cp .tooling/tests/loader.ts .tooling/tests/pi-smoke.test.ts tests/
+          rm -rf .tooling
+
       # pi 源码与版本见 scripts/pi-source.ts；测试、类型检查和 pi-smoke 都从默认缓存目录找到它。
       - name: Set up dev environment
-        run: bun run setup
+        run: bun scripts/setup.ts
 
       - name: Build
         run: bun run build
