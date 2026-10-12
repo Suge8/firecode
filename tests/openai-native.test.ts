@@ -77,10 +77,10 @@ function malformedIds(items: any[]): string[] {
 
 const firstIndex = (items: any[], needle: string) => items.findIndex((item) => JSON.stringify(item.content ?? "").includes(needle));
 
-type Setup = { model: any; openai?: Record<string, unknown>; hasUI?: boolean; sm?: any; auth?: unknown };
+type Setup = { model: any; openai?: Record<string, unknown>; hasUI?: boolean; sm?: any; loggedIn?: boolean };
 
 /** 在真实会话上装配扩展（配置文件里只有 openai 节）；返回会话、宿主钩子的调用入口与通知记录。 */
-async function harness({ model, openai = { nativeCompaction: true }, hasUI = false, sm = undefined, auth = undefined }: Setup) {
+async function harness({ model, openai = { nativeCompaction: true }, hasUI = false, sm = undefined, loggedIn = true }: Setup) {
 	const directory = mkdtempSync(join(tmpdir(), "firecode-openai-native-"));
 	directories.push(directory);
 	const { registerOpenAINative } = (await loadFirecodeModule("provider/openai-native/index.ts", {
@@ -95,7 +95,8 @@ async function harness({ model, openai = { nativeCompaction: true }, hasUI = fal
 		hasUI,
 		model: current,
 		getSystemPrompt: () => INSTRUCTIONS,
-		modelRegistry: { getApiKeyAndHeaders: async () => auth ?? { ok: true, apiKey: apiKeyFor(current) } },
+		// 宿主的注册表自行解析鉴权；没登录时流以缺凭据报错结束。
+		modelRegistry: { streamSimple: (m: any, context: unknown, options: object) => streamSimple(m, context, { ...options, apiKey: loggedIn ? apiKeyFor(m) : undefined }) },
 		sessionManager: sm,
 		ui: { notify: (message: string, level: string) => notices.push([level, message]), setStatus() {}, theme: { fg: (_: string, value: string) => value } },
 	});
@@ -461,7 +462,7 @@ test("turning nativeCompaction off after a native compaction warns once that the
 
 test("a manual /compact without login credentials is cancelled and says why", async () => {
 	const model = getModel("openai", "gpt-5-mini");
-	const h = await harness({ model, hasUI: true, auth: { ok: true, apiKey: undefined } });
+	const h = await harness({ model, hasUI: true, loggedIn: false });
 	const kept = oldHistory(h.sm, model);
 	const calls = stubFetch(compacted("enc"));
 
@@ -516,7 +517,6 @@ test.each([
 		model,
 		hasUI: false,
 		sessionManager: h.sm,
-		modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
 	});
 
 	expect(rewritten).toEqual({ ...payload, ...added });

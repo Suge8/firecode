@@ -14,10 +14,9 @@ export const msg = defineMessages({
 		fastCommand: "开关当前 OpenAI 系供应商的加速档",
 		fastShortcut: "开关加速档",
 		compaction: {
-			unavailable: (reason: string) => `FireCode：原生压缩拿不到登录凭据（${reason}），/compact 已取消。请先登录该供应商再试。`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
 				const what: Record<NativeCompactionFailureReason, string> = {
-					"network-error": "网络请求失败",
+					"network-error": "请求没能发出，或网络失败",
 					"non-2xx": "接口拒绝了请求",
 					"empty-body": "接口返回了空内容",
 					"invalid-json": "接口返回的不是合法 JSON",
@@ -56,10 +55,9 @@ export const msg = defineMessages({
 		fastCommand: "Toggle fast mode for the current OpenAI-family provider",
 		fastShortcut: "Toggle fast mode",
 		compaction: {
-			unavailable: (reason: string) => `FireCode: native compaction has no login credentials (${reason}); /compact cancelled. Log in to this provider and try again.`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
 				const what: Record<NativeCompactionFailureReason, string> = {
-					"network-error": "the network request failed",
+					"network-error": "the request could not be sent, or the network failed",
 					"non-2xx": "the API rejected the request",
 					"empty-body": "the API returned an empty body",
 					"invalid-json": "the API returned invalid JSON",
