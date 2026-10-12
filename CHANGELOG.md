@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- A review checkpoint that can no longer be read is reported once, with the session it belongs to, instead of being silently dropped; run `/fire-review` again to restart that review.
 - Native compaction now uses pi's public model interface instead of an internal entry point, so OpenAI-compatible setups with a custom `baseUrl` are called at the right address.
 - 1.3.0 was never published to npm. From 1.3.1 on, GitHub Actions publishes the package to npm with a provenance attestation.
 - For contributors: `bun run setup` fetches the pinned pi sources that tests and the type check need.
