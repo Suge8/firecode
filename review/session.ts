@@ -19,20 +19,15 @@ export interface ReviewModelConfig {
 	timeoutMs: number;
 }
 
-export interface ReviewSessionRequest {
+interface ReviewSessionRequest {
 	config: ReviewModelConfig;
 	prompt: PromptLayers;
 	cwd: string;
 	signal?: AbortSignal;
 }
 
-export type ReviewSessionRunner = (request: ReviewSessionRequest) => Promise<ReviewSessionResult>;
-
-export function createReviewSessionRunner(pool: InProcessSessionPool): ReviewSessionRunner {
-	return (request) => runReviewSession(pool, request);
-}
-
-async function runReviewSession(
+/** 开一个隔离的内存会话跑一次提问，把结局归成 ReviewSessionResult；审查者与顾问共用。 */
+export async function runReviewSession(
 	pool: InProcessSessionPool,
 	{ config, prompt, cwd, signal }: ReviewSessionRequest,
 ): Promise<ReviewSessionResult> {

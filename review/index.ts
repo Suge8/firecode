@@ -13,8 +13,8 @@ import type { InProcessSessionPool } from "../spawn.js";
 import { registerCardRenderer } from "./card.js";
 import { CheckpointWriter, readCheckpoint, recordRefusal, sealCheckpoint } from "./checkpoint.js";
 import { msg } from "./messages.js";
+import { sessionLabel } from "./ui.js";
 import { errorText, Run, type RunHost } from "./run.js";
-import { createReviewSessionRunner, type ReviewSessionRunner } from "./session.js";
 import { CANCEL_REVIEW_ARG } from "./outcome.js";
 import { initialState, isActive } from "./state.js";
 
@@ -23,25 +23,20 @@ export interface ReviewOptions {
 	enabled?: boolean;
 	/** features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。 */
 	configBroken?: boolean;
-	/** 审查/顾问会话开在这个池里：进程里唯一的子会话池，由入口传入，本模块不自建。 */
-	pool?: InProcessSessionPool;
-	/** 审查/顾问会话的执行器；测试注入脚本化会话用，给了就不需要 pool。 */
-	runSession?: ReviewSessionRunner;
 }
 
-export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken = false, pool, runSession }: ReviewOptions = {}): void {
+/** pool：审查/顾问会话开在这个池里，进程里唯一的子会话池，由入口传入，本模块不自建。 */
+export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false }: ReviewOptions = {}): void {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
 		return;
 	}
-	const sessionRunner = runSession ?? (pool && createReviewSessionRunner(pool));
-	if (!sessionRunner) throw new Error("registerReview needs a session pool or a session runner");
 	let current: Run | undefined;
 	const host: RunHost = {
 		pi,
-		runSession: sessionRunner,
+		pool,
 		ended: (run) => {
 			if (current === run) current = undefined;
 		},
@@ -92,13 +87,23 @@ export function registerReview(pi: ExtensionAPI, { enabled = true, configBroken 
 	 * 这里只按新会话的 checkpoint 恢复，quit 之外不 settle。
 	 */
 	function resume(ctx: ExtensionContext): void {
-		const checkpoint = readCheckpoint(ctx);
+		const checkpoint = readCheckpoint(ctx, () => voidDamaged(pi, ctx));
 		if (!checkpoint || !isActive(checkpoint)) return;
 		// 配置问题的告警由入口统一聚合；这里保留活动 checkpoint，修好后继续恢复。
 		const loaded = loadConfig().review;
 		if ("error" in loaded) return;
 		current = new Run(host, ctx, loaded.config, checkpoint, new CheckpointWriter(pi, checkpoint));
 		current.resume();
+	}
+}
+
+/** 提示存档损坏并写一份空的已收口存档作废它：之后读到的是有效存档，同一会话不再重复提示。 */
+function voidDamaged(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (ctx.hasUI) ctx.ui.notify(msg.notify.checkpointDamaged(sessionLabel(ctx)), "error");
+	try {
+		sealCheckpoint(pi, initialState(randomUUID()));
+	} catch (error) {
+		if (ctx.hasUI) ctx.ui.notify(msg.notify.cannotSealOld(errorText(error)), "error");
 	}
 }
 

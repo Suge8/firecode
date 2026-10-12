@@ -24,11 +24,6 @@ export interface MasterSetup {
 	workerPrompt: string;
 	/** fire-review 不可用的原因；可用时为 undefined。 */
 	reviewGate?: string;
-	interruptResumeMs: number;
-	/** 指挥官空闲时合并唤醒的安静窗口（见 outbox.ts）。 */
-	wakeQuietMs: number;
-	/** 事件投递失败后首次重试的间隔，其后翻倍到上限（见 outbox.ts）。 */
-	eventRetryMs: number;
 	/** 在飞子代理数的唯一发布口（跨会话保持上次发布值以便配对）。 */
 	publishInFlight(count: number): void;
 	/** 子代理名册的唯一发布口（内容没变不发）。 */

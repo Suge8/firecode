@@ -89,6 +89,7 @@ export const msg = defineMessages({
 		},
 		notify: {
 			cannotSealOld: (reason: string) => `fire-review 无法收口旧 checkpoint：${reason}`,
+			checkpointDamaged: (session: string) => `会话「${session}」的审查进度读不出来（存档已损坏），这场审查已作废，不会继续。需要审查请重新运行 /fire-review。`,
 			stepFailed: (reason: string) => `fire-review 步骤失败：${reason}`,
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint 写入失败，已停止审查：${reason}`,
 			cannotSeal: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
@@ -170,7 +171,6 @@ export const msg = defineMessages({
 			},
 		},
 		reviewer: {
-			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `第一行必须是 PASS 或 FAIL；实际是：${actual}`,
 			formatInvalid: (issue: string) => `审查输出格式无效：${issue}`,
 			failFormatNote: (issue: string) => `（审查者的 FAIL 输出未满足格式契约：${issue}。以下为原文，仍按未通过处理）`,
@@ -216,6 +216,7 @@ export const msg = defineMessages({
 		},
 		notify: {
 			cannotSealOld: (reason: string) => `fire-review could not seal the old checkpoint: ${reason}`,
+			checkpointDamaged: (session: string) => `The review progress of session "${session}" cannot be read (the saved data is damaged). That review is void and will not continue. Run /fire-review again to review.`,
 			stepFailed: (reason: string) => `fire-review step failed: ${reason}`,
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint write failed; review stopped: ${reason}`,
 			cannotSeal: "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc.",
@@ -297,7 +298,6 @@ export const msg = defineMessages({
 			},
 		},
 		reviewer: {
-			empty: "(empty)",
 			invalidFirstLine: (actual: string) => `first line must be PASS or FAIL; actual: ${actual}`,
 			formatInvalid: (issue: string) => `review output format invalid: ${issue}`,
 			failFormatNote: (issue: string) => `(The reviewer's FAIL output did not meet the format contract: ${issue}. Original text follows and still counts as a failure.)`,

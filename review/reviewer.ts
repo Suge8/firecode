@@ -2,7 +2,8 @@
 import { fieldLine, msg, SUGGESTIONS_HEADING, termPattern, type Terms } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult } from "./state.js";
-import type { ReviewModelConfig, ReviewSessionResult, ReviewSessionRunner } from "./session.js";
+import { runReviewSession, type ReviewModelConfig, type ReviewSessionResult } from "./session.js";
+import type { InProcessSessionPool } from "../spawn.js";
 import { verdictWord } from "./verdict.js";
 
 interface RunReviewerOptions {
@@ -11,14 +12,14 @@ interface RunReviewerOptions {
 	prompt: PromptLayers;
 	cwd: string;
 	signal?: AbortSignal;
-	runSession: ReviewSessionRunner;
+	pool: InProcessSessionPool;
 }
 
 type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
 
 /** 运行一个独立审查会话并解析输出。会话故障记为 error，不拖垮整轮。 */
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
-	const result = await options.runSession({
+	const result = await runReviewSession(options.pool, {
 		config: options.config,
 		prompt: options.prompt,
 		cwd: options.cwd,
@@ -33,9 +34,8 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
  * 格式无效的 PASS 或首行不是判定词，该票作废为缺席；格式无效但以 FAIL 开头的票仍是未通过：
  * 它是审查者提出的阻断意见，丢掉会让另一票的 PASS 翻盘，原文随修复反馈与结果卡交给执行模型和用户。
  */
-export function parseReviewOutput(text: string): ParseOutcome {
+function parseReviewOutput(text: string): ParseOutcome {
 	const trimmed = text.trim();
-	if (!trimmed) return contractViolation(msg.reviewer.empty);
 	const [firstLine = "", ...rest] = trimmed.split(/\r?\n/);
 	const verdict = verdictWord(firstLine);
 	const body = rest.join("\n").trim();
@@ -56,7 +56,7 @@ export function parseReviewOutput(text: string): ParseOutcome {
 			details: issue ? [msg.reviewer.failFormatNote(issue), body].filter(Boolean).join("\n\n") : body,
 		};
 	}
-	return contractViolation(msg.reviewer.invalidFirstLine(tail(firstLine.trim() || msg.reviewer.empty)));
+	return contractViolation(msg.reviewer.invalidFirstLine(tail(firstLine.trim())));
 }
 
 function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>): ParseOutcome {

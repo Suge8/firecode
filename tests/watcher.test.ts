@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
+import { installFaux } from "./faux-host.ts";
 import { until } from "./until.ts";
 import {
 	featuresOnly,
@@ -13,7 +14,7 @@ import {
 	PI_TUI_URL,
 } from "./loader.ts";
 
-const { fauxAssistantMessage, fauxToolCall, registerFauxProvider } = await import(PI_AI_COMPAT_URL) as any;
+const { fauxAssistantMessage, fauxToolCall } = await import(PI_AI_COMPAT_URL) as any;
 const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth: (text: string) => number };
 const WATCHER_CONFIG = { model: "test/watcher/low" };
 const QUEUE_OPTIONS = { deliverAs: "steer" };
@@ -340,31 +341,36 @@ test("主会话压缩后从当前尾部重新入场，不回放旧增量", async
 	expect(harness.notes().at(-1)).toEqual({ note: "压缩后", turnIndex: 2 });
 });
 
+/**
+ * 按增量内容回答的观察员脚本：每个会话各自按自己看到的回合说话，不依赖请求的先后顺序。
+ * rules 的键是增量里的文字，值是建议（空串表示无需建议）；gate 在回答含该文字的增量前先等放行。
+ */
+function observerScript(rules: Record<string, string>, gate?: { when: string; started: () => void; open: Promise<void>; fail?: string }) {
+	faux.appendResponses(Array.from({ length: 12 }, () => async (context: any) => {
+		if (context.messages.at(-1).role === "toolResult") return fauxAssistantMessage("已提交");
+		const text = latestUserText(context);
+		if (gate && text.includes(gate.when)) {
+			gate.started();
+			await gate.open;
+			if (gate.fail) throw new Error(gate.fail);
+		}
+		const note = Object.entries(rules).find(([key]) => text.includes(key))?.[1];
+		return note
+			? fauxAssistantMessage([fauxToolCall("advise", { note })], { stopReason: "toolUse" })
+			: fauxAssistantMessage("无需建议");
+	}));
+}
+
 test("评估途中发生压缩时丢弃过期建议，观察员不被拖垮", async () => {
-	let finishEvaluation!: (advice: any) => void;
-	let evaluationStarted!: () => void;
-	const started = new Promise<void>((resolve) => { evaluationStarted = resolve; });
-	const observers = [
-		{
-			evaluate: () => {
-				evaluationStarted();
-				return new Promise<any>((resolve) => { finishEvaluation = resolve; });
-			},
-			contextPercent: () => 0,
-			dispose() {},
-		},
-		{
-			evaluate: async () => "压缩后的建议",
-			contextPercent: () => 0,
-			dispose() {},
-		},
-	];
-	const harness = await setup({ createObserver: async () => observers.shift() });
+	const harness = await setup();
+	const started = Promise.withResolvers<void>();
+	const open = Promise.withResolvers<void>();
+	observerScript({ 压缩前: "压缩前的现场", 压缩后: "压缩后的建议" }, { when: "压缩前", started: started.resolve, open: open.promise });
 	await harness.turnEnd(1, "压缩前的回合");
-	await started;
+	await started.promise;
 	await harness.emit("session_compact", { type: "session_compact" });
-	finishEvaluation("压缩前的现场");
-	await Bun.sleep(0);
+	open.resolve();
+	await Bun.sleep(20);
 	expect(harness.messages).toEqual([]);
 	expect(harness.notices).toEqual([]);
 
@@ -375,33 +381,18 @@ test("评估途中发生压缩时丢弃过期建议，观察员不被拖垮", as
 });
 
 test("评估中切换会话后旧任务不访问旧 ctx，也不关闭新 runtime", async () => {
-	let rejectEvaluation!: (error: Error) => void;
-	let evaluationStarted!: () => void;
-	const started = new Promise<void>((resolve) => { evaluationStarted = resolve; });
-	const observers = [
-		{
-			evaluate: () => {
-				evaluationStarted();
-				return new Promise<undefined>((_resolve, reject) => { rejectEvaluation = reject; });
-			},
-			contextPercent: () => 0,
-			dispose() {},
-		},
-		{
-			evaluate: async () => "新会话仍在工作",
-			contextPercent: () => 0,
-			dispose() {},
-		},
-	];
-	const harness = await setup({ createObserver: async () => observers.shift() });
+	const harness = await setup();
+	const started = Promise.withResolvers<void>();
+	const open = Promise.withResolvers<void>();
+	observerScript({ 新会话: "新会话仍在工作" }, { when: "旧会话", started: started.resolve, open: open.promise, fail: "旧评估失败" });
 	await harness.turnEnd(1, "旧会话");
-	await started;
+	await started.promise;
 	const oldContext = harness.context;
 	const nextContext = harness.createContext();
 	await harness.sessionStart(nextContext.ctx);
 	oldContext.retire();
-	rejectEvaluation(new Error("旧评估失败"));
-	await Bun.sleep(0);
+	open.resolve();
+	await Bun.sleep(20);
 
 	expect(oldContext.staleAccesses).toEqual([]);
 	const delivered = harness.next();
@@ -411,46 +402,33 @@ test("评估中切换会话后旧任务不访问旧 ctx，也不关闭新 runtim
 });
 
 test("Observer 创建中切换会话时释放迟到资源且不执行旧评估", async () => {
-	let releaseCreation!: (observer: any) => void;
-	let creationStarted!: () => void;
-	const started = new Promise<void>((resolve) => { creationStarted = resolve; });
-	let lateEvaluations = 0;
-	let lateDisposals = 0;
-	const lateObserver = {
-		evaluate: async () => { lateEvaluations += 1; return undefined; },
-		contextPercent: () => 0,
-		dispose: () => { lateDisposals += 1; },
+	const harness = await setup();
+	observerScript({ 旧会话: "旧会话的建议", 新会话: "新 owner 的建议" });
+	const spawn = harness.pool.spawn.bind(harness.pool);
+	const spawning = Promise.withResolvers<void>();
+	let spawned = 0;
+	let disposals = 0;
+	harness.pool.spawn = async (options: unknown) => {
+		spawned += 1;
+		if (spawned === 1) spawning.resolve();
+		const session = await spawn(options);
+		const dispose = session.dispose;
+		session.dispose = () => { disposals += 1; return dispose(); };
+		return session;
 	};
-	let creation = 0;
-	const harness = await setup({
-		createObserver: async () => {
-			creation += 1;
-			if (creation === 1) {
-				creationStarted();
-				return new Promise<any>((resolve) => { releaseCreation = resolve; });
-			}
-			return {
-				evaluate: async () => "新 owner 的建议",
-				contextPercent: () => 0,
-				dispose() {},
-			};
-		},
-	});
 	await harness.turnEnd(1, "旧会话");
-	await started;
+	await spawning.promise;
 	const oldContext = harness.context;
 	const nextContext = harness.createContext();
 	await harness.sessionStart(nextContext.ctx);
 	oldContext.retire();
-	releaseCreation(lateObserver);
-	await until(() => lateDisposals === 1);
+	await until(() => disposals === 1);
 
-	expect(lateEvaluations).toBe(0);
-	expect(lateDisposals).toBe(1);
 	expect(oldContext.staleAccesses).toEqual([]);
 	const delivered = harness.next();
 	await harness.turnEnd(2, "新会话", [], [], nextContext.ctx);
 	await delivered;
+	expect(disposals).toBe(1);
 	expect(harness.notes()).toEqual([{ note: "新 owner 的建议", turnIndex: 2 }]);
 });
 
@@ -483,7 +461,6 @@ function advise(note: string) {
 async function setup(options: {
 	watcher?: Record<string, unknown> | null;
 	features?: Record<string, unknown>;
-	createObserver?: (...args: any[]) => Promise<any>;
 	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
 	failDeliveries?: number;
 	/** 前门唤起发出后宿主迟迟不开回合：复现发言停在“未送达”。 */
@@ -494,33 +471,11 @@ async function setup(options: {
 	const agentDir = join(directory, "agent");
 	const sessionDir = join(directory, "sessions");
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
-	await writeFile(join(agentDir, "auth.json"), JSON.stringify({ faux: { type: "api_key", key: "faux-key" } }));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	faux = registerFauxProvider();
-	const { ModelRuntime, SessionManager } = await import(PI_CODING_AGENT_URL) as any;
+	faux = await installFaux(agentDir, ["test/watcher"]);
+	const { SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("spawn.js") as any;
-	const modelRuntime = await ModelRuntime.create({
-		authPath: join(agentDir, "auth.json"),
-		modelsPath: join(agentDir, "models.json"),
-	});
-	const fauxModel = faux.getModel();
-	modelRuntime.registerProvider(fauxModel.provider, {
-		baseUrl: fauxModel.baseUrl,
-		api: fauxModel.api,
-		models: [{
-			id: fauxModel.id,
-			name: fauxModel.name,
-			api: fauxModel.api,
-			reasoning: fauxModel.reasoning,
-			input: fauxModel.input,
-			cost: fauxModel.cost,
-			contextWindow: fauxModel.contextWindow,
-			maxTokens: fauxModel.maxTokens,
-			baseUrl: fauxModel.baseUrl,
-		}],
-	});
-	if (!modelRuntime.hasConfiguredAuth(fauxModel.provider)) throw new Error("测试 Faux 模型认证未载入");
-	const pool = new spawnModule.InProcessSessionPool({ modelRuntime, resolveModel: async () => fauxModel });
+	const pool = new spawnModule.InProcessSessionPool();
 	const watcher = options.watcher === undefined ? WATCHER_CONFIG : options.watcher;
 	const module = await loadFirecodeModule("watcher/index.js", {
 		configJsonc: JSON.stringify({
@@ -590,10 +545,7 @@ async function setup(options: {
 		return { ctx, staleAccesses, retire: () => { retired = true; } };
 	};
 	const context = createContext();
-	module.registerWatcher(pi, {
-		pool,
-		...(options.createObserver ? { createObserver: options.createObserver } : {}),
-	});
+	module.registerWatcher(pi, pool);
 	const emit = (name: string, event: any, ctx = context.ctx) => fake.fire(name, event, ctx);
 	await emit("session_start", { type: "session_start", reason: "startup" });
 	return {

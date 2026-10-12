@@ -12,7 +12,7 @@ import type { MasterRuntime } from "./runtime.js";
 
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
-/** 投递失败的重试间隔从 MasterSetup.eventRetryMs 起逐次翻倍，封顶于此。 */
+/** 投递失败的重试间隔从 Timing.eventRetryMs 起逐次翻倍，封顶于此。 */
 const EVENT_RETRY_MAX_MS = 60_000;
 /** 指挥官空闲时，从第一条结果入队起最多等这么久就唤醒，即使结果还在陆续到达。 */
 const WAKE_MAX_MS = 6_000;
@@ -88,7 +88,7 @@ export class Outbox {
 		this.queued.push(event);
 		this.active.schedulePublish();
 		if (this.retryScheduled) return;
-		const quiet = this.active.setup.wakeQuietMs;
+		const quiet = this.active.setup.pool.timing.wakeQuietMs;
 		if (!this.active.ctx.isIdle() || quiet <= 0) {
 			if (!this.flushTimer || this.firstQueuedAt !== undefined) this.schedule(0);
 			return;
@@ -140,7 +140,7 @@ export class Outbox {
 			// 一串连续失败只提示一次；之后静默退避重试，直到送达。
 			if (!this.failures) active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
 			this.retryScheduled = true;
-			this.schedule(Math.min(active.setup.eventRetryMs * 2 ** this.failures, EVENT_RETRY_MAX_MS));
+			this.schedule(Math.min(active.setup.pool.timing.eventRetryMs * 2 ** this.failures, EVENT_RETRY_MAX_MS));
 			this.failures++;
 		});
 	}

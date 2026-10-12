@@ -74,19 +74,31 @@ export function checkpointOf(entry: unknown): Snapshot | undefined {
 	return snapshot as Snapshot;
 }
 
-/** 读当前分支上最近一个快照并按轮记录补回 history；无、损坏、版本不匹配或轮记录对不上都返回 undefined。 */
-export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] } }): ReviewState | undefined {
+/**
+ * 读当前分支上最近一个快照并按轮记录补回 history；没有存档、旧版本存档（格式升级不迁移）都返回 undefined 且不出声。
+ * 存档损坏（同版本但字段无效，或快照记的轮数与轮记录条数对不上，不分审查是否已收口）也返回 undefined，
+ * 但先调 onDamaged：调用方借此告诉用户这场审查的进度读不出来，并写一份空的已收口存档作废它（否则每次开会话都重复提示）。
+ */
+export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] } }, onDamaged?: () => void): ReviewState | undefined {
 	const entries = ctx.sessionManager.getBranch();
 	const index = entries.findLastIndex((entry) => isRecord(entry) && entry.customType === CHECKPOINT_TYPE);
+	if (index < 0) return undefined;
 	const snapshot = checkpointOf(entries[index]);
-	if (!snapshot) return undefined;
+	if (!snapshot) {
+		const data = (entries[index] as { data?: unknown }).data;
+		if (isRecord(data) && data.version === VERSION) onDamaged?.();
+		return undefined;
+	}
 	const rounds = new Map<number, ReviewRound>();
 	for (const entry of entries.slice(0, index)) {
 		if (!isRecord(entry) || entry.customType !== ROUND_TYPE || !isRecord(entry.data) || entry.data.runId !== snapshot.runId) continue;
 		const round = entry.data.round as ReviewRound;
 		if (isRecord(round) && typeof round.round === "number" && Array.isArray(round.reviewers)) rounds.set(round.round, round);
 	}
-	if (rounds.size !== snapshot.rounds) return undefined;
+	if (rounds.size !== snapshot.rounds) {
+		onDamaged?.();
+		return undefined;
+	}
 	const { rounds: _rounds, last: _last, ...rest } = snapshot;
 	return { ...rest, history: [...rounds.values()].sort((a, b) => a.round - b.round) } as ReviewState;
 }
