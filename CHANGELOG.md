@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-13
+
 ### Changed
 
 - **Breaking:** FireCode now requires Pi 1.2.0 or later.
