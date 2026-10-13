@@ -72,7 +72,7 @@ const hubs = () => processShared("busy", () => new WeakMap<ExtensionAPI, Hub>())
  * 指挥官回合以 agent_start → agent_settled 为界：宿主只在回合彻底结束（不再有自动重试、压缩或排队的续跑）后才发
  * agent_settled，排队的续跑要等本次通知派发完才开始，所以它就是回合结束。会话启动时回合已在跑（扩展在回合中重载宿主）
  * 以 ctx.isIdle() 补上，否则这一段会漏掉起点。在飞数归零与回合落定先后不定
- * （闲时前门投递在宿主记录这条消息后才算送达，见 deliver.ts），歇下必须在两个来源都满足的那一刻触发。
+ * （闲时投递等它开的回合 agent_start 才算送达，见 deliver.ts），歇下必须在两个来源都满足的那一刻触发。
  * 拆会话（session_shutdown）与 Master 停用遗弃子代理只结束本段，不发歇下边沿。
  */
 export function watchBusy(pi: ExtensionAPI, handlers: BusyHandlers): void {

@@ -5,10 +5,10 @@
 import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { MasterRole, ModelAtom } from "../config.js";
-import { wrapEnvelope } from "../deliver.js";
+import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
-import { masterEvent, type MasterEvent } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
@@ -81,8 +81,11 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 	});
 }
 
-/** resolve 即回合已在飞：宿主 prompt 的前置阶段仍报空闲，期间 abort 会被丢弃，interrupt 必须晚于 preflight。 */
-export async function runWorker(active: MasterRuntime, worker: WorkerRef, session: AgentSession, prompt: string): Promise<void> {
+/**
+ * resolve 即回合已在飞。工作说明是用户消息，经宿主 prompt：它的前置阶段仍报空闲，期间 abort 会被丢弃，interrupt 必须晚于 preflight。
+ * 插件自己的续跑提示是机器消息，以自定义消息 + triggerTurn 开回合：宿主同步置忙，开回合前的 abort 在回合开始时生效，发出即在飞。
+ */
+export async function runWorker(active: MasterRuntime, worker: WorkerRef, session: AgentSession, input: string | Delivery): Promise<void> {
 	// 启动回合的路径都经这里：准备期间被 kill 的不调模型、不留热会话。
 	active.current(worker);
 	observeWorker(active, worker, session);
@@ -111,8 +114,12 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 		}
 		settleWorker(active, worker, terminal, error);
 	};
+	if (typeof input !== "string") {
+		void session.sendCustomMessage({ ...input, display: true }, { triggerTurn: true }).then(() => settled(), settled);
+		return;
+	}
 	const inflight = Promise.withResolvers<void>();
-	void session.prompt(prompt, { preflightResult: () => inflight.resolve() })
+	void session.prompt(input, { preflightResult: () => inflight.resolve() })
 		.then(() => settled(), settled)
 		.finally(() => inflight.resolve());
 	await inflight.promise;
@@ -331,6 +338,6 @@ export function resumeCheckPrompt(): string {
 	return wrapEnvelope("firecode_master_event", msg.run.resumeCheck);
 }
 
-function fallbackResumePrompt(from: string, to: string, reason: string): string {
-	return wrapEnvelope("firecode_master_event", msg.run.fallbackResume(from, to, reason));
+function fallbackResumePrompt(from: string, to: string, reason: string): Delivery {
+	return { customType: MASTER_EVENT_TYPE, content: wrapEnvelope("firecode_master_event", msg.run.fallbackResume(from, to, reason)) };
 }

@@ -277,12 +277,11 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 
 		at(373);
 		finish.resolve();
-		await harness.userMessageStarted;
+		await harness.turnRequested;
 		await Bun.sleep(5);
-		// 前门消息已发出、唤醒回合还没开始：不能歇下（报告里这里先写了一条整段记录）。
+		// 唤醒消息已发出、它开的回合还没 agent_start：不能歇下（报告里这里先写了一条整段记录）。
 		expect(rounds).toEqual([]);
 
-		harness.idle = false;
 		await harness.wake();
 		await Bun.sleep(5);
 		expect(rounds).toEqual([]);
@@ -308,12 +307,14 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async
 	gates[0].resolve();
 	await until(() => arrived() === 1);
 	// 第一条到达后安静窗口内不唤醒，等同批的下一条。
-	expect(harness.userMessages).toEqual([]);
+	expect(harness.messages).toEqual([]);
 	gates[1].resolve();
 	await until(() => harness.appended.some(([type]) => type === "firecode-master-event-ack"));
-	expect(harness.userMessages).toHaveLength(1);
-	expect(harness.userMessages[0]).toContain("结果 0");
-	expect(harness.userMessages[0]).toContain("结果 1");
+	expect(harness.messages).toHaveLength(1);
+	expect(harness.messages[0].options).toEqual({ triggerTurn: true });
+	expect(harness.turns).toHaveLength(1);
+	expect(harness.turns[0]).toContain("结果 0");
+	expect(harness.turns[0]).toContain("结果 1");
 	// 每条结果投递前各写一条 pending，整批送达后只写一条 ack。
 	expect(harness.appended.map(([type]) => type)).toEqual([
 		"firecode-master-pending-event",
@@ -332,45 +333,9 @@ test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达"
 	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "start", worker: "busy", prompt: "做", role: "工程师" });
 	await steered;
-	expect(harness.messages.at(-1).options).toEqual({ deliverAs: "steer" });
-	await harness.command("");
-});
-
-test("前门唤醒被宿主拒绝后用户自己开回合：事件不算送达，在同一回合经 steer 补投并确认，不丢", async () => {
-	const harness = await setup(true, { holdWake: true });
-	harness.idle = true;
-	faux.setResponses([fauxAssistantMessage("被拒的结果")]);
-	await harness.execute({ action: "start", worker: "rejected", prompt: "只回复完成", role: "工程师", thinking: "low" });
-	await harness.userMessageStarted;
-	await Bun.sleep(5);
-	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);
-	const envelope = harness.userMessages[0];
-	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event"]);
-
-	// 宿主在开回合前拒绝了前门消息（扩展订阅不到）；之后用户自己发消息开了一个回合。
-	harness.idle = false;
-	await harness.userTurn("我自己的新问题");
-	await until(() => harness.appended.some(([type]) => type === "firecode-master-event-ack"));
-	expect(harness.messages).toEqual([
-		{ message: expect.objectContaining({ content: envelope }), options: { deliverAs: "steer" } },
-	]);
-	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
-	expect(counts()).toEqual([1, 0]);
-	await harness.command("");
-});
-
-test("前门唤醒正常时只确认一次，不重复补投", async () => {
-	const harness = await setup(true, { holdWake: true });
-	harness.idle = true;
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	await harness.execute({ action: "start", worker: "woken", prompt: "只回复完成", role: "工程师", thinking: "low" });
-	await harness.userMessageStarted;
-	await harness.wake();
-	await harness.userTurn("之后用户又问了一句");
-	await until(() => harness.appended.some(([type]) => type === "firecode-master-event-ack"));
-	await Bun.sleep(5);
-	expect(harness.messages).toEqual([]);
-	expect(harness.appended.map(([type]) => type)).toEqual(["firecode-master-pending-event", "firecode-master-event-ack"]);
+	// 宿主忙时 triggerTurn 的自定义消息进 steer 队列，不另开回合。
+	expect(harness.messages.at(-1).options).toEqual({ triggerTurn: true });
+	expect(harness.turns).toEqual([]);
 	await harness.command("");
 });
 
@@ -418,8 +383,8 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 		{ ...worker, status: "idle", currentAction: expect.objectContaining({ kind: "idle" }) },
 	]);
 	expect(harness.messages[0]).toMatchObject({
-		message: { content: expect.stringMatching(/^<firecode_master_event>\ntrace 已返回\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
-		options: { deliverAs: "steer" },
+		message: { customType: "firecode-master-event", content: expect.stringMatching(/^<firecode_master_event>\ntrace 已返回\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
+		options: { triggerTurn: true },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
 	expect(trace.content[0].text).toContain("assistant: 确定性完成");
@@ -623,14 +588,14 @@ test("空闲会话自动释放后 kill 仍只删档案并保留会话文件", as
 	expect(await readdir(join(harness.agentDir, "tmp"))).not.toContain(`firecode-master-${harness.sessionId}.json`);
 });
 
-test("空闲前门投递未完成时替换会话，旧投递不得确认到新 runtime", async () => {
+test("空闲投递唤起的回合还没开始时替换会话，旧投递不得确认到新 runtime", async () => {
 	const harness = await setup(true, { holdWake: true });
 	harness.idle = true;
 	faux.setResponses([fauxAssistantMessage("旧会话结果")]);
 	await harness.execute({
 		action: "start", worker: "old-delivery", prompt: "执行", role: "工程师",
 	});
-	await harness.userMessageStarted;
+	await harness.turnRequested;
 	const appendedBeforeReplacement = harness.appended.length;
 
 	await harness.replaceSession();
@@ -708,14 +673,14 @@ test("视图里直接派的运行指挥官并不在等：不计入在飞数（�
 	await delivered;
 	await until(() => inFlightCounts(harness).length === 2);
 	expect(inFlightCounts(harness)).toEqual([1, 0]);
-	const wakes = harness.userMessages.length;
+	const wakes = harness.turns.length;
 
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.viewSend("viewed", "把标题改短");
 	await delivered;
 	await Bun.sleep(5);
 	expect(inFlightCounts(harness)).toEqual([1, 0]);
-	expect(harness.userMessages).toHaveLength(wakes);
+	expect(harness.turns).toHaveLength(wakes);
 	const { message, options } = harness.messages.at(-1);
 	expect(titleOf(message.content)).toBe("viewed 已返回（你在子代理视图里直接派的）");
 	expect(options).toEqual({ triggerTurn: false });
@@ -735,7 +700,7 @@ test("视图派的运行进行中指挥官又 send 给同一子代理：来源�
 	await harness.execute({ action: "start", worker: "shared", prompt: "初始化", role: "工程师" });
 	await delivered;
 	await until(() => inFlightCounts(harness).length === 2);
-	const wakes = harness.userMessages.length;
+	const wakes = harness.turns.length;
 
 	await harness.viewSend("shared", "视图里说的");
 	await Bun.sleep(5);
@@ -748,9 +713,9 @@ test("视图派的运行进行中指挥官又 send 给同一子代理：来源�
 	release();
 	await delivered;
 	await until(() => inFlightCounts(harness).length === 4);
-	expect(harness.userMessages).toHaveLength(wakes + 1);
-	expect(titleOf(harness.userMessages.at(-1)!)).toBe("shared 已返回（你在子代理视图里直接派的）");
-	expect(harness.userMessages.at(-1)).toContain("你说：视图里说的");
+	expect(harness.turns).toHaveLength(wakes + 1);
+	expect(titleOf(harness.turns.at(-1)!)).toBe("shared 已返回（你在子代理视图里直接派的）");
+	expect(harness.turns.at(-1)).toContain("你说：视图里说的");
 	expect(inFlightCounts(harness)).toEqual([1, 0, 1, 0]);
 });
 
@@ -1779,7 +1744,7 @@ async function setup(activate = true, options: {
 	confirmAnswer?: boolean;
 	/** 在子会话里装一个事件处理器抛错的扩展：复现子代理扩展出错。 */
 	throwingExtension?: boolean;
-	/** 前门唤醒回合不自动开始：宿主 sendUserMessage 立即返回，agent_start 由测试 wake() 发出。 */
+	/** 唤起的回合不自动开始：宿主已置忙，agent_start 由测试 wake() 发出，回合何时结束也由测试决定。 */
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
@@ -1858,15 +1823,17 @@ async function setup(activate = true, options: {
 	}
 	(globalThis as any).__pool = pool;
 	const fake = fakePi();
-	const { commands, tools, sent: messages, appended, userMessages, emitted } = fake;
+	const { commands, tools, sent: messages, appended, emitted } = fake;
+	/** 指挥官被唤醒开的回合：各记它的起始消息正文。 */
+	const turns: string[] = [];
 	const notices: string[] = [];
 	const confirmations: [string, string][] = [];
 	const entries: any[] = [];
 	let failures = options.failDeliveries ?? 0;
 	let onMessage: (() => void) | undefined;
 	let idle = false;
-	let markUserMessageStarted!: () => void;
-	const userMessageStarted = new Promise<void>((resolve) => { markUserMessageStarted = resolve; });
+	const turnRequested = Promise.withResolvers<void>();
+	let starting: any;
 	let activeTools = options.activeTools ?? ["read", "bash", "edit", "write"];
 	const pi = Object.assign(fake.pi, {
 		getActiveTools: () => [...activeTools],
@@ -1875,27 +1842,31 @@ async function setup(activate = true, options: {
 			appended.push([type, data]);
 			entries.push({ type: "custom", customType: type, data });
 		},
-		sendMessage: (message: any, options: any) => {
+		// 与宿主 sendCustomMessage 一致：忙时 triggerTurn 等同 steer；歇透时同步置忙、立即返回，回合稍后才 agent_start。
+		sendMessage: (message: any, sendOptions: any) => {
 			if (failures > 0) { failures--; throw new Error("投递失败"); }
-			messages.push({ message, options });
+			messages.push({ message, options: sendOptions });
+			if (sendOptions?.triggerTurn === true && idle) {
+				idle = false;
+				starting = message;
+				turnRequested.resolve();
+				if (!options.holdWake) setTimeout(() => void wake().then(finishTurn), 0);
+			}
 			onMessage?.();
-		},
-		// 与宿主一致：扩展的 sendUserMessage 返回 void、不等唤醒回合；回合稍后才 agent_start。
-		sendUserMessage: (content: string) => {
-			userMessages.push(content);
-			markUserMessageStarted();
-			onMessage?.();
-			if (!options.holdWake) setTimeout(() => void wake(), 0);
 		},
 	});
-	/** 宿主开一个回合并记录它的第一条用户消息（与宿主事件顺序一致：agent_start 在前，message_start 在后）。 */
-	const turn = async (text: string) => {
+	/** 唤起的回合真正开始：agent_start 在前，随后宿主记录这条自定义消息本身。 */
+	const wake = async () => {
+		const { customType, content, display } = starting;
+		turns.push(content);
 		await fake.fire("agent_start", {}, ctx);
-		const message = { role: "user", content: [{ type: "text", text }] };
-		await fake.fire("message_start", { message }, ctx);
+		await fake.fire("message_start", { message: { role: "custom", customType, content, display } }, ctx);
 	};
-	/** 前门消息唤起的回合真正开始：宿主记录了这条信封消息本身。 */
-	const wake = () => turn(userMessages.at(-1)!);
+	const finishTurn = async () => {
+		idle = true;
+		await fake.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await fake.fire("agent_settled", {}, ctx);
+	};
 	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
 	const components = new Map<any, any>();
@@ -1943,7 +1914,7 @@ async function setup(activate = true, options: {
 		confirmations,
 		statuses,
 		messages,
-		userMessages,
+		turns,
 		emitted,
 		appended,
 		entries,
@@ -1959,12 +1930,11 @@ async function setup(activate = true, options: {
 		set toolsExpanded(value: boolean) { toolsExpanded = value; },
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
-		userMessageStarted,
+		/** 歇透时的投递已让宿主置忙、回合尚未 agent_start。 */
+		turnRequested: turnRequested.promise,
 		wake,
 		pi,
 		ctx,
-		/** 用户自己发消息开的回合（前门消息已被宿主拒绝、没进来）。 */
-		userTurn: (text: string) => turn(text),
 		command,
 		emit: (name: string, event: any) => fake.fire(name, event, ctx),
 		replaceSession: async () => {

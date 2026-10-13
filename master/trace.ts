@@ -7,7 +7,6 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { parseEnvelopes } from "../deliver.js";
 import { clip, oneLine, textOf } from "../format.js";
 import { isRecord } from "../jsonc.js";
 import { msg } from "./messages.js";
@@ -38,8 +37,8 @@ function messagesOf(worker: WorkerRef, session: AgentSession | undefined): reado
 }
 
 function renderTrace(all: readonly TraceMessage[]): string {
-	// 外部输入 = 不是整条由 Master 信封构成的用户消息（续跑核对、fallback 续跑提示是插件自己发的）。
-	const input = all.findLastIndex((message) => message.role === "user" && !parseEnvelopes(textOf(message.content)));
+	// 外部输入 = 用户消息；插件自己的续跑与审查提示是自定义消息。
+	const input = all.findLastIndex((message) => message.role === "user");
 	const recent = all.slice(Math.max(0, input));
 	const errors = recent.flatMap((message) => {
 		if (message.role !== "assistant" || (message.stopReason !== "error" && message.stopReason !== "aborted")) return [];
@@ -59,7 +58,8 @@ function renderTrace(all: readonly TraceMessage[]): string {
 
 function linesOf(message: TraceMessage): string[] {
 	const text = oneLine(textOf(message.content));
-	if (message.role === "user") return text ? [`user: ${clip(text, TEXT_WIDTH)}`] : [];
+	// 自定义消息（插件的事件与提示）在模型侧就是用户消息。
+	if (message.role === "user" || message.role === "custom") return text ? [`user: ${clip(text, TEXT_WIDTH)}`] : [];
 	if (message.role === "toolResult") return text ? [`${message.isError ? "error" : "result"}: ${clip(text, RESULT_WIDTH)}`] : [];
 	const calls = Array.isArray(message.content) ? message.content.flatMap((part) => (isRecord(part) && part.type === "toolCall" ? [toolCallLine(part)] : [])) : [];
 	return [...(text ? [`assistant: ${clip(text, TEXT_WIDTH)}`] : []), ...calls];

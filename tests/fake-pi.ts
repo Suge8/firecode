@@ -2,7 +2,7 @@ type Handler = (...args: any[]) => unknown;
 
 /**
  * 测试共用的假 ExtensionAPI。与宿主一致：同名事件保留全部处理器，事件总线可发可收，on 返回退订函数；
- * 其余注册与发送方法默认只记录。个别测试需要的宿主行为（投递失败、前门唤起回合、模型切换）经 overrides 覆盖。
+ * 其余注册与发送方法默认只记录。个别测试需要的宿主行为（投递失败、唤起回合、模型切换）经 overrides 覆盖。
  */
 export function fakePi(overrides: Record<string, unknown> = {}) {
 	const handlers = new Map<string, Handler[]>();
@@ -18,7 +18,6 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 	const entryRenderers = new Map<string, unknown>();
 	const toolRenderers: Handler[] = [];
 	const sent: { message: any; options: any }[] = [];
-	const userMessages: string[] = [];
 	const appended: [string, any][] = [];
 	const emitted: [string, any][] = [];
 	let activeTools: string[] = [];
@@ -42,7 +41,6 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		registerFlag() {},
 		getFlag: () => undefined,
 		sendMessage: (message: unknown, options: unknown) => { sent.push({ message, options }); },
-		sendUserMessage: (content: string) => { userMessages.push(content); },
 		appendEntry: (type: string, data: unknown) => { appended.push([type, data]); },
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (names: string[]) => { activeTools = names; },
@@ -71,7 +69,6 @@ export function fakePi(overrides: Record<string, unknown> = {}) {
 		resolveToolRenderers: (name: string, base?: unknown) =>
 			toolRenderers.reduceRight<() => unknown>((next, resolver) => () => resolver(name, next), () => base)(),
 		sent,
-		userMessages,
 		appended,
 		emitted,
 		fire,

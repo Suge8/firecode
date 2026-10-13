@@ -82,7 +82,7 @@
 pi install npm:pi-firecode
 ```
 
-重启 Pi（1.1.0 及以上）就能用。配置文件首次启动时生成在 `~/.pi/agent/extensions/firecode/config.jsonc`：填上你用的模型，不想要哪个功能就写 `"features": { "<名字>": false }` 关掉。
+重启 Pi（1.2.0 及以上）就能用。配置文件首次启动时生成在 `~/.pi/agent/extensions/firecode/config.jsonc`：填上你用的模型，不想要哪个功能就写 `"features": { "<名字>": false }` 关掉。
 
 - 用 herdr？先执行 `herdr integration uninstall pi`，FireCode 会自己上报 pane 状态。
 - 子代理和审查者能执行不受沙箱约束的 `bash`，需要隔离就把 Pi 放进容器。

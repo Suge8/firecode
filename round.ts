@@ -9,8 +9,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { watchBusy } from "./busy.js";
-import { parseEnvelopes } from "./deliver.js";
-import { formatDuration, textOf } from "./format.js";
+import { formatDuration } from "./format.js";
 import { msg } from "./messages.js";
 
 export const ROUND_ENTRY = "firecode-round";
@@ -146,8 +145,7 @@ export type BranchEntry =
 	| { type: "message"; message: { role: string; content?: unknown } }
 	| { type: string };
 
-const isHumanEntry = (entry: BranchEntry) => entry.type === "message" && "message" in entry
-	&& entry.message.role === "user" && !parseEnvelopes(textOf(entry.message.content));
+const isHumanEntry = (entry: BranchEntry) => entry.type === "message" && "message" in entry && entry.message.role === "user";
 
 /** 会话条目若是轮记录，给出它（带落定时刻）；子代理全过程视图与 Master 的本次运行耗时都按它读子代理会话。 */
 export function roundFromEntry(entry: unknown): Round | undefined {

@@ -96,34 +96,32 @@ export default function (pi) {
 	}
 }, 10_000);
 
-test("宿主契约：扩展 API 的 sendUserMessage 立即返回、不等唤醒回合；唤醒回合在 agent_start 后原样记录这条用户消息", async () => {
+// 宿主在 agent_start 之前就从 sendMessage 返回：deliver 过早 resolve 会让 Master 先扣在飞数，busy.ts 在唤醒回合开始前误报歇下（报告现场：一段被拆成两条轮记录）。
+test("歇透时 deliver 等它开的回合 agent_start 之后才 resolve", async () => {
 	const session = await hostSession(`
+import { deliver, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
 	const order = (globalThis.__wakeOrder = []);
 	pi.on("agent_start", () => { order.push("agent_start"); });
-	pi.on("message_start", ({ message }) => {
-		if (message.role === "user") order.push("user:" + (typeof message.content === "string" ? message.content : message.content.map((part) => part.text).join("")));
+	pi.on("session_start", (_event, ctx) => {
+		globalThis.__deliverIdle = () => deliver(pi, ctx, { customType: "firecode-master-event", content: wrapEnvelope("firecode_master_event", "worker done") })
+			.then(() => order.push("delivered"));
 	});
-	pi.registerCommand("wake", { handler: async () => {
-		const returned = pi.sendUserMessage("woken from extension");
-		order.push(returned === undefined ? "returned-void" : "returned-value");
-	} });
 }
 `, [fauxAssistantMessage("woken")]);
 	try {
 		await session.bindExtensions({ mode: "print" });
-		await session.prompt("/wake");
-		await until(() => (globalThis as any).__wakeOrder.includes("agent_start"));
+		await (globalThis as any).__deliverIdle();
 		await session.waitForIdle();
-		// 唤醒回合的第一条用户消息就是这条正文原样：deliver 据此确认送达，而不是见到任何 agent_start 就算。
-		expect((globalThis as any).__wakeOrder).toEqual(["returned-void", "agent_start", "user:woken from extension"]);
+		expect((globalThis as any).__wakeOrder).toEqual(["agent_start", "delivered"]);
 	} finally {
 		delete (globalThis as any).__wakeOrder;
+		delete (globalThis as any).__deliverIdle;
 		session.dispose();
 	}
 }, 10_000);
 
-test("review 的修复反馈与总结提示经 deliver 前门唤起：回合的每次请求都经过 before_agent_start，扩展注入的段不被撤下", async () => {
+test("review 的修复反馈与总结提示经 deliver 唤起：回合的每次请求都经过 before_agent_start，扩展注入的段不被撤下", async () => {
 	const requests: { prompt: string; first: string }[] = [];
 	const record = (reply: unknown) => (context: any) => {
 		const user = context.messages.find((message: any) => message.role === "user");
@@ -144,7 +142,7 @@ export default function (pi) {
 `, [record(toolCallResponse), record(fauxAssistantMessage("fixed"))], waitToolOptions);
 	try {
 		await session.bindExtensions({ mode: "print" });
-		// 修复回合第一次工具调用之后的请求，系统提示里仍有扩展注入的段（followUp+triggerTurn 侧门会在这里把它撤下，#33）。
+		// 修复回合第一次工具调用之后的请求，系统提示里仍有扩展注入的段（pi 1.2.0 之前 triggerTurn 开的回合会在这里把它撤下，#33）。
 		await (globalThis as any).__deliverFix();
 		await session.waitForIdle();
 		expect(requests).toHaveLength(2);
@@ -179,7 +177,7 @@ export default function (pi) {
 }, 10_000);
 
 // 手动 /compact 不在回合里：宿主 isIdle 为 false，但 steer 只会被当场追加、没有回合可续。deliver 要等压缩落定再唤起。
-test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展较慢的 session_compact 处理器）前门唤起一个回合，信封作为用户消息进上下文", async () => {
+test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展较慢的 session_compact 处理器）才唤起一个回合，信封进上下文", async () => {
 	const requests: string[] = [];
 	let release!: () => void;
 	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
@@ -258,12 +256,12 @@ export default function (pi) {
 	const delivered = (globalThis as any).__deliverDuringSummary();
 	const early = await Promise.race([delivered.then(() => "resolved"), new Promise((resolve) => setTimeout(() => resolve("pending"), 100))]);
 	const onCurrentBranch = () => session.sessionManager.getBranch().some((entry: any) =>
-		entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("worker done"));
+		entry.type === "custom_message" && JSON.stringify(entry.content).includes("worker done"));
 	return { session, requests, release, navigating, delivered, early, onCurrentBranch };
 }
 
 // 宿主在摘要期间 isIdle 为 false 却没有回合：steer 会把消息追加在即将被丢下的旧分支上，模型永远看不到，也没人被唤起。
-test("带摘要的 /tree 切换期间 deliver：摘要结束后前门唤起一个回合，信封在切换后的当前分支上", async () => {
+test("带摘要的 /tree 切换期间 deliver：摘要结束后才唤起一个回合，信封在切换后的当前分支上", async () => {
 	const { session, requests, release, navigating, delivered, early, onCurrentBranch } = await summarizingSession();
 	try {
 		expect(early).toBe("pending");

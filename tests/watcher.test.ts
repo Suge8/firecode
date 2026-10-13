@@ -17,7 +17,7 @@ import {
 const { fauxAssistantMessage, fauxToolCall } = await import(PI_AI_COMPAT_URL) as any;
 const { visibleWidth } = await import(PI_TUI_URL) as { visibleWidth: (text: string) => number };
 const WATCHER_CONFIG = { model: "test/watcher/low" };
-const QUEUE_OPTIONS = { deliverAs: "steer" };
+const DELIVER_OPTIONS = { triggerTurn: true };
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 let faux: any;
@@ -52,7 +52,7 @@ test("建议卡收起只显示正文首行，展开显示完整建议", async ()
 	expect(expanded.replaceAll("\n", "")).toContain("第二行必须只在展开时出现");
 });
 
-test("开口即经队列语义投递，建议带来源信封与时点标记", async () => {
+test("开口即投递，建议带来源信封与时点标记", async () => {
 	const harness = await setup();
 	advise("工单要求的回滚路径还没实现");
 	const delivered = harness.next();
@@ -60,7 +60,7 @@ test("开口即经队列语义投递，建议带来源信封与时点标记", as
 	await delivered;
 
 	expect(harness.messages).toHaveLength(1);
-	expect(harness.messages[0].options).toEqual(QUEUE_OPTIONS);
+	expect(harness.messages[0].options).toEqual(DELIVER_OPTIONS);
 	expect(harness.messages[0].message.content).toBe([
 		"<firecode_watcher>",
 		"👓 观察员（基于第 7 回合前的观察）",
@@ -106,7 +106,7 @@ test("用户 esc 中断过的现场照常投递，投递选项不变", async () 
 	await delivered;
 
 	expect(harness.messages).toHaveLength(1);
-	expect(harness.messages[0].options).toEqual(QUEUE_OPTIONS);
+	expect(harness.messages[0].options).toEqual(DELIVER_OPTIONS);
 	expect(harness.notes()).toEqual([{ note: "迁移脚本会删表", turnIndex: 9 }]);
 });
 
@@ -181,20 +181,6 @@ test("评估落后时合并跳最新，同批增量只产生一条建议", async
 	]);
 });
 
-test("主会话空闲时发言走前门用户消息，不出卡片", async () => {
-	const harness = await setup();
-	harness.idle = true;
-	advise("空闲现场的提醒");
-	const delivered = harness.next();
-	await harness.turnEnd(9, "刚停下");
-	await delivered;
-
-	expect(harness.messages).toEqual([]);
-	expect(harness.userMessages).toHaveLength(1);
-	expect(harness.userMessages[0]).toContain("<firecode_watcher>");
-	expect(harness.userMessages[0]).toContain("空闲现场的提醒");
-});
-
 test("供应商报错时观察员停用并提示原因，不装作还在工作", async () => {
 	const harness = await setup();
 	faux.appendResponses([fauxAssistantMessage([], { stopReason: "error", errorMessage: "invalid x-api-key" })]);
@@ -204,26 +190,6 @@ test("供应商报错时观察员停用并提示原因，不装作还在工作",
 	expect(harness.notices).toEqual(["观察员已停止：invalid x-api-key"]);
 	expect(harness.statuses.has("watcher")).toBeFalse();
 	expect(harness.messages).toEqual([]);
-});
-
-test("新建议取代还没送达的上一条：过时的建议在之后的回合里不补投", async () => {
-	const harness = await setup({ neverWake: true });
-	harness.idle = true;
-	advise("过时的第一条");
-	let sent = harness.next();
-	await harness.turnEnd(1, "第一回合");
-	await sent;
-	advise("较新的第二条");
-	sent = harness.next();
-	await harness.turnEnd(2, "第二回合");
-	await sent;
-	expect(harness.userMessages).toHaveLength(2);
-
-	// 用户自己开了回合：只有仍在途的那条补投，被取代的不再出现。
-	harness.idle = false;
-	await harness.fire("agent_start", {}, harness.context.ctx);
-	await harness.fire("message_start", { message: { role: "user", content: [{ type: "text", text: "用户自己说的话" }] } }, harness.context.ctx);
-	expect(harness.notes()).toEqual([{ note: "较新的第二条", turnIndex: 2 }]);
 });
 
 test("一次评估只接受一条 advise，多余的当场拒绝", async () => {
@@ -463,8 +429,6 @@ async function setup(options: {
 	features?: Record<string, unknown>;
 	/** 前 n 次 sendMessage 抛错：复现发言投递失败。 */
 	failDeliveries?: number;
-	/** 前门唤起发出后宿主迟迟不开回合：复现发言停在“未送达”。 */
-	neverWake?: boolean;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-watcher-"));
 	const cwd = join(directory, "project");
@@ -486,7 +450,7 @@ async function setup(options: {
 	}) as any;
 
 	const fake = fakePi();
-	const { commands, sent: messages, userMessages } = fake;
+	const { commands, sent: messages } = fake;
 	const notices: string[] = [];
 	let idle = false;
 	const statuses = new Map<string, string>();
@@ -494,21 +458,12 @@ async function setup(options: {
 	const settle = () => waiter?.();
 	let failures = options.failDeliveries ?? 0;
 	const pi = Object.assign(fake.pi, {
+		// 与宿主一致：triggerTurn 在歇透时开回合，sendMessage 先返回，回合稍后才 agent_start。
 		sendMessage: (message: any, sendOptions: any) => {
 			if (failures > 0) { failures--; settle(); throw new Error("投递失败"); }
 			messages.push({ message, options: sendOptions });
 			settle();
-		},
-		// 与宿主一致：返回 void、不等唤醒回合，回合稍后才 agent_start。
-		sendUserMessage: (content: string) => {
-			userMessages.push(content);
-			settle();
-			if (options.neverWake) return;
-			setTimeout(() => {
-				void fake.fire("agent_start", {}, context.ctx);
-				const message = { role: "user", content: [{ type: "text", text: content }] };
-				void fake.fire("message_start", { message }, context.ctx);
-			}, 0);
+			if (sendOptions?.triggerTurn && idle) setTimeout(() => void fake.fire("agent_start", {}, context.ctx), 0);
 		},
 	});
 	const sessionId = crypto.randomUUID();
@@ -551,7 +506,6 @@ async function setup(options: {
 	return {
 		pool,
 		messages,
-		userMessages,
 		notices,
 		statuses,
 		set idle(value: boolean) { idle = value; },

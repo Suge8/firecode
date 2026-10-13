@@ -150,7 +150,8 @@ function makePi(sessionManager: MockSessionManager) {
 		fire: fake.fire,
 		get sent() { return fake.sent.map(({ message }) => message); },
 		get sentOptions() { return fake.sent.map(({ options }) => options); },
-		get userMessages() { return fake.userMessages; },
+		/** 投给执行模型的消息（修复反馈、总结提示）：带 triggerTurn:true 的自定义消息；结果卡不带。 */
+		get delivered() { return fake.sent.filter(({ options }) => options?.triggerTurn === true).map(({ message }) => message as { customType: string; content: string; display: boolean }); },
 		get emitted() { return fake.emitted.map(([name, data]) => ({ name, data })); },
 	};
 	return { pi: fake.pi, registered };
@@ -186,10 +187,14 @@ async function loadReviewWithVerdict(
 	};
 }
 
-/** 宿主按前门送达的最近一条用户消息开回合：agent_start，随后记录这条用户消息（deliver 以此确认送达）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。 */
-async function startTurn(registered: ReturnType<typeof makePi>["registered"], ctx: unknown, content = registered.userMessages.at(-1)) {
+/**
+ * 宿主为空闲时 triggerTurn 投递的最近一条自定义消息开回合：agent_start（deliver 以此确认送达），随后记录这条消息
+ * （role 为 custom，customType 与 content 原样）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。
+ */
+async function startTurn(registered: ReturnType<typeof makePi>["registered"], ctx: unknown) {
+	const { customType, content } = registered.delivered.at(-1)!;
 	await registered.fire("agent_start", {}, ctx);
-	await registered.fire("message_start", { message: { role: "user", content } }, ctx);
+	await registered.fire("message_start", { message: { role: "custom", customType, content, display: true } }, ctx);
 	await new Promise((resolve) => setImmediate(resolve));
 }
 
@@ -268,14 +273,14 @@ describe("registerReview wiring", () => {
 		ctx.cwd = tmpdir();
 		const command = fireReview(registered);
 		await command.handler("", ctx);
-		await until(() => registered.userMessages.length > 0);
+		await until(() => registered.delivered.length > 0);
 		expect(systems[0]).toContain("You are an independent adversarial reviewer");
-		const sent = registered.sent as { customType?: string; content?: string }[];
-		const card = sent.filter((message) => message.customType === "firecode-review-card").map((message) => message.content).join("\n");
+		const card = (registered.sent as { content: string }[]).filter((_, index) => registered.sentOptions[index].triggerTurn === false)
+			.map((message) => message.content).join("\n");
 		expect(card).toContain("Models: one");
 		expect(card).toContain("Review passed");
 		expect(card).toContain("Elapsed:");
-		const summary = registered.userMessages[0] ?? "";
+		const summary = registered.delivered[0]?.content ?? "";
 		expect(summary).toContain("The adversarial review passed after 1 round(s)");
 		expect(`${card}${summary}`).not.toMatch(/[\u3400-\u9fff]/u);
 	}, 20_000);
@@ -290,8 +295,8 @@ describe("registerReview wiring", () => {
 		ctx.cwd = tmpdir();
 		const command = fireReview(registered);
 		await command.handler("", ctx);
-		// 质量裁决落地 → 总结提示经前门送出（回合尚未开始，仍是 pending），占用仍持有。
-		await until(() => registered.userMessages.length > 0);
+		// 质量裁决落地 → 总结提示以带 triggerTurn 的自定义消息送出（回合尚未开始，仍是 pending），占用仍持有。
+		await until(() => registered.delivered.length > 0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("pending");
 		const held = (registered.emitted as { data: { active: boolean; progress?: () => unknown } }[]).findLast((event) => event.data.active);
@@ -299,13 +304,15 @@ describe("registerReview wiring", () => {
 		const card = (registered.sent as { customType?: string; content?: string }[]).find((message) => message.customType === "firecode-review-card");
 		expect(card?.content?.startsWith("<firecode_review>\n")).toBe(true);
 		expect(card?.content?.endsWith("\n</firecode_review>")).toBe(true);
-		const summary = registered.userMessages[0];
+		expect(registered.delivered).toHaveLength(1);
+		expect(registered.delivered[0]).toMatchObject({ customType: "firecode-review-card", display: true });
+		const summary = registered.delivered[0].content;
 		expect(summary.startsWith("<firecode_review>\n")).toBe(true);
 		expect(summary).toContain("对抗审查已通过");
 		expect(summary).toContain("不要修改代码");
 		expect(summary.endsWith("\n</firecode_review>")).toBe(true);
 		expect(registered.emitted).toEqual([OCCUPIED]);
-		// 总结回合开始（送达确认）→ running；回合结束 → settled，占用释放。
+		// 宿主开总结回合（送达确认）→ running；回合结束 → settled，占用释放。
 		await startTurn(registered, ctx);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
@@ -315,17 +322,16 @@ describe("registerReview wiring", () => {
 				expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 	}, 20_000);
 
-	test("the reviewer's evidence leaves out the review's own envelopes, whether custom messages or front-door user messages", async () => {
+	test("the reviewer's evidence leaves out the review's own messages but keeps the human request and other machine messages", async () => {
 		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
 		const prompts: string[] = [];
 		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict, undefined, { onSession: (prompt) => prompts.push(prompt.user) });
 		const sessionManager = makeSessionManager();
-		const message = (role: string, content: string) => ({ type: "message", message: { role, content } });
+		const custom = (customType: string, content: string) => ({ type: "custom_message", customType, content, display: true });
 		sessionManager.entries.push(
-			message("user", "实现登录续期"),
-			message("user", "<firecode_review>\n本轮审查未通过，请修复：旧反馈正文\n</firecode_review>"),
-			{ type: "custom_message", customType: "firecode-review-card", content: "<firecode_review>\n补投的反馈正文\n</firecode_review>", display: true },
-			message("user", "<firecode_master_event>\nfix-auth 已返回\n</firecode_master_event>"),
+			{ type: "message", message: { role: "user", content: "实现登录续期" } },
+			custom("firecode-review-card", "<firecode_review>\n本轮审查未通过，请修复：旧反馈正文\n</firecode_review>"),
+			custom("firecode-master-event", "<firecode_master_event>\nfix-auth 已返回\n</firecode_master_event>"),
 		);
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
@@ -336,7 +342,6 @@ describe("registerReview wiring", () => {
 		expect(prompts[0]).toContain("实现登录续期");
 		expect(prompts[0]).toContain("fix-auth 已返回");
 		expect(prompts[0]).not.toContain("旧反馈正文");
-		expect(prompts[0]).not.toContain("补投的反馈正文");
 	}, 20_000);
 
 	test("headless review runs to a readable terminal verdict without UI access", async () => {
@@ -349,7 +354,7 @@ describe("registerReview wiring", () => {
 		ctx.cwd = tmpdir();
 		const command = fireReview(registered);
 		await command.handler("", ctx);
-		await until(() => registered.userMessages.length > 0);
+		await until(() => registered.delivered.length > 0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		await startTurn(registered, ctx);
 		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
@@ -845,7 +850,7 @@ describe("reload recovery actually resumes the loop", () => {
 		ctx.setIdle(false);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("pending");
-		expect(registered.userMessages).toHaveLength(0);
+		expect(registered.delivered).toHaveLength(0);
 
 		ctx.setIdle(true);
 		await registered.fire("resources_discover", {}, ctx);
@@ -854,9 +859,9 @@ describe("reload recovery actually resumes the loop", () => {
 		expect(restored?.phase).toBe("awaiting_fix");
 		expect(restored?.round).toBe(1);
 		expect(restored?.turn).toBe("pending");
-		expect(registered.userMessages).toHaveLength(1);
-		expect(registered.userMessages[0]).toContain("<firecode_review>");
-		// 回合开始、这条用户消息被记录：送达确认，pending → running。
+		expect(registered.delivered).toHaveLength(1);
+		expect(registered.delivered[0].content).toContain("<firecode_review>");
+		// 宿主为它开回合：送达确认，pending → running。
 		await startTurn(registered, ctx);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
@@ -912,9 +917,8 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 	});
 
-	// 前门唤起以消息送达为回执、没有计时器：回执迟迟不来也不取消；重复的推进请求不重复投递。
-	// 宿主没接这条消息、下一个回合是用户自己的话时，反馈改走 steer 补投，同样算送达。
-	test("feedback is delivered once and waits for the turn to start; a foreign first message falls back to steer", async () => {
+	// 空闲时投递以宿主开回合（agent_start）为回执、没有计时器：回执到来前一直是 pending。
+	test("feedback is delivered once as a waking custom message and counts as started only when the host starts the turn", async () => {
 		const { registerReview, readCheckpoint } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -922,18 +926,17 @@ describe("the loop survives failing side effects", () => {
 		const ctx = makeCtx(sessionManager, false);
 		ctx.cwd = tmpdir();
 		await fireReview(registered).handler("", ctx);
-		await until(() => registered.userMessages.length > 0);
-		for (let turn = 0; turn < 3; turn += 1) {
-			await registered.fire("agent_settled", {}, ctx);
-			await flush();
-		}
-		expect(registered.userMessages).toHaveLength(1);
+		await until(() => registered.delivered.length > 0);
+		await flush();
+		expect(registered.delivered).toHaveLength(1);
+		expect(registered.delivered[0]).toMatchObject({ customType: "firecode-review-card", display: true });
+		expect(registered.delivered[0].content).toContain("<firecode_review>");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("awaiting_fix");
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("pending");
 
-		await startTurn(registered, ctx, "用户自己的话");
+		await startTurn(registered, ctx);
 		await flush();
-		expect(registered.sent.map((message) => (message as { content: string }).content)).toContain(registered.userMessages[0]);
+		expect(registered.delivered).toHaveLength(1);
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
 	}, 20_000);
 
@@ -941,8 +944,10 @@ describe("the loop survives failing side effects", () => {
 		const { registerReview, readCheckpoint } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		pi.sendUserMessage = () => {
-			throw new Error("同步拒绝");
+		const sendMessage = pi.sendMessage;
+		pi.sendMessage = (message: unknown, options: { triggerTurn?: boolean }) => {
+			if (options.triggerTurn) throw new Error("同步拒绝");
+			sendMessage(message, options);
 		};
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
@@ -1002,7 +1007,6 @@ describe("review cards and degraded paths", () => {
 		expect(registered.sent).toHaveLength(1);
 		expect((registered.sent[0] as { content: string }).content).toContain("审查超时");
 		expect(registered.sentOptions[0]).toEqual({ triggerTurn: false });
-		expect(registered.userMessages).toHaveLength(0);
 	});
 
 	// 以 FAIL 开头的票格式再差也是阻断意见：另一票 PASS 不能让整轮通过，原文随反馈交给执行模型。
@@ -1016,9 +1020,9 @@ describe("review cards and degraded paths", () => {
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
 		await fireReview(registered).handler("", ctx);
-		await until(() => registered.userMessages.length > 0);
+		await until(() => registered.delivered.length > 0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("awaiting_fix");
-		expect(registered.userMessages[0]).toContain("数据会丢：重启后 checkpoint 被覆盖");
+		expect(registered.delivered[0].content).toContain("数据会丢：重启后 checkpoint 被覆盖");
 		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查未通过"));
 		expect(card).toContain("数据会丢");
 	}, 20_000);
@@ -1033,16 +1037,16 @@ describe("review cards and degraded paths", () => {
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
 		await fireReview(registered).handler("", ctx);
-		await until(() => registered.userMessages.length === 1);
+		await until(() => registered.delivered.length === 1);
 		await startTurn(registered, ctx);
 		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
 		await registered.fire("agent_settled", {}, ctx);
 		// 第二轮仍未通过，到顾问阈值；顾问会话没有产出。
-		await until(() => registered.userMessages.length === 2);
+		await until(() => registered.delivered.length === 2);
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
 		expect(cards.some((content) => content.includes("顾问不可用，已跳过"))).toBe(true);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("awaiting_fix");
-		expect(registered.userMessages[1]).toContain("<firecode_review>");
+		expect(registered.delivered[1].content).toContain("<firecode_review>");
 	}, 20_000);
 
 	// 修复回合里被取消：末轮是 failed，Master 不能把它读成“轮数用尽”。
@@ -1054,7 +1058,7 @@ describe("review cards and degraded paths", () => {
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
 		await fireReview(registered).handler("", ctx);
-		await until(() => registered.userMessages.length > 0);
+		await until(() => registered.delivered.length > 0);
 		await startTurn(registered, ctx);
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
 		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctx);

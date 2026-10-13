@@ -1,22 +1,20 @@
 import {
 	AssistantMessageComponent,
 	CustomMessageComponent,
-	getMarkdownTheme,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type ExtensionUIContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Spacer, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
-import { parseEnvelopes } from "../deliver.js";
 import { HEAT_COLORS, paint, settling } from "../flame.js";
 import { toolTargetText } from "./actions.js";
 import { firstSentence, oneLine, textOf } from "../format.js";
 import { ToolLine, resultText, type ActionLine } from "./line.js";
 import { genericArgsParts } from "./parts.js";
 import { assistantView, hasThinking, replyText, type AssistantActivity } from "./assistant-view.js";
-import { customMessageOf, isEntry, isToolOutputEcho, openCard, textComponentText, toolFacts, userTextOf, type ToolFacts, type ToolRow } from "./host.js";
+import { customMessageOf, isEntry, isToolOutputEcho, openCard, textComponentText, toolFacts, type ToolFacts, type ToolRow } from "./host.js";
 import { machineEntries, machineLine, type MachineEntry } from "./machine.js";
 import { msg } from "./messages.js";
 import { combineRounds, type Round } from "../round.js";
@@ -29,51 +27,29 @@ function actionLine(component: Component | undefined): ActionLine | undefined {
 		? component as ActionLine : undefined;
 }
 
-/** 机器消息：整条文本由信封构成，来自 CustomMessage 或空闲时投递的用户消息。 */
-function machineText(component: Component): string | undefined {
-	if (component instanceof CustomMessageComponent) {
-		return textOf(customMessageOf(component).content);
-	}
-	if (component instanceof UserMessageComponent) return userTextOf(component);
-	return undefined;
-}
-
 /** 宿主消息组件的文本与 details 创建后不变，同一帧里要问多次、每帧都要问：按组件缓存解析结果。 */
 const MACHINE_ENTRIES = new WeakMap<Component, MachineEntry[] | null>();
 
+/** 机器消息：整条文本由信封构成的 CustomMessage。 */
 function machineEntriesOf(component: Component): MachineEntry[] | undefined {
+	if (!(component instanceof CustomMessageComponent)) return undefined;
 	const cached = MACHINE_ENTRIES.get(component);
 	if (cached !== undefined) return cached ?? undefined;
-	const text = machineText(component);
-	if (text === undefined) return undefined;
-	const details = component instanceof CustomMessageComponent
-		? customMessageOf(component).details
-		: undefined;
-	const entries = machineEntries(text, details);
+	const { content, details } = customMessageOf(component);
+	const entries = machineEntries(textOf(content), details);
 	MACHINE_ENTRIES.set(component, entries ?? null);
 	return entries;
 }
 
-/** 整条内容由信封构成的 CustomMessage 或用户消息。 */
 export function isMachineMessage(component: Component): boolean {
 	return machineEntriesOf(component) !== undefined;
-}
-
-function machineBodies(component: Component): string {
-	return parseEnvelopes(machineText(component) ?? "")?.map((envelope) => envelope.body).join("\n\n") ?? "";
-}
-
-/** 只有人类用户消息是轮次边界。 */
-function isHuman(component: Component): boolean {
-	return component instanceof UserMessageComponent && !machineEntriesOf(component);
 }
 
 /** 模型侧的过程 = 模型的输出、动作与收件（含机器消息）；投影里再加上本段的补话。其余节点（错误、CustomEntry 等）是段边界。 */
 function isModelProcess(component: Component): boolean {
 	return component instanceof ToolExecutionComponent
 		|| component instanceof AssistantMessageComponent
-		|| component instanceof CustomMessageComponent
-		|| (component instanceof UserMessageComponent && !isHuman(component));
+		|| component instanceof CustomMessageComponent;
 }
 
 /** 有实质的过程（工具或思考）或轮记录才有摘要行；提示只折入有摘要行的段。 */
@@ -157,11 +133,11 @@ function arrivalAge(item: object, env: ProjectionEnv): number {
 	return Date.now() - FIRST_SEEN.get(item)!;
 }
 
-/** 机器消息：展开态一行 ↳，点击切换完整正文（信封用户消息）或原生卡片（CustomMessage）。 */
+/** 机器消息：展开态一行 ↳，点击切换原生卡片。 */
 class MachineItem implements Component {
 	private rows = 1;
 	constructor(
-		private readonly item: Component,
+		private readonly item: CustomMessageComponent,
 		private readonly entries: readonly MachineEntry[],
 		private readonly env: ProjectionEnv,
 	) {}
@@ -169,15 +145,9 @@ class MachineItem implements Component {
 	render(width: number): string[] {
 		const rows = this.entries.map((entry) => machineLine(entry, this.env.ui.theme, width));
 		this.rows = rows.length;
-		return this.env.isOpen(this.item) ? [...rows, ...this.body(width)] : rows;
-	}
-	private body(width: number): string[] {
-		if (this.item instanceof CustomMessageComponent) {
-			openCard(this.item);
-			return this.item.render(width);
-		}
-		const bodies = machineBodies(this.item);
-		return new Markdown(bodies, 1, 0, getMarkdownTheme()).render(width);
+		if (!this.env.isOpen(this.item)) return rows;
+		openCard(this.item);
+		return [...rows, ...this.item.render(width)];
 	}
 	handleMouse(event: TuiMouseEvent) {
 		if (event.y >= this.rows) {
@@ -276,7 +246,7 @@ function openersOf(children: readonly Component[]): Set<Component> {
 	let settled = false;
 	for (const child of children) {
 		if (roundOf(child)) settled = true;
-		else if (isHuman(child)) {
+		else if (child instanceof UserMessageComponent) {
 			if (!seenHuman || settled) openers.add(child);
 			seenHuman = true;
 			settled = false;
@@ -294,7 +264,7 @@ function withoutEchoes(children: readonly Component[]): Component[] {
 export function projectProcessGroups(source: readonly Component[], env: ProjectionEnv): Projection {
 	const children = withoutEchoes(source);
 	const openers = openersOf(children);
-	const isProcess = (component: Component) => isModelProcess(component) || (isHuman(component) && !openers.has(component));
+	const isProcess = (component: Component) => isModelProcess(component) || (component instanceof UserMessageComponent && !openers.has(component));
 	const nodes: Component[] = [];
 	let animatingAt: number | undefined;
 	let turn = env.headless;
@@ -312,7 +282,7 @@ export function projectProcessGroups(source: readonly Component[], env: Projecti
 		if (isProcess(child)) return true;
 		// 轮记录等 CustomEntry 属于本轮：有段可依附时不切段。
 		if (isEntry(child)) return segment.length > 0;
-		// 宿主在用户消息（含空闲送达的信封）与提示前先插一个 Spacer：它跟着后面的节点走，
+		// 宿主在用户消息与提示前先插一个 Spacer：它跟着后面的节点走，
 		// 后面的节点属于本段，它就属于本段。
 		if (child instanceof Spacer) return segment.length > 0 && leadsInto(children[index + 1]);
 		return segment.some(hasSubstance) && noticeKind(child, env.ui.theme) !== undefined;
@@ -389,7 +359,7 @@ function foldedReplies(
 	const { theme } = env.ui;
 	const groups: { message?: UserMessageComponent; replies: string[] }[] = [{ replies: [] }];
 	for (const item of segment) {
-		if (item instanceof UserMessageComponent && isHuman(item)) groups.push({ message: item, replies: [] });
+		if (item instanceof UserMessageComponent) groups.push({ message: item, replies: [] });
 		else if (item instanceof AssistantMessageComponent && item !== tail) {
 			const text = replyText(item);
 			if (text) groups[groups.length - 1].replies.push(firstSentence(text));
@@ -418,7 +388,7 @@ function processList(segment: readonly Component[], env: ProjectionEnv): Compone
 		if (item instanceof Spacer && machineEntriesOf(segment[index + 1] ?? item)) continue;
 		if (roundOf(item)) continue;
 		const machine = machineEntriesOf(item);
-		if (machine) {
+		if (machine && item instanceof CustomMessageComponent) {
 			// 与上一个工具行或正文空一行，免得 ↳ 行像是贴在它底下；连续的 ↳ 行紧挨。
 			if (!(list.at(-1) instanceof MachineItem || list.at(-1) instanceof Spacer)) list.push(new Spacer(1));
 			list.push(new MachineItem(item, machine, env));

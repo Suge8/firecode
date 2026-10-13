@@ -6,7 +6,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, sep } from "node:path";
 
-export const PI_VERSION = "v1.1.0";
+export const PI_VERSION = "v1.2.0";
 export const PI_REPOSITORY = "https://github.com/earendil-works/pi";
 
 /** setup 把 pi 源码放在仓库之外：测试 loader 会复制整个仓库目录。 */

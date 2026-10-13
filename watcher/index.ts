@@ -79,7 +79,7 @@ export function registerWatcher(pi: ExtensionAPI, pool: InProcessSessionPool): v
 		ctx.ui.setStatus(STATUS_KEYS.watcher, ctx.ui.theme.fg("dim", msg.statusLabel));
 		return owner;
 	};
-	// 与指挥官事件同构：忙时卡片经 steer 队列句缝追加，歇透时走前门唤起（见 deliver.ts）。
+	// 与指挥官事件同构，经 deliver.ts 投递：忙时句缝送达，歇透时唤起。
 	// 建议是当下的第二意见，过时重投没有价值：发言不阻塞评估循环，新建议、压缩或会话失效时中止上一条未送达的，
 	// 它不再补投；投递失败只丢弃这一条并提示，观察员照常工作（Master 事件则重试）。
 	const speak = (owner: WatcherRuntime, note: string, turnIndex: number) => {

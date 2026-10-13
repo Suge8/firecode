@@ -8,8 +8,7 @@
 import type { AgentEndEvent, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { OCCUPANCY_CHANNEL, type ReviewProgress, type ReviewStage } from "../busy.js";
 import type { ModelAtom, ReviewConfig } from "../config.js";
-import { deliver, parseEnvelopes, wrapEnvelope } from "../deliver.js";
-import { textOf } from "../format.js";
+import { deliver, wrapEnvelope } from "../deliver.js";
 import { readPrompt } from "../i18n.js";
 import { runAdvisor } from "./advisor.js";
 import { buildCard, CARD_TYPE } from "./card.js";
@@ -70,7 +69,7 @@ export class Run {
 	state: ReviewState;
 	ctx: ExtensionContext;
 	private readonly pi: ExtensionAPI;
-	/** 终止时中止：投递中的前门唤起、新工作的启动都以它为准。 */
+	/** 终止时中止：投递中的唤起、新工作的启动都以它为准。 */
 	private readonly lifetime = new AbortController();
 	private readonly ui = new ReviewUi();
 	private readonly inbox: ReviewEvent[] = [];
@@ -333,9 +332,8 @@ export class Run {
 	}
 
 	/**
-	 * 修复反馈与总结提示经统一投递入口（deliver.ts）：空闲时前门唤起，回合照常经过 before_agent_start；
-	 * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器。宿主拒收时 deliver 不 resolve，
-	 * 状态停在 pending，等下一个回合带着这条信封补投；reload 同样从 pending 重投。delivering 防止等待期间重复投递。
+	 * 修复反馈与总结提示经统一投递入口（deliver.ts），回合照常经过 before_agent_start；
+	 * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器；reload 从 pending 重投。delivering 防止等待期间重复投递。
 	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按用户取消收尾。
 	 */
 	private async deliverTurn(content: string): Promise<void> {
@@ -407,9 +405,7 @@ export class Run {
 	}
 }
 
-/** 结果卡（含忙时补投的提示，沿用卡的类型，渲染器降级成纯文本），或空闲时前门送达、整条由审查信封构成的用户消息。 */
+/** 结果卡与投给执行模型的反馈、总结提示（沿用卡的类型，渲染器降级成纯文本）。 */
 function isOwnMessage(entry: SessionEntry): boolean {
-	if (entry.type === "custom_message") return entry.customType === CARD_TYPE;
-	if (entry.type !== "message" || entry.message.role !== "user") return false;
-	return parseEnvelopes(textOf(entry.message.content))?.every((envelope) => envelope.tag === "firecode_review") ?? false;
+	return entry.type === "custom_message" && entry.customType === CARD_TYPE;
 }

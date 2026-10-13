@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** FireCode now requires Pi 1.2.0 or later.
+- Master events, watcher suggestions and review prompts that wake an idle session are now extension messages instead of user messages, the same as when they arrive during a turn. `/fork` and the user-message filter of `/tree` list only what you typed, a wake-up is no longer rejected when the model has no API key (the turn starts and shows the error), and the event stays in the conversation. **Breaking:** in sessions recorded before this version, earlier wake-ups show as plain user messages.
+
+### Fixed
+
+- `tail` showed review feedback that reached a busy Worker as the Worker's own reply; FireCode's messages are now shown as input.
+
 ## [1.3.1] - 2026-10-12
 
 ### Changed
