@@ -90,10 +90,6 @@ export function customMessageOf(component: CustomMessageComponent): { content: u
 	return message as { content: unknown; details?: unknown };
 }
 
-export function userTextOf(component: UserMessageComponent): string {
-	return checked<{ text: string }>(component, TEXT_FIELDS, "UserMessageComponent").text;
-}
-
 /** 宿主整行单色提示的原文（带颜色转义）。宿主的 ThemedText 首次渲染前 text 还是空串，原文由私有的 build 现算。 */
 export function textComponentText(component: Text): string {
 	const build = (component as unknown as { build?: unknown }).build;

@@ -43,7 +43,7 @@ const REVIEW_NOISE = new RegExp(
 /** review/state.ts 多审查者通过汇总的一行：“• 模型短名：结论”。 */
 const MODEL_BULLET = /^•\s*[^\s：:]+[：:]\s*/u;
 
-/** details 是承载信封的 CustomMessage 的 details（审查卡带 tone）；用户消息形态没有。 */
+/** details 是承载信封的 CustomMessage 的 details（审查卡带 tone）。 */
 export function machineEntries(text: string, details?: unknown): MachineEntry[] | undefined {
 	return parseEnvelopes(text)?.map(({ tag, body }) => entryOf(tag, body, details));
 }

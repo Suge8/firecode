@@ -1,18 +1,13 @@
 /**
- * 统一投递入口（Master 事件、观察员发言与 review 的修复反馈/总结提示共用）：宿主流式中投自定义卡片、经
- * steer 队列在句缝送达；会话歇透时改走 sendUserMessage 前门唤起。只告知不唤醒的结果走 inform。唤醒走前门而非
- * triggerTurn 的原因（#33）见根 AGENTS.md 硬约束。
- * 宿主的扩展 sendUserMessage 返回 void、不等回合：以宿主记录这条消息为送达，没进回合就改走 steer 补投（tests/delivery-contract.test.ts 钉住）。
+ * 统一投递入口（Master 事件、观察员发言与 review 的修复反馈/总结提示共用）：一律以自定义消息 + triggerTurn 交给宿主，
+ * 宿主在回合进行中（含开回合的准备阶段）把它放进 steer 队列句缝送达，歇透时由它开一个回合，回合照常经过
+ * before_agent_start（pi 1.2.0 起），扩展注入的系统提示段不被撤下。只告知不唤醒的结果走 inform。
  *
- * 忙闲判断与发送必须在同一事件循环节拍内完成，两者之间禁止 await：会话落定
- * 是下一节拍的事件，同节拍读到的忙闲不会骑墙；宿主在回合结束前清空 steer
- * 队列，忙时入队的消息以同回合续跑送达，不会沦为唤醒者。
- * 唯一的例外是手动 /compact 与带摘要的 /tree 切换：它们不在回合里，宿主 isIdle 为 false 却没有回合可续，steer 只会被当场追加、
- * 没人被唤起（宿主 sendCustomMessage 的 isStreaming 为 false 分支；/tree 还会把消息挂到被丢下的旧分支）。所以发送前先等它们
- * 落定，再做上面那步同节拍的忙闲判断。自动压缩在回合内部，宿主压缩后按队列续跑，不受影响。
+ * 例外是手动 /compact 与带摘要的 /tree 切换：它们不在回合里，宿主 isIdle 为 false、isStreaming 为 false，此时 steer 只会被当场
+ * 追加、没人被唤起，triggerTurn 则会在压缩还没落定时开一个回合；/tree 还会把消息挂到被丢下的旧分支。所以发送前先等它们落定。
+ * 自动压缩在回合内部，宿主压缩后按队列续跑，不受影响。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { textOf } from "./format.js";
 
 /**
  * 机器消息的信封是唯一事实源：模型上下文里的来源标记、卡片与折叠界面的识别都从这里来。
@@ -111,10 +106,14 @@ export function watchSessionMaintenance(pi: ExtensionAPI): void {
 }
 
 /**
- * 统一投递，resolve 即“已交给指挥官”：
- * - 主回合在跑：卡片进 steer 队列，入队即交付；
- * - 主回合歇透：前门 sendUserMessage 唤起，见 wake；
+ * 统一投递，resolve 即指挥官回合已在跑：
+ * - 主回合在跑：宿主把卡片放进 steer 队列，入队即交付；
+ * - 主回合歇透：宿主当场把会话置为忙并开回合，等这个回合的 agent_start 再 resolve。宿主在 agent_start 之前就返回，
+ *   过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。会话已置为忙，期间没有别的回合能先开始，
+ *   所以下一个 agent_start 就是它开的回合；agent_settled 派发期间发出的，宿主推迟到派发完再开，同样是下一个；
  * - 手动压缩或分支切换中：等它落定再按上两条投递，期间保持未完成（见 watchSessionMaintenance）。
+ * 忙闲判断与发送之间不能 await：两者在同一节拍，读到的忙闲就是宿主处理这条消息时的忙闲。
+ * 调用方收口（signal 中止）时退订并以中止原因 reject。
  */
 export async function deliver(
 	pi: ExtensionAPI,
@@ -128,8 +127,15 @@ export async function deliver(
 		signal?.throwIfAborted();
 		await new Promise((resolve) => setTimeout(resolve, state.tickMs));
 	}
-	if (ctx.isIdle()) return wake(pi, envelope, signal);
-	steer(pi, envelope);
+	signal?.throwIfAborted();
+	const started = ctx.isIdle() ? Promise.withResolvers<void>() : undefined;
+	const unsubscribe = started && pi.on("agent_start", () => started.resolve());
+	try {
+		pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true }, { triggerTurn: true });
+		if (started) await abortable(started.promise, signal);
+	} finally {
+		unsubscribe?.();
+	}
 }
 
 function abortable(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -148,51 +154,4 @@ function abortable(promise: Promise<void>, signal?: AbortSignal): Promise<void> 
  */
 export function inform(pi: ExtensionAPI, envelope: Delivery): void {
 	pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true }, { triggerTurn: false });
-}
-
-function steer(pi: ExtensionAPI, envelope: Delivery): void {
-	pi.sendMessage(
-		{ customType: envelope.customType, content: envelope.content, display: true },
-		{ deliverAs: "steer" },
-	);
-}
-
-/**
- * 前门唤起按事实确认送达。宿主的扩展 sendUserMessage 返回 void、不等回合；开回合前被拒时只走宿主
- * emitError，扩展订阅不到。所以等下一个回合的第一条消息：
- * - 正是这条信封（role=user、正文原样）：它开启了这一回合，送达；
- * - 是别的（用户自己发的话、其他扩展唤起的消息）：这条没进来，会话此刻正忙，同一节拍改走 steer 补投，句缝送达。
- * 两种情况下 resolve 时指挥官回合都已在跑，Master 扣在飞数不会让 busy.ts 误报歇下。
- * 之后再没有任何回合时投递保持未完成：宁可不歇下，也不误报歇下；没有计时器。调用方收口（signal 中止）时退订并以中止原因 reject，
- * 收口后的回合不再补投旧信封。
- * 不以任意 agent_start 为送达（宿主拒绝后用户自己开的回合会被误认，事件被 ack 却没进上下文）；不加超时（超时后仍判断不了是否送达）。
- */
-function wake(pi: ExtensionAPI, envelope: Delivery, signal?: AbortSignal): Promise<void> {
-	signal?.throwIfAborted();
-	const delivered = Promise.withResolvers<void>();
-	let running = false;
-	const onAbort = () => {
-		for (const off of unsubscribe) off();
-		delivered.reject(signal?.reason);
-	};
-	const unsubscribe = [
-		() => signal?.removeEventListener("abort", onAbort),
-		pi.on("agent_start", () => {
-			running = true;
-		}),
-		pi.on("message_start", ({ message }) => {
-			if (!running) return;
-			for (const off of unsubscribe) off();
-			if (message.role !== "user" || textOf(message.content) !== envelope.content) steer(pi, envelope);
-			delivered.resolve();
-		}),
-	];
-	signal?.addEventListener("abort", onAbort, { once: true });
-	try {
-		pi.sendUserMessage(envelope.content);
-	} catch (error) {
-		for (const off of unsubscribe) off();
-		throw error;
-	}
-	return delivered.promise;
 }

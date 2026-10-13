@@ -452,10 +452,19 @@ const EVENT = (title: string, body: string, run = "8m") =>
 const WORKER_RESULT = (name: string, body = "刷新改为单飞。更多细节") => EVENT(`${name} 已返回`, `回复：\n${body}`);
 const WORKER_FAILED = (name: string, error = "429 Too Many Requests") => EVENT(`${name} 失败`, `错误：\n${error}`, "2m");
 
-/** 宿主 addMessageToChat 在每条用户消息前先插一个 Spacer（空闲送达的信封用户消息也一样）。 */
+/** 宿主 addMessageToChat 在每条用户消息前先插一个 Spacer。 */
 function hostUser(s: any, text: string) {
 	s.chat.addChild(new s.tui.Spacer(1));
 	s.chat.addChild(new s.host.UserMessageComponent(text));
+}
+
+const { registerMasterEventRenderer } = await loadFirecodeModule("master/event-card.ts") as any;
+let masterEventRenderer: unknown;
+registerMasterEventRenderer({ registerMessageRenderer: (_type: string, render: unknown) => { masterEventRenderer = render; } });
+
+/** Master 事件按宿主 addMessageToChat 的样子进聊天树：自定义消息不带前置 Spacer。 */
+function hostEvent(s: any, content: string) {
+	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content, display: true, timestamp: 0 }, masterEventRenderer));
 }
 
 function assistant(s: any, content: unknown[], stopReason = "stop") {
@@ -464,16 +473,13 @@ function assistant(s: any, content: unknown[], stopReason = "stop") {
 	return message;
 }
 
-test("空闲路径的信封用户消息不切段；展开后它与忙时 CustomMessage 都是一行 ↳，点击切换完整内容", async () => {
+test("机器消息不切段；展开后一行 ↳，点击切换原生卡片", async () => {
 	const s = await scene();
-	const { registerMasterEventRenderer } = await loadFirecodeModule("master/event-card.ts");
-	let renderer: any;
-	registerMasterEventRenderer({ registerMessageRenderer: (_type: string, render: unknown) => { renderer = render; } });
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_RESULT("fix-auth"));
+	hostEvent(s, WORKER_RESULT("fix-auth"));
 	s.complete(s.tool("read", { path: "b.ts" }));
-	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"), display: true, timestamp: 0 }, renderer));
+	hostEvent(s, WORKER_RESULT("lint-sweep", "清掉 4 处 lint。"));
 	assistant(s, [{ type: "text", text: "全部收口" }]);
 
 	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
@@ -484,14 +490,14 @@ test("空闲路径的信封用户消息不切段；展开后它与忙时 CustomM
 
 	s.ui.setToolsExpanded(true);
 	let expanded = s.lines().map((line: string) => line.trim());
-	// 机器消息一律一行，不平铺整张卡；两种形态同一行样式。
+	// 机器消息一律一行，不平铺整张卡。
 	expect(expanded).toContain("↳ fix-auth 已返回 · 8m 刷新改为单飞。");
 	expect(expanded).toContain("↳ lint-sweep 已返回 · 8m 清掉 4 处 lint。");
 	expect(expanded.join("\n")).not.toMatch(/firecode_master_event|当前任务/);
 	const order = ["a.ts", "fix-auth", "b.ts", "lint-sweep", "全部收口"].map((needle) => expanded.findIndex((line: string) => line.includes(needle)));
 	expect(order).toEqual([...order].sort((a, b) => a - b));
 
-	// 点击该行切换完整正文（信封用户消息）或原生卡片（CustomMessage），与单工具行同一交互。
+	// 点击该行切换原生卡片，与单工具行同一交互。
 	for (const name of ["fix-auth", "lint-sweep"]) {
 		const rowAt = () => s.lines().findIndex((line: string) => line.trim().startsWith(`↳ ${name}`));
 		const countOpen = () => s.lines().filter((line: string) => line.includes("当前任务 19m")).length;
@@ -637,7 +643,7 @@ test("运行中的摘要只有当前动作不跳计时，子代理结果到达�
 	s.setNow(6000);
 	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test\\s*$`));
 
-	s.chat.addChild(new s.host.UserMessageComponent(WORKER_RESULT("fix-auth")));
+	hostEvent(s, WORKER_RESULT("fix-auth"));
 	expect(s.lines().find((line: string) => line.includes("已返回"))).toMatch(new RegExp(`^${FLAME} fix-auth 已返回\\s*$`));
 	s.setNow(9000);
 	expect(s.lines().find((line: string) => line.includes("操作"))).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test\\s*$`));
@@ -670,7 +676,7 @@ test("中间回复与子代理结果行都经首句规则预览（规则本身�
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
 	assistant(s, [{ type: "text", text: "标准输出：\n\nhello world\n后面的细节" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
+	hostEvent(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 
 	expect(s.lines().map((line: string) => line.trim())).toContain("标准输出：hello world");
@@ -805,10 +811,10 @@ test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失
 	const s = await scene();
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_FAILED("perf-probe"));
+	hostEvent(s, WORKER_FAILED("perf-probe"));
 	s.chat.addChild(new s.host.CustomMessageComponent({ role: "custom", customType: "firecode-master-event", content: WORKER_FAILED("lint"), display: true, timestamp: 0 }));
-	hostUser(s, WORKER_FAILED("perf-probe", "又一次失败"));
-	hostUser(s, WORKER_RESULT("fix-auth"));
+	hostEvent(s, WORKER_FAILED("perf-probe", "又一次失败"));
+	hostEvent(s, WORKER_RESULT("fix-auth"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 	s.settle(3_000, "complete", 0);
 	s.setNow(60_000);
@@ -830,7 +836,7 @@ test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为
 	const s = await scene();
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, EVENT("fix-auth 失败", "回复：\n部分回复\n错误：\n供应商错误", "2s"));
+	hostEvent(s, EVENT("fix-auth 失败", "回复：\n部分回复\n错误：\n供应商错误", "2s"));
 	assistant(s, [{ type: "text", text: "收口" }]);
 	s.settle(3_000, "complete", 0);
 	s.setNow(60_000);
@@ -861,7 +867,7 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 		s.setNow(1000);
 		feed(s, true, 0, 1000);
 		s.tool("bash", { command: "bun test" });
-		hostUser(s, event(body));
+		hostEvent(s, event(body));
 		// 非落定事件（模型切换）不高亮：摘要行仍是当前动作。
 		expect(summaryOf(s)).toMatch(new RegExp(`^${FLAME} ${title?.replace(/[()（）]/gu, "\\$&") ?? "操作 \\$ bun test"}$`, "u"));
 		// 到达文字从白色渐变到终色：失败的终色偏红，成功的偏金。
@@ -878,7 +884,7 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	const s = await scene();
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	for (const { body } of cases) hostUser(s, event(body));
+	for (const { body } of cases) hostEvent(s, event(body));
 	assistant(s, [{ type: "text", text: "收口" }]);
 	s.settle(3_000, "complete", 0);
 	s.setNow(60_000);
@@ -1097,7 +1103,7 @@ test("截断的聊天行在宿主滚动条那一列之前闭合颜色并留一�
 	const s = await scene();
 	hostUser(s, "开工");
 	s.complete(s.tool("read", { path: "a.ts" }));
-	hostUser(s, WORKER_RESULT("fix-auth", "这是一段很长很长的结果说明，".repeat(8)));
+	hostEvent(s, WORKER_RESULT("fix-auth", "这是一段很长很长的结果说明，".repeat(8)));
 	s.chat.addChild(new s.tui.Spacer(1));
 	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss after 8m idle: 63k tokens re-billed and more and more text"), 1, 0));
 	assistant(s, [{ type: "text", text: "收口" }]);

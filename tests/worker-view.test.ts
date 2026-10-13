@@ -1,6 +1,8 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
 import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
+
+// 宿主输入框的假光标是零宽 APC 标记，node:util 的 stripVTControlCharacters 不认，读纯文本用宿主自己的清理。
+const { stripTerminalSequences } = await import(PI_TUI_URL) as any;
 
 let disposeGroups: (() => void) | undefined;
 afterEach(async () => {
@@ -112,7 +114,7 @@ async function open(options: {
 	const rows = options.rows ?? ROWS;
 	const component = new view.WorkerView(port, options.name ?? options.workers[0].name, { terminal: { rows }, requestRender: () => { renders++; } }, theme,
 		{ matches: (data: string, action: string) => KEYS[data] === action }, () => { closed++; component.dispose(); });
-	const lines = (width = 100): string[] => component.render(width).map((line: string) => stripVTControlCharacters(line).trimEnd());
+	const lines = (width = 100): string[] => component.render(width).map((line: string) => stripTerminalSequences(line).trimEnd());
 	const type = (text: string) => { for (const char of text) component.handleInput(char); };
 	return {
 		component, lines, type, sent, interrupted, sessionListeners, removedListeners,
@@ -339,7 +341,7 @@ test("40 列：上横线保住状态字形、状态词与耗时，名字 · 角�
 	expect(view.top(40)).toMatch(/^─ [⠀-⣿] 运行中 1m5s /u);
 	expect(view.bottom(40)).toMatch(/^─ 1\/3 ─/u);
 	expect(view.bottom(40)).toMatch(/esc 返回 ─$/u);
-	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripVTControlCharacters(line))).toBeLessThanOrEqual(width);
+	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripTerminalSequences(line))).toBeLessThanOrEqual(width);
 });
 
 test("顶行的状态与耗时与活动列表读同一份事实：已完成写完成、失败写失败，耗时是本次运行", async () => {

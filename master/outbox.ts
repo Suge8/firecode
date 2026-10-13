@@ -36,7 +36,7 @@ export class Outbox {
 	private retryScheduled = false;
 	/** 空闲合并窗口里第一条事件入队的时刻。 */
 	private firstQueuedAt?: number;
-	/** 发件箱收口时中止悬而未决的前门唤起：停用后的回合不再补投旧事件。 */
+	/** 发件箱收口时中止悬而未决的唤起：停用后不再确认旧事件。 */
 	private readonly closing = new AbortController();
 
 	constructor(private readonly active: MasterRuntime) {}
