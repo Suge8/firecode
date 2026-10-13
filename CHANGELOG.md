@@ -10,7 +10,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- A reviewer can have a fallback chain: write `{ "model": "…", "fallback": ["…"] }` in `review.reviewers` (up to 2 fallback models, same as Master roles). When a reviewer gives no verdict, the next model in its chain reviews instead, and the result card says which model was replaced and why.
+- A reviewer can have a fallback chain: write `{ "model": "…", "fallback": ["…"] }` in `review.reviewers` (up to 2 fallback models, same as Master roles). When a reviewer gives no verdict, the next model in its chain reviews instead, and the result card says which model was replaced and why. Later rounds of the same review start from the model that gave the last verdict.
+- A review left in progress by an earlier version is not resumed after the update; run `/fire-review` again.
 
 ## [1.4.0] - 2026-10-13
 

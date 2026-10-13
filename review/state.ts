@@ -11,7 +11,7 @@
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
-import type { ModelAtom, ReviewConfig } from "../config.js";
+import type { ChainedAtom, ModelAtom, ReviewConfig } from "../config.js";
 import { fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
@@ -47,8 +47,8 @@ export interface ReviewerResult extends ModelAtom {
 	replaced?: string;
 }
 
-/** 审查中某个审查者的席位；result 为 null 即还在审。 */
-export interface ReviewerSlot extends ModelAtom {
+/** 审查中某个审查者的席位：本轮从哪个模型审起、其后还剩的 fallback；result 为 null 即还在审。 */
+export interface ReviewerSlot extends ChainedAtom {
 	result: ReviewerResult | null;
 }
 
@@ -225,8 +225,18 @@ function onAdvance(state: ReviewState, limits: ReviewLimits, now: number): Reduc
 	return { state: beginRound(state, state.round + 1, limits, now), effects: [{ kind: "advance" }] };
 }
 
+/**
+ * 每个席位从上一轮给出结论的那个模型审起（同一场审查内记住换上的 fallback，不再每轮先等主模型失败），
+ * 上一轮缺席或新开的审查从主模型审起；上一轮就是本场 history 的末轮。
+ */
 function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now: number): ReviewState {
-	const slots: ReviewerSlot[] = limits.reviewers.map((item) => ({ model: item.model, thinking: item.thinking, result: null }));
+	const last = state.history.at(-1)?.reviewers;
+	const slots: ReviewerSlot[] = limits.reviewers.map(({ fallback, ...primary }, index) => {
+		const chain = [primary, ...fallback];
+		const voter = last?.find((item) => item.index === index && item.status !== "error");
+		const start = Math.max(0, chain.findIndex((atom) => atom.model === voter?.model && atom.thinking === voter.thinking));
+		return { ...chain[start], fallback: chain.slice(start + 1), result: null };
+	});
 	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
 }
 

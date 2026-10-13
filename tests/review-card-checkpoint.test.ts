@@ -74,7 +74,7 @@ describe("checkpoint", () => {
 		const { CheckpointWriter, readCheckpoint } = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
 		const entries: { type: "custom"; customType: string; data: unknown }[] = [];
 		const pi = { appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); } };
-		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: { model: "p/a", thinking: "low" as const }, reviewers: [0, 1, 2].map((i) => ({ model: `p/m${i}`, thinking: "low" as const })) };
+		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: { model: "p/a", thinking: "low" as const }, reviewers: [0, 1, 2].map((i) => ({ model: `p/m${i}`, thinking: "low" as const, fallback: [] })) };
 		// 真实审查会话的这一票：问题字段 3000 字，摘要取自它。
 		const voter = await reviewVoter();
 		const vote = await voter.vote(["FAIL", "## 发现 1", "- 严重程度: 高", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));

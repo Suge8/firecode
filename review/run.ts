@@ -27,6 +27,7 @@ import {
 	type ReviewEffect,
 	type ReviewEvent,
 	type ReviewerResult,
+	type ReviewerSlot,
 	type ReviewState,
 	reduce,
 	resultsOf,
@@ -284,11 +285,11 @@ export class Run {
 		await Promise.all(state.slots.map((slot, index) => (slot.result ? undefined : this.review(index, slot, prompt, signal))));
 	}
 
-	/** 沿该审查者的 fallback 链换模型，直到有一票结论；链用尽时这一票带着每个模型的原因记为缺席。 */
-	private async review(index: number, slot: ModelAtom, prompt: PromptLayers, signal: AbortSignal): Promise<void> {
+	/** 沿席位的 fallback 链换模型，直到有一票结论；链用尽时这一票带着每个模型的原因记为缺席。 */
+	private async review(index: number, slot: ReviewerSlot, prompt: PromptLayers, signal: AbortSignal): Promise<void> {
 		const primary: ModelAtom = { model: slot.model, thinking: slot.thinking };
 		const attempts: string[] = [];
-		for (const atom of [primary, ...(this.config.reviewers[index]?.fallback ?? [])]) {
+		for (const atom of [primary, ...slot.fallback]) {
 			const result = await this.vote(index, atom, prompt, signal);
 			if (signal.aborted) return;
 			if (result.status !== "error") {

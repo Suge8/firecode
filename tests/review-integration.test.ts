@@ -749,14 +749,14 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 7,
+				version: 8,
 				runId: "g",
 				phase: "reviewing",
 				round: 1,
 				focus: "",
 				rounds: 0,
 				last: null,
-				slots: [{ model: "m", thinking: "high", result: null }],
+				slots: [{ model: "m", thinking: "high", fallback: [], result: null }],
 				consecutiveFailures: 0,
 				startedAt: 1,
 				roundStartedAt: 1,
@@ -802,7 +802,7 @@ describe("reload recovery actually resumes the loop", () => {
 			...initialState("restore-review"),
 			phase: "reviewing",
 			round: 1,
-			slots: [{ model: "p/one", thinking: "low", result: null }],
+			slots: [{ model: "p/one", thinking: "low", fallback: [], result: null }],
 			startedAt: Date.now(),
 			roundStartedAt: Date.now(),
 			updatedAt: Date.now(),
@@ -1069,6 +1069,27 @@ describe("review cards and degraded paths", () => {
 		expect(card).toContain("No API key found for expired");
 		expect(card).toContain("two");
 		expect(card).toContain("额度不足");
+	}, 20_000);
+
+	test("later rounds of the same review start from the fallback that gave the last verdict", async () => {
+		const calls: Record<string, number> = {};
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
+			calls[model] = (calls[model] ?? 0) + 1;
+			if (model === "p/three") return undefined;
+			return calls[model] === 1 ? FAIL_VERDICT : "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
+		}, [{ model: "p/three/low", fallback: ["p/two/low"] }]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		await startTurn(registered, ctx);
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", {}, ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
+		expect(calls).toEqual({ "p/three": 1, "p/two": 2 });
 	}, 20_000);
 
 	test("an unavailable advisor is skipped with a visible card and the repair carries on", async () => {

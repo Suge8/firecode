@@ -1,2 +1,2 @@
 {"type":"session","version":3,"id":"error-terminal-session"}
-{"type":"custom","customType":"firecode-review-checkpoint","data":{"version":7,"focus":"","consecutiveFailures":1,"startedAt":1,"roundStartedAt":3,"updatedAt":5,"runId":"error-run","phase":"settled","end":"error","round":2,"rounds":2,"last":{"round":2,"result":"error","reviewers":[],"error":"issue remains","elapsedMs":2}}}
+{"type":"custom","customType":"firecode-review-checkpoint","data":{"version":8,"focus":"","consecutiveFailures":1,"startedAt":1,"roundStartedAt":3,"updatedAt":5,"runId":"error-run","phase":"settled","end":"error","round":2,"rounds":2,"last":{"round":2,"result":"error","reviewers":[],"error":"issue remains","elapsedMs":2}}}
