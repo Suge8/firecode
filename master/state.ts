@@ -25,10 +25,6 @@ export interface WorkerRef {
 	reviewNeeded?: boolean;
 }
 
-export function modelAtomText(atom: Pick<ModelAtom, "model" | "thinking">): string {
-	return `${atom.model}/${atom.thinking}`;
-}
-
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
 export function masterStatePath(agentDir: string, sessionId: string): string {
 	const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/gu, "-");

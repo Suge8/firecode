@@ -16,6 +16,11 @@ export interface ModelAtom {
 	thinking: ThinkingLevelValue;
 }
 
+/** 模型原子写回配置里的样子 "provider/model/thinking"。 */
+export function modelAtomText(atom: ModelAtom): string {
+	return `${atom.model}/${atom.thinking}`;
+}
+
 export interface Preset {
 	model?: ModelAtom;
 	tools?: string[];
@@ -27,7 +32,7 @@ export interface Preset {
 /** /fire-review 配置：审查者 / 顾问模型 + 循环限制。见 config.jsonc 的 review 节注释。 */
 export interface ReviewConfig {
 	advisor: ModelAtom;
-	reviewers: ModelAtom[];
+	reviewers: ChainedAtom[];
 	/** 审查轮数硬上限。 */
 	maxRounds: number;
 	/** 连续几轮失败触发顾问仲裁。 */
@@ -38,10 +43,14 @@ export interface ReviewConfig {
 	tools: string[];
 }
 
-export interface MasterRole extends ModelAtom {
+/** fallback 链：主模型没有产出时依次换用 fallback 里的模型原子。 */
+export interface ChainedAtom extends ModelAtom {
+	fallback: ModelAtom[];
+}
+
+export interface MasterRole extends ChainedAtom {
 	role: string;
 	use: string;
-	fallback: ModelAtom[];
 }
 
 interface MasterConfig {
@@ -347,12 +356,18 @@ function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): Re
 	};
 }
 
-function reviewModels(value: unknown, problems: string[]): ModelAtom[] {
+/** 审查者写模型原子；要 fallback 链时写 { model, fallback }，与 master 角色同一形状。 */
+function reviewModels(value: unknown, problems: string[]): ChainedAtom[] {
 	if (!Array.isArray(value) || value.length === 0 || value.length > 5) {
 		problems.push(msg.config.reviewReviewers);
 		return [];
 	}
-	return value.map((item, index) => parseModelAtom(item, `review.reviewers[${index}]`, problems));
+	return value.map((item, index) => {
+		const field = `review.reviewers[${index}]`;
+		if (!isRecord(item)) return { ...parseModelAtom(item, field, problems), fallback: [] };
+		rejectUnknownKeys(item, ["model", "fallback"], field, problems);
+		return { ...parseModelAtom(item.model, `${field}.model`, problems), fallback: fallbackChain(item.fallback, `${field}.fallback`, problems) };
+	});
 }
 
 /** 缺失已由 mustSet 报过；越界值记录问题，返回值只为满足类型，有问题的节不会交出配置。 */
@@ -393,14 +408,14 @@ function masterRole(value: unknown, field: string, role: string, problems: strin
 	rejectUnknownKeys(record, ["model", "use", "fallback"], field, problems);
 	const atom = parseModelAtom(record.model, `${field}.model`, problems);
 	const use = stringValue(record.use, `${field}.use`, problems) ?? "";
-	const fallback = masterFallback(record.fallback, `${field}.fallback`, problems);
+	const fallback = fallbackChain(record.fallback, `${field}.fallback`, problems);
 	return { role, ...atom, use, fallback };
 }
 
-function masterFallback(value: unknown, field: string, problems: string[]): ModelAtom[] {
+function fallbackChain(value: unknown, field: string, problems: string[]): ModelAtom[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value) || value.length > 2) {
-		problems.push(msg.config.masterFallback(field));
+		problems.push(msg.config.fallbackChain(field));
 		return [];
 	}
 	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));

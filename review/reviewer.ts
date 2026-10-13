@@ -17,7 +17,7 @@ interface RunReviewerOptions {
 
 type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
 
-/** 运行一个独立审查会话并解析输出。会话故障记为 error，不拖垮整轮。 */
+/** 运行一个独立审查会话并解析输出。会话故障记为 error（缺席），换不换 fallback 由调用方决定。 */
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const result = await runReviewSession(options.pool, {
 		config: options.config,
@@ -68,7 +68,7 @@ function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>
 	return { status: "error", summary: "", details };
 }
 
-/** 输出契约违例：该票作废记为缺席，不拖垮整轮。 */
+/** 输出契约违例：该票作废记为缺席。 */
 function contractViolation(issue: string): ParseOutcome {
 	return { status: "error", summary: "", details: msg.reviewer.formatInvalid(issue) };
 }

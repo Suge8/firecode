@@ -37,7 +37,8 @@ let agentDir: string;
 beforeAll(async () => {
 	agentDir = await mkdtemp(join(tmpdir(), "firecode-review-agent-"));
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	faux = await installFaux(agentDir, ["p/one", "p/two", "test/advisor", "test/reviewer"]);
+	// expired 没有凭据：登录过期的供应商。
+	faux = await installFaux(agentDir, ["p/one", "p/two", "p/three", "expired/sol", "test/advisor", "test/reviewer"], ["expired"]);
 });
 afterAll(async () => {
 	faux.unregister();
@@ -1027,6 +1028,49 @@ describe("review cards and degraded paths", () => {
 		expect(card).toContain("数据会丢");
 	}, 20_000);
 
+	// 事故：一个审查者登录过期、一直没给结论，另一个给了 PASS，审查却判了通过。
+	test("a reviewer that gives no verdict keeps the review from passing; the result names the model and the reason", async () => {
+		const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint, outcome } = await loadTwoReviewers(() => pass, ["expired/sol/low", "p/one/low"]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
+		expect(registered.delivered).toEqual([]);
+		const result = await outcome(sessionManager);
+		expect(result.status).toBe("failed");
+		const reason = (result as { reason: string }).reason;
+		expect(reason).toContain("sol");
+		expect(reason).toContain("No API key found for expired");
+		const cards = registered.sent.map((message) => (message as { content: string }).content);
+		expect(cards.some((content) => content.includes("审查未完成") && content.includes("sol"))).toBe(true);
+		expect(cards.some((content) => content.includes("审查通过"))).toBe(false);
+	}, 20_000);
+
+	test("a reviewer without a verdict is replaced along its fallback chain, and the pass names who was replaced and why", async () => {
+		const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint } = await loadTwoReviewers(
+			(model) => (model === "p/two" ? undefined : pass),
+			[{ model: "expired/sol/low", fallback: ["p/two/low", "p/three/low"] }, "p/one/low"],
+		);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
+		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
+		expect(card).toContain("three");
+		expect(card).toContain("sol");
+		expect(card).toContain("No API key found for expired");
+		expect(card).toContain("two");
+		expect(card).toContain("额度不足");
+	}, 20_000);
+
 	test("an unavailable advisor is skipped with a visible card and the repair carries on", async () => {
 		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) =>
 			model === "test/advisor" ? undefined : "FAIL\n## 发现 1\n- 严重程度: 高\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test",
@@ -1092,14 +1136,25 @@ describe("review cards and degraded paths", () => {
 	});
 });
 
-/** 两个审查者（p/one、p/two）加顾问；answer 按模型给出会话输出，返回 undefined 表示该会话没有产出。 */
-async function loadTwoReviewers(answer: (model: string) => string | undefined) {
+/** 审查者（默认 p/one、p/two）加顾问；answer 按模型给出会话输出，返回 undefined 表示该会话没有产出。 */
+async function loadTwoReviewers(answer: (model: string) => string | undefined, reviewers: unknown[] = ["p/one/low", "p/two/low"]) {
 	const review = (await loadReviewModule("review/index.js", {
-		configJsonc: reviewConfig({ reviewers: ["p/one/low", "p/two/low"], maxRounds: 3 }),
+		configJsonc: reviewConfig({ reviewers, maxRounds: 3 }),
 	})) as { registerReview: (pi: unknown, options?: unknown) => void };
 	const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
+	const outcome = (await loadFirecodeModule("review/outcome.js")) as typeof import("../review/outcome.js");
 	return {
 		readCheckpoint: checkpoint.readCheckpoint,
+		/** Master 读到的审查判定（经会话文件）。 */
+		async outcome(sessionManager: MockSessionManager) {
+			const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
+			await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+			try {
+				return outcome.readReviewOutcome(sessionPath);
+			} finally {
+				await rm(sessionPath, { force: true });
+			}
+		},
 		registerReview: (pi: unknown) => {
 			script((_context, model) => answer(`${model.provider}/${model.id}`));
 			review.registerReview(pi);

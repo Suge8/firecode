@@ -7,7 +7,7 @@
  */
 import type { AgentEndEvent, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { OCCUPANCY_CHANNEL, type ReviewProgress, type ReviewStage } from "../busy.js";
-import type { ModelAtom, ReviewConfig } from "../config.js";
+import { type ModelAtom, modelAtomText, type ReviewConfig } from "../config.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { readPrompt } from "../i18n.js";
 import { runAdvisor } from "./advisor.js";
@@ -284,23 +284,33 @@ export class Run {
 		await Promise.all(state.slots.map((slot, index) => (slot.result ? undefined : this.review(index, slot, prompt, signal))));
 	}
 
+	/** 沿该审查者的 fallback 链换模型，直到有一票结论；链用尽时这一票带着每个模型的原因记为缺席。 */
 	private async review(index: number, slot: ModelAtom, prompt: PromptLayers, signal: AbortSignal): Promise<void> {
-		const result = await runReviewer({
-			index,
-			config: this.modelConfig(slot),
-			prompt,
-			cwd: this.ctx.cwd,
-			signal,
-			pool: this.host.pool,
-		}).catch((error): ReviewerResult => ({
-			index,
-			model: slot.model,
-			thinking: slot.thinking,
-			status: "error",
-			summary: "",
-			details: msg.failure.reviewerSession(errorText(error)),
-		}));
-		if (!signal.aborted) this.dispatch({ type: "REVIEWER_SETTLED", index, result });
+		const primary: ModelAtom = { model: slot.model, thinking: slot.thinking };
+		const attempts: string[] = [];
+		for (const atom of [primary, ...(this.config.reviewers[index]?.fallback ?? [])]) {
+			const result = await this.vote(index, atom, prompt, signal);
+			if (signal.aborted) return;
+			if (result.status !== "error") {
+				const replaced = attempts.length ? [msg.reviewer.replaced, ...attempts].join("\n") : undefined;
+				return this.dispatch({ type: "REVIEWER_SETTLED", index, result: replaced ? { ...result, replaced } : result });
+			}
+			// 每个模型一行：多行的供应商报错压成一行，列表才不被拆散。
+			attempts.push(msg.reviewer.attempt(modelAtomText(atom), result.details.trim().replace(/\s*\n\s*/gu, " ")));
+		}
+		const result: ReviewerResult = { index, ...primary, status: "error", summary: "", details: attempts.join("\n") };
+		this.dispatch({ type: "REVIEWER_SETTLED", index, result });
+	}
+
+	private vote(index: number, atom: ModelAtom, prompt: PromptLayers, signal: AbortSignal): Promise<ReviewerResult> {
+		return runReviewer({ index, config: this.modelConfig(atom), prompt, cwd: this.ctx.cwd, signal, pool: this.host.pool })
+			.catch((error): ReviewerResult => ({
+				index,
+				...atom,
+				status: "error",
+				summary: "",
+				details: msg.failure.reviewerSession(errorText(error)),
+			}));
 	}
 
 	/** 顾问不可用不终止审查：跳过咨询，带着本轮发现继续修复，并发一张可见的卡说明。 */

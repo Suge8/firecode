@@ -14,7 +14,7 @@
 - **工单库**（Tracker）：项目里存放工单的位置，插件不读写；避免：任务队列、任务板
 - **工单**（Ticket）：工单库里的一项工作，是指挥官写工作说明的输入；避免：任务、工作说明
 - **角色**（Role）→ 配置 `master.roles` 的键；避免：模型别名、预设
-- **fallback 链**（Fallback Chain）→ `master.roles.*.fallback`、`master/run.ts`；避免：质量路由、瞬时限流重试、静默降级
+- **fallback 链**（Fallback Chain）→ `master.roles.*.fallback`、`review.reviewers[].fallback`；避免：质量路由、瞬时限流重试、静默降级
 - **收割**（Harvest）：调研与盯守子代理取完要点即 kill；避免：清理、归档
 - **审查义务**（Review Obligation）→ `review:true`、档案 `reviewNeeded`；避免：自动审查、审查触发器
 - **会话进行中** / **歇下**（Session Busy）→ `busy.ts`；指挥官回合结束不等于歇下；避免：完成、空闲

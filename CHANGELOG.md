@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- `/fire-review` passes only when every reviewer returns PASS. A reviewer that gives no verdict (error, expired login, timeout, empty output) used to be skipped, so the other reviewer's PASS was enough; now the review stops as failed and the result names the model and the reason.
+
+### Added
+
+- A reviewer can have a fallback chain: write `{ "model": "…", "fallback": ["…"] }` in `review.reviewers` (up to 2 fallback models, same as Master roles). When a reviewer gives no verdict, the next model in its chain reviews instead, and the result card says which model was replaced and why.
+
 ## [1.4.0] - 2026-10-13
 
 ### Changed

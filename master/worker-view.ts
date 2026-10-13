@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE } from "../busy.js";
+import { modelAtomText } from "../config.js";
 import { onFrame } from "../flame.js";
 import { clip } from "../format.js";
 import { ClickAnchor, type Scroller } from "../tools/click-anchor.js";
@@ -24,7 +25,7 @@ import { ACTION_HANDLERS } from "./actions.js";
 import { ANIMATING_KINDS, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
 import { msg } from "./messages.js";
 import type { MasterRuntime } from "./runtime.js";
-import { modelAtomText, type WorkerRef } from "./state.js";
+import type { WorkerRef } from "./state.js";
 
 /** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
 const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;

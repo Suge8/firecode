@@ -4,7 +4,7 @@
  */
 import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
-import type { MasterRole, ModelAtom } from "../config.js";
+import { type MasterRole, type ModelAtom, modelAtomText } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
@@ -12,7 +12,7 @@ import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format
 import { msg } from "./messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
-import { modelAtomText, type WorkerRef } from "./state.js";
+import type { WorkerRef } from "./state.js";
 
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 /** Worker 跟随指挥官是否启用 codemode；on/only 由 Worker 会话读到的同一份 settings 决定，不另传。 */

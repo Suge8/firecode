@@ -75,9 +75,14 @@
 	},
 
 	// Review only calls models when the user or the Master starts it.
+	// A pass needs a PASS from every reviewer. A reviewer that gives no verdict (error, expired login, timeout, empty output)
+	// is retried along its fallback chain (up to 2 atoms); if the chain runs out, the review stops as failed and names the model and the reason.
 	"review": {
 		"advisor": "anthropic/claude-fable-5-1/high",
-		"reviewers": ["anthropic/claude-opus-5-5/low", "openai-codex/gpt-6.1-sol/low"],
+		"reviewers": [
+			"anthropic/claude-opus-5-5/low",
+			{ "model": "openai-codex/gpt-6.1-sol/low", "fallback": ["anthropic/claude-sonnet-5-5/low"] }
+		],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,

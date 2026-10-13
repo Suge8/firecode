@@ -13,8 +13,8 @@ const LIMITS: ReviewLimits = {
 	advisorAfterFailures: 2,
 	advisor: { model: "p/advisor", thinking: "high" },
 	reviewers: [
-		{ model: "p/sol", thinking: "high" },
-		{ model: "p/terra", thinking: "high" },
+		{ model: "p/sol", thinking: "high", fallback: [] },
+		{ model: "p/terra", thinking: "high", fallback: [] },
 	],
 };
 
@@ -105,25 +105,16 @@ describe("fire-review reducer", () => {
 		expect(text).not.toContain("模型 2 · m1");
 	});
 
-	test("an absent reviewer does not stop the round from forming and is named in the result", async () => {
+	test("an absent reviewer blocks a pass but not the findings of a FAIL", async () => {
 		await loadState();
-		const three: ReviewLimits = { ...LIMITS, reviewers: [...LIMITS.reviewers, { model: "p/luna", thinking: "high" }] };
-		let state = settle(begin(three), 0, "passed", "PASS\n证据：文件=a.ts；命令=ls", three).state;
-		state = settle(state, 1, "error", "审查会话超时", three).state;
-		const passed = settle(state, 2, "error", "会话启动失败", three);
-		expect(passed.state.phase).toBe("summarizing");
-		expect(passSummary(passed.effects[0])).toContain("未形成裁决：m1（审查会话超时）、m2（会话启动失败）");
+		const passed = settle(settle(begin(), 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state, 1, "error", "审查会话超时");
+		expect(passed.state).toMatchObject({ phase: "settled", end: "error" });
+		expect(passed.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
+		expect(passed.state.history[0].error).toContain("模型 2 · m1\n审查会话超时");
 
 		const failed = settle(settle(begin(), 0, "failed", "FAIL\n发现 1").state, 1, "error", "审查会话认证失败");
 		expect(failed.state.history[0].result).toBe("failed");
 		expect(failed.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "fail" } });
-	});
-
-	test("every reviewer absent is an infrastructure error, not a quality verdict", async () => {
-		await loadState();
-		const result = settle(settle(begin(), 0, "error", "审查会话超时").state, 1, "error", "额度耗尽");
-		expect(result.state.phase).toBe("settled");
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
 	});
 
 	test("failures reaching the threshold hand the round to the advisor", async () => {
