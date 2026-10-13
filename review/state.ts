@@ -11,7 +11,7 @@
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
-import type { ModelAtom, ReviewConfig } from "../config.js";
+import type { ChainedAtom, ModelAtom, ReviewConfig } from "../config.js";
 import { fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
@@ -41,12 +41,14 @@ export interface ReviewerResult extends ModelAtom {
 	status: "passed" | "failed" | "error";
 	/** 短摘要：PASS 一行收敛摘要 / FAIL 发现一句话。 */
 	summary: string;
-	/** 全文：PASS 摘要+证据锚点 / FAIL 发现列表（或原文）/ error 的故障说明。 */
+	/** 全文：PASS 摘要+证据锚点 / FAIL 发现列表（或原文）/ error 的故障说明（fallback 链上每个模型一行）。 */
 	details: string;
+	/** 这一票由 fallback 给出时，被顶替的模型各自为何没给出结论（每个一行）。 */
+	replaced?: string;
 }
 
-/** 审查中某个审查者的席位；result 为 null 即还在审。 */
-export interface ReviewerSlot extends ModelAtom {
+/** 审查中某个审查者的席位：本轮从哪个模型审起、其后还剩的 fallback；result 为 null 即还在审。 */
+export interface ReviewerSlot extends ChainedAtom {
 	result: ReviewerResult | null;
 }
 
@@ -63,7 +65,7 @@ export interface ReviewRound {
 	advisor?: AdvisorResult;
 	/** 取消 / 超时的终止原因。 */
 	reason?: StopReason;
-	/** result 为 error 时的故障说明（基础设施错误原文，或全员缺席时各审查者的故障汇总）。 */
+	/** result 为 error 时的故障说明（基础设施错误原文，或缺席审查者的故障汇总）。 */
 	error?: string;
 	elapsedMs: number;
 }
@@ -223,8 +225,18 @@ function onAdvance(state: ReviewState, limits: ReviewLimits, now: number): Reduc
 	return { state: beginRound(state, state.round + 1, limits, now), effects: [{ kind: "advance" }] };
 }
 
+/**
+ * 每个席位从上一轮给出结论的那个模型审起（同一场审查内记住换上的 fallback，不再每轮先等主模型失败），
+ * 上一轮缺席或新开的审查从主模型审起；上一轮就是本场 history 的末轮。
+ */
 function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now: number): ReviewState {
-	const slots: ReviewerSlot[] = limits.reviewers.map((item) => ({ model: item.model, thinking: item.thinking, result: null }));
+	const last = state.history.at(-1)?.reviewers;
+	const slots: ReviewerSlot[] = limits.reviewers.map(({ fallback, ...primary }, index) => {
+		const chain = [primary, ...fallback];
+		const voter = last?.find((item) => item.index === index && item.status !== "error");
+		const start = Math.max(0, chain.findIndex((atom) => atom.model === voter?.model && atom.thinking === voter.thinking));
+		return { ...chain[start], fallback: chain.slice(start + 1), result: null };
+	});
 	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
 }
 
@@ -251,22 +263,23 @@ function onReviewerSettled(
 
 function settleRound(state: ReviewState, results: ReviewerResult[], limits: ReviewLimits, now: number): ReduceResult {
 	const { round } = state;
-	const verdicts = results.filter((item) => item.status !== "error");
+	const absent = results.filter((item) => item.status === "error");
+	const failed = results.some((item) => item.status === "failed");
 	const all = sections(results);
-	// 有裁决就成轮：缺席者（会话故障或输出契约违例）只在结论里点名，不阻止形成质量结论；
-	// 全员缺席才是基础设施不可用。否则一个供应商额度耗尽就会让整条审查通道停摆。
-	if (verdicts.length === 0) {
-		// 全员缺席是事故终态 → 直接收尾，不烧总结回合。
-		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error: all });
+	// 通过要每个审查者都给出 PASS：缺席者（fallback 链用尽仍无结论）不能让别人的 PASS 代表整轮。
+	// 有 FAIL 时照常进修复（发现是真的，缺席者在失败卡里点名）；否则缺席即事故终态，执行模型修不了它，不烧修复与总结回合。
+	if (!failed && absent.length > 0) {
+		const error = `${msg.summary.noVerdict}\n\n${sections(absent)}`;
+		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error });
 		return {
 			state: go(state, now, { phase: "settled", end: "error" }, { history: [...state.history, closed] }),
-			effects: [{ kind: "send_card", card: { kind: "error", message: all, elapsedMs: closed.elapsedMs } }],
+			effects: [{ kind: "send_card", card: { kind: "error", message: error, elapsedMs: closed.elapsedMs } }],
 		};
 	}
-	if (!verdicts.some((item) => item.status === "failed")) {
+	if (!failed) {
 		// 通过是质量裁决终态 → 总结回合。
 		const closed = closeRound(state, now, { round, result: "passed", reviewers: results });
-		const summary = appendClosedFindings(passSummary(verdicts, results.filter((item) => item.status === "error")), state.history, round);
+		const summary = appendClosedFindings(passSummary(results), state.history, round);
 		return {
 			state: go(state, now, { phase: "summarizing", turn: "pending" }, { history: [...state.history, closed] }),
 			effects: [
@@ -385,7 +398,7 @@ export function resultsOf(slots: ReviewerSlot[]): ReviewerResult[] {
 
 /** 每个审查者一节，展示与归档保留模型分节。 */
 export function sections(reviewers: ReviewerResult[]): string {
-	return reviewers.map((item) => `${modelLabel(item)}\n${item.details.trim()}`).join("\n\n");
+	return reviewers.map((item) => [modelLabel(item), item.replaced, item.details.trim()].filter(Boolean).join("\n")).join("\n\n");
 }
 
 /**
@@ -428,20 +441,15 @@ export function summaryKindOf(round: ReviewRound | undefined): SummaryKind {
 	return round?.result === "passed" ? "passed" : round?.result === "stopped" ? "advisor_stop" : "max_rounds";
 }
 
-function passSummary(passed: ReviewerResult[], absent: ReviewerResult[]) {
+function passSummary(passed: ReviewerResult[]) {
 	const fallback = msg.summary.passedFallback;
 	const lines = passed.length === 1
 		? [passBody(passed[0]?.summary ?? "") || fallback]
 		: passed.map((item) => msg.summary.modelBullet(shortModel(item.model), passBody(item.summary) || fallback));
-	if (absent.length > 0)
-		lines.push(msg.summary.absent(absent.map((item) => ({ model: shortModel(item.model), reason: firstLine(item.details) }))));
+	lines.push(...passed.flatMap((item) => (item.replaced ? [item.replaced] : [])));
 	const suggestions = [...new Set(passed.flatMap((item) => splitSuggestions(item.details)))];
 	if (suggestions.length === 0) return lines.join("\n");
 	return [...lines, "", `## ${msg.terms.suggestions}`, ...suggestions.map((item) => `- ${item}`)].join("\n");
-}
-
-function firstLine(text: string) {
-	return text.trim().split(/\r?\n/u, 1)[0]?.split(/[：:]/u, 1)[0]?.trim() ?? "";
 }
 
 /** 建议区（“## 建议（非阻塞）”之后）的条目。 */

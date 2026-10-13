@@ -1977,11 +1977,11 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 7, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 8, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
 		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,
-		slots: [{ model: "test/reviewer", thinking: "high", result: null }],
+		slots: [{ model: "test/reviewer", thinking: "high", fallback: [], result: null }],
 	};
 	const settled = {
 		...base, phase: "settled", end: timeout ? "error" : "passed", updatedAt: 2, rounds: 1,

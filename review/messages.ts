@@ -133,8 +133,7 @@ export const msg = defineMessages({
 		summary: {
 			passedFallback: "审查通过。",
 			modelBullet: (model: string, body: string) => `• ${model}：${body}`,
-			absent: (items: { model: string; reason: string }[]) =>
-				`未形成裁决：${items.map((item) => `${item.model}（${item.reason}）`).join("、")}`,
+			noVerdict: "有审查者没给出结论（fallback 已用尽），本轮不算通过：",
 			modelSection: (index: number, model: string) => `${zhTerms.model} ${index} · ${model}`,
 			closedHeading: "**本次收口的问题**：",
 			closedItem: (issue: string, round: number) => `• ${issue}（第 ${round} 轮）`,
@@ -178,6 +177,8 @@ export const msg = defineMessages({
 			timeout: "审查会话超时，未在时限内返回有效输出。",
 			sessionFailed: (reason: string) => `审查会话失败。${reason}`,
 			emptyOutput: "审查输出为空：无审查结论。",
+			attempt: (atom: string, reason: string) => `- ${atom}：${reason}`,
+			replaced: "fallback 顶替了没给出结论的模型：",
 			passNoSummary: "PASS 缺少摘要行（证据行前必须有一行极简摘要）",
 			passNoEvidence: `PASS 缺少证据锚点行（${zhTerms.field.evidence}：${zhTerms.anchor.files}=…；${zhTerms.anchor.commands}=…）`,
 			passNoFiles: `PASS 证据行缺少文件段（${zhTerms.anchor.files}=至少一个带扩展名的路径）`,
@@ -260,8 +261,7 @@ export const msg = defineMessages({
 		summary: {
 			passedFallback: "Review passed.",
 			modelBullet: (model: string, body: string) => `• ${model}: ${body}`,
-			absent: (items: { model: string; reason: string }[]) =>
-				`No verdict from ${items.map((item) => `${item.model} (${item.reason})`).join(", ")}`,
+			noVerdict: "A reviewer gave no verdict (fallback chain exhausted), so this round does not pass:",
 			modelSection: (index: number, model: string) => `${enTerms.model} ${index} · ${model}`,
 			closedHeading: "**Issues closed in this check**:",
 			closedItem: (issue: string, round: number) => `• ${issue} (Round ${round})`,
@@ -305,6 +305,8 @@ export const msg = defineMessages({
 			timeout: "review session timed out before returning valid output.",
 			sessionFailed: (reason: string) => `review session failed. ${reason}`,
 			emptyOutput: "review output is empty: no check result.",
+			attempt: (atom: string, reason: string) => `- ${atom}: ${reason}`,
+			replaced: "Fallback replaced models that gave no verdict:",
 			passNoSummary: "PASS is missing the summary line (one terse summary line must precede the evidence line)",
 			passNoEvidence: `PASS is missing the evidence anchor line (${enTerms.field.evidence}: ${enTerms.anchor.files}=...; ${enTerms.anchor.commands}=...)`,
 			passNoFiles: `PASS evidence line is missing the files segment (${enTerms.anchor.files}=at least one path with an extension)`,

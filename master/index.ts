@@ -5,7 +5,7 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
-import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";
+import { loadConfig, type MasterRole, modelAtomText, THINKING_LEVELS } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
@@ -18,7 +18,6 @@ import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import type { InProcessSessionPool } from "../spawn.js";
-import { modelAtomText } from "./state.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
