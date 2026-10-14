@@ -8,6 +8,7 @@ import { watchSessionMaintenance } from "./deliver.js";
 import { type Feature, loadConfig } from "./config.js";
 import { registerHeader } from "./header.js";
 import { msg } from "./messages.js";
+import { registerClaudeFiles } from "./provider/claude-files.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
 import { registerPresets } from "./session/presets.js";
@@ -32,6 +33,7 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	presets: registerPresets,
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
+	claudeFiles: registerClaudeFiles,
 	openaiNative: registerOpenAINative,
 	statusbar: registerStatusBar,
 };

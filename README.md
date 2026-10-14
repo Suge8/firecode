@@ -74,7 +74,7 @@ Built the Pi way: sub-agents add just two small tools, and review and the watche
 
 ## Also in the box
 
-`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · OpenAI native compaction · Works with Claude subscription login
+`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
 
 ## Install
 

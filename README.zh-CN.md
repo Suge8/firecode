@@ -74,7 +74,7 @@
 
 ## 还有这些
 
-`/fire-watch` 便宜模型帮你盯着，跑偏才开口 · `/preset` 一键切换模型、思考档和工具 · `/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档 · OpenAI 原生压缩 · 适配 Claude 订阅登录
+`/fire-watch` 便宜模型帮你盯着，跑偏才开口 · `/preset` 一键切换模型、思考档和工具 · `/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档 · OpenAI 原生压缩 · 适配 Claude 订阅登录 · Claude 截图只传一次，不再每轮重传
 
 ## 安装
 
