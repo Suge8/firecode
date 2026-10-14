@@ -7,6 +7,7 @@ export type WindowLoss = { kind: "switched" | "disabled" | "unreplayable"; from:
 export const msg = defineMessages({
 	zh: {
 		tokenReissued: "Claude 令牌刚换发，已自动重试",
+		imageUploadFailed: (reason: string) => `图片上传 Claude Files 失败，没传上的本轮原样内嵌，下一轮重试：${reason}`,
 		fastUnsupported: "当前模型不支持加速档",
 		fastToggled: (enabled: boolean) => `加速档：${enabled ? "开" : "关"}`,
 		fastSaveFailed: (reason: string) => `加速档保存失败：${reason}`,
@@ -48,6 +49,8 @@ export const msg = defineMessages({
 	},
 	en: {
 		tokenReissued: "Claude token was just reissued; retried automatically",
+		imageUploadFailed: (reason: string) =>
+			`Image upload to Claude Files failed; images not uploaded are sent inline this turn and retried next turn: ${reason}`,
 		fastUnsupported: "The current model does not support fast mode",
 		fastToggled: (enabled: boolean) => `Fast mode: ${enabled ? "on" : "off"}`,
 		fastSaveFailed: (reason: string) => `Could not save fast mode: ${reason}`,

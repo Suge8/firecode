@@ -94,6 +94,7 @@ export const FEATURES = [
 	"presets",
 	"stats",
 	"claudeSub",
+	"claudeFiles",
 	"openaiNative",
 	"review",
 	"master",

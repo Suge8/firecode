@@ -1,6 +1,6 @@
 # FireCode
 
-pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
+pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
 
 单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、日期段、herdr 投影、审查卡渲染始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
@@ -19,6 +19,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
+| `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射记在会话里，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回） | |

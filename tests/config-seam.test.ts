@@ -149,7 +149,7 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	const loaded = (loadConfig as () => any)();
 
 	expect(loaded.problems).toEqual([]);
-	for (const feature of ["claudeSub", "openaiNative", "review", "master", "watcher"])
+	for (const feature of ["claudeSub", "claudeFiles", "openaiNative", "review", "master", "watcher"])
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.master.config.autoActivate).toBeTrue();
 	expect(loaded.watcher.config.enabled).toBeFalse();

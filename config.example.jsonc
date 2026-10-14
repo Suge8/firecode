@@ -11,6 +11,7 @@
 		"presets": true,
 		"stats": true,
 		"claudeSub": true,
+		"claudeFiles": true,
 		"openaiNative": true,
 		"review": true,
 		"master": true,

@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-14
+
 ### Changed
 
 - `/fire-review` passes only when every reviewer returns PASS. A reviewer that gives no verdict (error, expired login, timeout, empty output) used to be skipped, so the other reviewer's PASS was enough; now the review stops as failed and the result names the model and the reason.
@@ -12,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - A reviewer can have a fallback chain: write `{ "model": "…", "fallback": ["…"] }` in `review.reviewers` (up to 2 fallback models, same as Master roles). When a reviewer gives no verdict, the next model in its chain reviews instead, and the result card says which model was replaced and why. Later rounds of the same review start from the model that gave the last verdict.
 - A review left in progress by an earlier version is not resumed after the update; run `/fire-review` again.
+- Images sent to Claude (screenshots, `read` results, pasted images) are uploaded once through the Files API and referenced by ID, instead of being resent inline with the whole history every turn. In an image-heavy session the request shrinks from megabytes to the text alone; image quality is unchanged and prompt cache and thinking stay valid. Turn it off with `"features": { "claudeFiles": false }`.
 
 ## [1.4.0] - 2026-10-13
 
@@ -219,7 +222,9 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Suge8/firecode/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/Suge8/firecode/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Suge8/firecode/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Suge8/firecode/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/Suge8/firecode/compare/v1.2.0...v1.2.1
