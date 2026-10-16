@@ -21,7 +21,6 @@ const MODELS = [
 	{ provider: "openai", id: "gpt-5-mini", folded: true },
 ] as const;
 const INSTRUCTIONS = "INSTRUCTIONS";
-const TRIGGER = { type: "compaction_trigger" };
 const directories: string[] = [];
 const savedFetch = globalThis.fetch;
 let clock = 0;
@@ -142,7 +141,16 @@ function stubFetch(...responses: Array<() => Response>) {
 	}) as typeof fetch;
 	return calls;
 }
-const compacted = (encrypted: string) => () => Response.json({ output: [{ type: "message", role: "assistant", content: [] }, { type: "compaction", encrypted_content: encrypted }] });
+const compactionItem = (encrypted: string) => ({ id: `cmp_${encrypted}`, type: "compaction", encrypted_content: encrypted });
+/** 压缩请求的真实响应（2026-10 实测）：流里先给出压缩项，随即因输出上限以 response.incomplete 结束。 */
+const compacted = (encrypted: string) => () => {
+	const item = compactionItem(encrypted);
+	const events = [
+		{ type: "response.output_item.done", item, output_index: 0 },
+		{ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [item] } },
+	];
+	return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+};
 
 /** 压缩前的会话：被总结的旧轮次与保留窗口。返回保留窗口的首条 id。 */
 function oldHistory(sm: any, model: any): string {
@@ -182,13 +190,15 @@ for (const { provider, id, folded } of MODELS) {
 		const instructions = `${INSTRUCTIONS}\n\nAdditional user guidance for this manual /compact request:\nKeep the release notes.`;
 		const hostRequest = await hostPayload(model, [system({ content: instructions }), ...context.slice(1)]);
 		expect(calls).toHaveLength(1);
-		expect(calls[0].body.input).toEqual([...hostRequest.input, TRIGGER]);
+		// 服务端压缩参数而非 compaction_trigger 输入项：ChatGPT 订阅登录拒收后者。
+		expect(calls[0].body.input).toEqual(hostRequest.input);
+		expect(calls[0].body.context_management).toEqual([{ type: "compaction", compact_threshold: 1000 }]);
 		expect(calls[0].body.instructions).toBe(hostRequest.instructions);
 		expect([calls[0].body.instructions, ...calls[0].body.input.filter((item: any) => item.role === "developer").map((item: any) => item.content)]).toContain(instructions);
 		expect(result.compaction).toMatchObject({ summary: SHIM, firstKeptEntryId: kept, tokensBefore: 4096 });
 		const window = result.compaction.details.compactedWindow;
 		// 保留窗口只留各轮用户消息与压缩项：工具往返和系统提示不进窗口（系统提示每次请求自带）。
-		expect(window.at(-1)).toEqual({ type: "compaction", encrypted_content: "enc-1" });
+		expect(window.at(-1)).toEqual(compactionItem("enc-1"));
 		expect(window.slice(0, -1).filter((item: any) => item.role === "user").map((item: any) => item.content[0].text)).toEqual(["ancient question", "old question"]);
 		expect(window.some((item: any) => item.type === "function_call")).toBe(false);
 		expect(JSON.stringify(window)).not.toContain(INSTRUCTIONS);
@@ -366,9 +376,8 @@ test("repeated /compact reuses the latest stored window plus the live tail, and 
 
 	const input = calls[1].body.input;
 	const windowStart = input.findIndex((item: any) => item.type === "compaction");
-	// 系统提示之后依次是上次的窗口、压缩之后的对话、触发项；上次的窗口不重复前面的历史。
+	// 系统提示之后依次是上次的窗口、压缩之后的对话；上次的窗口不重复前面的历史。
 	expect(input.slice(windowStart - (firstWindow.length - 1), windowStart + 1)).toEqual(firstWindow);
-	expect(input.at(-1)).toEqual(TRIGGER);
 	expect(calls[1].raw).toContain("Release notes say green.");
 	expect(calls[1].raw).not.toContain("compacted into the following summary");
 	expect(calls[1].raw).not.toContain("ancient answer");
@@ -393,28 +402,6 @@ test("a trailing provider-authored developer prompt keeps its place at the end o
 
 	expect(result.input.at(-1)).toEqual(hint);
 	expect(JSON.stringify(result.input)).toContain("enc");
-});
-
-test("a streamed compaction response (SSE) is accepted", async () => {
-	const model = getModel("openai-codex", "gpt-6.1-sol");
-	const h = await harness({ model });
-	const kept = oldHistory(h.sm, model);
-	const item = { type: "compaction", encrypted_content: "streamed" };
-	stubFetch(() => new Response(
-		[
-			`data: ${JSON.stringify({ type: "response.output_item.done", item })}`,
-			"",
-			`data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
-			"",
-			"data: [DONE]",
-			"",
-		].join("\n"),
-		{ status: 200, headers: { "content-type": "text/event-stream" } },
-	));
-
-	const result = await h.compact(kept);
-
-	expect(result.compaction.details.compactedWindow.at(-1)).toEqual(item);
 });
 
 // 原生压缩没有可用窗口时请求照宿主原样发出；旧历史不在上下文里，用户要知道，但同一次压缩只提醒一次。
@@ -518,8 +505,8 @@ test.each([
 		`data: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: "context_length_exceeded", message: "Too long." } } })}\n\ndata: [DONE]\n`,
 		{ status: 200 },
 	), ["超出了模型的上下文窗口", "Too long."]],
-	["the API rejects the request", () => Response.json({ error: { message: "Invalid input type 'compaction_trigger'." } }, { status: 400 }),
-		["接口拒绝了请求", "HTTP 400", "Invalid input type 'compaction_trigger'."]],
+	["the API rejects the request", () => Response.json({ error: { message: "Unsupported input item." } }, { status: 400 }),
+		["接口拒绝了请求", "HTTP 400", "Unsupported input item."]],
 	["the response fails for another reason", () => Response.json({ status: "failed", error: { code: "server_error", message: "The response failed." } }),
 		["接口报告压缩失败", "server_error"]],
 	["the response holds no compaction item", () => Response.json({ output: [{ type: "message", role: "assistant", content: [] }] }),

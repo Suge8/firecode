@@ -4,7 +4,14 @@ import { isRecord } from "../../../jsonc.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { leadingPromptLength, postThroughHost } from "./host-stream.js";
 
-const COMPACTION_TRIGGER = { type: "compaction_trigger" } as const;
+/**
+ * 压缩走服务端压缩（请求参数 context_management），不在输入末尾追加 compaction_trigger：ChatGPT 订阅登录（Sign in with ChatGPT）
+ * 拒收 compaction_trigger 输入项，context_management 则 API key、Codex 订阅与 ChatGPT 订阅都接受（2026-10 实测）。
+ * 阈值取接口下限 1000：值得压缩的会话必然越线，服务端先压缩、在流里给出压缩项。压缩项之后的回答没有用，
+ * max_output_tokens 取接口下限 16，回答随即以 response.incomplete 截断，不白付一轮生成。
+ */
+const CONTEXT_MANAGEMENT = [{ type: "compaction", compact_threshold: 1000 }];
+const MAX_OUTPUT_TOKENS = 16;
 const RETAINED_MESSAGE_TOKEN_BUDGET = 64_000;
 
 type ParsedOutput = { output: Record<string, unknown>[] };
@@ -117,7 +124,8 @@ function parseSseOutput(responseText: string): ParsedOutput | ParsedFailure | un
 			streamedItems.push(event.item);
 			continue;
 		}
-		if (event.type === "response.completed") {
+		// 压缩请求按设计在压缩项之后被输出上限截断，以 response.incomplete 结束，与 completed 同为正常终点。
+		if (event.type === "response.completed" || event.type === "response.incomplete") {
 			completed = parseJsonOutput(event.response) ?? { output: [] };
 			continue;
 		}
@@ -204,7 +212,7 @@ function buildCompactedWindow(input: Record<string, unknown>[], compactionItem: 
 }
 
 /**
- * 原生压缩：宿主按这批消息构造请求体，这里在它前面补上上次的压缩窗口、在末尾追加 compaction_trigger 后真实发出。
+ * 原生压缩：宿主按这批消息构造请求体，这里在它前面补上上次的压缩窗口、带上服务端压缩参数后真实发出。
  * 输入是否超窗由服务端裁决（context_length_exceeded → input-too-large）；本地字符估算既不准也是第二事实源，
  * 历史上曾把正常触发线（窗口 − 预留）上的压缩全部误拒。
  */
@@ -224,7 +232,15 @@ export async function executeNativeCompaction(args: {
 			const lead = leadingPromptLength(input);
 			const body = [...input.slice(0, lead), ...(args.priorWindow ?? []), ...input.slice(lead)];
 			retained = body.slice(lead);
-			return { model, ...(instructions === undefined ? {} : { instructions }), input: [...body, COMPACTION_TRIGGER], store: false, stream: true };
+			return {
+				model,
+				...(instructions === undefined ? {} : { instructions }),
+				input: body,
+				context_management: CONTEXT_MANAGEMENT,
+				max_output_tokens: MAX_OUTPUT_TOKENS,
+				store: false,
+				stream: true,
+			};
 		},
 	});
 	if (!posted.wire) {
