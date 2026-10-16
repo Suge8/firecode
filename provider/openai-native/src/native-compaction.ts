@@ -23,10 +23,6 @@ export function notify(ctx: ExtensionContext, message: string, level: "warning" 
 	else console.error(message);
 }
 
-function cancel(ctx: ExtensionContext, message: string): NativeCompactionHookResult {
-	notify(ctx, message, "error");
-	return { cancel: true };
-}
 
 function buildInstructions(systemPrompt: string, customInstructions?: string): string {
 	const guidance = customInstructions?.trim();
@@ -36,13 +32,25 @@ function buildInstructions(systemPrompt: string, customInstructions?: string): s
 }
 
 /**
- * 最近一次压缩是原生压缩，而当前模型用不了它的窗口：手动 /compact 取消（用户能切回去），
- * 自动压缩不能卡死会话，回落宿主的摘要压缩并明说窗口里的旧历史不会进摘要。
+ * 原生压缩这次做不成时的唯一规则：手动 /compact 取消并说明，会话不变，用户可以重试或切回模型；
+ * 自动压缩退回宿主的摘要压缩并明说——取消的话下一轮照样失败，上下文满了连溢出补救也被取消，会话就卡死了。
+ * windowLost：最近一次压缩是原生压缩，退回摘要时它窗口里的旧历史进不了摘要。
  */
-function windowUnusable(event: SessionBeforeCompactEvent, ctx: ExtensionContext, from: string): NativeCompactionHookResult | undefined {
-	if (event.reason === "manual") return cancel(ctx, msg.compaction.windowCancelled(from));
-	notify(ctx, msg.compaction.windowDropped(from), "warning");
+function decline(
+	event: SessionBeforeCompactEvent,
+	ctx: ExtensionContext,
+	decision: { cause: string; hint: string; windowLost: boolean },
+): NativeCompactionHookResult | undefined {
+	if (event.reason === "manual") {
+		notify(ctx, msg.compaction.cancelled(decision.cause, decision.hint), "error");
+		return { cancel: true };
+	}
+	notify(ctx, msg.compaction.fallback(decision.cause, decision.windowLost), "warning");
 	return undefined;
+}
+
+function windowUnusable(event: SessionBeforeCompactEvent, ctx: ExtensionContext, from: string): NativeCompactionHookResult | undefined {
+	return decline(event, ctx, { cause: msg.compaction.windowUnusable(from), hint: msg.compaction.switchBack(from), windowLost: true });
 }
 
 export async function compactWithOpenAINative(
@@ -81,9 +89,9 @@ export async function compactWithOpenAINative(
 		signal: event.signal,
 	});
 	if (!result.ok) {
-		return result.reason === "aborted"
-			? { cancel: true }
-			: cancel(ctx, msg.compaction.failed(result.reason, result.status, result.detail));
+		if (result.reason === "aborted") return { cancel: true };
+		const cause = msg.compaction.failed(result.reason, result.status, result.detail);
+		return decline(event, ctx, { cause, hint: msg.compaction.retryLater, windowLost: prior !== undefined });
 	}
 	return {
 		compaction: createNativeCompactionResult({
