@@ -26,12 +26,15 @@ export const msg = defineMessages({
 					"input-too-large": "对话超出了模型的上下文窗口",
 					"response-failed": "接口报告压缩失败",
 				};
-				return `FireCode：原生压缩失败：${what[reason]}${status ? `（HTTP ${status}）` : ""}${detail ? `：${detail}` : ""}。/compact 已取消，会话没有改动，可以稍后重试。`;
+				return `原生压缩失败：${what[reason]}${status ? `（HTTP ${status}）` : ""}${detail ? `：${detail}` : ""}`;
 			},
-			windowCancelled: (from: string) =>
-				`FireCode：上一次压缩是 ${from} 的原生压缩，当前模型用不了它的压缩窗口，/compact 已取消。切回 ${from} 再压缩，或把 openai.nativeCompaction 设为 false 并重启，改用普通摘要压缩（压缩窗口里的旧历史会丢失）。`,
-			windowDropped: (from: string) =>
-				`FireCode：上一次压缩是 ${from} 的原生压缩，当前模型用不了它的压缩窗口。这次自动压缩改用普通摘要，窗口里的旧历史不会进入摘要。`,
+			windowUnusable: (from: string) => `上一次压缩是 ${from} 的原生压缩，当前模型用不了它的压缩窗口`,
+			retryLater: "可以稍后重试",
+			switchBack: (from: string) =>
+				`切回 ${from} 再压缩，或把 openai.nativeCompaction 设为 false 并重启，改用普通摘要压缩（压缩窗口里的旧历史会丢失）`,
+			cancelled: (cause: string, hint: string) => `FireCode：${cause}。/compact 已取消，会话没有改动；${hint}。`,
+			fallback: (cause: string, windowLost: boolean) =>
+				`FireCode：${cause}。这次自动压缩改用普通摘要${windowLost ? "，上次原生压缩窗口里的旧历史不会进入摘要" : ""}。`,
 			replayDeclined: (loss: WindowLoss) => {
 				const cause = {
 					switched: `当前模型不是做那次原生压缩的 ${loss.from}`,
@@ -69,12 +72,15 @@ export const msg = defineMessages({
 					"input-too-large": "the conversation exceeds the model's context window",
 					"response-failed": "the API reported the compaction failed",
 				};
-				return `FireCode: native compaction failed: ${what[reason]}${status ? ` (HTTP ${status})` : ""}${detail ? `: ${detail}` : ""}. /compact was cancelled and the session is unchanged; try again later.`;
+				return `native compaction failed: ${what[reason]}${status ? ` (HTTP ${status})` : ""}${detail ? `: ${detail}` : ""}`;
 			},
-			windowCancelled: (from: string) =>
-				`FireCode: the last compaction was a native compaction by ${from}, and the current model cannot use its window; /compact cancelled. Switch back to ${from} and compact again, or set openai.nativeCompaction to false and restart to use ordinary summary compaction (history inside the window is lost).`,
-			windowDropped: (from: string) =>
-				`FireCode: the last compaction was a native compaction by ${from}, and the current model cannot use its window. This automatic compaction falls back to an ordinary summary; history inside the window will not be in it.`,
+			windowUnusable: (from: string) => `the last compaction was a native compaction by ${from}, and the current model cannot use its window`,
+			retryLater: "try again later",
+			switchBack: (from: string) =>
+				`switch back to ${from} and compact again, or set openai.nativeCompaction to false and restart to use ordinary summary compaction (history inside the window is lost)`,
+			cancelled: (cause: string, hint: string) => `FireCode: ${cause}. /compact was cancelled and the session is unchanged; ${hint}.`,
+			fallback: (cause: string, windowLost: boolean) =>
+				`FireCode: ${cause}. This automatic compaction falls back to an ordinary summary${windowLost ? "; history inside the last native compaction window will not be in it" : ""}.`,
 			replayDeclined: (loss: WindowLoss) => {
 				const cause = {
 					switched: `the current model is not ${loss.from}, which made the native compaction`,

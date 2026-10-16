@@ -511,18 +511,21 @@ test.each([
 		["接口报告压缩失败", "server_error"]],
 	["the response holds no compaction item", () => Response.json({ output: [{ type: "message", role: "assistant", content: [] }] }),
 		["接口没有返回压缩结果"]],
-])("when %s, /compact is cancelled with the reason instead of falling back", async (_name, response, phrases) => {
+])("when %s, a manual /compact is cancelled with the reason and an automatic compaction falls back to the summary with it", async (_name, response, phrases) => {
 	const model = getModel("openai", "gpt-5-mini");
 	const h = await harness({ model, hasUI: true });
 	const kept = oldHistory(h.sm, model);
 	const calls = stubFetch(response);
 
 	expect(await h.compact(kept)).toEqual({ cancel: true });
+	// 自动压缩不取消：取消的话每轮重试都失败，上下文满了连溢出补救也被取消，会话卡死。
+	expect(await h.compact(kept, { reason: "threshold" })).toBeUndefined();
 
-	expect(calls).toHaveLength(1);
-	expect(h.notices).toHaveLength(1);
-	expect(h.notices[0][0]).toBe("error");
-	for (const phrase of phrases) expect(h.notices[0][1]).toContain(phrase);
+	expect(calls).toHaveLength(2);
+	expect(h.notices.map(([level]) => level)).toEqual(["error", "warning"]);
+	for (const phrase of phrases) for (const [, notice] of h.notices) expect(notice).toContain(phrase);
+	expect(h.notices[0][1]).toContain("/compact 已取消");
+	expect(h.notices[1][1]).toContain("普通摘要");
 	expect(h.sm.getEntries().some((entry: any) => entry.type === "compaction")).toBe(false);
 });
 

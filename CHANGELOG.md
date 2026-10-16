@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-16
+
 ### Changed
 
 - **Breaking:** FireCode now requires Pi 1.3.0 or later.
@@ -14,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - OpenAI native compaction no longer drops its window on OpenAI GPT-6 models used with an API key and a thinking level. Pi 1.3.0 marks each reply's thinking level in these requests, the replay no longer matched, and history from before the compaction was left out of the context.
 - A `read` call whose omitted arguments arrive as `null` showed a wrong line range such as `:10-9`; it now shows `:10+`.
 - OpenAI native compaction works when OpenAI is signed in with a ChatGPT subscription ("Sign in with ChatGPT"). `/compact` failed with HTTP 400 because that login rejects the `compaction_trigger` input item; compaction now uses server-side compaction (`context_management`), which API keys, Codex and ChatGPT subscriptions all accept.
+- An automatic compaction whose native compaction fails now falls back to an ordinary summary with a warning, the same as after a model switch. It used to be cancelled, so it failed again every turn and, once the context was full, the overflow recovery was cancelled too and the session could not continue. A manual `/compact` is still cancelled with the reason.
 
 ## [1.5.0] - 2026-10-14
 
@@ -233,7 +236,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/Suge8/firecode/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Suge8/firecode/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Suge8/firecode/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Suge8/firecode/compare/v1.3.0...v1.3.1
