@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** FireCode now requires Pi 1.3.0 or later.
+- Master Workers no longer use codemode, even when the Master session has it on. Pi 1.3.0 lets at most two codemode scripts run at once across all sessions in a process, and a script keeps its slot while it waits for a tool. Workers run in the Master's process, so two Workers running long commands left a Master in codemode `only` mode unable to call any tool, including interrupting them. Workers now call their tools directly and can still run them in parallel.
+
+### Fixed
+
+- OpenAI native compaction no longer drops its window on OpenAI GPT-6 models used with an API key and a thinking level. Pi 1.3.0 marks each reply's thinking level in these requests, the replay no longer matched, and history from before the compaction was left out of the context.
+- A `read` call whose omitted arguments arrive as `null` showed a wrong line range such as `:10-9`; it now shows `:10+`.
+
 ## [1.5.0] - 2026-10-14
 
 ### Changed

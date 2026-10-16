@@ -1,5 +1,6 @@
 /** 内置工具的动作词与目标：工具行渲染与 Master 活动列表共用的唯一来源。 */
 import { homedir } from "node:os";
+import { formatReadLineRange } from "@earendil-works/pi-coding-agent";
 import type { ClipSide } from "../format.js";
 import { msg } from "./messages.js";
 import { commandParts, genericArgsParts, pathValue, type Part } from "./parts.js";
@@ -8,18 +9,16 @@ type ToolArgs = {
 	path?: string;
 	file_path?: string;
 	pattern?: string;
-	offset?: number;
-	limit?: number;
+	offset?: unknown;
+	limit?: unknown;
 };
 
 const argPath = (args: ToolArgs): string => args?.file_path ?? args?.path ?? "";
 
-/** read 的 offset/limit → `:12-40`、`:12+`。 */
+/** read 的行范围 → `:12-40`；解析归宿主（严格模式的 null、数字字符串）。没给行数时读到文件尾，补 `+` 写成 `:12+`，免得读成只读一行。 */
 function rangeSuffix(args: ToolArgs): string {
-	if (args.offset === undefined && args.limit === undefined) return "";
-	const start = args.offset ?? 1;
-	if (args.limit === undefined) return `:${start}+`;
-	return `:${start}-${start + args.limit - 1}`;
+	const range = formatReadLineRange(args.offset, args.limit);
+	return range && args.limit == null ? `${range}+` : range;
 }
 
 const CD_PREFIX = /^\s*cd\s+(?:"([^"]*)"|'([^']*)'|(\S+))\s*&&\s*/u;

@@ -1389,18 +1389,6 @@ test("子会话不注册只属于交互主会话的功能：横幅、工具渲�
 	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
-test("指挥官启用 codemode 时 Worker 也能经 codemode 脚本调用工具", async () => {
-	const harness = await setup(true, { activeTools: ["read", "bash", "edit", "write", "codemode"] });
-	faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("codemode", { code: 'await tools.write({ path: "made.txt", content: "ok" });' }), { stopReason: "toolUse" }),
-		fauxAssistantMessage("完成"),
-	]);
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "scripted", prompt: "写文件", role: "工程师" });
-	await settled;
-	expect(await readFile(join(harness.cwd, "made.txt"), "utf8")).toBe("ok");
-});
-
 test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
@@ -1752,8 +1740,6 @@ async function setup(activate = true, options: {
 	workerRecorder?: boolean;
 	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
-	/** 指挥官会话激活前的工具集。 */
-	activeTools?: string[];
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -1834,7 +1820,7 @@ async function setup(activate = true, options: {
 	let idle = false;
 	const turnRequested = Promise.withResolvers<void>();
 	let starting: any;
-	let activeTools = options.activeTools ?? ["read", "bash", "edit", "write"];
+	let activeTools = ["read", "bash", "edit", "write"];
 	const pi = Object.assign(fake.pi, {
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },
