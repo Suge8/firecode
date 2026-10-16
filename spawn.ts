@@ -4,7 +4,6 @@ import { basename, dirname } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
-	createCodemodeExtension,
 	DefaultResourceLoader,
 	getAgentDir,
 	hasTrustRequiringProjectResources,
@@ -15,16 +14,12 @@ import {
 	type AgentSession,
 	type ExtensionError,
 	type ExtensionFactory,
-	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevelValue } from "./config.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
-
-/** 宿主只给 CLI 主会话注入内置扩展；子会话自带 codemode（按 builtin 名受 settings 开关），激活仍由 tools 决定。 */
-const BUILTIN_CODEMODE: InlineExtension = { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true };
 
 type SessionPersistence =
 	| { type: "memory" }
@@ -125,7 +120,9 @@ export class InProcessSessionPool {
 				agentDir,
 				settingsManager,
 				noContextFiles: !options.contextFiles,
-				extensionFactories: this.extensionsFor(options),
+				extensionFactories: options.isolated || !this.environment.firecode
+					? []
+					: [{ name: "firecode", factory: this.environment.firecode, hidden: true }],
 				noExtensions: options.isolated,
 				noSkills: options.isolated,
 				noPromptTemplates: options.isolated,
@@ -177,12 +174,6 @@ export class InProcessSessionPool {
 	onRelease(listener: (sessionPath: string) => void): () => void {
 		this.releaseListeners.add(listener);
 		return () => this.releaseListeners.delete(listener);
-	}
-
-	private extensionsFor(options: SpawnSessionOptions): InlineExtension[] {
-		const firecode = this.environment.firecode;
-		if (options.isolated || !firecode) return [BUILTIN_CODEMODE];
-		return [BUILTIN_CODEMODE, { name: "firecode", factory: firecode, hidden: true }];
 	}
 
 	private modelRuntime(): Promise<ModelRuntime> {

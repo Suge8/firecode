@@ -82,7 +82,7 @@ Built the Pi way: sub-agents add just two small tools, and review and the watche
 pi install npm:pi-firecode
 ```
 
-Restart Pi (1.2.0+) and it's ready. The config is created on first launch at `~/.pi/agent/extensions/firecode/config.jsonc`: put in the models you use, and turn anything off with `"features": { "<name>": false }`.
+Restart Pi (1.3.0+) and it's ready. The config is created on first launch at `~/.pi/agent/extensions/firecode/config.jsonc`: put in the models you use, and turn anything off with `"features": { "<name>": false }`.
 
 - Using herdr? Run `herdr integration uninstall pi` first; FireCode reports the pane state itself.
 - Sub-agents and reviewers can run `bash` without a sandbox. Run Pi in a container if you need isolation.

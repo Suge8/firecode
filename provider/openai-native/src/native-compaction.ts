@@ -111,6 +111,13 @@ function sameItem(left: unknown, right: unknown): boolean {
 }
 
 /**
+ * 思考档标记：宿主在支持的模型上（OpenAI API key 下的 GPT-6）把每条回复的思考档写成它前面的一条 configuration_update，
+ * 只标注其后回复的档位，不是对话内容。量保留段时宿主不带思考档，产出里没有标记，所以比对时跳过请求体里的标记；
+ * 保留段里的标记随保留段一起换成窗口，之后的照原样留下。
+ */
+const isEffortMarker = (item: Record<string, unknown>) => item.type === "configuration_update";
+
+/**
  * 把宿主请求体里“压缩摘要 + 压缩时保留的那段”换成压缩窗口，其后的对话原样接上。
  * 保留段有多长，让宿主对压缩那一刻的上下文再序列化一遍来量（不发请求），并要求它确是本次请求体系统提示之后的前缀：
  * 前缀对不上就说明请求体的构造与会话记录脱节（例如上下文被别处改写），宁可不重放。
@@ -143,12 +150,16 @@ export async function replayOpenAINative(payload: unknown, ctx: ExtensionContext
 	// 系统提示不参与比对：不支持中途系统消息的模型把后来的更新折进首条提示，保留段之后的更新会让它与量出来的不同。
 	const keptItems = prefix.input.slice(leadingPromptLength(prefix.input));
 	const lead = leadingPromptLength(input);
-	if (!keptItems.every((item, index) => sameItem(item, input[lead + index]))) return lost("unreplayable");
+	let end = lead;
+	for (const item of keptItems) {
+		while (end < input.length && isEffortMarker(input[end])) end++;
+		if (!sameItem(item, input[end++])) return lost("unreplayable");
+	}
 	return {
 		ok: true,
 		payload: {
 			...(payload as ResponsesPayload),
-			input: [...input.slice(0, lead), ...native.details.compactedWindow, ...input.slice(lead + keptItems.length)],
+			input: [...input.slice(0, lead), ...native.details.compactedWindow, ...input.slice(end)],
 		},
 	};
 }

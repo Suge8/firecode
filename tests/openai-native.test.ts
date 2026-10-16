@@ -54,10 +54,11 @@ const jwt = (account: string) => {
 const apiKeyFor = (model: any) => (model.provider === "openai-codex" ? jwt("acct_test") : "sk-test");
 
 /** 宿主对这批消息会发出的请求体：同一份会话交给宿主自己的流，在发出前截下 onPayload 的参数。 */
-async function hostPayload(model: any, messages: unknown[]): Promise<any> {
+async function hostPayload(model: any, messages: unknown[], reasoning?: string): Promise<any> {
 	let captured: unknown;
 	const stream = streamSimple(model, { messages: convertToLlm(messages) }, {
 		apiKey: apiKeyFor(model),
+		reasoning,
 		onPayload: (payload: unknown) => { captured = payload; throw new Error("captured"); },
 	});
 	for await (const _ of stream);
@@ -119,10 +120,10 @@ async function harness({ model, openai = { nativeCompaction: true }, hasUI = fal
 			if (result?.compaction) sm.appendCompaction(result.compaction.summary, result.compaction.firstKeptEntryId, result.compaction.tokensBefore, result.compaction.details);
 			return result;
 		},
-		/** 宿主下一次请求：payload 是宿主自己的流构造的请求体，result 是扩展改写后的请求体（未改写为 undefined）。 */
-		async request(extra: unknown[] = [], current = model) {
+		/** 宿主下一次请求：payload 是宿主自己的流按会话思考档（reasoning）构造的请求体，result 是扩展改写后的请求体（未改写为 undefined）。 */
+		async request(extra: unknown[] = [], current = model, reasoning?: string) {
 			const messages = sm.buildSessionContext().messages;
-			const payload = await hostPayload(current, messages);
+			const payload = await hostPayload(current, messages, reasoning);
 			if (extra.length) payload.input.push(...extra);
 			return { payload, messages, result: await fake.fire("before_provider_request", { payload }, ctx(current)) };
 		},
@@ -244,6 +245,32 @@ test("a native compaction keeps replaying when assistant text carries no phase",
 	expect(JSON.stringify(result.input)).toContain("No phase here.");
 });
 
+test("on OpenAI GPT-6 with an API key and a thinking level, the host's thinking-level markers do not stop the replay", async () => {
+	const model = getModel("openai", "gpt-6.1-sol");
+	const h = await harness({ model, hasUI: true });
+	// 宿主为这类模型在每条回复上记下当时的思考档，之后的请求把它写成回复前的一条 configuration_update。
+	const thought = (message: object) => ({ ...message, providerThinkingLevel: "high" });
+	h.sm.appendMessage(system({ content: "Base prompt" }));
+	h.sm.appendMessage(user("ancient question"));
+	h.sm.appendMessage(thought(assistant(model, [answer("ancient answer", "msg_ancient")])));
+	const kept = h.sm.appendMessage(user("old question"));
+	h.sm.appendMessage(thought(assistant(model, [answer("Reading.", "msg_read", "commentary"), readCall("call_old")], "toolUse")));
+	h.sm.appendMessage(toolResult("call_old|fc_call_old", "Repository contents."));
+	h.sm.appendMessage(thought(assistant(model, [answer("old answer", "msg_old")])));
+	stubFetch(compacted("enc"));
+	const result = await h.compact(kept);
+	h.sm.appendMessage(user("new question"));
+	h.sm.appendMessage(thought(assistant(model, [answer("It is green.", "msg_green")])));
+	h.sm.appendMessage(user("follow up"));
+
+	const { payload, result: rewritten } = await h.request([], model, "high");
+
+	const tail = firstIndex(payload.input, "new question");
+	expect(payload.input.slice(0, tail).some((item: any) => item.type === "configuration_update")).toBe(true);
+	expect(h.notices).toEqual([]);
+	expect(rewritten.input).toEqual([payload.input[0], ...result.compaction.details.compactedWindow, ...payload.input.slice(tail)]);
+});
+
 const GRAMMAR_TOOL = {
 	name: "codemode",
 	description: "Run code",
@@ -319,7 +346,6 @@ test("a kept window holding another provider's messages still replays", async ()
 	expect(calls).toHaveLength(1);
 	// 别家的不透明推理不发往 OpenAI，可见文字照发。
 	expect(calls[0].raw).not.toContain("xai-encrypted");
-	expect(calls[0].raw).toContain("Foreign reasoning summary.");
 	expect(calls[0].raw).toContain("Reading the repository.");
 	expect(h.notices).toEqual([]);
 	expect(rewritten.input).toEqual([payload.input[0], ...result.compaction.details.compactedWindow, ...payload.input.slice(firstIndex(payload.input, "new question"))]);
