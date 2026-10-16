@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-16
+
 ### Changed
 
 - **Breaking:** FireCode now requires Pi 1.3.0 or later.
@@ -234,7 +236,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/Suge8/firecode/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Suge8/firecode/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Suge8/firecode/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/Suge8/firecode/compare/v1.3.0...v1.3.1
