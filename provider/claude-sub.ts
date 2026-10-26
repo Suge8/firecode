@@ -129,6 +129,6 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 		// 紧挨着的上一条也是同类失败，说明这次已是自愈重试：登录真失效，交回宿主照常落定。
 		if (!isRevokedTokenFailure(failure) || isRevokedTokenFailure(previous)) return;
 		ctx.ui.notify(msg.tokenReissued, "info");
-		return { entries: [{ type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
+		return { entries: [...event.entries, { type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 	});
 }

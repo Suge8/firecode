@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Image file IDs sent to Claude now belong to the account that uploaded them. After switching to another Claude account, or between a subscription and an API key, every request in a session with images failed with 404 "File `file_…` not found", because IDs uploaded under the old account were reused; the images are now uploaded once more under the new account. If a file is gone within the same account (for example deleted), it is uploaded again and the turn is retried automatically instead of the session breaking.
+
 ## [1.6.0] - 2026-10-16
 
 ### Changed
