@@ -490,6 +490,18 @@ test("溢出恢复删除运行时消息后仍落定供应商错误而非过期�
 	expect(content).not.toContain("（无回复）");
 });
 
+test("输出截断即使已有正文也按失败投递，不能报告正常返回", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("看似完整的结果", { stopReason: "length" })]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "truncated", prompt: "执行", role: "工程师" });
+	await delivered;
+	const content = harness.messages[0].message.content;
+	expect(content).toContain("错误：");
+	expect(content).toContain("截断");
+	expect(content).not.toContain("已返回");
+});
+
 test("非显式中断的 aborted 终态落定明确原因", async () => {
 	const harness = await setup();
 	faux.setResponses([

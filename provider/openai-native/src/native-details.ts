@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { CompactionEntry, CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../../../jsonc.js";
+import type { WindowLoss } from "../../messages.js";
 
-export const NATIVE_COMPACTION_STRATEGY = "openai-native-compact";
-export const NATIVE_COMPACTION_SUMMARY = "[OpenAI native compaction checkpoint]";
+const NATIVE_COMPACTION_STRATEGY = "openai-native-compact";
+const NATIVE_COMPACTION_VERSION = 2;
 
 const NATIVE_PROVIDERS = new Set(["openai", "openai-codex"]);
 const NATIVE_APIS = new Set(["openai-responses", "openai-codex-responses"]);
@@ -18,10 +20,11 @@ type NativeIdentity = { provider: string; api: string; model: string; baseUrl: s
 
 type NativeCompactionDetails = NativeIdentity & {
 	strategy: typeof NATIVE_COMPACTION_STRATEGY;
+	version?: number;
 	compactedWindow: Record<string, unknown>[];
 };
 
-export type NativeCompactionEntry = CompactionEntry<NativeCompactionDetails> & { details: NativeCompactionDetails };
+type NativeCompactionEntry = CompactionEntry<NativeCompactionDetails> & { details: NativeCompactionDetails };
 
 /** 当前模型能做原生压缩时给出它的身份；代理、其它供应商或没有基址都不行（历史不发往兼容代理）。 */
 export function nativeIdentity(model: Model<Api> | undefined): NativeIdentity | undefined {
@@ -44,14 +47,20 @@ function isNativeDetails(value: unknown): value is NativeCompactionDetails {
 }
 
 /** 分支上最近一次压缩；它是原生压缩时一并给出检查点内容。 */
-export function latestCompaction(entries: readonly SessionEntry[]): { index: number; native?: NativeCompactionEntry } | undefined {
-	const index = entries.findLastIndex((entry) => entry.type === "compaction");
-	if (index < 0) return undefined;
-	const entry = entries[index] as CompactionEntry;
-	return { index, native: isNativeDetails(entry.details) ? (entry as NativeCompactionEntry) : undefined };
+export function latestCompaction(entries: readonly SessionEntry[]): { native?: NativeCompactionEntry } | undefined {
+	const entry = entries.findLast((entry) => entry.type === "compaction");
+	return entry && { native: isNativeDetails(entry.details) ? (entry as NativeCompactionEntry) : undefined };
 }
 
-export function sameBackend(details: NativeIdentity, identity: NativeIdentity): boolean {
+export function nativeWindowLoss(details: NativeCompactionDetails, model: Model<Api> | undefined, enabled: boolean): WindowLoss | undefined {
+	const identity = nativeIdentity(model);
+	const kind = !enabled ? "disabled"
+		: details.version !== NATIVE_COMPACTION_VERSION ? "unreplayable"
+		: !identity || !sameBackend(details, identity) ? "switched" : undefined;
+	return kind && { kind, from: describeIdentity(details) };
+}
+
+function sameBackend(details: NativeIdentity, identity: NativeIdentity): boolean {
 	return (
 		details.provider === identity.provider &&
 		details.api === identity.api &&
@@ -67,9 +76,10 @@ export function createNativeCompactionResult(input: {
 	compactedWindow: Record<string, unknown>[];
 }): CompactionResult<NativeCompactionDetails> {
 	return {
-		summary: NATIVE_COMPACTION_SUMMARY,
+		// 宿主按摘要查找刚写入的条目；唯一标记避免第二次压缩误报旧检查点。
+		summary: `[OpenAI native compaction checkpoint: ${randomUUID()}]`,
 		firstKeptEntryId: input.firstKeptEntryId,
 		tokensBefore: input.tokensBefore,
-		details: { strategy: NATIVE_COMPACTION_STRATEGY, ...input.identity, compactedWindow: input.compactedWindow },
+		details: { strategy: NATIVE_COMPACTION_STRATEGY, version: NATIVE_COMPACTION_VERSION, ...input.identity, compactedWindow: input.compactedWindow },
 	};
 }

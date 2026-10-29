@@ -1028,6 +1028,21 @@ describe("review cards and degraded paths", () => {
 		expect(card).toContain("数据会丢");
 	}, 20_000);
 
+	test("截断的 PASS 不能让审查通过", async () => {
+		await loadAll();
+		faux.setResponses([fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test", { stopReason: "length" })]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => (readCheckpoint({ sessionManager })?.history.length ?? 0) > 0);
+		const state = readCheckpoint({ sessionManager });
+		expect(state?.history.at(-1)?.result).toBe("error");
+		expect(state?.history.at(-1)?.error).toContain("截断");
+	}, 20_000);
+
 	// 事故：一个审查者登录过期、一直没给结论，另一个给了 PASS，审查却判了通过。
 	test("a reviewer that gives no verdict keeps the review from passing; the result names the model and the reason", async () => {
 		const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";

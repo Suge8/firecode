@@ -23,9 +23,9 @@
 	},
 
 	// nativeCompaction uses OpenAI's native context compaction. The result can only be continued by the same model and base URL:
-	// when it cannot be used (after a model switch) or fails, a manual /compact is cancelled with the reason and automatic compaction
-	// falls back to a normal summary.
-	// Set it to false to always use normal summaries. priority pays more for faster output and is off by default.
+	// unavailable windows stop requests and compaction without dropping history. Re-enable this option and switch back to resume.
+	// Failures fall back to normal summaries only before the first native checkpoint. Set false for new sessions to use normal summaries.
+	// priority pays more for faster output and is off by default.
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {

@@ -25,7 +25,7 @@ import { registerRoundRecorder } from "./round.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
 
-type SimpleFeature = Exclude<Feature, "review" | "master" | "watcher">;
+type SimpleFeature = Exclude<Feature, "review" | "master" | "watcher" | "openaiNative">;
 
 const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
@@ -34,7 +34,6 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
 	claudeFiles: registerClaudeFiles,
-	openaiNative: registerOpenAINative,
 	statusbar: registerStatusBar,
 };
 
@@ -59,6 +58,8 @@ export function registerFirecode(
 	if (!subsession) watchSessionMaintenance(pi);
 	registerTruncatedWriteGuard(pi);
 	registerToday(pi);
+	// 关闭请求选项也不能让已有原生检查点静默丢失历史。
+	registerOpenAINative(pi, config.features.openaiNative !== false);
 	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);

@@ -63,8 +63,8 @@ export async function runReviewSession(
 		const assistant = assistantMessage(event);
 		if (assistant) {
 			finalText = textOf(assistant.content);
-			finalError = assistant.stopReason === "error"
-				? assistant.errorMessage || "model error"
+			finalError = assistant.stopReason === "length" ? msg.outputTruncated
+				: assistant.stopReason === "error" ? assistant.errorMessage || "model error"
 				: undefined;
 		}
 	});

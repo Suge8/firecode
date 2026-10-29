@@ -2,7 +2,7 @@
 
 pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
 
-单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、日期段、herdr 投影、审查卡渲染始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
 - 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数与审查占用在 `busy.ts`（读者经 `watchBusy`、`busyView`），轮记录写入通知在 `round.ts`，子代理名册 `firecode:subagents`（给同进程其他扩展的对外接口）在 `master/roster.ts`；契约都在各自头注释。
 - Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
@@ -49,6 +49,8 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 
 OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主流，不自带 Responses 序列化，也不自己解析鉴权（宿主在注册表里解析 apiKey、headers、baseUrl、env）。`provider/openai-native/src/host-stream.ts` 是唯一使用处。升级 pi 时要确认显式传入的 `onPayload` 优先，且不重入：宿主若让注册表调用也触发 `before_provider_request`（上游 [pi#9773](https://github.com/earendil-works/pi/issues/9773)），本扩展自己的钩子会在压缩请求里被再次调用，须保证它不对这类请求重放或改写。
+
+原生检查点只压缩宿主 `preparation` 已投影的待摘要消息，保留段仍归宿主管理。服务端压缩项是唯一历史窗口，不另保留用户消息；重放只替换检查点摘要。已有窗口不可用或再次压缩失败时停止，不将占位摘要交给普通压缩；关闭功能也保留完整性守卫。窗口格式版本不匹配时从检查点前的分支重新开始，不猜测旧格式。摘要带唯一标记，因为宿主按摘要查找 `session_compact` 的条目。
 
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 

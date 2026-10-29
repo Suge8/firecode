@@ -10,6 +10,7 @@ import { clip, firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
+import { msg as commonMsg } from "../messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
@@ -311,6 +312,7 @@ function captureWorkerTerminal(
 
 function terminalFailure(terminal: WorkerTerminal | undefined): string | undefined {
 	if (!terminal) return msg.run.noTerminal;
+	if (terminal.stopReason === "length") return commonMsg.outputTruncated;
 	if (terminal.stopReason === "error") return terminal.errorMessage || msg.run.unknownProviderError;
 	if (terminal.stopReason === "aborted") return msg.run.aborted(terminal.errorMessage || msg.run.noReason);
 	if (!terminal.text) return msg.run.noReply;

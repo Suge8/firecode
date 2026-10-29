@@ -16,12 +16,12 @@ export const msg = defineMessages({
 		fastCommand: "开关当前 OpenAI 系供应商的加速档",
 		fastShortcut: "开关加速档",
 		compaction: {
+			guidance: (text: string) => `本次手动 /compact 的补充要求：\n${text}`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
 				const what: Record<NativeCompactionFailureReason, string> = {
 					"network-error": "请求没能发出，或网络失败",
 					"non-2xx": "接口拒绝了请求",
 					"empty-body": "接口返回了空内容",
-					"invalid-json": "接口返回的不是合法 JSON",
 					"malformed-response": "接口返回了无法识别的内容",
 					"missing-compaction": "接口没有返回压缩结果",
 					"input-too-large": "对话超出了模型的上下文窗口",
@@ -29,25 +29,20 @@ export const msg = defineMessages({
 				};
 				return `原生压缩失败：${what[reason]}${status ? `（HTTP ${status}）` : ""}${detail ? `：${detail}` : ""}`;
 			},
-			windowUnusable: (from: string) => `上一次压缩是 ${from} 的原生压缩，当前模型用不了它的压缩窗口`,
-			retryLater: "可以稍后重试",
-			switchBack: (from: string) =>
-				`切回 ${from} 再压缩，或把 openai.nativeCompaction 设为 false 并重启，改用普通摘要压缩（压缩窗口里的旧历史会丢失）`,
-			cancelled: (cause: string, hint: string) => `FireCode：${cause}。/compact 已取消，会话没有改动；${hint}。`,
-			fallback: (cause: string, windowLost: boolean) =>
-				`FireCode：${cause}。这次自动压缩改用普通摘要${windowLost ? "，上次原生压缩窗口里的旧历史不会进入摘要" : ""}。`,
+			cancelled: (cause: string) => `FireCode：${cause}。压缩已取消，历史保留，可以稍后重试。`,
+			fallback: (cause: string) => `FireCode：${cause}。这次自动压缩改用完整原文生成普通摘要。`,
 			replayDeclined: (loss: WindowLoss) => {
 				const cause = {
 					switched: `当前模型不是做那次原生压缩的 ${loss.from}`,
-					disabled: "openai.nativeCompaction 已关闭",
-					unreplayable: "这次请求的内容与会话记录对不上",
+					disabled: "features.openaiNative 或 openai.nativeCompaction 已关闭",
+					unreplayable: "原生检查点版本不受支持，或这次请求的内容与会话记录对不上",
 				}[loss.kind];
 				const remedy = {
 					switched: `切回 ${loss.from} 可恢复这段历史`,
-					disabled: "把 openai.nativeCompaction 改回 true 并重启可恢复",
-					unreplayable: "这个提示反复出现时，把 openai.nativeCompaction 设为 false 并重启，改用普通摘要压缩",
+					disabled: "把 features.openaiNative 和 openai.nativeCompaction 改回 true 并重启可恢复",
+					unreplayable: "从该检查点之前的会话分支重新开始",
 				}[loss.kind];
-				return `FireCode：${cause}，这次请求没有带上上次原生压缩之前的历史。${remedy}。`;
+				return `FireCode：${cause}，已停止请求或压缩，避免丢失历史。${remedy}。`;
 			},
 		},
 	},
@@ -63,12 +58,12 @@ export const msg = defineMessages({
 		fastCommand: "Toggle fast mode for the current OpenAI-family provider",
 		fastShortcut: "Toggle fast mode",
 		compaction: {
+			guidance: (text: string) => `Additional user guidance for this manual /compact request:\n${text}`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
 				const what: Record<NativeCompactionFailureReason, string> = {
 					"network-error": "the request could not be sent, or the network failed",
 					"non-2xx": "the API rejected the request",
 					"empty-body": "the API returned an empty body",
-					"invalid-json": "the API returned invalid JSON",
 					"malformed-response": "the API returned something unrecognizable",
 					"missing-compaction": "the API returned no compaction result",
 					"input-too-large": "the conversation exceeds the model's context window",
@@ -76,25 +71,20 @@ export const msg = defineMessages({
 				};
 				return `native compaction failed: ${what[reason]}${status ? ` (HTTP ${status})` : ""}${detail ? `: ${detail}` : ""}`;
 			},
-			windowUnusable: (from: string) => `the last compaction was a native compaction by ${from}, and the current model cannot use its window`,
-			retryLater: "try again later",
-			switchBack: (from: string) =>
-				`switch back to ${from} and compact again, or set openai.nativeCompaction to false and restart to use ordinary summary compaction (history inside the window is lost)`,
-			cancelled: (cause: string, hint: string) => `FireCode: ${cause}. /compact was cancelled and the session is unchanged; ${hint}.`,
-			fallback: (cause: string, windowLost: boolean) =>
-				`FireCode: ${cause}. This automatic compaction falls back to an ordinary summary${windowLost ? "; history inside the last native compaction window will not be in it" : ""}.`,
+			cancelled: (cause: string) => `FireCode: ${cause}. Compaction was cancelled; history is preserved. Try again later.`,
+			fallback: (cause: string) => `FireCode: ${cause}. This automatic compaction uses the complete original text for an ordinary summary.`,
 			replayDeclined: (loss: WindowLoss) => {
 				const cause = {
 					switched: `the current model is not ${loss.from}, which made the native compaction`,
-					disabled: "openai.nativeCompaction is off",
-					unreplayable: "this request does not line up with the session record",
+					disabled: "features.openaiNative or openai.nativeCompaction is off",
+					unreplayable: "the native checkpoint version is unsupported, or this request does not line up with the session record",
 				}[loss.kind];
 				const remedy = {
 					switched: `switch back to ${loss.from} to restore it`,
-					disabled: "set openai.nativeCompaction back to true and restart to restore it",
-					unreplayable: "if this keeps appearing, set openai.nativeCompaction to false and restart to use ordinary summary compaction",
+					disabled: "set features.openaiNative and openai.nativeCompaction back to true and restart to restore it",
+					unreplayable: "start again from the session branch before this checkpoint",
 				}[loss.kind];
-				return `FireCode: ${cause}, so this request left out the history before the last native compaction; ${remedy}.`;
+				return `FireCode: ${cause}. The request or compaction was stopped to preserve history; ${remedy}.`;
 			},
 		},
 	},

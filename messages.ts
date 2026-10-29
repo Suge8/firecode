@@ -48,6 +48,7 @@ export const msg = defineMessages({
 			extensionFailed: (event: string, reason: string) => `子会话里的扩展在 ${event} 出错：${reason}`,
 		},
 		truncatedWrite: "写入内容带 read 截断提示，说明拿的是截断后的半截文件：改文件用 edit，或分段读完整再写",
+		outputTruncated: "模型输出达到上限，回复被截断，未正常完成",
 		outcome: { aborted: "已中断", error: "请求失败" },
 		earlier: {
 			aborted: (count: number) => `中断过 ${count} 次`,
@@ -108,6 +109,7 @@ export const msg = defineMessages({
 			extensionFailed: (event: string, reason: string) => `An extension in the sub-session failed on ${event}: ${reason}`,
 		},
 		truncatedWrite: "The content to write carries a read truncation notice, so it is a truncated half of the file: change the file with edit, or read it completely in chunks before writing",
+		outputTruncated: "The model reached its output limit; the reply was truncated, not completed",
 		outcome: { aborted: "Interrupted", error: "Request failed" },
 		earlier: {
 			aborted: (count: number) => `Interrupted ${count} ${count === 1 ? "time" : "times"}`,
