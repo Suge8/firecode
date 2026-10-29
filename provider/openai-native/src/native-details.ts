@@ -54,8 +54,8 @@ export function latestCompaction(entries: readonly SessionEntry[]): { native?: N
 
 export function nativeWindowLoss(details: NativeCompactionDetails, model: Model<Api> | undefined, enabled: boolean): WindowLoss | undefined {
 	const identity = nativeIdentity(model);
-	const kind = !enabled ? "disabled"
-		: details.version !== NATIVE_COMPACTION_VERSION ? "unreplayable"
+	const kind = details.version !== NATIVE_COMPACTION_VERSION ? "unreplayable"
+		: !enabled ? "disabled"
 		: !identity || !sameBackend(details, identity) ? "switched" : undefined;
 	return kind && { kind, from: describeIdentity(details) };
 }

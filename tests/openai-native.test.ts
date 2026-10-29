@@ -1,5 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
@@ -211,16 +211,12 @@ test("a truncated native summary is rejected; a first automatic failure can stil
 	expect(session.sessionManager.getBranch().find((entry: any) => entry.type === "compaction")?.details?.strategy).not.toBe("openai-native-compact");
 }, 20_000);
 
-test.each(["model", "native", "feature", "old-format"])("%s cannot silently replace a native window with placeholder history", async (mode) => {
+test.each(["model", "native", "feature"])("%s cannot silently replace a native window with placeholder history", async (mode) => {
 	const f = await fixture();
 	let { session } = await open(f);
 	seed(session);
 	await session.compact();
 	const path = session.sessionManager.getSessionFile();
-	if (mode === "old-format") {
-		const checkpoint = session.sessionManager.getBranch().findLast((entry: any) => entry.type === "compaction");
-		session.sessionManager.appendCompaction(checkpoint.summary, checkpoint.firstKeptEntryId, 1000, { ...checkpoint.details, version: undefined });
-	}
 	await close(session);
 	({ session } = await open(f, path, { native: mode !== "native", enabled: mode !== "feature" }));
 	if (mode === "model") await session.setModel(session.modelRuntime.getModel("openai", "gpt-5-mini"));
@@ -230,4 +226,47 @@ test.each(["model", "native", "feature", "old-format"])("%s cannot silently repl
 	expect(session.messages.findLast((message: any) => message.role === "assistant").stopReason).toBe("aborted");
 	await expect(session.compact()).rejects.toThrow("cancelled");
 	expect(requests.length).toBe(before);
+}, 20_000);
+
+
+test.each(["on", "off"])("legacy checkpoints preserve later messages and explain recovery with native %s", async (mode) => {
+	const f = await fixture();
+	let { session } = await open(f);
+	seed(session);
+	const beforeCheckpoint = session.sessionManager.getLeafId();
+	const kept = session.sessionManager.getBranch().find((entry: any) => entry.type === "message" && entry.message.role === "user" && entry.message.content.startsWith("Recent tail."));
+	session.sessionManager.appendCompaction("[OpenAI native compaction checkpoint]", kept.id, 2000, {
+		strategy: "openai-native-compact", provider: session.model.provider, api: session.model.api,
+		model: session.model.id, baseUrl: session.model.baseUrl,
+		compactedWindow: [{ type: "compaction", encrypted_content: "legacy-window" }],
+	});
+	append(session, "user", "LATER-REQUIREMENT-872");
+	append(session, "assistant", "LATER-RESULT-450");
+	const path = session.sessionManager.getSessionFile();
+	await close(session);
+	({ session } = await open(f, path, { native: mode === "on" }));
+	const original = readFileSync(path, "utf8");
+	const notices = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		await session.prompt("Continue the existing session.");
+		await expect(session.compact()).rejects.toThrow("cancelled");
+		expect(requests).toHaveLength(0);
+		const warning = notices.mock.calls.flat().join("\n");
+		expect(warning).toContain("/export");
+		expect(warning).toContain("No summary");
+		expect(warning).toContain("不会自动合并");
+		expect(readFileSync(path, "utf8").startsWith(original)).toBe(true);
+		const oldLeaf = session.sessionManager.getLeafId();
+		const backup = session.exportToJsonl(join(f.directory, "backup.jsonl"));
+		const exported = readFileSync(backup, "utf8");
+		for (const marker of ["LANTERN-5849", "LATER-REQUIREMENT-872", "LATER-RESULT-450"]) expect(exported).toContain(marker);
+		await session.navigateTree(beforeCheckpoint, { summarize: false });
+		const restored = JSON.stringify(session.sessionManager.buildSessionProjection().messages);
+		expect(restored).toContain("LANTERN-5849");
+		expect(restored).not.toContain("LATER-REQUIREMENT-872");
+		expect(JSON.stringify(session.sessionManager.getBranch(oldLeaf))).toContain("LATER-REQUIREMENT-872");
+		expect(readFileSync(path, "utf8").startsWith(original)).toBe(true);
+	} finally {
+		notices.mockRestore();
+	}
 }, 20_000);

@@ -40,7 +40,7 @@ export const msg = defineMessages({
 				const remedy = {
 					switched: `切回 ${loss.from} 可恢复这段历史`,
 					disabled: "把 features.openaiNative 和 openai.nativeCompaction 改回 true 并重启可恢复",
-					unreplayable: "从该检查点之前的会话分支重新开始",
+					unreplayable: "先用 /export <备份路径.jsonl> 保存当前分支（含检查点后消息），再用 /tree 回到最早原生检查点前并选 No summary；后续消息仍在旧分支和备份中，不会自动合并，继续前请从备份补回后续需求与结果",
 				}[loss.kind];
 				return `FireCode：${cause}，已停止请求或压缩，避免丢失历史。${remedy}。`;
 			},
@@ -82,7 +82,7 @@ export const msg = defineMessages({
 				const remedy = {
 					switched: `switch back to ${loss.from} to restore it`,
 					disabled: "set features.openaiNative and openai.nativeCompaction back to true and restart to restore it",
-					unreplayable: "start again from the session branch before this checkpoint",
+					unreplayable: "first save the current branch, including post-checkpoint messages, with /export <backup-path.jsonl>; then use /tree to go before the earliest native checkpoint and choose No summary. Later messages remain on the old branch and in the backup, but are not merged automatically; bring later requirements and results back from the backup before continuing",
 				}[loss.kind];
 				return `FireCode: ${cause}. The request or compaction was stopped to preserve history; ${remedy}.`;
 			},
