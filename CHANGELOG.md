@@ -4,7 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** native compaction checkpoints use a new format. Older native checkpoints are not replayed or migrated automatically. Before upgrading an existing compacted session, back up the complete session file and export its active branch. Returning with `/tree` to before its earliest native checkpoint restores only earlier context; later messages stay on the old branch and in the backup and must be brought back before continuing. Incompatible checkpoints now stop requests and compaction instead of silently omitting history.
+
 ### Fixed
+
+- Native compaction follows Pi's projected summary boundary, so edited or deleted messages do not return and the recent tail stays under Pi's control. The server compaction item replaces the extra local retention algorithm.
+- Native compaction no longer limits generation to 16 tokens, which could truncate the compaction itself. Incomplete responses are rejected; if a later native compaction fails, its existing history is preserved instead of being replaced by an ordinary summary of a placeholder. Each checkpoint has a distinct identity.
+- A Worker's truncated response is reported as a failure, and a review ending at the output limit cannot pass even if its partial text begins with PASS.
 
 - Image file IDs sent to Claude now belong to the account that uploaded them. After switching to another Claude account, or between a subscription and an API key, every request in a session with images failed with 404 "File `file_…` not found", because IDs uploaded under the old account were reused; the images are now uploaded once more under the new account. If a file is gone within the same account (for example deleted), it is uploaded again and the turn is retried automatically instead of the session breaking.
 
