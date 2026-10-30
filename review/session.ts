@@ -37,10 +37,10 @@ export async function runReviewSession(
 	let actual = config.models[0];
 	try {
 		const selected = await pool.resolveChain(config.models);
+		if (!selected) return { kind: "error", message: msg.spawn.chainExhausted(config.models.map((atom) => msg.spawn.modelUnavailable(atom.model)).join("; ")) };
 		actual = selected;
 		spawned = await pool.spawn({
 			cwd,
-			thinking: selected.thinking,
 			chain: config.models,
 			onModelChange: (atom) => { actual = atom; },
 			tools: config.tools,

@@ -52,7 +52,6 @@ export async function createModelRoute(
 	const state: RouteState = {};
 	let lastReason: string | undefined;
 	let currentFailed = false;
-	let pendingFailure: string | undefined;
 	let nextTask = true;
 	let settled = true;
 	const attempted = new Set<string>();
@@ -89,20 +88,14 @@ export async function createModelRoute(
 		const atom = { model: key(selected.model), thinking: clampThinkingLevel(selected.model, override ?? selected.thinking) };
 		state.current = { model: selected.model, thinking: atom.thinking };
 		currentFailed = false;
-		pendingFailure = undefined;
 		if (!previous || previous.model !== atom.model || previous.thinking !== atom.thinking) onChange?.(atom, previous, lastReason);
 		return { model: selected.model, thinkingLevel: atom.thinking };
 	};
 	runtime.registerVirtualModel({ provider, id, name: "FireCode", thinkingLevels: THINKING_LEVELS,
 		route: async (request) => {
-			if (request.reason === "retry" && state.current && !currentFailed && (request.failed || pendingFailure)) {
-				const alternatives = (await candidates(runtime, chain)).filter(({ model }) => key(model) !== key(state.current!.model) && !attempted.has(key(model)) && (cooldowns.get(key(model))?.until ?? 0) <= Date.now());
-				if (!alternatives.length) {
-					nextTask = false;
-					return { model: state.current.model, thinkingLevel: override ?? state.current.thinking };
-				}
-				fail(state.current.model, request.failed?.message.errorMessage ?? pendingFailure ?? "model error");
-				currentFailed = true;
+			if (request.reason === "retry" && state.current) {
+				nextTask = false;
+				return { model: state.current.model, thinkingLevel: state.current.thinking };
 			}
 			const restart = request.reason === "direct" ? settled : nextTask && request.reason !== "retry";
 			nextTask = false;
@@ -121,9 +114,8 @@ export async function createModelRoute(
 		pi.on("agent_settled", () => { settled = true; });
 		pi.on("message_end", (event) => {
 			const message = event.message;
-			if (message.role !== "assistant" || !state.current || message.api === "pi-virtual") return;
-			if (message.stopReason === "error") pendingFailure = message.errorMessage ?? "model error";
-			else if (message.stopReason !== "aborted") cooldowns.delete(key(state.current.model));
+			if (message.role === "assistant" && state.current && message.api !== "pi-virtual"
+				&& message.stopReason !== "error" && message.stopReason !== "aborted") cooldowns.delete(key(state.current.model));
 		});
 		pi.on("agent_before_settle", (event, ctx) => {
 			if (event.outcome !== "error" || event.continue) return;

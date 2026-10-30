@@ -31,7 +31,6 @@ interface SpawnSessionOptions {
 	chain: ModelChain;
 	thinkingOverride?: ThinkingLevelValue;
 	onModelChange?: (atom: ModelAtom, previous?: ModelAtom, reason?: string) => void;
-	thinking: ThinkingLevelValue;
 	tools: string[];
 	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
 	customTools?: ToolDefinition[];
@@ -92,10 +91,9 @@ export class InProcessSessionPool {
 		this.timing = { ...DEFAULT_TIMING, ...environment.timing };
 	}
 
-	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom> {
+	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom | undefined> {
 		const first = (await candidates(await this.modelRuntime(), chain))[0];
-		if (!first) throw new Error(msg.spawn.chainExhausted(chain.map((atom) => msg.spawn.modelUnavailable(atom.model)).join("; ")));
-		return { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
+		return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
 	}
 
 	configureRoute(sessionPath: string, chain: ModelChain, override?: ThinkingLevelValue): void {
@@ -150,7 +148,6 @@ export class InProcessSessionPool {
 				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
 				modelRuntime: runtime,
 				model: route.model,
-				thinkingLevel: options.thinking,
 				tools: options.tools,
 				...(options.customTools ? { customTools: options.customTools } : {}),
 				resourceLoader: loader,

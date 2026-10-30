@@ -752,7 +752,7 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 9,
+				version: 8,
 				runId: "g",
 				phase: "reviewing",
 				round: 1,

@@ -106,11 +106,9 @@ export function registerWatcher(pi: ExtensionAPI, pool: InProcessSessionPool): v
 				let observer = owner.observer;
 				if (!observer) {
 					const cwd = owner.ctx.cwd;
-					const selected = await pool.resolveChain(config.models);
 					if (runtime !== owner) return;
 					observer = await createObserver({
 						cwd,
-						thinking: selected.thinking,
 						chain: config.models,
 						pool,
 						onExtensionError: (error) => {

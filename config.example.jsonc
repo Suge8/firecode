@@ -39,12 +39,12 @@
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
 		"roles": {
-			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Implement and debug substantial code changes" },
-			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Design and build visual interfaces and interactions" },
-			"junior": { "model": ["claude-sonnet-5-5/medium", "gpt-6.1-terra/medium"], "use": "Implement bounded, well-specified small changes" },
-			"chores": { "model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"], "use": "Perform routine mechanical maintenance and bulk edits" },
-			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Investigate sources, documentation and code without editing" },
-			"sentinel": { "model": ["gpt-6-luna/high", "claude-haiku-5-5/medium"], "use": "Monitor CI, deployments and long-running processes until completion" }
+			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Changes code: implementation, debugging; also for audits that need deep code reading to find defects (read-only)" },
+			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Visual and frontend work" },
+			"junior": { "model": ["claude-sonnet-5-5/medium", "gpt-6.1-terra/medium"], "use": "Code changes with ordinary quality requirements" },
+			"chores": { "model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"], "use": "Well-specified changes verifiable by tests or type checks: renames, pattern migrations, boilerplate and running commands" },
+			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Read-only: web search, docs and version lookups, reading logs, locating code from leads, checking references" },
+			"sentinel": { "model": ["gpt-6-luna/high", "claude-haiku-5-5/medium"], "use": "Waiting on CI, deployments and long tests" }
 		}
 	},
 

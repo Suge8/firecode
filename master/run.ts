@@ -37,11 +37,10 @@ interface WorkerTerminal {
 export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean, override?: ThinkingLevelValue): Promise<AgentSession> {
 	const { pool, exclusions } = active.setup;
 	const role = active.setup.roster.find((entry) => entry.role === worker.role);
-	if (!role) throw new Error(msg.run.roleGone(worker.role));
+	if (!role) throw new Error(msg.run.roleGone(worker.role, active.setup.roster.map((entry) => entry.role).join(", ")));
 	active.assertOpen();
 	const spawned = await pool.spawn({
 		cwd: worker.cwd ?? process.cwd(),
-		thinking: worker.thinking,
 		chain: role.models,
 		thinkingOverride: override,
 		onModelChange: (atom, previous, reason) => {

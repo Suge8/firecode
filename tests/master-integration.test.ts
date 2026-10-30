@@ -54,14 +54,20 @@ test("省略供应商的模型原子能派给可用来源", async () => {
 	expect(harness.messages.at(-1).message.content).toContain("完成");
 });
 
-test("没有可用模型的角色不会出现在角色表和枚举", async () => {
+test("不可用角色保留在枚举中，但不进入角色表且派发时报出可用角色", async () => {
 	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 不可用: { model: "nokey/model/medium", use: "其他工作" } } });
 	await harness.emit("session_start", {});
 	const prompt = await harness.systemPrompt("主提示词");
 	expect(prompt).toContain("工程师（测试）");
 	expect(prompt).not.toContain("不可用");
-	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师"]);
+	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "不可用"]);
 	expect(harness.notices.join("\n")).toContain("不可用");
+	await expect(harness.execute({ action: "start", worker: "missing", prompt: "执行", role: "不可用" })).rejects.toThrow(/不可用.*工程师/u);
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "valid", prompt: "执行", role: "工程师" });
+	await delivered;
+	await expect(harness.execute({ action: "send", worker: "valid", prompt: "继续", role: "不可用" })).rejects.toThrow(/不可用.*工程师/u);
 });
 
 test("新会话默认激活 subagents", async () => {
@@ -419,6 +425,30 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
+test("可重试错误由宿主在原模型重试，不切换模型", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
+	faux.setResponses([fauxAssistantMessage("初始化")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({ action: "start", worker: "retry-chain", prompt: "初始化", role: "工程师" });
+	await delivered;
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
+	const models: string[] = [];
+	const respond = (_context: any, _options: any, _state: any, model: any) => {
+		models.push(model.id);
+		return models.length === 1
+			? fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit" })
+			: fauxAssistantMessage("重试完成");
+	};
+	faux.setResponses([respond, respond]);
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "retry-chain", prompt: "继续" });
+	await delivered;
+	expect(models).toEqual(["worker", "worker"]);
+	expect(harness.messages.at(-1).message.content).toContain("重试完成");
+	expect(harness.messages.some((entry: any) => entry.message.content.includes("已切换模型"))).toBe(false);
+});
+
 test("首选额度用尽时同一回合切换到下一模型并返回", async () => {
 	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
 	const fault = fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" });
@@ -502,7 +532,6 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	const options = {
 		cwd: harness.cwd,
 		chain: [{ model: "test/worker", thinking: "medium" }],
-		thinking: "medium",
 		tools: [],
 		systemPrompt: { mode: "replace", text: "test" },
 		contextFiles: false,
@@ -523,7 +552,7 @@ test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会�
 	await mkdir(dirname(sessionPath), { recursive: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const spawned = await harness.pool.spawn({
-		cwd: harness.cwd, chain: [{ model: "test/worker", thinking: "medium" }], thinking: "medium", tools: [],
+		cwd: harness.cwd, chain: [{ model: "test/worker", thinking: "medium" }], tools: [],
 		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
 		persistence: { type: "file", sessionPath },
 	});
@@ -2003,7 +2032,7 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 9, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 8, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
 		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,

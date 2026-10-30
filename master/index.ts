@@ -31,16 +31,12 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	const startupError = "error" in loaded ? loaded.error : prompts.error;
 	const configuredRoles = "error" in loaded ? [] : loaded.config.roles;
 	const roster: MasterRole[] = [...configuredRoles];
-	const roleParameter = Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: msg.tool.role }));
+	const roleParameter = Type.Optional(StringEnum(configuredRoles.map((entry) => entry.role), { description: msg.tool.role }));
 	let rosterReady = false;
 	const prepareRoster = async (ctx: ExtensionContext) => {
 		if (rosterReady) return;
-		const checks = await Promise.all(configuredRoles.map(async (role) => {
-			try { await pool.resolveChain(role.models); return true; } catch { return false; }
-		}));
+		const checks = await Promise.all(configuredRoles.map(async (role) => !!(await pool.resolveChain(role.models))));
 		roster.splice(0, roster.length, ...configuredRoles.filter((_role, index) => checks[index]));
-		const names = (roleParameter as unknown as { enum: string[] }).enum;
-		names.splice(0, names.length, ...roster.map((role) => role.role));
 		const missing = configuredRoles.filter((_role, index) => !checks[index]);
 		if (missing.length) {
 			const warning = msg.roster.unavailable(missing.map((role) => `${role.role}: ${role.models.map((atom) => atom.model).join(", ")}`).join("; "));

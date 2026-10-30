@@ -3,6 +3,8 @@
  * - 归因：仅订阅（OAuth）会话。请求头 user-agent 用本机 Claude Code 的版本号覆盖宿主的固定版本，与系统提示词首块 billing header
  *   里的 cc_version 保持一致（宿主已为 OAuth 请求带 x-app，不重复）；billing header 缺失时注入，已存在则原样通过。
  *   API key 与兼容代理的 anthropic 请求不带这些标识：头随当前凭据类型注册，登出订阅改用 API key 后在下一次提示前清掉。
+ *   pi 的会话流（含压缩）为 before_provider_headers 传入 transformHeaders；直接调用 modelRegistry.streamSimple 不传时不会触发钩子，
+ *   因此物理模型仍需注册供应商头，虚拟模型在路由后用请求头钩子按实际模型设置。
  * - 换发自愈：Anthropic 换发订阅令牌即吊销旧令牌，换发时仍在途的请求以 401 落空；宿主不重试 401，
  *   这里把该失败从模型投影中省略并续跑一次，续跑请求由宿主重读令牌文件拿到新令牌。重试仍 401 即登录真失效，照常落定。
  *   是否已重试只看会话分支，不留内存标记；不交给角色 fallback，换模型解决不了令牌换发。宿主将来自行重试这类 401 时删除本自愈。

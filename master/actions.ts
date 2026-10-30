@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { THINKING_LEVELS, type MasterRole } from "../config.js";
+import { THINKING_LEVELS, type MasterRole, type ModelAtom, type ThinkingLevelValue } from "../config.js";
 import { CANCEL_REVIEW_COMMAND, readReviewOutcome } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
@@ -137,6 +137,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	const requestedThinking = optionalString(params.thinking);
 	const requestedCwd = optionalString(params.cwd);
 	const prompt = requiredString(params.prompt, "prompt");
+	const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
 	// 子代理全过程视图的补话走同一入口，只多一个来源标记：视图起的运行指挥官不在等（见 RunOrigin），
 	// 落定事件注明是用户在视图里直接派的；视图补进别人起的运行只记原话，不改来源。
 	const fromView = origin === "view";
@@ -151,14 +152,13 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	}
 	if (target.status === "working") throw new Error(msg.action.workingSwitch(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.reviewingSend(target.name));
-	const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
 	const thinkingOverride = validThinking(requestedThinking);
 	live.transitioning = true;
 	try {
 		const cwd = await resolveSendCwd(target, requestedCwd);
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
 		const selectedRole = selection ?? resolveRole(roster, target.role);
-		const selected = await pool.resolveChain(selectedRole.models, thinkingOverride);
+		const selected = await resolveRoleModel(active, selectedRole, thinkingOverride);
 		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
 		active.current(target);
 		const session = await openWorkerSession(active, { ...target, cwd, role: selectedRole.role, ...selected }, thinkingOverride);
@@ -226,7 +226,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	const override = validThinking(optionalString(params.thinking));
 	const { live, launch } = active.reserve(name);
 	try {
-		const selected = await active.setup.pool.resolveChain(selectedRole.models, override);
+		const selected = await resolveRoleModel(active, selectedRole, override);
 		const thinking = selected.thinking;
 		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 		active.assertOpen();
@@ -283,10 +283,19 @@ function validThinking(value: string | undefined): WorkerRef["thinking"] | undef
 	return value as WorkerRef["thinking"] | undefined;
 }
 
+async function resolveRoleModel(active: MasterRuntime, role: MasterRole, override?: ThinkingLevelValue): Promise<ModelAtom> {
+	const { pool, roster } = active.setup;
+	const selected = await pool.resolveChain(role.models, override);
+	if (selected) return selected;
+	const checks = await Promise.all(roster.map(async (candidate) => !!(await pool.resolveChain(candidate.models))));
+	const available = roster.filter((_candidate, index) => checks[index]).map((candidate) => candidate.role).join(", ");
+	throw new Error(msg.run.roleGone(role.role, available));
+}
+
 /** 宿主已按 schema 枚举校验过 role，这里只查表。 */
 function resolveRole(roles: MasterRole[], role: string): MasterRole {
 	const found = roles.find((candidate) => candidate.role === role);
-	if (!found) throw new Error(msg.run.roleGone(role));
+	if (!found) throw new Error(msg.run.roleGone(role, roles.map((candidate) => candidate.role).join(", ")));
 	return found;
 }
 

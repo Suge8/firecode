@@ -19,7 +19,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 
 ## 工具契约
 
-`subagents` 只有七个命令动作，结构上都要求 Worker：
+`subagents` 只有七个命令动作，结构上都要求 Worker。role 枚举列全部配置角色；系统提示只列有可用候选的角色，选择其他角色时报出可用角色。
 
 - `start`：显式指定角色表内的 role 和短名；可用 thinking 覆盖角色原子档，可带 cwd、review。
 - `send`：working Worker 的普通 send 经宿主 `session.steer` 在句缝送达，不打断（仅回合确在流式时；steer 是子会话自己的消息队列，与根 AGENTS.md「硬约束」里主会话的唤醒问题无关，且只在流式中使用，不会唤起歇透会话）。切换 role、thinking 或 cwd 要求 Worker 空闲，working 时提示先 `interrupt`，reviewing 时等落定。省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。带 cwd 时释放热会话并以新目录重开同一份 JSONL（不新建会话），档案记新 cwd；Worker 的 cwd 已不存在且未带 cwd 时明确报错并提示带 cwd。steer 入队后回合若以中断等方式结束，滞留队列的补充说明在落定时清出并作为事件回报指挥官重发，不留到下次 prompt。

@@ -5,7 +5,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { InProcessSessionPool } from "../spawn.js";
-import type { ModelChain, ThinkingLevelValue } from "../config.js";
+import type { ModelChain } from "../config.js";
 import { readPrompt } from "../i18n.js";
 import { msg } from "./messages.js";
 
@@ -22,7 +22,6 @@ export interface Observer {
 
 interface ObserverOptions {
 	cwd: string;
-	thinking: ThinkingLevelValue;
 	chain: ModelChain;
 	pool: InProcessSessionPool;
 	onExtensionError?: (error: ExtensionError) => void;
@@ -32,7 +31,6 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 	let advice: string | undefined;
 	const spawned = await options.pool.spawn({
 		cwd: options.cwd,
-		thinking: options.thinking,
 		chain: options.chain,
 		tools: OBSERVER_TOOLS,
 		customTools: [adviseTool(() => advice, (note) => { advice = note; })],
