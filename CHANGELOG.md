@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Model settings for roles, reviewers, the advisor and watcher now accept an atom or ordered array. Remove role `fallback` fields and reviewer `{ model, fallback }` objects. Provider prefixes are optional. Pi 1.4.0 or later is required.
+- **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
+
 ### Fixed
 
 - `/fire-review` waits for a repair or summary turn to settle after automatic retries and continuations, so a transient provider error no longer cancels the review. A final repair error or feedback delivery failure is reported to the Master with its original message.

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -39,6 +39,9 @@ beforeAll(async () => {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	// expired 没有凭据：登录过期的供应商。
 	faux = await installFaux(agentDir, ["p/one", "p/two", "p/three", "expired/sol", "test/advisor", "test/reviewer"], ["expired"]);
+});
+beforeEach(() => {
+	((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown> | undefined)?.clear();
 });
 afterAll(async () => {
 	faux.unregister();
@@ -749,14 +752,14 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 8,
+				version: 9,
 				runId: "g",
 				phase: "reviewing",
 				round: 1,
 				focus: "",
 				rounds: 0,
 				last: null,
-				slots: [{ model: "m", thinking: "high", fallback: [], result: null }],
+				slots: [{ result: null }],
 				consecutiveFailures: 0,
 				startedAt: 1,
 				roundStartedAt: 1,
@@ -781,6 +784,23 @@ describe("review config is rejected at every entry point", () => {
 describe("reload recovery actually resumes the loop", () => {
 	// resources_discover 是宿主提供的 post-session 边界：只有全部异步 session_start
 	// handler 返回后才发，不能用 tick 或毫秒猜测。
+	test("旧版 v8 审查不会被恢复或改写", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		sessionManager.appendCustomEntry("firecode-review-checkpoint", {
+			version: 8, runId: "old-review", phase: "reviewing", round: 1, rounds: 0, last: null,
+			slots: [{ model: "p/one", thinking: "low", fallback: [], result: null }],
+		});
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, ctx);
+		await registered.fire("resources_discover", {}, ctx);
+		expect(readCheckpoint({ sessionManager })).toBeUndefined();
+		expect(checkpoints(sessionManager)).toHaveLength(1);
+		expect(ctx.notices).toEqual([]);
+	});
+
 	test("restored reviewers wait for the post-session event after later async handlers", async () => {
 		await loadAll();
 		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
@@ -802,7 +822,7 @@ describe("reload recovery actually resumes the loop", () => {
 			...initialState("restore-review"),
 			phase: "reviewing",
 			round: 1,
-			slots: [{ model: "p/one", thinking: "low", fallback: [], result: null }],
+			slots: [{ result: null }],
 			startedAt: Date.now(),
 			roundStartedAt: Date.now(),
 			updatedAt: Date.now(),
@@ -1063,17 +1083,37 @@ describe("review cards and degraded paths", () => {
 		expect(result.status).toBe("failed");
 		const reason = (result as { reason: string }).reason;
 		expect(reason).toContain("sol");
-		expect(reason).toContain("No API key found for expired");
+		expect(reason).toContain("expired/sol");
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
 		expect(cards.some((content) => content.includes("审查未完成") && content.includes("sol"))).toBe(true);
 		expect(cards.some((content) => content.includes("审查通过"))).toBe(false);
 	}, 20_000);
 
-	test("a reviewer without a verdict is replaced along its fallback chain, and the pass names who was replaced and why", async () => {
+	test("审查者输出截断后沿链切换并完成审查", async () => {
+		const { registerReview } = await loadReviewModule("review/index.js", {
+			configJsonc: reviewConfig({ reviewers: [["p/two/low", "p/three/low"]] }),
+		});
+		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		faux.setResponses(Array.from({ length: 3 }, () => (_context: any, _options: any, _state: any, model: any) =>
+			model.id === "two" ? fauxAssistantMessage("部分内容", { stopReason: "length" })
+				: fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test")));
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => ["summarizing", "settled"].includes(checkpoint.readCheckpoint({ sessionManager })?.phase ?? ""));
+		const state = checkpoint.readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.history[0].reviewers[0].model).toBe("p/three");
+	}, 20_000);
+
+	test("reviewer changes model within the same session after quota failure", async () => {
 		const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
 		const { registerReview, readCheckpoint } = await loadTwoReviewers(
-			(model) => (model === "p/two" ? undefined : pass),
-			[{ model: "expired/sol/low", fallback: ["p/two/low", "p/three/low"] }, "p/one/low"],
+			(model) => model === "p/two" ? undefined : pass,
+			[["p/two/low", "p/three/low"]],
 		);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -1083,31 +1123,8 @@ describe("review cards and degraded paths", () => {
 		await fireReview(registered).handler("", ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
 		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
-		expect(card).toContain("three");
-		expect(card).toContain("sol");
-		expect(card).toContain("No API key found for expired");
-		expect(card).toContain("two");
-		expect(card).toContain("额度不足");
-	}, 20_000);
-
-	test("later rounds of the same review start from the fallback that gave the last verdict", async () => {
-		const calls: Record<string, number> = {};
-		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
-			calls[model] = (calls[model] ?? 0) + 1;
-			if (model === "p/three") return undefined;
-			return calls[model] === 1 ? FAIL_VERDICT : "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
-		}, [{ model: "p/three/low", fallback: ["p/two/low"] }]);
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi);
-		const ctx = makeCtx(sessionManager);
-		ctx.cwd = tmpdir();
-		await fireReview(registered).handler("", ctx);
-		await until(() => registered.delivered.length === 1);
-		await startTurn(registered, ctx);
-		await registered.fire("agent_settled", { aborted: false }, ctx);
-		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
-		expect(calls).toEqual({ "p/three": 1, "p/two": 2 });
+		expect(card).toContain("核对完毕");
+		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/three");
 	}, 20_000);
 
 	test("an unavailable advisor is skipped with a visible card and the repair carries on", async () => {

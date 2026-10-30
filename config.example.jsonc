@@ -1,7 +1,7 @@
 {
 	// Recommended config: every feature on. It is written here on first launch; swap in the models you are logged in to, then restart Pi.
 	// The watcher does not activate itself in a new session; run /fire-watch to toggle it for the current session.
-	// Everywhere a model is named, use the same model atom: "provider/model/thinking" (the last segment is the thinking level).
+	// Everywhere a model is named, use a model atom "model/thinking"; the provider is optional. An ordered array chooses alternatives.
 	// Language of the UI and of the text shown to models: follows the system locale by default (zh* → Chinese, otherwise English); uncomment the next line to pin it, "zh" | "en".
 	// "language": "en",
 	"features": {
@@ -39,31 +39,12 @@
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
 		"roles": {
-			"researcher": {
-				"model": "anthropic/claude-haiku-5-5/low",
-				"use": "Read-only: web search, docs and version lookups, reading logs, locating code from leads, checking references",
-				"fallback": ["openai-codex/gpt-6-luna/medium"]
-			},
-			"engineer": {
-				"model": "anthropic/claude-sonnet-5-5/high",
-				"use": "Changes code: implementation, debugging; also for audits that need deep code reading to find defects (read-only)",
-				"fallback": ["openai-codex/gpt-6.1-sol/high"]
-			},
-			"batch": {
-				"model": "anthropic/claude-haiku-5-5/medium",
-				"use": "Well-specified bulk changes that tests or type checks can verify: pattern migrations, renames, boilerplate; for large volumes split by file and run several in parallel",
-				"fallback": ["openai-codex/gpt-6.1-sol/medium"]
-			},
-			"designer": {
-				"model": "anthropic/claude-opus-5-5/medium",
-				"use": "Visual and frontend work",
-				"fallback": ["openai-codex/gpt-6.1-sol/high"]
-			},
-			"sentinel": {
-				"model": "anthropic/claude-haiku-5-5/low",
-				"use": "Waiting on CI, deployments and long tests",
-				"fallback": ["anthropic/claude-sonnet-5-5/low"]
-			}
+			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Changes code: implementation, debugging; also for audits that need deep code reading to find defects (read-only)" },
+			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Visual and frontend work" },
+			"junior": { "model": ["claude-sonnet-5-5/medium", "gpt-6.1-terra/medium"], "use": "Code changes with ordinary quality requirements" },
+			"chores": { "model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"], "use": "Well-specified changes verifiable by tests or type checks: renames, pattern migrations, boilerplate and running commands" },
+			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Read-only: web search, docs and version lookups, reading logs, locating code from leads, checking references" },
+			"sentinel": { "model": ["gpt-6-luna/high", "claude-haiku-5-5/medium"], "use": "Waiting on CI, deployments and long tests" }
 		}
 	},
 
@@ -77,14 +58,10 @@
 	},
 
 	// Review only calls models when the user or the Master starts it.
-	// A pass needs a PASS from every reviewer. A reviewer that gives no verdict (error, expired login, timeout, empty output)
-	// is retried along its fallback chain (up to 2 atoms); if the chain runs out, the review stops as failed and names the model and the reason.
+	// A pass needs a PASS from every reviewer; a model failure tries the next candidate in its chain.
 	"review": {
-		"advisor": "anthropic/claude-fable-5-1/high",
-		"reviewers": [
-			"anthropic/claude-opus-5-5/low",
-			{ "model": "openai-codex/gpt-6.1-sol/low", "fallback": ["anthropic/claude-sonnet-5-5/low"] }
-		],
+		"advisor": ["claude-opus-5-5/high", "gpt-6-astra/high"],
+		"reviewers": [["gpt-6.1-terra/low", "claude-sonnet-5-5/low"]],
 		"maxRounds": 5,
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
@@ -94,7 +71,7 @@
 	// Once active, it evaluates what each main-session turn added, which costs extra model calls; it speaks up on the spot when needed.
 	"watcher": {
 		"enabled": false,
-		"model": "openai-codex/gpt-6.1-sol/medium",
+		"model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"],
 		"context": "minimal"
 	}
 }

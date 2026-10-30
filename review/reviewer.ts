@@ -17,7 +17,7 @@ interface RunReviewerOptions {
 
 type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
 
-/** 运行一个独立审查会话并解析输出。会话故障记为 error（缺席），换不换 fallback 由调用方决定。 */
+/** 运行一个独立审查会话并解析输出。会话故障记为 error（缺席）。 */
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const result = await runReviewSession(options.pool, {
 		config: options.config,
@@ -26,7 +26,7 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 		signal: options.signal,
 	});
 	const parsed = result.kind === "output" ? parseReviewOutput(result.text) : processFailure(result);
-	return { index: options.index, model: options.config.model, thinking: options.config.thinking, ...parsed };
+	return { index: options.index, ...(result.kind === "output" ? result.atom : options.config.models[0]), ...parsed };
 }
 
 /**

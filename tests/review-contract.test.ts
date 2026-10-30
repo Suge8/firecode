@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { loadFirecodeModule } from "./loader.ts";
 import { reviewVoter } from "./review-vote.ts";
 
@@ -9,6 +9,9 @@ let buildEvidence: BuildEvidence;
 // 输出契约经真实的审查者 / 顾问会话解析：faux 供应商给出文本，结果就是 runReviewer / runAdvisor 的返回。
 let voter: Awaited<ReturnType<typeof reviewVoter>>;
 beforeAll(async () => { voter = await reviewVoter(); });
+beforeEach(() => {
+	((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown> | undefined)?.clear();
+});
 afterAll(() => voter.close());
 const vote = (text: string) => voter.vote(text);
 const advise = (text: string) => voter.advise(text);
@@ -91,7 +94,7 @@ describe("PASS/FAIL output contract", () => {
 describe("advisor verdict parsing", () => {
 	test("parses continue/stop/narrow on the first line", async () => {
 		await loadAll();
-		expect(await advise("continue\n继续修")).toEqual({ verdict: "continue", advice: "继续修" });
+		expect(await advise("continue\n继续修")).toMatchObject({ verdict: "continue", advice: "继续修" });
 		expect((await advise("stop\n别修了")).verdict).toBe("stop");
 		expect((await advise("narrow\n收窄范围")).verdict).toBe("narrow");
 		expect((await advise("**stop**")).verdict).toBe("stop");
@@ -100,7 +103,7 @@ describe("advisor verdict parsing", () => {
 	test("tolerates a model preamble before the verdict line and keeps it as advice", async () => {
 		await loadAll();
 		// fable 实际产出过的形状：前言句 + 裁决行 + 正文。
-		expect(await advise("我已核实关键文件与 Pi 类型定义，裁决如下。\ncontinue\n核实结论：发现属实")).toEqual({
+		expect(await advise("我已核实关键文件与 Pi 类型定义，裁决如下。\ncontinue\n核实结论：发现属实")).toMatchObject({
 			verdict: "continue",
 			advice: "我已核实关键文件与 Pi 类型定义，裁决如下。\n核实结论：发现属实",
 		});
@@ -111,20 +114,20 @@ describe("advisor verdict parsing", () => {
 
 	test("accepts an unambiguous verdict wrapped by markdown or a verdict label", async () => {
 		await loadAll();
-		expect(await advise("```text\nstop\n别修了\n```")).toEqual({
+		expect(await advise("```text\nstop\n别修了\n```")).toMatchObject({
 			verdict: "stop",
 			advice: "别修了",
 		});
-		expect(await advise("裁决：narrow\n只修阻塞项")).toEqual({
+		expect(await advise("裁决：narrow\n只修阻塞项")).toMatchObject({
 			verdict: "narrow",
 			advice: "只修阻塞项",
 		});
-		expect(await advise("Verdict: continue\nkeep fixing")).toEqual({
+		expect(await advise("Verdict: continue\nkeep fixing")).toMatchObject({
 			verdict: "continue",
 			advice: "keep fixing",
 		});
 		// 提示词里裁决词带反引号展示，模型照抄是真实发生过的解析失败根因。
-		expect(await advise("`stop`\n别修了")).toEqual({
+		expect(await advise("`stop`\n别修了")).toMatchObject({
 			verdict: "stop",
 			advice: "别修了",
 		});

@@ -83,13 +83,11 @@ export function coreTable(lang: Lang) {
 /** 演示里的角色模型：取随包配置模板里调研员与工程师的模型原子 */
 export function demoModels() {
 	const config = parseJsonc(readFileSync(join(root, "config.example.jsonc"), "utf8")) as {
-		master: { roles: Record<string, { model: string; fallback?: string[] }> };
+		master: { roles: Record<string, { model: string[] }> };
 	};
 	const { researcher, engineer } = config.master.roles;
-	if (!researcher?.fallback?.[0] || !engineer) throw new Error("config.example.jsonc：演示需要 researcher（带 fallback）与 engineer 两个角色");
-	// 界面里模型名不带供应商前缀
-	const short = (atom: string) => atom.slice(atom.indexOf("/") + 1);
-	return { primary: short(researcher.model), fallback: short(researcher.fallback[0]), engineer: short(engineer.model), engineerAtom: engineer.model };
+	if (!researcher?.model[1] || !engineer?.model[0]) throw new Error("config.example.jsonc：演示需要 researcher 的模型链与 engineer");
+	return { primary: researcher.model[0], fallback: researcher.model[1], engineer: engineer.model[0], engineerAtom: engineer.model[0] };
 }
 
 export function readmeMarkdown(lang: Lang) {

@@ -24,7 +24,7 @@ export async function runAdvisor(options: RunAdvisorOptions): Promise<AdvisorRes
 	});
 	if (result.kind !== "output")
 		throw new Error(msg.advisor.unavailable(result.kind === "error" ? result.message : result.kind));
-	return parseAdvisorOutput(result.text);
+	return { ...parseAdvisorOutput(result.text), model: result.atom.model };
 }
 
 /** 首行应为裸裁决词；容忍模型前言，在前几个非空行内识别裁决行，

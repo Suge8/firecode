@@ -187,7 +187,7 @@ test("供应商报错时观察员停用并提示原因，不装作还在工作",
 	await harness.turnEnd(1, "继续");
 	await until(() => harness.notices.length > 0);
 
-	expect(harness.notices).toEqual(["观察员已停止：invalid x-api-key"]);
+	expect(harness.notices.join("\n")).toContain("invalid x-api-key");
 	expect(harness.statuses.has("watcher")).toBeFalse();
 	expect(harness.messages).toEqual([]);
 });
@@ -237,7 +237,7 @@ test("watcher 节缺失时拒绝启动并说明原因，不拿默认模型代替
 	expect(faux.getPendingResponseCount()).toBe(0);
 
 	await harness.command("");
-	expect(harness.notices.join("\n")).toContain("watcher.model 必须是“provider/model/thinking”字符串");
+	expect(harness.notices.join("\n")).toContain("watcher.model 必须是“模型/thinking”字符串");
 });
 
 test("无建议时保持沉默；增量带上工具调用与工具结果，minimal 只省推理与正文", async () => {

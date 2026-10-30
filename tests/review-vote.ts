@@ -24,7 +24,7 @@ export async function reviewVoter(options: Parameters<typeof loadFirecodeModule>
 		loadFirecodeModule("spawn.js", options),
 	]) as any[];
 	const pool = new InProcessSessionPool();
-	const request = { config: { model: "p/one", thinking: "low", tools: [], timeoutMs: 10_000 }, prompt: { system: "policy", user: "input" }, cwd: tmpdir(), pool };
+	const request = { config: { models: [{ model: "p/one", thinking: "low" }], tools: [], timeoutMs: 10_000 }, prompt: { system: "policy", user: "input" }, cwd: tmpdir(), pool };
 	const reply = (text: SessionReply) => faux.setResponses([typeof text === "string"
 		? fauxAssistantMessage(text)
 		: fauxAssistantMessage([], { stopReason: "error", errorMessage: text.error })]);

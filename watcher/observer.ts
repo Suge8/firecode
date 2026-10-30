@@ -2,11 +2,10 @@
  * 观察会话：进程内 memory 子会话 + 只读工具 + 唯一自定义工具 advise。
  * 系统提示以 prompts/watch.{zh,en}.md 为唯一事实源（整体替换，不受项目文件改写）。
  */
-import type { Model } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { InProcessSessionPool } from "../spawn.js";
-import type { ThinkingLevelValue } from "../config.js";
+import type { ModelChain } from "../config.js";
 import { readPrompt } from "../i18n.js";
 import { msg } from "./messages.js";
 
@@ -23,8 +22,7 @@ export interface Observer {
 
 interface ObserverOptions {
 	cwd: string;
-	model: Model<any>;
-	thinking: ThinkingLevelValue;
+	chain: ModelChain;
 	pool: InProcessSessionPool;
 	onExtensionError?: (error: ExtensionError) => void;
 }
@@ -33,8 +31,7 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 	let advice: string | undefined;
 	const spawned = await options.pool.spawn({
 		cwd: options.cwd,
-		model: options.model,
-		thinking: options.thinking,
+		chain: options.chain,
 		tools: OBSERVER_TOOLS,
 		customTools: [adviseTool(() => advice, (note) => { advice = note; })],
 		systemPrompt: { mode: "replace", text: readPrompt(PROMPTS, "watch") },

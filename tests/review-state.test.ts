@@ -11,10 +11,10 @@ type ReviewEvent = import("../review/state.js").ReviewEvent;
 const LIMITS: ReviewLimits = {
 	maxRounds: 3,
 	advisorAfterFailures: 2,
-	advisor: { model: "p/advisor", thinking: "high" },
+	advisor: [{ model: "p/advisor", thinking: "high" }],
 	reviewers: [
-		{ model: "p/sol", thinking: "high", fallback: [] },
-		{ model: "p/terra", thinking: "high", fallback: [] },
+		[{ model: "p/sol", thinking: "high" }],
+		[{ model: "p/terra", thinking: "high" }],
 	],
 };
 

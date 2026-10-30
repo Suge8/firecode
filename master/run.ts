@@ -1,14 +1,14 @@
 /**
- * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断/fallback 续跑）、审查监视与中断续跑提醒。
+ * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断）、审查监视与中断续跑提醒。
  * 所有 await 之后的写回经 runtime.current/commit 重读档案：kill 赢过迟到的异步写回。
  */
 import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
-import { type MasterRole, type ModelAtom, modelAtomText } from "../config.js";
+import { modelAtomText, type ThinkingLevelValue } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
-import { clip, firstSentence, textOf, tildeHome } from "../format.js";
+import { firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
-import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
+import { masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
 import { assembleWorkerPrompt } from "./prompt.js";
@@ -20,7 +20,6 @@ import type { WorkerRef } from "./state.js";
  * Worker 与指挥官同进程，两个 Worker 各跑一条长命令就会占满，codemode only 的指挥官随之一个工具都调不了，连中断都发不出。
  */
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
-const FAULT_SUMMARY_WIDTH = 80;
 /** 算作“有输出”的子会话事件：模型 token 流与工具执行；活动列表据此判卡住。 */
 const OUTPUT_EVENTS = new Set(["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 
@@ -35,14 +34,23 @@ interface WorkerTerminal {
  * 恢复时文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放（宿主此前没写文件），没有任何上下文可恢复，
  * 就在同一路径上新开；这也包括文件被人删掉的情形，那时同样没有东西可恢复。
  */
-export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean): Promise<AgentSession> {
+export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean, override?: ThinkingLevelValue): Promise<AgentSession> {
 	const { pool, exclusions } = active.setup;
-	const model = await pool.resolveModel(worker.model);
+	const role = active.setup.roster.find((entry) => entry.role === worker.role);
+	if (!role) throw new Error(msg.run.roleGone(worker.role, active.setup.roster.map((entry) => entry.role).join(", ")));
 	active.assertOpen();
 	const spawned = await pool.spawn({
 		cwd: worker.cwd ?? process.cwd(),
-		model,
-		thinking: worker.thinking,
+		chain: role.models,
+		thinkingOverride: override,
+		onModelChange: (atom, previous, reason) => {
+			const current = active.find(worker);
+			if (!current) return;
+			const from = previous ?? { model: current.model, thinking: current.thinking };
+			active.commit(current, (latest) => ({ ...latest, ...atom }));
+			if (from.model !== atom.model)
+				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name);
+		},
 		tools: WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
@@ -57,9 +65,9 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 	return spawned.session;
 }
 
-export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
+export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef, override?: ThinkingLevelValue): Promise<AgentSession> {
 	active.assertOpen();
-	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true);
+	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true, override);
 }
 
 /** 子代理会话里的扩展出错：同一处错误只告知指挥官一次（事件处理器每次触发都会再抛）。 */
@@ -111,10 +119,6 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 			settleInterrupted(active, worker);
 			return;
 		}
-		if (terminal?.stopReason === "error" && error === undefined) {
-			await resumeWithFallback(active, worker, session, terminal, faultSummary(terminal));
-			return;
-		}
 		settleWorker(active, worker, terminal, error);
 	};
 	if (typeof input !== "string") {
@@ -159,41 +163,6 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
 	}, delay);
 	live.interruptTimer.unref?.();
-}
-
-/**
- * 任何 error 终态都沿角色链切换，不按关键词分类故障：供应商措辞多变，关键词白名单实测一次未命中，分类也不改变决策。
- * 瞬时限流与 Claude 令牌换发在 error 之前已由宿主重试和 claude-sub 自愈处理。由插件而非宿主做：宿主不知道角色与档案。
- */
-async function resumeWithFallback(
-	active: MasterRuntime,
-	identity: WorkerRef,
-	session: AgentSession,
-	terminal: WorkerTerminal,
-	reason: string,
-): Promise<void> {
-	const current = active.current(identity);
-	const configuredRole = active.setup.roster.find((entry) => entry.role === current.role);
-	if (!configuredRole)
-		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n${msg.run.roleGone(current.role)}`));
-	const fallback = nextFallback(configuredRole, current);
-	if (!fallback)
-		return settleWorker(active, current, terminal, new Error(`${terminalFailure(terminal)}\n${msg.run.fallbackExhausted(current.role)}`));
-	try {
-		const model = await active.setup.pool.resolveModel(fallback.model);
-		active.assertOpen();
-		await session.setModel(model);
-		active.assertOpen();
-		session.setThinkingLevel(fallback.thinking);
-		const switched = active.commit(current, (latest) => ({ ...latest, ...fallback, status: "working" }));
-		const from = modelAtomText(current);
-		const to = modelAtomText(fallback);
-		active.outbox.enqueue(masterEvent.modelSwitched(current.name, from, to, reason), current.name);
-		await runWorker(active, switched, session, fallbackResumePrompt(from, to, reason));
-	} catch (error) {
-		const failure = `${terminalFailure(terminal)}\n${msg.run.fallbackFailed(error instanceof Error ? error.message : String(error))}`;
-		settleWorker(active, current, terminal, new Error(failure));
-	}
 }
 
 function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: WorkerTerminal | undefined, error?: unknown): void {
@@ -319,29 +288,11 @@ function terminalFailure(terminal: WorkerTerminal | undefined): string | undefin
 	return undefined;
 }
 
-function faultSummary(terminal: WorkerTerminal): string {
-	const message = terminal.errorMessage?.trim();
-	if (!message) return msg.run.unknownProviderError;
-	const [first = message] = message.split(/(?<=[.。!！?？])\s|\n/u);
-	return clip(first.trim(), FAULT_SUMMARY_WIDTH);
-}
-
 function lastAssistant<T extends { role: string }>(messages: readonly T[]): T | undefined {
 	return messages.findLast((candidate) => candidate.role === "assistant");
-}
-
-function nextFallback(role: MasterRole, worker: WorkerRef): ModelAtom | undefined {
-	const chain: ModelAtom[] = [role, ...role.fallback];
-	let index = chain.findIndex((atom) => atom.model === worker.model && atom.thinking === worker.thinking);
-	if (index < 0) index = chain.findIndex((atom) => atom.model === worker.model);
-	return chain[index + 1];
 }
 
 /** 首次续派前置的现场核对提示。 */
 export function resumeCheckPrompt(): string {
 	return wrapEnvelope("firecode_master_event", msg.run.resumeCheck);
-}
-
-function fallbackResumePrompt(from: string, to: string, reason: string): Delivery {
-	return { customType: MASTER_EVENT_TYPE, content: wrapEnvelope("firecode_master_event", msg.run.fallbackResume(from, to, reason)) };
 }

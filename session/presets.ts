@@ -15,6 +15,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { type Preset, loadConfig } from "../config.js";
 import { isRecord } from "../jsonc.js";
+import { matchModels } from "../model-match.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
 
@@ -56,15 +57,9 @@ const title = (text: string): string =>
 
 const modelKey = (model: Model<Api> | undefined) => (model ? `${model.provider}/${model.id}` : undefined);
 
-/** 模型原子在配置层已校验为 provider/model；调 Pi 接口时才拆成两段。 */
-function splitModel(id: string): [provider: string, model: string] {
-	const slash = id.indexOf("/");
-	return [id.slice(0, slash), id.slice(slash + 1)];
-}
-
-/** 预设对模型的要求：当前模型就是预设的模型，或预设根本不管模型。 */
-function holds(preset: Preset, model: Model<Api> | undefined): boolean {
-	return !preset.model || modelKey(model) === preset.model.model;
+/** 预设对模型的要求：当前模型属于预设原子匹配的可用模型。 */
+function holds(preset: Preset, model: Model<Api> | undefined, ctx: ExtensionContext): boolean {
+	return !preset.model || matchModels(ctx.modelRegistry.getAvailable(), preset.model.model).some((candidate) => modelKey(candidate) === modelKey(model));
 }
 
 function describe(preset: Preset): string {
@@ -155,8 +150,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 	/** 返回失败原因；成功或预设不管模型时为 undefined。 */
 	async function applyModel(preset: Preset, ctx: ExtensionContext): Promise<string | undefined> {
 		if (!preset.model) return undefined;
-		const [provider, id] = splitModel(preset.model.model);
-		const model = ctx.modelRegistry.find(provider, id);
+		const model = matchModels(ctx.modelRegistry.getAvailable(), preset.model.model)[0];
 		if (!model) return msg.presets.modelNotFound(preset.model.model);
 		if (!(await pi.setModel(model))) return msg.presets.modelNoCredentials(preset.model.model);
 		pi.setThinkingLevel(preset.model.thinking);
@@ -174,7 +168,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 
 	function dropIfDiverged(ctx: ExtensionContext): void {
 		const active = activePreset();
-		if (!activeName || !active || holds(active, ctx.model)) return;
+		if (!activeName || !active || holds(active, ctx.model, ctx)) return;
 		const name = activeName;
 		release((restored) => (restored ? msg.presets.divergedRestored(name) : msg.presets.diverged(name)), ctx);
 	}
@@ -196,8 +190,8 @@ export function registerPresets(pi: ExtensionAPI): void {
 	/** 还原快照里的模型；当前已是它、或快照没有模型时不动。返回失败原因。 */
 	async function restoreModel(key: string | undefined, ctx: ExtensionContext): Promise<string | undefined> {
 		if (!key || key === modelKey(ctx.model)) return undefined;
-		const [provider, id] = splitModel(key);
-		const model = ctx.modelRegistry.find(provider, id);
+		const slash = key.indexOf("/");
+		const model = ctx.modelRegistry.find(key.slice(0, slash), key.slice(slash + 1));
 		if (!model) return msg.presets.modelNotFound(key);
 		return (await pi.setModel(model)) ? undefined : msg.presets.modelNoCredentials(key);
 	}
@@ -325,7 +319,7 @@ export function registerPresets(pi: ExtensionAPI): void {
 		activeName = state.name;
 		original = state.original;
 		if (!preset) release(() => msg.presets.gone(state.name!), ctx);
-		else if (!holds(preset, ctx.model)) dropIfDiverged(ctx);
+		else if (!holds(preset, ctx.model, ctx)) dropIfDiverged(ctx);
 	}
 }
 
