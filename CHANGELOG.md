@@ -4,10 +4,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-### Changed
-
-- **Breaking:** The review checkpoint format changed; a review left in progress by an earlier version is not resumed. Run `/fire-review` again.
-
 ### Fixed
 
 - `/fire-review` waits for a repair or summary turn to settle after automatic retries and continuations, so a transient provider error no longer cancels the review. A final repair error or feedback delivery failure is reported to the Master with its original message.
