@@ -3,12 +3,17 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type Case, headOf } from "./cases.ts";
+import { type Case, CASES, headOf } from "./cases.ts";
 import { git, SOURCES, WORK } from "./lib.ts";
 
 const FIXTURES = join(WORK, "fixtures");
+/** 只取决定仓库内容的部分：改需求文字、验证命令或真值不重建仓库（重建会丢掉 setup 装进去的依赖与构建产物）。 */
 export const fixtureKey = (item: Case): string => createHash("sha256")
-	.update(JSON.stringify(item)).update(readFileSync(import.meta.path)).digest("hex");
+	.update(JSON.stringify({ source: item.source, base: item.base, turns: item.turns.map(({ to, inject }) => ({ to, inject })) }))
+	.update(fixtureRepo.toString()).update(exportTree.toString()).digest("hex");
+
+export interface CheckResult { command: string; exit: number | null; tail: string }
+export const ENVCHECK = join(WORK, "envcheck.json");
 
 /**
  * 仓库副本：base 的文件树作为唯一的初始提交（拿不到之后的历史，也就拿不到修复），
@@ -86,12 +91,19 @@ function conventionFiles(repo: string, paths: string[]): string[] {
 const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
 /**
- * 合成会话：公开提交重建需求与编辑轨迹；验证命令没有重放，不生成成功回执。
- * 审查证据只渲染消息正文与工具调用的路径/命令；重建轨迹只能用于范围归因，不能证明历史验证通过。
+ * 合成会话：公开提交重建需求与编辑轨迹；验证命令的结果取 setup.ts check 在同一棵树上实跑的退出码与输出尾部，
+ * 交付声明只陈述提交与这些实跑结果，不编造“已补测试”之类无法追溯的说法。
  * 消息链与工具调用 id 完整，修复模式下执行模型可以接着这份会话继续干活。
  */
 export function writeSession(item: Case, repo: string, file: string, executor: { provider: string; model: string }): void {
 	const turns = JSON.parse(readFileSync(`${fixtureRepo(item)}.turns.json`, "utf8")) as string[];
+	if (!existsSync(ENVCHECK)) throw new Error("先运行 bun evals/review/setup.ts check");
+	const checked = JSON.parse(readFileSync(ENVCHECK, "utf8")) as Record<string, CheckResult[]>;
+	const checksAt = (to: string): CheckResult[] => {
+		const owner = CASES.find((other) => other.source === item.source && headOf(other) === to && checked[other.id]);
+		if (!owner) throw new Error(`${item.id}：${to} 没有实跑的验证结果，先运行 setup.ts check`);
+		return checked[owner.id]!;
+	};
 	const lines: object[] = [];
 	let clock = Date.parse(git(SOURCES[item.source], "show", "-s", "--format=%aI", headOf(item)).trim()) - 3_600_000;
 	let parent: string | null = null;
@@ -103,7 +115,7 @@ export function writeSession(item: Case, repo: string, file: string, executor: {
 		parent = id;
 	};
 	const user = (text: string) => push({ type: "message", message: { role: "user", content: [{ type: "text", text }], timestamp: clock } });
-	const assistant = (text: string, tools: Array<{ name: string; arguments: Record<string, unknown>; result: string }>) => {
+	const assistant = (text: string, tools: Array<{ name: string; arguments: Record<string, unknown>; result: string; isError?: boolean }>) => {
 		const content: object[] = text ? [{ type: "text", text }] : [];
 		const ids = tools.map((tool) => {
 			const id = `call_${++calls}`;
@@ -111,7 +123,7 @@ export function writeSession(item: Case, repo: string, file: string, executor: {
 			return id;
 		});
 		push({ type: "message", message: { role: "assistant", content, api: "openai-completions", provider: executor.provider, model: executor.model, usage: ZERO_USAGE, stopReason: tools.length ? "toolUse" : "stop", timestamp: clock } });
-		tools.forEach((tool, index) => push({ type: "message", message: { role: "toolResult", toolCallId: ids[index], toolName: tool.name, content: [{ type: "text", text: tool.result }], isError: false, timestamp: clock } }));
+		tools.forEach((tool, index) => push({ type: "message", message: { role: "toolResult", toolCallId: ids[index], toolName: tool.name, content: [{ type: "text", text: tool.result }], isError: tool.isError ?? false, timestamp: clock } }));
 	};
 
 	lines.push({ type: "session", version: 3, id: randomUUID(), timestamp: new Date(clock).toISOString(), cwd: repo });
@@ -120,7 +132,7 @@ export function writeSession(item: Case, repo: string, file: string, executor: {
 	item.turns.forEach((turn, index) => {
 		const to = turns[index]!;
 		const files = changedFiles(repo, from, to);
-		user(`这是公开提交重建的评测场景。编辑轨迹用于归因；历史验证声明尚未复跑，不作为通过证据。\n\n${turn.user}`);
+		user(turn.user);
 		const conventions = index === 0 ? conventionFiles(repo, files.map((entry) => entry.path)) : [];
 		const reads = [...conventions, ...files.filter((entry) => entry.status !== "A").map((entry) => entry.path).filter((path) => !conventions.includes(path))];
 		assistant("先读项目约定和要改的代码。", reads.map((path) => ({ name: "read", arguments: { path }, result: "（已读取）" })));
@@ -128,10 +140,11 @@ export function writeSession(item: Case, repo: string, file: string, executor: {
 			entry.status === "D" ? { name: "bash", arguments: { command: `git rm -q ${entry.path}` }, result: "" }
 			: entry.status === "A" ? { name: "write", arguments: { path: entry.path, content: "…" }, result: `Successfully wrote ${entry.path}` }
 			: { name: "edit", arguments: { path: entry.path, edits: [] }, result: `Successfully replaced text in ${entry.path}.` }));
-		if (turn.checks.length) assistant(`公开提交列出的验证命令（未重放）：\n${turn.checks.join("\n")}`, []);
+		const results = checksAt(turn.to);
+		assistant("跑验证。", results.map((result) => ({ name: "bash", arguments: { command: result.command }, result: result.tail, isError: result.exit !== 0 })));
 		const subjects = git(repo, "log", "--reverse", "--format=%s", `${from}..${to}`).trim().split("\n").filter(Boolean);
 		assistant("", [{ name: "bash", arguments: { command: `git add ${files.map((entry) => entry.path).join(" ")} && git commit -m ${JSON.stringify(subjects.join("；"))}` }, result: `[work] ${subjects.at(-1) ?? ""}` }]);
-		assistant(`本轮已提交：${subjects.join("；")}。验证结果未采集，请核对当前文件。`, []);
+		assistant(`已完成并提交：${subjects.join("；")}。验证：${results.map((result) => `${result.command}（exit ${result.exit}）`).join("；")}。`, []);
 		from = to;
 	});
 	mkdirSync(dirname(file), { recursive: true });

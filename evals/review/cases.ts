@@ -227,10 +227,10 @@ ${FC_TAIL}`,
 		tags: ["race"],
 		turns: [{
 			user: `会话“歇下”边沿收进 busy.ts：指挥官回合结束且没有在飞子代理才算歇下，这是唯一的边沿；Bark 通知、输入框上边框与轮次时钟只消费 busy.ts 给出的歇下，不各自拼装判断。
-${FC_TAIL}`,
+先读 AGENTS.md 与改动目录的 AGENTS.md、WORDS.md；跑受影响的测试，提交在本分支，不推送。`,
 			to: "7ebcb89",
 
-			checks: ["bun run typecheck", "bun test tests/statusbar.test.ts"],
+			checks: ["bun test tests/statusbar.test.ts"],
 		}],
 		truth: [
 			{ id: "settled-not-idle", kind: "bug", summary: "agent_settled 一到就把指挥官回合记为结束，但宿主在 agent_settled 时可能还有排队或延后的动作（ctx.isIdle() 为 false），紧接着会再 agent_start：歇下边沿提前触发，Bark 提前推、计时提前定格", fix: "3d9397f" },
@@ -399,10 +399,10 @@ ${FC_TAIL}`,
 		set: "opt",
 		tags: ["external", "large", "scheduler"],
 		turns: [{
-			user: `packages/durable：用持久的 sleeping 状态取代 runtime.sleep。任务以 runtime.sleepUntil() 或 { status: "sleeping", until, checkpoint } 结束一个阶段：不占用 invocation，截止时间跨重启保留，到点后从 checkpoint 恢复。生成的重试/轮询与压缩重试都改这样睡。Harness.wake() 与 HarnessOptions.onWake 让 Durable Object 这类宿主自己唤醒进程；HarnessOptions.setTimer 接管 Harness 的所有计时器，chord 的 Progress 改用可注入的时钟。SQLite 迁到 schema 2 以接纳 sleeping 状态。遵守仓库 AGENTS.md，跑 npm run check 与相关测试。`,
+			user: `packages/durable：用持久的 sleeping 状态取代 runtime.sleep。任务以 runtime.sleepUntil() 或 { status: "sleeping", until, checkpoint } 结束一个阶段：不占用 invocation，截止时间跨重启保留，到点后从 checkpoint 恢复。生成的重试/轮询与压缩重试都改这样睡。Harness.wake() 与 HarnessOptions.onWake 让 Durable Object 这类宿主自己唤醒进程；HarnessOptions.setTimer 接管 Harness 的所有计时器，chord 的 Progress 改用可注入的时钟。SQLite 迁到 schema 2 以接纳 sleeping 状态。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
 			to: "f75b3240a",
 
-			checks: ["npm run check", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-sleep.test.ts test/sqlite-migrations.test.ts"],
+			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-sleep.test.ts test/sqlite-migrations.test.ts"],
 		}],
 		truth: [
 			{ id: "due-sleep-stranded", kind: "bug", summary: "到点的 sleep 只由计时器或 resume() 唤醒：其他变化触发的调度轮次跑在截止时间之后也不处理已到期的 sleeping 任务，而为它排的计时器可能已被丢弃，任务就此搁浅", fix: "ec1be23eb" },
@@ -424,10 +424,10 @@ ${FC_TAIL}`,
 - settings.afterFailedRun：keep、continue 或 withdraw 排在失败运行之后的输入。
 - TaskGraphNode.blocked 跟随注册表变化与失败的迁移。
 - README 的 Durable Object 示例在 Harness.open 之前排兜底闹钟。
-遵守仓库 AGENTS.md，跑 npm run check 与相关测试。`,
+遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
 			to: "a30c2a81d",
 
-			checks: ["npm run check", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-reports.test.ts test/harness-generation.test.ts"],
+			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-reports.test.ts test/harness-blocked.test.ts test/harness-generation.test.ts"],
 		}],
 		truth: [
 			{ id: "close-counts-restart", kind: "bug", summary: "正常 close 时停下的任务没有写回 pending，下次 open 也按一次崩溃计重启：反复正常开关就能把任务误停成 blocked(restart_limit)", fix: "440a5fcdb" },
@@ -443,10 +443,10 @@ ${FC_TAIL}`,
 		set: "opt",
 		tags: ["external", "regression", "small"],
 		turns: [{
-			user: `packages/durable：per-model 压缩设置 compaction.modelOverrides，按精确的 "provider/modelId" 为每个模型单独设压缩阈值，阈值检查、溢出恢复与压缩范围选择都用它们所服务模型的那一项（closes #10942）。遵守仓库 AGENTS.md，跑 npm run check 与相关测试。`,
+			user: `packages/durable：per-model 压缩设置 compaction.modelOverrides，按精确的 "provider/modelId" 为每个模型单独设压缩阈值，阈值检查、溢出恢复与压缩范围选择都用它们所服务模型的那一项（closes #10942）。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
 			to: "c4cf7957b",
 
-			checks: ["npm run check", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-tools.test.ts test/harness-compaction.test.ts"],
+			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-tools.test.ts test/harness-compaction.test.ts"],
 		}],
 		truth: [
 			{ id: "terminate-reverted", kind: "bug", summary: "提交基于 6085986e4 之前的旧树，把 ToolControl.terminate 从 boolean 改回 true、删掉 terminate:false 的回归测试（#10858）与对应 changelog，属于与需求无关的回退", fix: "790271cd0" },
@@ -479,11 +479,11 @@ ${FC_TAIL}`,
 ${FC_TAIL}`,
 		["bun run typecheck", "bun test tests/round.test.ts tests/statusbar.test.ts tests/tool-groups.test.ts"]),
 	clean("pi-list-files", "pi", "abfe62928", "opt", ["external"],
-		`packages/env 与 packages/durable：ExecutionEnv 增加可选的 listFiles，列出目录下的文件、目录与符号链接——相对路径、深度优先按名字排序、跳过 .git 与工作树里 git 忽略的内容，有上限并带 truncated 标记。调用方在它缺失或报 not_supported 时退回自己的遍历。env 的一致性测试套件用新的 listFiles 选项检查它。遵守仓库 AGENTS.md，跑 npm run check 与相关测试。`,
-		["npm run check", "cd packages/env && node ../../node_modules/vitest/dist/cli.js --run test/conformance.test.ts"]),
+		`packages/env 与 packages/durable：ExecutionEnv 增加可选的 listFiles，列出目录下的文件、目录与符号链接——相对路径、深度优先按名字排序、跳过 .git 与工作树里 git 忽略的内容，有上限并带 truncated 标记。调用方在它缺失或报 not_supported 时退回自己的遍历。env 的一致性测试套件用新的 listFiles 选项检查它。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+		["cd packages/env && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && npx tsc --noEmit -p tsconfig.build.json"]),
 	clean("pi-responses-tool-cache", "pi", "caa6967b6", "hold", ["external", "cache"],
-		`packages/ai：Responses 上工具集变化时保住提示缓存（#10940）。带 additional_tools 的模型把每个工具都声明在 additional_tools 条目里、输入开头先放一条（与 Codex 一致）；后面的条目可以覆盖前面同名的定义，但不能覆盖顶层工具也不能移除工具，所以移除用文本宣布，之后的更新重述仍不可用的工具。工具搜索与 Kimi 的工具消息每次移除或重声明时只挪一次顶层工具表，之后的加载保持锚定，不在第一次移除后的每次加载都重发整张工具表。遵守仓库 AGENTS.md，跑 npm run check 与相关测试。`,
-		["npm run check", "cd packages/ai && node ../../node_modules/vitest/dist/cli.js --run test/openai-responses-tools.test.ts"]),
+		`packages/ai：Responses 上工具集变化时保住提示缓存（#10940）。带 additional_tools 的模型把每个工具都声明在 additional_tools 条目里、输入开头先放一条（与 Codex 一致）；后面的条目可以覆盖前面同名的定义，但不能覆盖顶层工具也不能移除工具，所以移除用文本宣布，之后的更新重述仍不可用的工具。工具搜索与 Kimi 的工具消息每次移除或重声明时只挪一次顶层工具表，之后的加载保持锚定，不在第一次移除后的每次加载都重发整张工具表。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+		["cd packages/ai && npx tsc --noEmit -p tsconfig.build.json", "cd packages/ai && node ../../node_modules/vitest/dist/cli.js --run test/transcript-tool-changes.test.ts"]),
 ];
 
 export function caseById(id: string): Case {
