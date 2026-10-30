@@ -33,12 +33,15 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	const roster: MasterRole[] = [...configuredRoles];
 	const roleParameter = Type.Optional(StringEnum(configuredRoles.map((entry) => entry.role), { description: msg.tool.role }));
 	let rosterReady = false;
+	let warnedSessionId: string | undefined;
 	const prepareRoster = async (ctx: ExtensionContext) => {
 		if (rosterReady) return;
 		const checks = await Promise.all(configuredRoles.map(async (role) => !!(await pool.resolveChain(role.models))));
 		roster.splice(0, roster.length, ...configuredRoles.filter((_role, index) => checks[index]));
 		const missing = configuredRoles.filter((_role, index) => !checks[index]);
-		if (missing.length) {
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (missing.length && warnedSessionId !== sessionId) {
+			warnedSessionId = sessionId;
 			const warning = msg.roster.unavailable(missing.map((role) => `${role.role}: ${role.models.map((atom) => atom.model).join(", ")}`).join("; "));
 			if (ctx.hasUI) ctx.ui.notify(warning, "warning");
 			else console.error(warning);

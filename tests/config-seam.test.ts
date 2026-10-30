@@ -182,14 +182,25 @@ async function seedHarness(options: { configJsonc: string | null; subsession?: b
 	const fake = fakePi({ registerProvider() {} });
 	registerFirecode(fake.pi, options.subsession ?? false);
 	const notices: [string, string][] = [];
-	const sessionStart = () => fake.fire("session_start", {}, {
-		isIdle: () => true,
-		mode: "tui",
-		hasUI: options.hasUI ?? true,
-		cwd: "/tmp",
-		ui: new Proxy({ notify: (message: string, level: string) => notices.push([level, message]) }, { get: (target, key) => (target as any)[key] ?? (() => {}) }),
-		sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => "test-session" },
-	});
+	const agentDir = dirname(dirname(dirname(CONFIG_PATH)));
+	const sessionStart = async (sessionId = "test-session") => {
+		const environment = { ...process.env };
+		try {
+			for (const key of Object.keys(process.env)) delete process.env[key];
+			Object.assign(process.env, { PATH: environment.PATH, HOME: agentDir, LC_ALL: "zh_CN.UTF-8", PI_CODING_AGENT_DIR: agentDir });
+			return await fake.fire("session_start", {}, {
+				isIdle: () => true,
+				mode: "tui",
+				hasUI: options.hasUI ?? true,
+				cwd: "/tmp",
+				ui: new Proxy({ notify: (message: string, level: string) => notices.push([level, message]) }, { get: (target, key) => (target as any)[key] ?? (() => {}) }),
+				sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => sessionId },
+			});
+		} finally {
+			for (const key of Object.keys(process.env)) delete process.env[key];
+			Object.assign(process.env, environment);
+		}
+	};
 	return { CONFIG_PATH, fake, notices, sessionStart };
 }
 
@@ -197,10 +208,20 @@ test("扩展加载时配置缺失：主会话写入随包模板，本次会话�
 	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
+	const warning = "角色没有可用模型：engineer: claude-opus-5-5, gpt-6-astra; designer: claude-opus-5-5, gpt-6-astra; junior: claude-sonnet-5-5, gpt-6.1-terra; chores: gpt-6.1-terra, claude-haiku-5-5; researcher: gpt-6.1-terra, claude-sonnet-5-5; sentinel: gpt-6-luna, claude-haiku-5-5";
 	await sessionStart();
 	await sessionStart();
 
-	expect(notices).toEqual([["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"]]);
+	expect(notices).toEqual([
+		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
+		["warning", warning],
+	]);
+	await sessionStart("another-session");
+	expect(notices).toEqual([
+		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
+		["warning", warning],
+		["warning", warning],
+	]);
 });
 
 test("全新安装（播种的推荐配置、宿主默认键位）注册的快捷键不与任何宿主键位重叠，启动无冲突提示", async () => {
