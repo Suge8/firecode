@@ -3,6 +3,7 @@
  */
 import { wrapEnvelope } from "../deliver.js";
 import { msg } from "./messages.js";
+import { BLOCKING } from "./reviewer.js";
 import { roundText, type AdvisorResult, type ReviewState, type SummaryKind } from "./state.js";
 
 interface ReviewPromptInput {
@@ -29,7 +30,8 @@ export function buildReviewPrompt(template: string, input: ReviewPromptInput): P
 		`${msg.prompt.sessionRecord}\n<session_evidence>\n${evidence}\n</session_evidence>`,
 		msg.prompt.reviewReminder,
 	);
-	return promptLayers(template, parts.filter((part) => part !== "").join("\n\n"));
+	const system = template.replaceAll("{{score}}", String(BLOCKING.score)).replaceAll("{{impact}}", String(BLOCKING.impact));
+	return promptLayers(system, parts.filter((part) => part !== "").join("\n\n"));
 }
 
 function promptLayers(system: string, user: string): PromptLayers {
@@ -55,6 +57,8 @@ function priorRoundsSection(history: ReviewState["history"], round: number): str
 
 interface AdvisorPromptInput {
 	focus: string;
+	/** 原始需求锚点加最近会话的节选（与审查证据同一套组装）：仲裁要对照的是需求，不只是发现本身。 */
+	requirement: string;
 	details: string;
 	history: ReviewState["history"];
 	round: number;
@@ -63,6 +67,8 @@ interface AdvisorPromptInput {
 export function buildAdvisorPrompt(template: string, input: AdvisorPromptInput): PromptLayers {
 	const parts: string[] = [];
 	if (input.focus) parts.push(`${msg.prompt.advisorFocus}\n${input.focus}`);
+	const requirement = input.requirement.replaceAll("</session_evidence>", "&lt;/session_evidence&gt;");
+	parts.push(`${msg.prompt.requirementRecord}\n<session_evidence>\n${requirement}\n</session_evidence>`);
 	parts.push(`${msg.prompt.thisRoundFindings}\n${input.details}`);
 	const prior = priorRoundsSection(input.history, input.round);
 	if (prior) parts.push(`${msg.prompt.priorHistory}\n${prior}`);

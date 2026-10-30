@@ -1,5 +1,5 @@
 /** 审查者：进程内 memory 会话 + PASS/FAIL 输出契约解析。 */
-import { fieldLine, msg, SUGGESTIONS_HEADING, termPattern, type Terms } from "./messages.js";
+import { DECISIONS_HEADING, fieldLine, msg, SUGGESTIONS_HEADING, termPattern, type Terms } from "./messages.js";
 import type { PromptLayers } from "./prompt.js";
 import type { ReviewerResult } from "./state.js";
 import { runReviewSession, type ReviewModelConfig, type ReviewSessionResult } from "./session.js";
@@ -30,33 +30,42 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 }
 
 /**
- * 解析审查者文本输出：首行严格 PASS/FAIL。
- * 格式无效的 PASS 或首行不是判定词，该票作废为缺席；格式无效但以 FAIL 开头的票仍是未通过：
- * 它是审查者提出的阻断意见，丢掉会让另一票的 PASS 翻盘，原文随修复反馈与结果卡交给执行模型和用户。
+ * 阻塞门槛：频率×影响 ≥ score，或频率 ≥ 1 且影响 ≥ impact。审查者只给每条发现写发生条件与两个分数，
+ * 是否阻塞、整票通过与否都只由这里按数字算出（审查者自己写的 PASS/FAIL 不算数）；提示词里的门槛数字也取自这里。
+ */
+export const BLOCKING = { score: 20, impact: 8 } as const;
+
+export function blocks(frequency: number, impact: number): boolean {
+	return frequency * impact >= BLOCKING.score || (frequency >= 1 && impact >= BLOCKING.impact);
+}
+
+/**
+ * 解析审查者文本输出：摘要行 + 证据锚点行，之后是发现、需用户裁决与建议区。
+ * 过门槛的发现是阻断意见：格式不全也按未通过计（违例说明作前注），丢掉会让另一票的 PASS 翻盘；
+ * 门槛以下的发现收成建议区的一行。没有过门槛的发现时，缺摘要或证据锚点的票作废为缺席。
  */
 function parseReviewOutput(text: string): ParseOutcome {
-	const trimmed = text.trim();
-	const [firstLine = "", ...rest] = trimmed.split(/\r?\n/);
-	const verdict = verdictWord(firstLine);
-	const body = rest.join("\n").trim();
-	if (verdict === "pass") {
-		const issue = passIssue(body);
-		if (issue) return contractViolation(issue);
-		const summary = firstSummary(body);
-		// passIssue 只保证证据行前有行，那行可能是建议区标题；没有真摘要就是契约违规，
-		// 不能让 undefined 流进多模型汇总把循环撞死。
-		if (!summary) return contractViolation(msg.reviewer.passNoSummary);
-		return { status: "passed", summary, details: body };
+	const lines = text.trim().split(/\r?\n/u);
+	// 模型常顺手写判定词；结论只由打分推出，这行丢掉。
+	if (["pass", "fail"].includes(verdictWord(lines[0] ?? ""))) lines.shift();
+	const report = splitReport(lines);
+	const scored = report.findings.map(scoreFinding);
+	const blocking = scored.filter((finding) => finding.blocking);
+	const suggestions = [...scored.filter((finding) => !finding.blocking).map(demoted), ...report.suggestions];
+	const head = report.head.join("\n").trim();
+	const details = [
+		head,
+		...blocking.map((finding) => finding.text),
+		...(report.decisions.length ? [`## ${msg.terms.decisions}\n${report.decisions.join("\n")}`] : []),
+		...(suggestions.length ? [`## ${msg.terms.suggestions}\n${suggestions.map((item) => (/^[-*+]\s/u.test(item) ? item : `- ${item}`)).join("\n")}`] : []),
+	].filter(Boolean).join("\n\n");
+	const anchorIssue = headIssue(report.head);
+	if (blocking.length > 0) {
+		const issue = anchorIssue ?? blocking.map((finding, index) => finding.missing.length ? msg.reviewer.missingFields(index + 1, finding.missing) : undefined).find(Boolean);
+		return { status: "failed", summary: firstIssue(blocking.map((finding) => finding.text).join("\n")), details: issue ? `${msg.reviewer.failFormatNote(issue)}\n\n${details}` : details };
 	}
-	if (verdict === "fail") {
-		const issue = failIssue(body);
-		return {
-			status: "failed",
-			summary: firstIssue(body),
-			details: issue ? [msg.reviewer.failFormatNote(issue), body].filter(Boolean).join("\n\n") : body,
-		};
-	}
-	return contractViolation(msg.reviewer.invalidFirstLine(tail(firstLine.trim())));
+	if (anchorIssue) return contractViolation(anchorIssue);
+	return { status: "passed", summary: firstSummary(head)!, details };
 }
 
 function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>): ParseOutcome {
@@ -85,86 +94,94 @@ const COMMAND_SEGMENT = new RegExp(String.raw`${termPattern((terms) => terms.anc
 const FILE_ANCHOR = /[\w@./-]*\w\.[a-zA-Z]\w{0,5}\b/u;
 // 不能用 \b 收尾：中文不是\w，「发现 1」里「现」与空格之间不构成词边界。
 const FINDING_HEADING = new RegExp(String.raw`^#{1,6}\s*${termPattern((terms) => terms.finding)}`, "u");
-const SUGGESTIONS_HEADING_SPLIT = new RegExp(SUGGESTIONS_HEADING.source, "imu");
+const FINDING_TITLE = new RegExp(String.raw`^#{1,6}\s*${termPattern((terms) => terms.finding)}\s*[\d.]*\s*[:：]?\s*`, "u");
 
 const NON_EMPTY = String.raw`(\S.*)$`;
 const FINDING_ISSUE = fieldLine((terms) => terms.field.issue, { value: "(.*)$" });
 
-/**
- * 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约。
- * 只校验字段存在且非空，不校验取值；严重程度单独校验（只有高/中能阻塞）。
- */
+/** 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约；打分三项缺了不报格式错，按频率 0 处理。 */
 const FINDING_FIELDS = (["issue", "evidence", "contract", "commands"] as const).map((key) => ({
 	key,
 	pick: (terms: Terms) => terms.field[key],
 }));
-type FindingField = (typeof FINDING_FIELDS)[number];
-const SEVERITY_LINE = fieldLine((terms) => terms.field.severity, { value: NON_EMPTY });
-/** 提示词规定阻塞发现只有高/中；低严重度必须进建议区，不得驱动修复循环。值取行内开头的词，容忍「高（理由）」「**高**」。 */
-const BLOCKING_SEVERITY = new RegExp(`^(?:${termPattern((terms) => terms.high)}|${termPattern((terms) => terms.medium)})`, "iu");
+const SCORE_FIELDS = (["condition", "frequency", "impact"] as const).map((key) => ({ key, pick: (terms: Terms) => terms.field[key] }));
+type Field = { pick: (terms: Terms) => string };
 const FIELD_START = new RegExp(
-	String.raw`^[-*+]\s*(?:\*\*)?(?:${[(terms: Terms) => terms.field.severity, ...FINDING_FIELDS.map((field) => field.pick)].map(termPattern).join("|")})`,
+	String.raw`^[-*+]\s*(?:\*\*)?(?:${[...SCORE_FIELDS, ...FINDING_FIELDS].map((field) => termPattern(field.pick)).join("|")})`,
 	"iu",
 );
 
-/** PASS 证据锚点闸门：摘要行在前，首个证据行必须同时含文件段（带扩展名）与命令段。 */
-function passIssue(body: string): string | undefined {
-	const lines = body
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter(Boolean);
-	const evidenceIndex = lines.findIndex((line) => EVIDENCE_LINE.test(line));
-	if (evidenceIndex === -1) return msg.reviewer.passNoEvidence;
-	if (evidenceIndex === 0) return msg.reviewer.passNoSummary;
-	const line = lines[evidenceIndex];
-	if (!hasFileSegment(line)) return msg.reviewer.passNoFiles;
-	if (!hasCommandSegment(line)) return msg.reviewer.passNoCommands;
-	return undefined;
-}
+interface Report { head: string[]; findings: string[][]; decisions: string[]; suggestions: string[] }
 
-/**
- * FAIL 发现闸门：至少一条带「问题」的发现，且不能全落在「建议（非阻塞）」区。
- * 返回第一处违例；违例的 FAIL 仍按未通过计，原文照常交给执行模型，违例说明作为前注。
- */
-function failIssue(body: string): string | undefined {
-	if (!body) return msg.reviewer.failNoFinding;
-	const blocking = (body.split(SUGGESTIONS_HEADING_SPLIT)[0] ?? "")
-		.split(/\r?\n/)
-		.map((line) => line.trim());
-	const starts = blocking
-		.map((line, index) => (FINDING_HEADING.test(line) ? index : -1))
-		.filter((index) => index >= 0);
-	if (starts.length === 0) return msg.reviewer.failNoFinding;
-	for (const [order, start] of starts.entries()) {
-		const end = starts[order + 1] ?? blocking.length;
-		const section = blocking.slice(start, end);
-		const severity = section.map((line) => SEVERITY_LINE.exec(line)?.[1]).find((value) => value !== undefined);
-		if (severity !== undefined && !BLOCKING_SEVERITY.test(severity.trim()))
-			return msg.reviewer.severityNotBlocking(order + 1, severity.trim());
-		const missing = [
-			...(severity === undefined ? [msg.terms.field.severity] : []),
-			...FINDING_FIELDS.filter((field) => !sectionHasField(section, field)).map((field) => msg.terms.field[field.key]),
-		];
-		if (missing.length > 0) return msg.reviewer.missingFields(order + 1, missing);
+/** 按二级标题切开：发现小节、需用户裁决与建议区（顺序不限），其余标题算所在小节的正文。 */
+function splitReport(lines: string[]): Report {
+	const report: Report = { head: [], findings: [], decisions: [], suggestions: [] };
+	let current = report.head;
+	for (const raw of lines) {
+		const line = raw.trim();
+		if (FINDING_HEADING.test(line)) report.findings.push((current = [line]));
+		else if (DECISIONS_HEADING.test(line)) current = report.decisions;
+		else if (SUGGESTIONS_HEADING.test(line)) current = report.suggestions;
+		else if (current === report.decisions || current === report.suggestions) { if (line) current.push(line); }
+		else current.push(raw.trimEnd());
 	}
-	return undefined;
+	return report;
 }
 
-function sectionHasField(section: readonly string[], field: FindingField): boolean {
+interface Scored { text: string; title: string; condition: string; frequency: number; impact: number; blocking: boolean; missing: string[] }
+
+/** 说不清发生条件、分数缺失或越界的发现按频率 0 算（不阻塞），留在建议区让人看到。 */
+function scoreFinding(section: string[]): Scored {
+	const condition = fieldValue(section, SCORE_FIELDS[0]!) ?? "";
+	const score = (field: Field, min: number) => {
+		const value = Number(/^\d+(?:\.\d+)?/u.exec(fieldValue(section, field) ?? "")?.[0] ?? NaN);
+		return value >= min && value <= 10 ? value : undefined;
+	};
+	const impact = score(SCORE_FIELDS[2]!, 1) ?? 0;
+	const frequency = condition ? score(SCORE_FIELDS[1]!, 0) ?? 0 : 0;
+	return {
+		text: section.join("\n").trim(),
+		title: (section[0] ?? "").replace(FINDING_TITLE, "").trim(),
+		condition,
+		frequency,
+		impact,
+		blocking: blocks(frequency, impact),
+		missing: FINDING_FIELDS.filter((field) => fieldValue(section, field) === undefined).map((field) => msg.terms.field[field.key]),
+	};
+}
+
+function demoted(finding: Scored): string {
+	return msg.reviewer.demoted(finding.title || firstIssue(finding.text), clean(finding.condition), finding.frequency, finding.impact);
+}
+
+/** 字段值：同行冒号之后，或字段名独占一行时其后到下一个字段或标题之前的第一行。 */
+function fieldValue(section: readonly string[], field: Field): string | undefined {
 	const full = fieldLine(field.pick, { value: NON_EMPTY });
 	const tag = fieldLine(field.pick);
 	for (let i = 0; i < section.length; i += 1) {
-		const line = section[i] ?? "";
-		if (full.test(line)) return true;
+		const line = (section[i] ?? "").trim();
+		const match = full.exec(line);
+		if (match?.[1]) return match[1].replace(/^\*\*|\*\*$/gu, "").trim();
 		if (!tag.test(line)) continue;
-		// 字段名独占一行时，值在其后的行里（直到下一个字段或标题）。
 		for (let j = i + 1; j < section.length; j += 1) {
-			const nextLine = (section[j] ?? "").trim();
-			if (FIELD_START.test(nextLine) || /^#{1,6}\s+/u.test(nextLine)) break;
-			if (nextLine) return true;
+			const next = (section[j] ?? "").trim();
+			if (FIELD_START.test(next) || /^#{1,6}\s+/u.test(next)) break;
+			if (next) return next;
 		}
 	}
-	return false;
+	return undefined;
+}
+
+/** 证据锚点闸门：摘要行在前，首个证据行必须同时含文件段（带扩展名）与命令段。 */
+function headIssue(head: string[]): string | undefined {
+	const lines = head.map((line) => line.trim()).filter(Boolean);
+	const evidenceIndex = lines.findIndex((line) => EVIDENCE_LINE.test(line));
+	if (evidenceIndex === -1) return msg.reviewer.noEvidence;
+	if (evidenceIndex === 0) return msg.reviewer.noSummary;
+	const line = lines[evidenceIndex]!;
+	if (!hasFileSegment(line)) return msg.reviewer.noFiles;
+	if (!hasCommandSegment(line)) return msg.reviewer.noCommands;
+	return undefined;
 }
 
 function hasFileSegment(line: string) {
@@ -176,12 +193,9 @@ function hasCommandSegment(line: string) {
 	return Boolean(COMMAND_SEGMENT.exec(line)?.[1]?.trim());
 }
 
-/** 汇总摘要：剥离证据锚点行与建议区后的首行。 */
-function firstSummary(body: string) {
-	return body
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter((line) => line && !EVIDENCE_LINE.test(line) && !SUGGESTIONS_HEADING.test(line))[0];
+/** 汇总摘要：证据锚点行之前的首行（headIssue 已保证存在）。 */
+function firstSummary(head: string) {
+	return head.split(/\r?\n/u).map((line) => line.trim()).find((line) => line && !EVIDENCE_LINE.test(line));
 }
 
 /** 发现一句话问题（FAIL 卡片回顾用）：取第一条「- 问题:」行（支持同行及换行）。 */

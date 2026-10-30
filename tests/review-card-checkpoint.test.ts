@@ -77,7 +77,7 @@ describe("checkpoint", () => {
 		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: [{ model: "p/a", thinking: "low" as const }], reviewers: [0, 1, 2].map((i) => [{ model: `p/m${i}`, thinking: "low" as const }]) };
 		// 真实审查会话的这一票：问题字段 3000 字，摘要取自它。
 		const voter = await reviewVoter();
-		const vote = await voter.vote(["FAIL", "## 发现 1", "- 严重程度: 高", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
+		const vote = await voter.vote(["核对了 a.ts。", "证据：文件=a.ts；命令=bun test", "## 发现 1", "- 发生条件: 每次", "- 频率: 10", "- 影响: 8", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
 		await voter.close();
 		expect(vote.status).toBe("failed");
 		let current = state.reduce(state.reduce(state.initialState("run"), { type: "START", focus: "" }, limits, 1).state, { type: "ADVANCE" }, limits, 2).state;

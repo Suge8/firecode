@@ -10,9 +10,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Breaking:** Pi 1.5.0 or later is required. Tool schemas import TypeBox from `typebox`, which Pi provides to extensions, instead of the re-export Pi 1.5 dropped from `@earendil-works/pi-ai`.
 - Master Workers use codemode again when the Master session has it on. Each subsession with codemode raises Pi's process-wide codemode worker limit (`PI_CODEMODE_MAX_WORKERS`) by two while it lives, so Workers running long scripts never take the slots the Master needs; the variable returns to its original value once they are released.
 - **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
+- `/fire-review` reviewers score every finding with the condition that triggers it, a frequency (0–10) and an impact (1–10) instead of High/Medium/Low. Only findings with frequency × impact ≥ 20, or frequency ≥ 1 and impact ≥ 8, send the work back for a repair round; findings below that, or whose condition cannot be stated, are listed as suggestions in the result card and the wrap-up. Conflicts in the request itself are listed under "Needs user decision" instead of being fixed. Reviewers read the ticket or document a pointer-only request refers to, and the advisor now sees the original request.
 
 ### Fixed
 
+- A Claude subscription limit such as "You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)" now cools the model down until that time instead of for 5 minutes, so the next task no longer hits the same limit again.
+- A model switch reported to the Master no longer carries the failure reason of an earlier task.
 - `/fire-review` waits for a repair or summary turn to settle after automatic retries and continuations, so a transient provider error no longer cancels the review. A final repair error or feedback delivery failure is reported to the Master with its original message.
 
 ## [1.7.0] - 2026-10-29

@@ -60,11 +60,11 @@ test("审查者按 en 提示词写的输出契约被解析；校验报错、证�
 	const passed = await voter.vote("PASS\nLooks right.\nEvidence: files=src/a.ts; commands=bun test");
 	expect(passed.status).toBe("passed");
 
-	const missing = await voter.vote("FAIL\n## Finding 1: x\n- **Severity**: High\n- **Issue**: x");
+	const missing = await voter.vote("Checked a.ts.\nEvidence: files=a.ts; commands=bun test\n## Finding 1: x\n- **Condition**: every restart\n- **Frequency**: 10\n- **Impact**: 8\n- **Issue**: x");
 	await voter.close();
-	// 格式无效但以 FAIL 开头的票仍按未通过计，违例说明与原文一并交出。
+	// 过了门槛的发现格式不全也按未通过计，违例说明与原文一并交出。
 	expect(missing).toMatchObject({ status: "failed" });
-	expect(missing.details).toContain("did not meet the format contract: FAIL finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
+	expect(missing.details).toContain("did not meet the format contract: blocking finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
 	expect(missing.details).toContain("- **Issue**: x");
 
 	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;

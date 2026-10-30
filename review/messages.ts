@@ -11,10 +11,8 @@ const zhTerms = {
 	failed: "审查未通过",
 	finding: "发现",
 	suggestions: "建议（非阻塞）",
-	field: { severity: "严重程度", issue: "问题", evidence: "证据", contract: "违反的约定与期望行为", commands: "验证命令" },
-	high: "高",
-	medium: "中",
-	low: "低",
+	decisions: "需用户裁决",
+	field: { condition: "发生条件", frequency: "频率", impact: "影响", issue: "问题", evidence: "证据", contract: "违反的约定与期望行为", commands: "验证命令" },
 	anchor: { files: "文件", commands: "命令" },
 	model: "模型",
 	models: "模型",
@@ -28,16 +26,16 @@ const enTerms: typeof zhTerms = {
 	failed: "Review failed",
 	finding: "Finding",
 	suggestions: "Suggestions (non-blocking)",
+	decisions: "Needs user decision",
 	field: {
-		severity: "Severity",
+		condition: "Condition",
+		frequency: "Frequency",
+		impact: "Impact",
 		issue: "Issue",
 		evidence: "Evidence",
 		contract: "Violated agreement & expected behavior",
 		commands: "Verification command",
 	},
-	high: "High",
-	medium: "Medium",
-	low: "Low",
 	anchor: { files: "files", commands: "commands" },
 	model: "Model",
 	models: "Models",
@@ -67,10 +65,11 @@ export function fieldLine(pick: (terms: Terms) => string, { value = "", bullet =
 	return new RegExp(String.raw`^${lead}${BOLD}${termPattern(pick)}${BOLD}\s*[:：]\s*${BOLD}\s*${value}`, "iu");
 }
 
-/** 审查输出里“## 建议（非阻塞）”标题行（整行，两种语言都认）：审查者解析与状态机拆建议区共用这一条。 */
+/** 审查输出里“## 建议（非阻塞）”与“## 需用户裁决”标题行（整行，两种语言都认）：审查者解析与状态机拆这两区共用。 */
 export const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
+export const DECISIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.decisions)}\\s*$`, "iu");
 
-/** 审查结果行里不算结论的整行词：判定词本身与各语言的通过/未通过标题（审查者按输出契约只写 PASS/FAIL）。 */
+/** 审查结果行里不算结论的整行词：判定词本身（旧卡片与顺手写判定词的审查者）与各语言的通过/未通过标题。 */
 export const REDUNDANT_VERDICT_LINES: ReadonlySet<string> = new Set([
 	"PASS",
 	"FAIL",
@@ -149,40 +148,40 @@ export const msg = defineMessages({
 			priorRound: (round: number) => `## 第 ${round} 轮 · 未通过`,
 			advisorRuling: "顾问裁决",
 			advisorFocus: "审查关注点：",
+			requirementRecord: "原始需求与最近的会话记录（节选；完整记录在会话文件里）：",
 			thisRoundFindings: "本轮 FAIL 发现：",
 			priorHistory: "往轮 FAIL 历史：",
 			advisorReminder: "现在按 system prompt 的规则完成仲裁，并严格遵守其输出契约。",
 			fixInstruction:
-				"本轮审查未通过，请修复以下发现。将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。",
+				"本轮审查未通过，请修复以下发现。将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。「建议（非阻塞）」与「需用户裁决」里的条目不要改：建议留到总结里列出，裁决项交给用户。",
 			narrowInstruction:
-				"本轮审查未通过，但顾问判定发现清单范围过宽。下方是完整发现，仅供参考：只修顾问收窄后的范围内、真正阻塞当前需求的那部分，其余发现不要处理。先根据当前文件与命令输出核实再修，修根因不压表象，修复验证后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。若认为收窄范围内的发现也不成立，说明依据并停下。",
+				"本轮审查未通过，但顾问判定发现清单范围过宽。下方是完整发现，仅供参考：只修顾问收窄后的范围内、真正阻塞当前需求的那部分，其余发现不要处理。先根据当前文件与命令输出核实再修，修根因不压表象，修复验证后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。若认为收窄范围内的发现也不成立，说明依据并停下。「建议（非阻塞）」与「需用户裁决」里的条目不要改。",
 			advisorScope: "顾问收窄后的范围（以此为准）：",
 			advisorAdvice: "顾问建议：",
 			materialTruncated: (omitted: number) => `[材料截断：省略 ${omitted} 字]`,
 			materialLabel: { passed: "末轮审查结论：", max_rounds: "末轮未通过的发现：", advisor_stop: "顾问裁决：" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
+					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由；4) 审查提出的「需用户裁决」事项——逐条原样列出，交用户决定。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
 				max_rounds: (rounds: number) =>
-					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办；5) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
 				advisor_stop: (rounds: number) =>
-					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步；4) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
 			},
 		},
 		reviewer: {
-			invalidFirstLine: (actual: string) => `第一行必须是 PASS 或 FAIL；实际是：${actual}`,
 			formatInvalid: (issue: string) => `审查输出格式无效：${issue}`,
-			failFormatNote: (issue: string) => `（审查者的 FAIL 输出未满足格式契约：${issue}。以下为原文，仍按未通过处理）`,
-			severityNotBlocking: (index: number, value: string) => `FAIL 第 ${index} 条发现的严重程度是「${value}」，阻塞发现只能是高或中（低严重度写进建议区）`,
+			failFormatNote: (issue: string) => `（审查输出未满足格式契约：${issue}。以下为原文，过门槛的发现仍按未通过处理）`,
+			demoted: (title: string, condition: string, frequency: number, impact: number) =>
+				`${title}（${condition ? `${zhTerms.field.condition}：${condition}` : "发生条件未说明"}；${zhTerms.field.frequency} ${frequency} · ${zhTerms.field.impact} ${impact}）`,
 			timeout: "审查会话超时，未在时限内返回有效输出。",
 			sessionFailed: (reason: string) => `审查会话失败。${reason}`,
 			emptyOutput: "审查输出为空：无审查结论。",
-			passNoSummary: "PASS 缺少摘要行（证据行前必须有一行极简摘要）",
-			passNoEvidence: `PASS 缺少证据锚点行（${zhTerms.field.evidence}：${zhTerms.anchor.files}=…；${zhTerms.anchor.commands}=…）`,
-			passNoFiles: `PASS 证据行缺少文件段（${zhTerms.anchor.files}=至少一个带扩展名的路径）`,
-			passNoCommands: `PASS 证据行缺少命令段（${zhTerms.anchor.commands}=实际运行的命令）`,
-			failNoFinding: `FAIL 缺少阻塞发现：需要一个「## ${zhTerms.finding}」小节`,
-			missingFields: (index: number, names: string[]) => `FAIL 第 ${index} 条发现缺少必填字段：${names.join("、")}`,
+			noSummary: "缺少摘要行（证据行前必须有一行极简摘要）",
+			noEvidence: `缺少证据锚点行（${zhTerms.field.evidence}：${zhTerms.anchor.files}=…；${zhTerms.anchor.commands}=…）`,
+			noFiles: `证据行缺少文件段（${zhTerms.anchor.files}=至少一个带扩展名的路径）`,
+			noCommands: `证据行缺少命令段（${zhTerms.anchor.commands}=实际运行的命令）`,
+			missingFields: (index: number, names: string[]) => `第 ${index} 条阻塞发现缺少必填字段：${names.join("、")}`,
 			failFallbackSummary: "审查未通过，存在发现。",
 		},
 		advisor: {
@@ -275,40 +274,40 @@ export const msg = defineMessages({
 			priorRound: (round: number) => `## Round ${round} · failed`,
 			advisorRuling: "Advisor ruling",
 			advisorFocus: "Review focus:",
+			requirementRecord: "Original request and recent session record (excerpt; the full record is in the session file):",
 			thisRoundFindings: "This round FAIL findings:",
 			priorHistory: "Prior FAIL history:",
 			advisorReminder: "Now arbitrate under the system prompt and strictly follow its output contract.",
 			fixInstruction:
-				"This round's review failed. Fix the findings below. Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved then finish directly (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints).",
+				"This round's review failed. Fix the findings below. Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved then finish directly (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints). Leave the items under “Suggestions (non-blocking)” and “Needs user decision” alone: suggestions are listed in the wrap-up, decisions go to the user.",
 			narrowInstruction:
-				"This round's review failed, but the advisor judged the finding list too broad. The full findings below are context only: fix only the part inside the advisor's narrowed scope that actually blocks the current requirement, and leave the rest alone. Verify against current files and command output before fixing, fix root causes not symptoms, and finish directly after verification (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. If even the narrowed findings do not hold, explain why and stop.",
+				"This round's review failed, but the advisor judged the finding list too broad. The full findings below are context only: fix only the part inside the advisor's narrowed scope that actually blocks the current requirement, and leave the rest alone. Verify against current files and command output before fixing, fix root causes not symptoms, and finish directly after verification (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. If even the narrowed findings do not hold, explain why and stop. Leave the items under “Suggestions (non-blocking)” and “Needs user decision” alone.",
 			advisorScope: "Advisor scope (authoritative):",
 			advisorAdvice: "Advisor note:",
 			materialTruncated: (omitted: number) => `[material truncated: ${omitted} characters omitted]`,
 			materialLabel: { passed: "Final review verdict:", max_rounds: "Final round findings:", advisor_stop: "Advisor ruling:" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why; 4) items the review marked "Needs user decision" — list each as raised, for the user to decide. Summary only: do not change code or run tools; end this turn with the final reply.`,
 				max_rounds: (rounds: number) =>
-					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
+					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next; 5) list the items marked "Needs user decision" and the suggestions left unaddressed. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
 				advisor_stop: (rounds: number) =>
-					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step; 4) list the items marked "Needs user decision" and the suggestions left unaddressed. Summary only: do not change code or run tools; end this turn with the final reply.`,
 			},
 		},
 		reviewer: {
-			invalidFirstLine: (actual: string) => `first line must be PASS or FAIL; actual: ${actual}`,
 			formatInvalid: (issue: string) => `review output format invalid: ${issue}`,
-			failFormatNote: (issue: string) => `(The reviewer's FAIL output did not meet the format contract: ${issue}. Original text follows and still counts as a failure.)`,
-			severityNotBlocking: (index: number, value: string) => `FAIL finding ${index} has severity "${value}"; a blocking finding must be High or Medium (low severity goes in the suggestions section)`,
+			failFormatNote: (issue: string) => `(The review output did not meet the format contract: ${issue}. Original text follows; findings over the threshold still count as a failure.)`,
+			demoted: (title: string, condition: string, frequency: number, impact: number) =>
+				`${title} (${condition ? `${enTerms.field.condition}: ${condition}` : "condition not stated"}; ${enTerms.field.frequency} ${frequency} · ${enTerms.field.impact} ${impact})`,
 			timeout: "review session timed out before returning valid output.",
 			sessionFailed: (reason: string) => `review session failed. ${reason}`,
 			emptyOutput: "review output is empty: no check result.",
-			passNoSummary: "PASS is missing the summary line (one terse summary line must precede the evidence line)",
-			passNoEvidence: `PASS is missing the evidence anchor line (${enTerms.field.evidence}: ${enTerms.anchor.files}=...; ${enTerms.anchor.commands}=...)`,
-			passNoFiles: `PASS evidence line is missing the files segment (${enTerms.anchor.files}=at least one path with an extension)`,
-			passNoCommands: `PASS evidence line is missing the commands segment (${enTerms.anchor.commands}=the commands actually run)`,
-			failNoFinding: `FAIL has no blocking finding: a \`## ${enTerms.finding}\` section is required`,
-			missingFields: (index: number, names: string[]) => `FAIL finding ${index} is missing required fields: ${names.join(", ")}`,
+			noSummary: "missing the summary line (one terse summary line must precede the evidence line)",
+			noEvidence: `missing the evidence anchor line (${enTerms.field.evidence}: ${enTerms.anchor.files}=...; ${enTerms.anchor.commands}=...)`,
+			noFiles: `evidence line is missing the files segment (${enTerms.anchor.files}=at least one path with an extension)`,
+			noCommands: `evidence line is missing the commands segment (${enTerms.anchor.commands}=the commands actually run)`,
+			missingFields: (index: number, names: string[]) => `blocking finding ${index} is missing required fields: ${names.join(", ")}`,
 			failFallbackSummary: "Review failed with findings.",
 		},
 		advisor: {

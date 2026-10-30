@@ -16,6 +16,7 @@ import { type CheckpointWriter, sealCheckpoint } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, type PromptLayers } from "./prompt.js";
+
 import { runReviewer } from "./reviewer.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import type { ReviewModelConfig } from "./session.js";
@@ -35,6 +36,9 @@ import {
 	summaryKindOf,
 } from "./state.js";
 import { ReviewUi } from "./ui.js";
+
+/** 顾问看的需求证据只要锚点与最近几步：它核实的是发现，不重做全量审查。 */
+const ADVISOR_EVIDENCE_TOKENS = 6_000;
 
 const PROMPTS = new URL("./prompts/", import.meta.url);
 
@@ -303,6 +307,7 @@ export class Run {
 		try {
 			const prompt = buildAdvisorPrompt(readPrompt(PROMPTS, "advisor"), {
 				focus: state.focus,
+				requirement: buildEvidence(this.sessionEntries(), { budgetTokens: ADVISOR_EVIDENCE_TOKENS, sessionFile: this.ctx.sessionManager.getSessionFile() }),
 				details: findingsOf(state.voters),
 				history: state.history,
 				round: state.round,
