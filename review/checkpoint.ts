@@ -9,7 +9,10 @@
  * - 拒绝记录：命令入口拒绝启动的原因（无 UI 的 Worker 里这是唯一出口）。
  * 校验只守版本与关键字段：数据是本代码写的，字段形状由类型保证，版本门挡住旧档，不做字段级兼容。
  */
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ModelChain } from "../config.js";
+import { matchModels } from "../model-match.js";
 import { isRecord } from "../jsonc.js";
 import { PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
 
@@ -39,7 +42,12 @@ export class CheckpointWriter {
 	private written: number;
 
 	/** restored 是从会话恢复出来的状态（其历史已在会话里）；新审查不传。 */
-	constructor(private readonly pi: ExtensionAPI, restored?: ReviewState) {
+	constructor(
+		private readonly pi: ExtensionAPI,
+		private readonly reviewers: ModelChain[],
+		private readonly available: () => readonly Model<Api>[],
+		restored?: ReviewState,
+	) {
 		this.written = restored?.history.length ?? 0;
 	}
 
@@ -48,19 +56,36 @@ export class CheckpointWriter {
 			this.pi.appendEntry(ROUND_TYPE, { runId: state.runId, round });
 			this.written += 1;
 		}
-		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state) });
+		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state, this.reviewers, this.available) });
 	}
 }
 
 /** 终态封存（按取消收尾）：把活动态改成 settled 写下去，调用方负责处理写不进去的情况。 */
 export function sealCheckpoint(pi: ExtensionAPI, state: ReviewState): void {
-	new CheckpointWriter(pi, state).write({ ...state, phase: "settled", end: "cancelled", updatedAt: Date.now() } as ReviewState);
+	new CheckpointWriter(pi, [], () => [], state).write({ ...state, phase: "settled", end: "cancelled", updatedAt: Date.now() } as ReviewState);
 }
 
-function snapshotOf(state: ReviewState): Snapshot {
+function snapshotOf(state: ReviewState, reviewers: ModelChain[], available: () => readonly Model<Api>[]): Snapshot {
 	const { history, ...rest } = state;
 	const last = history.at(-1);
-	return { ...rest, rounds: history.length, last: last ? light(last) : null } as Snapshot;
+	if (state.phase !== "reviewing") return { ...rest, rounds: history.length, last: last ? light(last) : null } as Snapshot;
+	// v8 的旧审查器从快照读取席位模型与 fallback；只在写盘时从当前配置和宿主模型表投影，恢复后不留第二套链。
+	const models = available().filter((model) => model.api !== "pi-virtual");
+	const slots = state.slots.map((slot, index) => {
+		const seen = new Set<string>();
+		const chain = reviewers[index].flatMap((atom) => {
+			const matches = matchModels(models, atom.model);
+			const candidates = matches.length ? matches.map((model) => ({ model: `${model.provider}/${model.id}`, thinking: atom.thinking })) : [atom];
+			return candidates.filter((candidate) => {
+				if (seen.has(candidate.model)) return false;
+				seen.add(candidate.model);
+				return true;
+			});
+		});
+		const [primary, ...fallback] = chain;
+		return { ...primary, fallback, result: slot.result };
+	});
+	return { ...rest, slots, rounds: history.length, last: last ? light(last) : null } as Snapshot;
 }
 
 function light(round: ReviewRound): ReviewRound {
@@ -100,7 +125,10 @@ export function readCheckpoint(ctx: { sessionManager: { getBranch(): unknown[] }
 		return undefined;
 	}
 	const { rounds: _rounds, last: _last, ...rest } = snapshot;
-	return { ...rest, history: [...rounds.values()].sort((a, b) => a.round - b.round) } as ReviewState;
+	const history = [...rounds.values()].sort((a, b) => a.round - b.round);
+	return rest.phase === "reviewing"
+		? { ...rest, slots: rest.slots.map(({ result }) => ({ result })), history }
+		: { ...rest, history } as ReviewState;
 }
 
 function isStored(value: unknown): value is Snapshot & { version: number } {

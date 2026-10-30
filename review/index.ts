@@ -64,7 +64,7 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 		if (current) return refuse(ctx, msg.command.alreadyRunning, "info");
 		const input = args.trim();
 		if (input.startsWith("--")) return refuse(ctx, msg.command.invalidArgs, "error");
-		current = new Run(host, ctx, loaded.config, initialState(randomUUID()), new CheckpointWriter(pi));
+		current = new Run(host, ctx, loaded.config, initialState(randomUUID()), new CheckpointWriter(pi, loaded.config.reviewers, () => ctx.modelRegistry.getAvailable()));
 		current.start(input);
 	}
 
@@ -90,7 +90,7 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 		// 配置问题的告警由入口统一聚合；这里保留活动 checkpoint，修好后继续恢复。
 		const loaded = loadConfig().review;
 		if ("error" in loaded) return;
-		current = new Run(host, ctx, loaded.config, checkpoint, new CheckpointWriter(pi, checkpoint));
+		current = new Run(host, ctx, loaded.config, checkpoint, new CheckpointWriter(pi, loaded.config.reviewers, () => ctx.modelRegistry.getAvailable(), checkpoint));
 		current.resume();
 	}
 }

@@ -87,7 +87,7 @@ async function loadAll() {
 
 /** 把一份状态当作上次会话留下的 checkpoint 写进会话记录。 */
 function seed(pi: { appendEntry: (type: string, data: unknown) => void }, state: ReturnType<InitialState>) {
-	new CheckpointWriter(pi as never).write(state);
+	new CheckpointWriter(pi as never, [[{ model: "p/one", thinking: "low" }]], () => []).write(state);
 }
 
 function makeSessionManager() {
@@ -119,6 +119,10 @@ function makeCtx(sessionManager: MockSessionManager, busy = false) {
 		notices,
 		hasUI: true,
 		cwd: "/tmp/firecode-test",
+		modelRegistry: { getAvailable: () => ["p/one", "p/two", "p/three", "test/reviewer", "test/advisor"].map((name) => {
+			const [provider, ...id] = name.split("/");
+			return { provider, id: id.join("/") };
+		}) },
 		sessionManager,
 		isIdle: () => idle,
 		hasPendingMessages: () => false,
@@ -784,6 +788,26 @@ describe("review config is rejected at every entry point", () => {
 describe("reload recovery actually resumes the loop", () => {
 	// resources_discover 是宿主提供的 post-session 边界：只有全部异步 session_start
 	// handler 返回后才发，不能用 tick 或毫秒猜测。
+	test("进行中的 v8 审查快照保留旧版可恢复的模型链", async () => {
+		const module = await loadReviewModule("review/index.js", {
+			configJsonc: reviewConfig({ reviewers: [["two/low", "three/high"]] }),
+		});
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		module.registerReview(pi);
+		let started!: () => void;
+		const running = new Promise<void>((resolve) => { started = resolve; });
+		faux.setResponses([hang(started)]);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await running;
+		const snapshot = checkpoints(sessionManager).at(-1) as { data: { version: number; slots: unknown[] } };
+		expect(snapshot.data.version).toBe(8);
+		expect(snapshot.data.slots).toEqual([{ model: "p/two", thinking: "low", fallback: [{ model: "p/three", thinking: "high" }], result: null }]);
+		await registered.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);
+	});
+
 	test("restored reviewers wait for the post-session event after later async handlers", async () => {
 		await loadAll();
 		const marker = join(tmpdir(), `fire-review-marker-${Date.now()}`);
@@ -1070,6 +1094,26 @@ describe("review cards and degraded paths", () => {
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
 		expect(cards.some((content) => content.includes("审查未完成") && content.includes("sol"))).toBe(true);
 		expect(cards.some((content) => content.includes("审查通过"))).toBe(false);
+	}, 20_000);
+
+	test("审查者输出截断后沿链切换并完成审查", async () => {
+		const { registerReview } = await loadReviewModule("review/index.js", {
+			configJsonc: reviewConfig({ reviewers: [["p/two/low", "p/three/low"]] }),
+		});
+		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule;
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		faux.setResponses(Array.from({ length: 3 }, () => (_context: any, _options: any, _state: any, model: any) =>
+			model.id === "two" ? fauxAssistantMessage("部分内容", { stopReason: "length" })
+				: fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test")));
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => ["summarizing", "settled"].includes(checkpoint.readCheckpoint({ sessionManager })?.phase ?? ""));
+		const state = checkpoint.readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.history[0].reviewers[0].model).toBe("p/three");
 	}, 20_000);
 
 	test("reviewer changes model within the same session after quota failure", async () => {

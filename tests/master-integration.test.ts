@@ -497,6 +497,21 @@ test("溢出恢复删除运行时消息后仍落定供应商错误而非过期�
 	expect(content).not.toContain("（无回复）");
 });
 
+test("输出截断后在同一回合切换模型并完成", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
+	const respond = (_context: any, _options: any, _state: any, model: any) => model.id === "worker"
+		? fauxAssistantMessage("部分内容", { stopReason: "length" })
+		: fauxAssistantMessage("完整结果");
+	faux.setResponses([respond, respond]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({ action: "start", worker: "truncated-chain", prompt: "执行", role: "工程师" });
+	await delivered;
+	await until(() => harness.messages.some((entry: any) => /完整结果|截断/u.test(entry.message.content)));
+	expect(harness.messages.map((entry: any) => entry.message.content).join("\n")).toContain("完整结果");
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
+});
+
 test("输出截断即使已有正文也按失败投递，不能报告正常返回", async () => {
 	const harness = await setup();
 	faux.setResponses([fauxAssistantMessage("看似完整的结果", { stopReason: "length" })]);

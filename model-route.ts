@@ -115,14 +115,16 @@ export async function createModelRoute(
 		pi.on("message_end", (event) => {
 			const message = event.message;
 			if (message.role === "assistant" && state.current && message.api !== "pi-virtual"
-				&& message.stopReason !== "error" && message.stopReason !== "aborted") cooldowns.delete(key(state.current.model));
+				&& message.stopReason !== "error" && message.stopReason !== "aborted" && message.stopReason !== "length") cooldowns.delete(key(state.current.model));
 		});
 		pi.on("agent_before_settle", (event, ctx) => {
-			if (event.outcome !== "error" || event.continue) return;
+			if (event.outcome === "aborted" || event.continue) return;
 			const failure = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message");
-			if (failure?.type !== "message" || failure.message.role !== "assistant" || failure.message.stopReason !== "error") return;
+			if (failure?.type !== "message" || failure.message.role !== "assistant") return;
+			if (failure.message.stopReason !== "error" && failure.message.stopReason !== "length") return;
 			if (!state.current || failure.message.api === "pi-virtual") return;
-			if (!currentFailed) fail(state.current.model, failure.message.errorMessage ?? "model error");
+			const reason = failure.message.stopReason === "length" ? msg.outputTruncated : failure.message.errorMessage ?? "model error";
+			if (!currentFailed) fail(state.current.model, reason);
 			currentFailed = true;
 			return { entries: [...event.entries, { type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 		});

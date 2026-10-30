@@ -81,7 +81,7 @@ describe("checkpoint", () => {
 		await voter.close();
 		expect(vote.status).toBe("failed");
 		let current = state.reduce(state.reduce(state.initialState("run"), { type: "START", focus: "" }, limits, 1).state, { type: "ADVANCE" }, limits, 2).state;
-		const writer = new CheckpointWriter(pi as never);
+		const writer = new CheckpointWriter(pi as never, limits.reviewers, () => []);
 		const written = () => entries.reduce((sum, entry) => sum + JSON.stringify(entry).length, 0);
 		const totals: number[] = [];
 		for (let round = 1; round <= 10; round += 1) {
