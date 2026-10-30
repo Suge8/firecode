@@ -497,7 +497,7 @@ test("溢出恢复删除运行时消息后仍落定供应商错误而非过期�
 	expect(content).not.toContain("（无回复）");
 });
 
-test("输出截断后在同一回合切换模型并完成", async () => {
+test("输出截断后同回合切换模型，后续派活仍可使用首选", async () => {
 	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
 	const respond = (_context: any, _options: any, _state: any, model: any) => model.id === "worker"
 		? fauxAssistantMessage("部分内容", { stopReason: "length" })
@@ -510,6 +510,17 @@ test("输出截断后在同一回合切换模型并完成", async () => {
 	expect(harness.messages.map((entry: any) => entry.message.content).join("\n")).toContain("完整结果");
 	const session = harness.pool.getSession((started.details as any).worker.session);
 	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
+	const models: string[] = [];
+	const next = (_context: any, _options: any, _state: any, model: any) => {
+		models.push(model.id);
+		return fauxAssistantMessage(models.length === 1 ? "新会话完成" : "续派完成");
+	};
+	faux.setResponses([next, next]);
+	await harness.execute({ action: "start", worker: "another", prompt: "执行", role: "工程师" });
+	await until(() => harness.messages.some((entry: any) => entry.message.content.includes("新会话完成")));
+	await harness.execute({ action: "send", worker: "truncated-chain", prompt: "继续" });
+	await until(() => harness.messages.some((entry: any) => entry.message.content.includes("续派完成")));
+	expect(models).toEqual(["worker", "worker"]);
 });
 
 test("输出截断即使已有正文也按失败投递，不能报告正常返回", async () => {
@@ -2047,11 +2058,11 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 8, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 9, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
 		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,
-		slots: [{ model: "test/reviewer", thinking: "high", fallback: [], result: null }],
+		slots: [{ result: null }],
 	};
 	const settled = {
 		...base, phase: "settled", end: timeout ? "error" : "passed", updatedAt: 2, rounds: 1,

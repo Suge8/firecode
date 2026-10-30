@@ -54,14 +54,16 @@ export async function createModelRoute(
 	let currentFailed = false;
 	let nextTask = true;
 	let settled = true;
-	const attempted = new Set<string>();
-	const fail = (model: Model<Api>, reason: string) => {
+	const attempted = new Map<string, string>();
+	const fail = (model: Model<Api>, reason: string, cool: boolean) => {
 		const name = key(model);
-		attempted.add(name);
-		const previous = cooldowns.get(name);
-		const failures = (previous?.failures ?? 0) + 1;
-		const now = Date.now();
-		cooldowns.set(name, { failures, reason, until: resetTime(reason, now) ?? now + DELAYS[Math.min(failures - 1, DELAYS.length - 1)] });
+		attempted.set(name, reason);
+		if (cool) {
+			const previous = cooldowns.get(name);
+			const failures = (previous?.failures ?? 0) + 1;
+			const now = Date.now();
+			cooldowns.set(name, { failures, reason, until: resetTime(reason, now) ?? now + DELAYS[Math.min(failures - 1, DELAYS.length - 1)] });
+		}
 		lastReason = reason;
 	};
 	const choose = async (restart: boolean) => {
@@ -73,8 +75,11 @@ export async function createModelRoute(
 				const matches = list.filter((entry) => entry.model.id === atom.model || key(entry.model) === atom.model || key(entry.model).endsWith(`/${atom.model}`));
 				if (!matches.length) return [msg.spawn.modelUnavailable(atom.model)];
 				return matches.map(({ model }) => {
-					const failure = cooldowns.get(key(model));
-					return failure ? msg.spawn.modelCooling(key(model), failure.reason, new Date(failure.until).toISOString()) : msg.spawn.modelUnavailable(key(model));
+					const name = key(model);
+					const failure = cooldowns.get(name);
+					const reason = attempted.get(name);
+					if (reason && failure?.reason !== reason) return msg.spawn.modelFailed(name, reason);
+					return failure ? msg.spawn.modelCooling(name, failure.reason, new Date(failure.until).toISOString()) : msg.spawn.modelUnavailable(name);
 				});
 			});
 			const times = list.flatMap(({ model }) => {
@@ -124,7 +129,7 @@ export async function createModelRoute(
 			if (failure.message.stopReason !== "error" && failure.message.stopReason !== "length") return;
 			if (!state.current || failure.message.api === "pi-virtual") return;
 			const reason = failure.message.stopReason === "length" ? msg.outputTruncated : failure.message.errorMessage ?? "model error";
-			if (!currentFailed) fail(state.current.model, reason);
+			if (!currentFailed) fail(state.current.model, reason, failure.message.stopReason === "error");
 			currentFailed = true;
 			return { entries: [...event.entries, { type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 		});

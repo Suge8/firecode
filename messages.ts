@@ -41,6 +41,7 @@ export const msg = defineMessages({
 		},
 		spawn: {
 			modelUnavailable: (model: string) => `${model}：没有可用模型或凭据`,
+			modelFailed: (model: string, reason: string) => `${model}：${reason}`,
 			modelCooling: (model: string, reason: string, until: string) => `${model}：${reason}，恢复时间 ${until}`,
 			chainExhausted: (reasons: string) => `模型链已用尽：${reasons}`,
 			earliestRecovery: (time: string) => `最早恢复时间 ${time}`,
@@ -105,6 +106,7 @@ export const msg = defineMessages({
 		},
 		spawn: {
 			modelUnavailable: (model: string) => `${model}: no available model or credentials`,
+			modelFailed: (model: string, reason: string) => `${model}: ${reason}`,
 			modelCooling: (model: string, reason: string, until: string) => `${model}: ${reason}, resets at ${until}`,
 			chainExhausted: (reasons: string) => `Model chain exhausted: ${reasons}`,
 			earliestRecovery: (time: string) => `earliest recovery ${time}`,
