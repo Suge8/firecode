@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { fixtureDir } from "./fixtures.ts";
-import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, startPi, WORK } from "./lib.ts";
+import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, startPi, variantAgent, WORK } from "./lib.ts";
 import { TASKS, taskById, type Task } from "./tasks.ts";
 
 interface Start {
@@ -32,7 +32,7 @@ function runOne(task: Task, variant: string, run: number, o: { steps: number; ti
 	const { repo, tmp } = prepareRun(dir, fixtureDir(task.fixture));
 	const probePath = join(dir, "probe.jsonl");
 	const child = startPi(["--mode", "json", "--session-dir", join(dir, "sessions"), "-e", join(import.meta.dir, "probe.ts"), task.prompt], {
-		variant, cwd: repo, tmp, stdin: "ignore", env: { EVAL_LOG: probePath },
+		agentDir: variantAgent(variant), cwd: repo, tmp, stdin: "ignore", env: { EVAL_LOG: probePath },
 	});
 	const t0 = Date.now();
 	let tAgent = 0;

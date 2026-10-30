@@ -40,14 +40,17 @@ export function prepareRun(dir: string, fixture: string): { repo: string; tmp: s
 	return { repo, tmp };
 }
 
+/** 变体的临时 Agent 目录。 */
+export const variantAgent = (variant: string): string => join(WORK, "variants", variant, "agent");
+
 /**
  * 子进程不继承任何 PI_* 与 HERDR_*：前者含外层 pi 给工具设的会话变量（PI_SESSION_FILE、PI_MODEL 等）和个人设置（PI_CACHE_RETENTION），
  * 会让不同人跑出的结果不可比；后者会让子进程回写用户自己的 herdr pane。评测需要的 PI_* 在下面显式给出。
  */
-export function startPi(args: string[], o: { variant: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string> }): ChildProcess {
+export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string> }): ChildProcess {
 	const env: Record<string, string | undefined> = {
 		...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(PI|HERDR)_/u.test(key))),
-		PI_CODING_AGENT_DIR: join(WORK, "variants", o.variant, "agent"),
+		PI_CODING_AGENT_DIR: o.agentDir,
 		PI_OFFLINE: "1",
 		PI_TELEMETRY: "0",
 		TMPDIR: o.tmp,

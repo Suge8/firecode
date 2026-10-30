@@ -9,7 +9,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { fixtureDir } from "./fixtures.ts";
-import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, startPi, WORK } from "./lib.ts";
+import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, startPi, variantAgent, WORK } from "./lib.ts";
 import { taskById, type Task } from "./tasks.ts";
 
 const POLL_MS = 1000;
@@ -45,7 +45,7 @@ async function runOne(task: Task, variant: string, run: number): Promise<void> {
 	const id = `${variant}/${task.id}-${run}`;
 	const dir = join(WORK, "runs", variant, `${task.id}-${run}`);
 	const { repo, tmp } = prepareRun(dir, fixtureDir(task.fixture));
-	const child = startPi(["--mode", "rpc", "--session-dir", join(dir, "sessions")], { variant, cwd: repo, tmp, stdin: "pipe" });
+	const child = startPi(["--mode", "rpc", "--session-dir", join(dir, "sessions")], { agentDir: variantAgent(variant), cwd: repo, tmp, stdin: "pipe" });
 	child.stderr!.on("data", (chunk: Buffer) => appendFileSync(join(dir, "stderr.txt"), chunk));
 	let sessionFile = "";
 	const agentStarts: number[] = [];
