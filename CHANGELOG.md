@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `/fire-review` waits for a repair or summary turn to settle after automatic retries and continuations, so a transient provider error no longer cancels the review. A final provider error is reported to the Master with its original message.
+
 ## [1.7.0] - 2026-10-29
 
 ### Changed

@@ -9,7 +9,7 @@
  * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
- * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
+ * 不变量：同一时刻至多一个活动轮；round 单调递增；修复或总结回合出错时将末轮改记为故障。
  */
 import type { ChainedAtom, ModelAtom, ReviewConfig } from "../config.js";
 import { fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
@@ -57,7 +57,7 @@ export interface AdvisorResult {
 	advice: string;
 }
 
-/** 一轮已收口的记录；只追加不改写。全文只存在 reviewers[].details 一处，其余文本按 roundText 推出。 */
+/** 已收口的记录；修复或总结回合出错时末轮改记为故障。全文只存在 reviewers[].details 一处，其余文本按 roundText 推出。 */
 export interface ReviewRound {
 	round: number;
 	result: RoundResult;
@@ -240,11 +240,12 @@ function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now
 	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
 }
 
-/** 修复回合结束：总结回合无论何种结局都落 settled（总结是尽力而非必须）；修复回合被中断按用户取消收尾。 */
+/** 修复与总结回合均在最终落定时判断是否被中断。 */
 function onTurnEnded(state: ReviewState, aborted: boolean, now: number): ReduceResult {
+	if (state.phase !== "awaiting_fix" && state.phase !== "summarizing") return NOTHING(state);
+	if (state.turn !== "running" && !(state.phase === "summarizing" && !aborted)) return NOTHING(state);
+	if (aborted) return { state: go(state, now, { phase: "settled", end: "cancelled" }), effects: [{ kind: "notify_cancelled" }] };
 	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
-	if (state.phase !== "awaiting_fix" || state.turn !== "running") return NOTHING(state);
-	if (aborted) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
 	return { state: go(state, now, { phase: "awaiting_fix", turn: "done" }), effects: [] };
 }
 
@@ -357,6 +358,15 @@ function toRepair(
 }
 
 function onInfrastructureError(state: ReviewState, details: string, now: number): ReduceResult {
+	if (state.phase === "awaiting_fix" || state.phase === "summarizing") {
+		const last = state.history.at(-1);
+		if (last) return {
+			state: go(state, now, { phase: "settled", end: "error" }, {
+				history: [...state.history.slice(0, -1), { ...last, result: "error", error: details }],
+			}),
+			effects: [{ kind: "send_card", card: { kind: "error", message: details } }],
+		};
+	}
 	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
 	const round = reviewers && closeRound(state, now, { round: state.round, result: "error", reviewers, error: details });
 	return abort(state, now, "error", round, [{ kind: "send_card", card: { kind: "error", message: details } }]);

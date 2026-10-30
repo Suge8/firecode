@@ -1543,6 +1543,29 @@ test("子代理在第一条回复前随会话关闭被打断（还没有会话�
 	expect(titleOf(harness.messages.at(-1).message.content)).toBe("early 审查通过（1 轮）");
 });
 
+test("修复回合自动重试后继续下一轮审查", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } }));
+	const fail = "FAIL\n## 发现 1\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
+	const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
+	faux.setResponses([
+		fauxAssistantMessage("实现完成"),
+		fauxAssistantMessage(fail),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 service unavailable" }),
+		fauxAssistantMessage("修复完成"),
+		fauxAssistantMessage(pass),
+		fauxAssistantMessage("审查通过，修复完成"),
+	]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "retry-review", prompt: "实现", role: "工程师", review: true });
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "retry-review" });
+	await delivered;
+	expect(titleOf(harness.messages.at(-1).message.content)).toBe("retry-review 审查通过（2 轮）");
+	await harness.command("");
+}, 20_000);
+
 test("审查中的子代理被 interrupt：审查以取消收场（终态 checkpoint 已写），子代理回到 idle 带中断标记，审查义务仍在，可再 review", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	const { readReviewOutcome } = await loadFirecodeModule("review/outcome.js") as any;

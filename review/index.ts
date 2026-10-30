@@ -50,10 +50,8 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
 	pi.on("resources_discover", (_event, ctx) => current?.advance(ctx));
 	pi.on("agent_start", () => current?.agentStarted());
-	// agent_end 只记录修复/总结回合的结局，不在此推进审查。
-	pi.on("agent_end", (event) => current?.agentEnded(event));
-	// settled 后尝试推进；后续异步 handler 若再触发模型，agent_start 互锁会先停审查。
-	pi.on("agent_settled", (_event, ctx) => current?.advance(ctx));
+	// 只有最终落定才判回合结局；后续 handler 若再触发模型，agent_start 互锁会先停审查。
+	pi.on("agent_settled", (event, ctx) => current?.agentSettled(event, ctx));
 	pi.on("session_shutdown", (event, ctx) => current?.shutdown(event.reason, ctx));
 
 	async function startReview(args: string, ctx: ExtensionContext): Promise<void> {

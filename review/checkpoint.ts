@@ -2,7 +2,7 @@
  * /fire-review 的持久化：custom entry（不进 LLM 上下文）。
  *
  * 一份会话分支上有三种记录：
- * - 轮记录：每收口一轮追加一条完整的 ReviewRound（含审查全文），只写一次，写入先于引用它的快照；
+ * - 轮记录：每收口一轮追加完整的 ReviewRound（含审查全文），修复或总结出错时追加末轮的故障版本；写入先于引用它的快照；
  * - checkpoint 快照：append-only，最新一条为准。它不带 history，只带当前相的数据、轮数和末轮的轻量副本
  *   （去掉审查全文与摘要；Master 单凭一条快照就能给出终态判定），所以每条快照体积有界，
  *   一场审查的累计写入量随轮数线性增长；
@@ -37,17 +37,22 @@ export type Snapshot = WithoutHistory<ReviewState> & { rounds: number; last: Rev
 /** 一个会话里一场审查的写入口：记得已经写过多少轮。写不进去时抛错，由执行器收口。 */
 export class CheckpointWriter {
 	private written: number;
+	private last: ReviewRound | undefined;
 
 	/** restored 是从会话恢复出来的状态（其历史已在会话里）；新审查不传。 */
 	constructor(private readonly pi: ExtensionAPI, restored?: ReviewState) {
 		this.written = restored?.history.length ?? 0;
+		this.last = restored?.history.at(-1);
 	}
 
 	write(state: ReviewState): void {
+		const previous = state.history[this.written - 1];
+		if (previous && previous !== this.last) this.pi.appendEntry(ROUND_TYPE, { runId: state.runId, round: previous });
 		for (const round of state.history.slice(this.written)) {
 			this.pi.appendEntry(ROUND_TYPE, { runId: state.runId, round });
 			this.written += 1;
 		}
+		this.last = state.history.at(-1);
 		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state) });
 	}
 }
