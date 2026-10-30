@@ -210,7 +210,9 @@ export class Run {
 	/** 自动重试和续跑结束后，依据当前分支上的最终回复判定结局。 */
 	agentSettled(event: AgentSettledEvent, ctx: ExtensionContext): void {
 		const { state } = this;
-		if ((state.phase === "awaiting_fix" || state.phase === "summarizing") && state.turn === "running") {
+		if (state.phase === "summarizing" && state.turn === "running") {
+			this.dispatch({ type: "TURN_ENDED", aborted: event.aborted });
+		} else if (state.phase === "awaiting_fix" && state.turn === "running") {
 			const assistant = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
 			if (event.aborted) this.dispatch({ type: "TURN_ENDED", aborted: true });
 			else if (assistant?.type === "message" && assistant.message.role === "assistant" && assistant.message.stopReason === "error")
@@ -349,7 +351,7 @@ export class Run {
 	/**
 	 * 修复反馈与总结提示经统一投递入口（deliver.ts），回合照常经过 before_agent_start；
 	 * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器；reload 从 pending 重投。delivering 防止等待期间重复投递。
-	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按用户取消收尾。
+	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按故障收尾。
 	 */
 	private async deliverTurn(content: string): Promise<void> {
 		if (this.delivering) return;
@@ -361,7 +363,7 @@ export class Run {
 		} catch (error) {
 			if (signal.aborted) return;
 			this.notify(msg.notify.stepFailed(errorText(error)), "warning");
-			this.dispatch(this.state.phase === "summarizing" ? { type: "TURN_ENDED", aborted: false } : { type: "CANCEL", reason: "user" });
+			this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: errorText(error) });
 		} finally {
 			this.delivering = false;
 		}

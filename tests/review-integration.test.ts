@@ -749,7 +749,7 @@ describe("review config is rejected at every entry point", () => {
 			type: "custom",
 			customType: "firecode-review-checkpoint",
 			data: {
-				version: 8,
+				version: 9,
 				runId: "g",
 				phase: "reviewing",
 				round: 1,
@@ -941,8 +941,8 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
 	}, 20_000);
 
-	test("a synchronous feedback failure cancels the review", async () => {
-		const { registerReview, readCheckpoint } = await loadSingleFailReview();
+	test("a synchronous feedback failure reports the original error", async () => {
+		const { registerReview, readCheckpoint, readReviewOutcome } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		const sendMessage = pi.sendMessage;
@@ -956,7 +956,11 @@ describe("the loop survives failing side effects", () => {
 		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(readCheckpoint({ sessionManager })).toMatchObject({ phase: "settled", end: "error", error: "同步拒绝", history: [{ result: "failed" }] });
+		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
+		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "failed", rounds: 1, reason: "同步拒绝" });
+		await rm(sessionPath, { force: true });
 	}, 20_000);
 
 	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起审查会话、投反馈。

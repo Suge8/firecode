@@ -1566,6 +1566,33 @@ test("修复回合自动重试后继续下一轮审查", async () => {
 	await harness.command("");
 }, 20_000);
 
+test("修复回合最终错误向 Master 报告原文并保留审查轮", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const fail = "FAIL\n## 发现 1\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
+	const error = "供应商认证失败 401";
+	faux.setResponses([
+		fauxAssistantMessage("实现完成"),
+		fauxAssistantMessage(fail),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: error }),
+	]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({ action: "start", worker: "failed-review", prompt: "实现", role: "工程师", review: true });
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "review", worker: "failed-review" });
+	await delivered;
+	const content = harness.messages.at(-1).message.content;
+	expect(titleOf(content)).toBe("failed-review 审查未完成");
+	expect(content).toContain(error);
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	const { readCheckpoint } = await loadFirecodeModule("review/checkpoint.js") as any;
+	const { readReviewOutcome } = await loadFirecodeModule("review/outcome.js") as any;
+	expect(readReviewOutcome((started.details as any).worker.session)).toMatchObject({ status: "failed", rounds: 1, reason: error });
+	expect(readCheckpoint(session)).toMatchObject({ phase: "settled", end: "error", error, history: [{ result: "failed" }] });
+	await harness.command("");
+}, 20_000);
+
 test("审查中的子代理被 interrupt：审查以取消收场（终态 checkpoint 已写），子代理回到 idle 带中断标记，审查义务仍在，可再 review", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	const { readReviewOutcome } = await loadFirecodeModule("review/outcome.js") as any;
@@ -1998,7 +2025,7 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 8, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 9, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
 		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,

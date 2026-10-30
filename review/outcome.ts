@@ -88,7 +88,7 @@ function outcomeOf(latest: Snapshot): ReviewOutcome {
 			return { status: "stopped", runId, rounds };
 		// 故障与超时是基础设施故障，取消是人为中断，都不弱化成“停止”；原因给人话，不把枚举名交给读取方。
 		case "error":
-			return { status: "failed", runId, rounds, reason: (last && roundText(last).trim()) || msg.outcome.error };
+			return { status: "failed", runId, rounds, reason: latest.error || (last && roundText(last).trim()) || msg.outcome.error };
 		case "cancelled":
 			return { status: "cancelled", runId, rounds };
 		case "timed_out":

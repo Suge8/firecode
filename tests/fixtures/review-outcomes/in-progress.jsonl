@@ -1,2 +1,2 @@
 {"type":"session","version":3,"id":"running-session"}
-{"type":"custom","customType":"firecode-review-checkpoint","data":{"version":8,"focus":"","consecutiveFailures":0,"startedAt":1,"roundStartedAt":1,"updatedAt":3,"runId":"running-run","phase":"reviewing","round":1,"rounds":0,"last":null,"slots":[{"model":"p/m","thinking":"high","fallback":[],"result":null}]}}
+{"type":"custom","customType":"firecode-review-checkpoint","data":{"version":9,"focus":"","consecutiveFailures":0,"startedAt":1,"roundStartedAt":1,"updatedAt":3,"runId":"running-run","phase":"reviewing","round":1,"rounds":0,"last":null,"slots":[{"model":"p/m","thinking":"high","fallback":[],"result":null}]}}
