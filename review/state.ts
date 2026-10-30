@@ -88,7 +88,7 @@ interface Base {
 export type ReviewState = Base &
 	(
 		| { phase: "idle" | "queued" }
-		| { phase: "settled"; end: SettledEnd }
+		| { phase: "settled"; end: SettledEnd; error?: string }
 		| { phase: "reviewing"; slots: ReviewerSlot[] }
 		/** FAIL 轮等顾问仲裁：本轮全部审查结果，收口前不进 history。 */
 		| { phase: "needs_fix"; voters: ReviewerResult[] }
@@ -158,7 +158,7 @@ function baseOf(state: ReviewState): Base {
 
 type PhaseData =
 	| { phase: "idle" | "queued" }
-	| { phase: "settled"; end: SettledEnd }
+	| { phase: "settled"; end: SettledEnd; error?: string }
 	| { phase: "reviewing"; slots: ReviewerSlot[] }
 	| { phase: "needs_fix"; voters: ReviewerResult[] }
 	| { phase: "awaiting_fix" | "summarizing"; turn: TurnStatus };
@@ -240,10 +240,11 @@ function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now
 	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
 }
 
-/** 修复回合结束：总结回合无论何种结局都落 settled（总结是尽力而非必须）；修复回合被中断按用户取消收尾。 */
+/** 总结回合不改变质量裁决；修复回合中断按用户取消收尾。 */
 function onTurnEnded(state: ReviewState, aborted: boolean, now: number): ReduceResult {
+	if (state.phase !== "awaiting_fix" && state.phase !== "summarizing") return NOTHING(state);
+	if (state.turn !== "running") return NOTHING(state);
 	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
-	if (state.phase !== "awaiting_fix" || state.turn !== "running") return NOTHING(state);
 	if (aborted) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
 	return { state: go(state, now, { phase: "awaiting_fix", turn: "done" }), effects: [] };
 }
@@ -357,6 +358,10 @@ function toRepair(
 }
 
 function onInfrastructureError(state: ReviewState, details: string, now: number): ReduceResult {
+	if (state.phase === "awaiting_fix") return {
+		state: go(state, now, { phase: "settled", end: "error", error: details }),
+		effects: [{ kind: "send_card", card: { kind: "error", message: details } }],
+	};
 	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;
 	const round = reviewers && closeRound(state, now, { round: state.round, result: "error", reviewers, error: details });
 	return abort(state, now, "error", round, [{ kind: "send_card", card: { kind: "error", message: details } }]);

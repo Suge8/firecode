@@ -317,7 +317,7 @@ describe("registerReview wiring", () => {
 		await startTurn(registered, ctx);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
-		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 				expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
@@ -358,7 +358,7 @@ describe("registerReview wiring", () => {
 		await until(() => registered.delivered.length > 0);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		await startTurn(registered, ctx);
-		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
 		await flush();
 		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
 		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
@@ -941,8 +941,8 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
 	}, 20_000);
 
-	test("a synchronous feedback failure cancels the review", async () => {
-		const { registerReview, readCheckpoint } = await loadSingleFailReview();
+	test("a synchronous feedback failure reports the original error", async () => {
+		const { registerReview, readCheckpoint, readReviewOutcome } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		const sendMessage = pi.sendMessage;
@@ -956,7 +956,11 @@ describe("the loop survives failing side effects", () => {
 		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(readCheckpoint({ sessionManager })).toMatchObject({ phase: "settled", end: "error", error: "同步拒绝", history: [{ result: "failed" }] });
+		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
+		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "failed", rounds: 1, reason: "同步拒绝" });
+		await rm(sessionPath, { force: true });
 	}, 20_000);
 
 	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起审查会话、投反馈。
@@ -1101,8 +1105,7 @@ describe("review cards and degraded paths", () => {
 		await fireReview(registered).handler("", ctx);
 		await until(() => registered.delivered.length === 1);
 		await startTurn(registered, ctx);
-		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-		await registered.fire("agent_settled", {}, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
 		expect(calls).toEqual({ "p/three": 1, "p/two": 2 });
 	}, 20_000);
@@ -1119,8 +1122,7 @@ describe("review cards and degraded paths", () => {
 		await fireReview(registered).handler("", ctx);
 		await until(() => registered.delivered.length === 1);
 		await startTurn(registered, ctx);
-		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
-		await registered.fire("agent_settled", {}, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
 		// 第二轮仍未通过，到顾问阈值；顾问会话没有产出。
 		await until(() => registered.delivered.length === 2);
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
@@ -1141,7 +1143,7 @@ describe("review cards and degraded paths", () => {
 		await until(() => registered.delivered.length > 0);
 		await startTurn(registered, ctx);
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
-		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctx);
+		await registered.fire("agent_settled", { aborted: true }, ctx);
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
 		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));

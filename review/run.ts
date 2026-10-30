@@ -5,7 +5,7 @@
  * 迁移是同步的：dispatch 把事件放进收件箱，若已有迁移在跑（效果里又触发了事件）就留给外层循环依次处理，
  * 所以没有异步队列，也没有“等队列排空”的需要。所有终止路径（reducer 收尾、持久化失败、会话离开）都汇到 release()。
  */
-import type { AgentEndEvent, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentSettledEvent, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { OCCUPANCY_CHANNEL, type ReviewProgress, type ReviewStage } from "../busy.js";
 import { type ModelAtom, modelAtomText, type ReviewConfig } from "../config.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
@@ -207,13 +207,19 @@ export class Run {
 		await action.done;
 	}
 
-	/** 修复/总结回合的结局：总结任何结局都收尾；修复被中断按用户取消收尾。 */
-	agentEnded(event: AgentEndEvent): void {
+	/** 自动重试和续跑结束后，依据当前分支上的最终回复判定结局。 */
+	agentSettled(event: AgentSettledEvent, ctx: ExtensionContext): void {
 		const { state } = this;
-		if ((state.phase !== "awaiting_fix" && state.phase !== "summarizing") || state.turn !== "running") return;
-		const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
-		const aborted = !assistant || assistant.stopReason === "error" || assistant.stopReason === "aborted";
-		this.dispatch({ type: "TURN_ENDED", aborted });
+		if (state.phase === "summarizing" && state.turn === "running") {
+			this.dispatch({ type: "TURN_ENDED", aborted: event.aborted });
+		} else if (state.phase === "awaiting_fix" && state.turn === "running") {
+			const assistant = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+			if (event.aborted) this.dispatch({ type: "TURN_ENDED", aborted: true });
+			else if (assistant?.type === "message" && assistant.message.role === "assistant" && assistant.message.stopReason === "error")
+				this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: assistant.message.errorMessage || msg.outcome.error });
+			else this.dispatch({ type: "TURN_ENDED", aborted: false });
+		}
+		this.advance(ctx);
 	}
 
 	/** 推进的唯一入口：所有启动工作的路径都经过这道 idle 门；正确性另由 agentStarted 的同步停审互锁保证。 */
@@ -345,7 +351,7 @@ export class Run {
 	/**
 	 * 修复反馈与总结提示经统一投递入口（deliver.ts），回合照常经过 before_agent_start；
 	 * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器；reload 从 pending 重投。delivering 防止等待期间重复投递。
-	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按用户取消收尾。
+	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按故障收尾。
 	 */
 	private async deliverTurn(content: string): Promise<void> {
 		if (this.delivering) return;
@@ -357,7 +363,7 @@ export class Run {
 		} catch (error) {
 			if (signal.aborted) return;
 			this.notify(msg.notify.stepFailed(errorText(error)), "warning");
-			this.dispatch(this.state.phase === "summarizing" ? { type: "TURN_ENDED", aborted: false } : { type: "CANCEL", reason: "user" });
+			this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: errorText(error) });
 		} finally {
 			this.delivering = false;
 		}
