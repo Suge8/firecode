@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../jsonc.js";
+import { physicalModel } from "../model-route.js";
 import { msg } from "./messages.js";
 
 const ENTRY_TYPE = "firecode-claude-file";
@@ -69,7 +70,7 @@ export function registerClaudeFiles(pi: ExtensionAPI): void {
 
 	/** 用当前模型的凭据与地址建客户端；鉴权按请求解析一次，供这一请求里的全部新图共用。 */
 	async function client(ctx: ExtensionContext): Promise<Client> {
-		const model = ctx.model!;
+		const model = physicalModel(ctx.model)!;
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 		if (!auth.ok) throw new Error(auth.error);
 		const apiKey = auth.apiKey ?? "";
@@ -105,7 +106,7 @@ export function registerClaudeFiles(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		const payload = event.payload;
-		if (ctx.model?.provider !== "anthropic" || !isRecord(payload) || !Array.isArray(payload.messages)) return;
+		if (physicalModel(ctx.model)?.provider !== "anthropic" || !isRecord(payload) || !Array.isArray(payload.messages)) return;
 
 		const hashes = new Map<string, string>();
 		const hashOf = (data: string) => {

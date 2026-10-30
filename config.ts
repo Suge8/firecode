@@ -8,7 +8,7 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 export type ThinkingLevelValue = (typeof THINKING_LEVELS)[number];
 
 /**
- * 模型原子：配置里一律写作 "provider/model/thinking"，解析后拆成运行时模型 id 与思考档。
+ * 模型原子：配置里写作 "<模型>/thinking"，模型可以带供应商前缀。
  * 全仓库指定模型与思考档的唯一形状。
  */
 export interface ModelAtom {
@@ -31,8 +31,8 @@ export interface Preset {
 
 /** /fire-review 配置：审查者 / 顾问模型 + 循环限制。见 config.jsonc 的 review 节注释。 */
 export interface ReviewConfig {
-	advisor: ModelAtom;
-	reviewers: ChainedAtom[];
+	advisor: ModelChain;
+	reviewers: ModelChain[];
 	/** 审查轮数硬上限。 */
 	maxRounds: number;
 	/** 连续几轮失败触发顾问仲裁。 */
@@ -43,14 +43,12 @@ export interface ReviewConfig {
 	tools: string[];
 }
 
-/** fallback 链：主模型没有产出时依次换用 fallback 里的模型原子。 */
-export interface ChainedAtom extends ModelAtom {
-	fallback: ModelAtom[];
-}
+export type ModelChain = ModelAtom[];
 
-export interface MasterRole extends ChainedAtom {
+export interface MasterRole {
 	role: string;
 	use: string;
+	models: ModelChain;
 }
 
 interface MasterConfig {
@@ -81,7 +79,8 @@ export interface OpenAISettings {
 export type WatcherContext = "minimal" | "full";
 
 /** Watcher 观察员配置：模型原子必须显式配置，绝不回退默认模型。 */
-interface WatcherConfig extends ModelAtom {
+interface WatcherConfig {
+	models: ModelChain;
 	enabled: boolean;
 	context: WatcherContext;
 }
@@ -253,7 +252,7 @@ export function loadConfig(): LoadedConfig {
 		return reasons.length ? { error: refused(reasons) } : { config };
 	};
 	const review = section("review", msg.config.refusedReview, parseReviewConfig, (config) =>
-		config.advisor.model && config.reviewers.length ? undefined : msg.config.reviewIncomplete);
+		config.advisor.length && config.reviewers.length ? undefined : msg.config.reviewIncomplete);
 	const master = section("master", msg.config.refusedMaster, parseMasterConfig, (config) =>
 		config.roles.length ? undefined : msg.config.masterIncomplete);
 	const watcher = section("watcher", msg.config.refusedWatcher, parseWatcherConfig, () => undefined);
@@ -274,10 +273,10 @@ export function loadConfig(): LoadedConfig {
 const FALLBACK_THINKING: ThinkingLevelValue = "medium";
 
 /**
- * 解析 "provider/model/thinking"：按最后一个斜杠切出思考档，前半必须仍是 provider/model。
+ * 解析 "<模型>/thinking"：按最后一个斜杠切出思考档。
  * 任何位置的模型配置都走这里，解析失败只记录问题并留空模型，让上层拒绝启动。
- * 每个字段只报一条问题，且必带目标形状——两段式旧写法会同时踩中两项校验，逐项报错说不出该改成什么。
- * 旧的分字段与两段式写法一律拒绝、不做兼容：兼容层会把三种写法固化成三套事实源。
+ * 每个字段只报一条问题，且必带目标形状。
+ * 旧的分字段写法一律拒绝。
  */
 function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
 	const shape = msg.config.modelAtomShape(field);
@@ -288,10 +287,9 @@ function parseModelAtom(value: unknown, field: string, problems: string[]): Mode
 	const slash = value.lastIndexOf("/");
 	const model = slash > 0 ? value.slice(0, slash) : "";
 	const thinking = slash > 0 ? value.slice(slash + 1) : value;
-	const providerSlash = model.indexOf("/");
 	const valid = (THINKING_LEVELS as readonly string[]).includes(thinking);
 	const faults: string[] = [];
-	if (providerSlash <= 0 || providerSlash === model.length - 1)
+	if (!model || model.split("/").some((segment) => !segment))
 		faults.push(msg.config.modelSegment(model || value));
 	if (!valid) faults.push(msg.config.thinkingLevel(thinking));
 	if (faults.length) problems.push(msg.config.modelAtomFaults(shape, faults));
@@ -345,7 +343,7 @@ function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): Re
 	for (const key of REVIEW_KEYS)
 		if (key !== "advisor" && key !== "reviewers" && !(key in raw))
 			problems.push(msg.config.mustSet(`review.${key}`));
-	const advisor = parseModelAtom(raw.advisor, "review.advisor", problems);
+	const advisor = parseModelChain(raw.advisor, "review.advisor", problems);
 	const reviewers = reviewModels(raw.reviewers, problems);
 	return {
 		advisor,
@@ -357,18 +355,21 @@ function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): Re
 	};
 }
 
-/** 审查者写模型原子；要 fallback 链时写 { model, fallback }，与 master 角色同一形状。 */
-function reviewModels(value: unknown, problems: string[]): ChainedAtom[] {
+function parseModelChain(value: unknown, field: string, problems: string[]): ModelChain {
+	if (!Array.isArray(value)) return [parseModelAtom(value, field, problems)];
+	if (!value.length) {
+		problems.push(msg.config.mustBeStringArray(field));
+		return [];
+	}
+	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));
+}
+
+function reviewModels(value: unknown, problems: string[]): ModelChain[] {
 	if (!Array.isArray(value) || value.length === 0 || value.length > 5) {
 		problems.push(msg.config.reviewReviewers);
 		return [];
 	}
-	return value.map((item, index) => {
-		const field = `review.reviewers[${index}]`;
-		if (!isRecord(item)) return { ...parseModelAtom(item, field, problems), fallback: [] };
-		rejectUnknownKeys(item, ["model", "fallback"], field, problems);
-		return { ...parseModelAtom(item.model, `${field}.model`, problems), fallback: fallbackChain(item.fallback, `${field}.fallback`, problems) };
-	});
+	return value.map((item, index) => parseModelChain(item, `review.reviewers[${index}]`, problems));
 }
 
 /** 缺失已由 mustSet 报过；越界值记录问题，返回值只为满足类型，有问题的节不会交出配置。 */
@@ -406,20 +407,10 @@ function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): Ma
 
 function masterRole(value: unknown, field: string, role: string, problems: string[]): MasterRole {
 	const record = asRecord(value);
-	rejectUnknownKeys(record, ["model", "use", "fallback"], field, problems);
-	const atom = parseModelAtom(record.model, `${field}.model`, problems);
+	rejectUnknownKeys(record, ["model", "use"], field, problems);
+	const models = parseModelChain(record.model, `${field}.model`, problems);
 	const use = stringValue(record.use, `${field}.use`, problems) ?? "";
-	const fallback = fallbackChain(record.fallback, `${field}.fallback`, problems);
-	return { role, ...atom, use, fallback };
-}
-
-function fallbackChain(value: unknown, field: string, problems: string[]): ModelAtom[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value) || value.length > 2) {
-		problems.push(msg.config.fallbackChain(field));
-		return [];
-	}
-	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));
+	return { role, models, use };
 }
 
 // ---- watcher 节 ----
@@ -432,13 +423,13 @@ function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): W
 	rejectUnknownKeys(raw, WATCHER_KEYS, "watcher", problems);
 	const enabled = booleanValue(raw.enabled, "watcher.enabled", true, problems);
 	// 模型原子必填：缺失或写错时留空模型并记录问题，观察员据此拒绝启动。
-	const atom = parseModelAtom(raw.model, "watcher.model", problems);
+	const models = parseModelChain(raw.model, "watcher.model", problems);
 	let context: WatcherContext = "minimal";
 	if (raw.context !== undefined) {
 		if (WATCHER_CONTEXTS.includes(raw.context as WatcherContext)) context = raw.context as WatcherContext;
 		else problems.push(msg.config.mustBeOneOf("watcher.context", WATCHER_CONTEXTS));
 	}
-	return { enabled, ...atom, context };
+	return { enabled, models, context };
 }
 
 // ---- openai 节 ----

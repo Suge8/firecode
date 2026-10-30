@@ -1,20 +1,19 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevelValue } from "../config.js";
+import type { ModelAtom, ModelChain } from "../config.js";
 import { msg } from "../messages.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import type { PromptLayers } from "./prompt.js";
 import { textOf } from "../format.js";
 
 export type ReviewSessionResult =
-	| { kind: "output"; text: string }
+	| { kind: "output"; text: string; atom: ModelAtom }
 	| { kind: "empty" }
 	| { kind: "timeout" }
 	| { kind: "aborted" }
 	| { kind: "error"; message: string };
 
 export interface ReviewModelConfig {
-	model: string;
-	thinking: ThinkingLevelValue;
+	models: ModelChain;
 	tools: string[];
 	timeoutMs: number;
 }
@@ -35,11 +34,15 @@ export async function runReviewSession(
 	let spawned: Awaited<ReturnType<InProcessSessionPool["spawn"]>>;
 	// 会话里的扩展出错没有自己的状态：并进这一票的错误原因，让用户看到它而不是只看到“无输出”。
 	const extensionFailures: string[] = [];
+	let actual = config.models[0];
 	try {
+		const selected = await pool.resolveChain(config.models);
+		actual = selected;
 		spawned = await pool.spawn({
 			cwd,
-			model: await pool.resolveModel(config.model),
-			thinking: config.thinking,
+			thinking: selected.thinking,
+			chain: config.models,
+			onModelChange: (atom) => { actual = atom; },
 			tools: config.tools,
 			systemPrompt: { mode: "replace", text: clean(prompt.system) },
 			contextFiles: false,
@@ -82,7 +85,7 @@ export async function runReviewSession(
 		// 中断只靠 finally 的 dispose 收尾：pi 的 abort 在模型流卡死时永不返回，等它会拖住整个关闭链。
 		if (interrupted) return { kind: interrupted };
 		if (finalError) return { kind: "error", message: [finalError, ...extensionFailures].join("；") };
-		if (finalText?.trim()) return { kind: "output", text: finalText };
+		if (finalText?.trim()) return { kind: "output", text: finalText, atom: actual };
 		return extensionFailures.length ? { kind: "error", message: extensionFailures.join("；") } : { kind: "empty" };
 	} finally {
 		clearTimeout(timeout);

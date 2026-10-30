@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
@@ -16,7 +16,8 @@ import {
 	type ExtensionFactory,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevelValue } from "./config.js";
+import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
+import { candidates, createModelRoute } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -27,7 +28,9 @@ type SessionPersistence =
 
 interface SpawnSessionOptions {
 	cwd: string;
-	model: Model<any>;
+	chain: ModelChain;
+	thinkingOverride?: ThinkingLevelValue;
+	onModelChange?: (atom: ModelAtom, previous?: ModelAtom, reason?: string) => void;
 	thinking: ThinkingLevelValue;
 	tools: string[];
 	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
@@ -55,6 +58,7 @@ interface HeldSession {
 	sessionPath?: string;
 	timer?: NodeJS.Timeout;
 	releasing?: Promise<void>;
+	route?: Awaited<ReturnType<typeof createModelRoute>>;
 }
 
 // 单写者登记必须进程唯一，跨模块拷贝共享。
@@ -88,16 +92,14 @@ export class InProcessSessionPool {
 		this.timing = { ...DEFAULT_TIMING, ...environment.timing };
 	}
 
-	/**
-	 * 把 "provider/model" 解析成模型。ModelRuntime 每个池只建一次（auth.json 与 models.json 只读一次），解析与建子会话共用；
-	 * 扩展注册的 provider 在这里不可见，只能用内置 provider 与 models.json 里的模型。
-	 */
-	async resolveModel(id: string): Promise<Model<any>> {
-		const runtime = await this.modelRuntime();
-		const slash = id.indexOf("/");
-		const model = slash > 0 ? runtime.getModel(id.slice(0, slash), id.slice(slash + 1)) : undefined;
-		if (!model) throw new Error(msg.spawn.modelNotFound(id));
-		return model;
+	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom> {
+		const first = (await candidates(await this.modelRuntime(), chain))[0];
+		if (!first) throw new Error(msg.spawn.chainExhausted(chain.map((atom) => msg.spawn.modelUnavailable(atom.model)).join("; ")));
+		return { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
+	}
+
+	configureRoute(sessionPath: string, chain: ModelChain, override?: ThinkingLevelValue): void {
+		this.held.get(sessionPath)?.route?.configure(chain, override);
 	}
 
 	async spawn(options: SpawnSessionOptions): Promise<SpawnedSession> {
@@ -110,8 +112,11 @@ export class InProcessSessionPool {
 
 		let created: AgentSession;
 		let partial: AgentSession | undefined;
+		let route: Awaited<ReturnType<typeof createModelRoute>> | undefined;
 		try {
 			const agentDir = getAgentDir();
+			const runtime = await this.modelRuntime();
+			route = await createModelRoute(runtime, options.chain, options.thinkingOverride, options.onModelChange);
 			// 加载器与会话共用同一个 SettingsManager：项目信任只判定一次，两处读到的设置也不会分叉。
 			const settingsManager = SettingsManager.create(options.cwd, agentDir, { projectTrusted: false });
 			settingsManager.setProjectTrusted(projectTrusted(options.cwd, agentDir, settingsManager));
@@ -120,9 +125,10 @@ export class InProcessSessionPool {
 				agentDir,
 				settingsManager,
 				noContextFiles: !options.contextFiles,
-				extensionFactories: options.isolated || !this.environment.firecode
-					? []
-					: [{ name: "firecode", factory: this.environment.firecode, hidden: true }],
+				extensionFactories: [
+					...(!options.isolated && this.environment.firecode ? [{ name: "firecode", factory: this.environment.firecode, hidden: true }] : []),
+					...(route ? [{ name: "firecode-route", factory: route.extension, hidden: true }] : []),
+				],
 				noExtensions: options.isolated,
 				noSkills: options.isolated,
 				noPromptTemplates: options.isolated,
@@ -142,8 +148,8 @@ export class InProcessSessionPool {
 			const result = await createAgentSession({
 				cwd: options.cwd,
 				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
-				modelRuntime: await this.modelRuntime(),
-				model: options.model,
+				modelRuntime: runtime,
+				model: route.model,
 				thinkingLevel: options.thinking,
 				tools: options.tools,
 				...(options.customTools ? { customTools: options.customTools } : {}),
@@ -156,12 +162,13 @@ export class InProcessSessionPool {
 			created = partial;
 		} catch (error) {
 			partial?.dispose();
+			route?.dispose();
 			if (sessionPath) SESSION_WRITERS.delete(sessionPath);
 			throw error;
 		}
 
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
-		const held: HeldSession = { key, session: created, sessionPath };
+		const held: HeldSession = { key, session: created, sessionPath, route };
 		this.held.set(key, held);
 		return {
 			session: created,
@@ -228,6 +235,7 @@ export class InProcessSessionPool {
 				await held.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			} finally {
 				held.session.dispose();
+				held.route?.dispose();
 				if (held.sessionPath) {
 					SESSION_WRITERS.delete(held.sessionPath);
 					for (const listener of this.releaseListeners) listener(held.sessionPath);

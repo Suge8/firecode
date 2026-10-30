@@ -43,21 +43,21 @@ async function loadFrom(configJsonc: string) {
 	return (loadConfig as () => any)();
 }
 
-test("Master 角色表按模型原子解析，fallback 一并带出", async () => {
+test("Master 角色表按有序模型链解析", async () => {
 	const features = await featuresOnly("master");
 	const loaded = await loadFrom(JSON.stringify({
 		features,
 		master: {
 			roles: {
-				工程师: { model: "test/shared/medium", use: "实现", fallback: ["test/backup/high"] },
+				工程师: { model: ["test/shared/medium", "test/backup/high"], use: "实现" },
 				哨兵: { model: "test/shared/low", use: "盯守" },
 			},
 		},
 	}));
 	expect(loaded.problems).toEqual([]);
 	expect(loaded.master.config.roles).toEqual([
-		{ role: "工程师", model: "test/shared", thinking: "medium", use: "实现", fallback: [{ model: "test/backup", thinking: "high" }] },
-		{ role: "哨兵", model: "test/shared", thinking: "low", use: "盯守", fallback: [] },
+		{ role: "工程师", models: [{ model: "test/shared", thinking: "medium" }, { model: "test/backup", thinking: "high" }], use: "实现" },
+		{ role: "哨兵", models: [{ model: "test/shared", thinking: "low" }], use: "盯守" },
 	]);
 });
 
@@ -66,12 +66,12 @@ test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动",
 	const features = await featuresOnly("master", "review");
 	const rejected: [string, unknown, string][] = [
 		["master 旧的分字段写法", { master: { roles: { 工程师: { model: "p/m/high", thinking: "medium", use: "x" } } } }, "未知字段 master.roles.工程师.thinking"],
-		["master 两段式原子", { master: { roles: { 调研员: { model: "test/model", use: "x" } } } }, "master.roles.调研员.model 必须是“provider/model/thinking”字符串（模型段不是 provider/model：test；思考档无效：model）"],
-		["master fallback 超过两项", { master: { roles: { 工程师: { model: "p/m/low", use: "x", fallback: ["p/a/low", "p/b/low", "p/c/low"] } } } }, "master.roles.工程师.fallback 必须是至多 2 项的数组"],
+		["master 无效思考档", { master: { roles: { 调研员: { model: "test/model", use: "x" } } } }, "master.roles.调研员.model 必须是“模型/thinking”字符串（思考档无效：model）"],
+		["master 已删除的 fallback 字段", { master: { roles: { 工程师: { model: "p/m/low", use: "x", fallback: ["p/a/low", "p/b/low", "p/c/low"] } } } }, "未知字段 master.roles.工程师.fallback"],
 		["master 空角色表", { master: { roles: {} } }, "master.roles 必须是至少包含一个角色的对象"],
 		["master 旧数组写法", { master: { models: [] } }, "未知字段 master.models"],
-		["review 旧的 { model, thinking } 对象", { review: { advisor: { model: "p/m", thinking: "max" } } }, "review.advisor 必须是“provider/model/thinking”字符串"],
-		["review 审查者 fallback 超过两项", { review: { reviewers: [{ model: "p/m/low", fallback: ["p/a/low", "p/b/low", "p/c/low"] }] } }, "review.reviewers[0].fallback 必须是至多 2 项的数组"],
+		["review 旧的 { model, thinking } 对象", { review: { advisor: { model: "p/m", thinking: "max" } } }, "review.advisor 必须是“模型/thinking”字符串"],
+		["review 已删除的审查者对象", { review: { reviewers: [{ model: "p/m/low", fallback: ["p/a/low", "p/b/low", "p/c/low"] }] } }, "review.reviewers[0] 必须是“模型/thinking”字符串"],
 		["review 未知键", { review: { background: { cmd: "pi" } } }, "未知字段 review.background"],
 		["review 不是对象", { review: "typo" }, "review 必须是对象"],
 		["review 缺失的显式字段", { review: { maxRounds: 3 } }, "review.timeoutMinutes 必须显式配置"],

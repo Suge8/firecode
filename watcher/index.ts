@@ -106,12 +106,12 @@ export function registerWatcher(pi: ExtensionAPI, pool: InProcessSessionPool): v
 				let observer = owner.observer;
 				if (!observer) {
 					const cwd = owner.ctx.cwd;
-					const model = await pool.resolveModel(config.model);
+					const selected = await pool.resolveChain(config.models);
 					if (runtime !== owner) return;
 					observer = await createObserver({
 						cwd,
-						model,
-						thinking: config.thinking,
+						thinking: selected.thinking,
+						chain: config.models,
 						pool,
 						onExtensionError: (error) => {
 							if (runtime === owner) owner.ctx.ui.notify(rootMsg.spawn.extensionFailed(error.event, error.error), "warning");

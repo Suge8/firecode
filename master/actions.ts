@@ -157,22 +157,17 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	try {
 		const cwd = await resolveSendCwd(target, requestedCwd);
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
-		const nextModel = selection ? await pool.resolveModel(selection.model) : undefined;
+		const selectedRole = selection ?? resolveRole(roster, target.role);
+		const selected = await pool.resolveChain(selectedRole.models, thinkingOverride);
 		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
 		active.current(target);
-		const session = await openWorkerSession(active, { ...target, cwd });
+		const session = await openWorkerSession(active, { ...target, cwd, role: selectedRole.role, ...selected }, thinkingOverride);
 		await session.waitForIdle();
 		active.assertOpen();
-		let { role, model, thinking } = target;
-		if (selection && nextModel) {
-			await session.setModel(nextModel);
-			active.assertOpen();
-			({ role, model, thinking } = selection);
-		}
-		if (selection || thinkingOverride) {
-			thinking = thinkingOverride ?? thinking;
-			session.setThinkingLevel(thinking);
-		}
+		pool.configureRoute(target.sessionPath, selectedRole.models, thinkingOverride);
+		const role = selectedRole.role;
+		const model = target.model;
+		const thinking = target.thinking;
 		const interruptedAt = active.current(target).interruptedAt;
 		const working = active.commit(target, ({ interruptedAt: _interrupted, ...rest }) => ({
 			...rest,
@@ -228,9 +223,11 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	const requestedRole = optionalString(params.role);
 	if (!requestedRole) throw new Error(msg.action.needRole);
 	const selectedRole = resolveRole(roster, requestedRole);
-	const thinking = validThinking(optionalString(params.thinking)) ?? selectedRole.thinking;
+	const override = validThinking(optionalString(params.thinking));
 	const { live, launch } = active.reserve(name);
 	try {
+		const selected = await active.setup.pool.resolveChain(selectedRole.models, override);
+		const thinking = selected.thinking;
 		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 		active.assertOpen();
 		const mainSessionPath = ctx.sessionManager.getSessionFile();
@@ -238,7 +235,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		const worker: WorkerRef = {
 			name,
 			role: selectedRole.role,
-			model: selectedRole.model,
+			model: selected.model,
 			thinking,
 			status: "working",
 			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
@@ -249,7 +246,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		active.store.upsert(worker);
 		live.starting = undefined;
 		active.beginRun(name);
-		const session = await spawnWorker(active, worker, false);
+		const session = await spawnWorker(active, worker, false, override);
 		await runWorker(active, worker, session, prompt);
 		return toolResult({ started: true, worker: compactWorker(worker) });
 	} catch (error) {
@@ -288,7 +285,9 @@ function validThinking(value: string | undefined): WorkerRef["thinking"] | undef
 
 /** 宿主已按 schema 枚举校验过 role，这里只查表。 */
 function resolveRole(roles: MasterRole[], role: string): MasterRole {
-	return roles.find((candidate) => candidate.role === role)!;
+	const found = roles.find((candidate) => candidate.role === role);
+	if (!found) throw new Error(msg.run.roleGone(role));
+	return found;
 }
 
 function validateWorkerName(name: string): void {

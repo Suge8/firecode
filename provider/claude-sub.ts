@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { textOf } from "../format.js";
 import { isRecord } from "../jsonc.js";
+import { physicalModel } from "../model-route.js";
 import { msg } from "./messages.js";
 
 const BILLING_PREFIX = "x-anthropic-billing-header:";
@@ -34,7 +35,7 @@ function isTextBlock(value: unknown): value is TextBlock {
 }
 
 function shouldApply(ctx: ExtensionContext): boolean {
-	const model = ctx.model;
+	const model = physicalModel(ctx.model);
 	return !!model && model.provider === "anthropic" && ctx.modelRegistry.isUsingOAuth(model);
 }
 
@@ -102,6 +103,7 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 	// 同一供应商上别的扩展注册的头也随之清掉，这只发生在订阅凭据登出之后）。
 	let identified = false;
 	const sync = (_event: unknown, ctx: ExtensionContext) => {
+		if (ctx.model?.api === "pi-virtual") return;
 		const wanted = shouldApply(ctx);
 		if (wanted === identified) return;
 		identified = wanted;
@@ -110,6 +112,11 @@ export function registerClaudeSub(pi: ExtensionAPI): void {
 	pi.on("session_start", sync);
 	pi.on("model_select", sync);
 	pi.on("before_agent_start", sync);
+
+	pi.on("before_provider_headers", (event, ctx) => {
+		if (ctx.model?.api === "pi-virtual" && shouldApply(ctx))
+			event.headers["user-agent"] = `claude-cli/${claudeCodeVersion} (external, cli)`;
+	});
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const payload = event.payload;

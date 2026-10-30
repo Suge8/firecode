@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { msg, type WindowLoss } from "../../messages.js";
+import { physicalModel } from "../../../model-route.js";
 import { executeNativeCompaction } from "./compact-client.js";
 import { captureHostPayload, leadingPromptLength, type ResponsesPayload } from "./host-stream.js";
 import {
@@ -33,7 +34,7 @@ export async function compactWithOpenAINative(
 	enabled: boolean,
 ): Promise<NativeCompactionHookResult | undefined> {
 	if (event.signal.aborted) return { cancel: true };
-	const model = ctx.model;
+	const model = physicalModel(ctx.model);
 	const identity = nativeIdentity(model);
 	const latest = latestCompaction(event.branchEntries);
 	const prior = latest?.native?.details;
@@ -85,11 +86,12 @@ type Replay = { ok: true; payload: ResponsesPayload } | WindowLossReport;
 export async function replayOpenAINative(payload: unknown, ctx: ExtensionContext, enabled: boolean): Promise<Replay | undefined> {
 	const native = latestCompaction(ctx.sessionManager.getBranch())?.native;
 	if (!native) return undefined;
-	const loss = nativeWindowLoss(native.details, ctx.model, enabled);
+	const model = physicalModel(ctx.model);
+	const loss = nativeWindowLoss(native.details, model, enabled);
 	if (loss) return { ok: false, ...loss };
 	const lost: WindowLossReport = { ok: false, kind: "unreplayable", from: describeIdentity(native.details) };
 	const summary = sessionEntryToContextMessages(native).filter((message) => message.role !== "system");
-	const prefix = await captureHostPayload(ctx, ctx.model!, summary);
+	const prefix = await captureHostPayload(ctx, model!, summary);
 	const input = (payload as Partial<ResponsesPayload> | null)?.input;
 	if (!prefix || !Array.isArray(input)) return lost;
 	const summaryItems = prefix.input.slice(leadingPromptLength(prefix.input));

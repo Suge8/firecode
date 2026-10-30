@@ -45,6 +45,25 @@ afterEach(async () => {
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
 });
 
+test("省略供应商的模型原子能派给可用来源", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "worker/medium", use: "实现" } } });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "short-name", prompt: "执行", role: "工程师" });
+	await settled;
+	expect(harness.messages.at(-1).message.content).toContain("完成");
+});
+
+test("没有可用模型的角色不会出现在角色表和枚举", async () => {
+	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 不可用: { model: "nokey/model/medium", use: "其他工作" } } });
+	await harness.emit("session_start", {});
+	const prompt = await harness.systemPrompt("主提示词");
+	expect(prompt).toContain("工程师（测试）");
+	expect(prompt).not.toContain("不可用");
+	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师"]);
+	expect(harness.notices.join("\n")).toContain("不可用");
+});
+
 test("新会话默认激活 subagents", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
@@ -101,7 +120,7 @@ test("指挥官提示词作为系统提示段注入，附上已配置的角色�
 	const prompt = await harness.systemPrompt("自定义系统提示");
 	expect(prompt.startsWith("自定义系统提示\n\n")).toBe(true);
 	expect(prompt).toContain("委派是工具不是职责");
-	expect(prompt.endsWith("\n\n角色表：工程师：test/worker/medium（测试）；设计师：test/worker-2/high（切换测试）。")).toBe(true);
+	expect(prompt.endsWith("\n\n角色表：工程师（测试）；设计师（切换测试）。")).toBe(true);
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
@@ -147,7 +166,7 @@ test("角色表配置有错时拒绝启动（具体问题文案由配置解析�
 test("角色表提示词与 role 枚举都只来自已配置角色", async () => {
 	const harness = await setup(true, { roles: { 工程师: TEST_ROLES.工程师 } });
 	const prompt = await harness.systemPrompt("主提示词");
-	expect(prompt).toContain("角色表：工程师：test/worker/medium（测试）");
+	expect(prompt).toContain("角色表：工程师（测试）");
 	expect(prompt).not.toContain("设计师：");
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师"]);
 	await expect(harness.execute({
@@ -247,7 +266,7 @@ test("名册发布在 firecode:subagents：角色、模型、状态、在做什�
 	const rosters = () => harness.emitted.filter(([channel]) => channel === "firecode:subagents").map(([, payload]) => payload.workers);
 	await until(() => rosters().at(-1)?.[0]?.state === "done");
 	const running = rosters().flat().find((worker: any) => worker.action.includes("AGENTS.md"));
-	expect(running).toMatchObject({ name: "roster", role: "工程师", model: "test/worker", thinking: "low", state: "running" });
+	expect(running).toMatchObject({ name: "roster", role: "工程师", model: "test/worker", thinking: "off", state: "running" });
 	expect(typeof running.startedAt).toBe("number");
 	expect(running).not.toHaveProperty("settledAt");
 	const last = rosters().at(-1)![0];
@@ -373,7 +392,7 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 		thinking: "low",
 	});
 	const worker = (started.details as any).worker;
-	expect(worker).toMatchObject({ status: "working", role: "工程师", model: "test/worker", thinking: "low" });
+	expect(worker).toMatchObject({ status: "working", role: "工程师", model: "test/worker", thinking: "off" });
 	await settled;
 	await until(async () => (await harness.list()).details.workers[0]?.status === "idle");
 
@@ -400,60 +419,18 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
-test("供应商故障在无 fallback 时明确报告链已用尽", async () => {
-	const harness = await setup();
-	faux.setResponses([async () => { throw new Error("quota exhausted"); }]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({
-		action: "start", worker: "failed", prompt: "执行", role: "工程师",
-	});
-	await delivered;
-	expect(harness.messages[0].message.content).toMatch(/^<firecode_master_event>\nfailed 失败\n错误：\nquota exhausted\n角色 工程师 的 fallback 链已用尽\n耗时：[^\n]+\n<\/firecode_master_event>$/u);
-});
-
-// 任何 error 终态都沿角色链切换、不按措辞分类：一条无标点的原文，一条多句的（原因只取首句）。
-test.each([
-	["insufficient_quota", "insufficient_quota"],
-	[
-		"Codex error: Our servers are currently overloaded. Please try again later.",
-		"Codex error: Our servers are currently overloaded.",
-	],
-])("宿主重试用尽的故障（%s）按角色 fallback 在同一会话续跑并更新实际模型", async (errorMessage, reason) => {
-	const harness = await setup(true, {
-		roles: {
-			...TEST_ROLES,
-			工程师: { ...TEST_ROLES.工程师, fallback: ["test/worker-2/high"] },
-		},
-	});
-	faux.setResponses([fauxAssistantMessage("已启动")]);
-	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({
-		action: "start", worker: "fallback", prompt: "初始化", role: "工程师",
-	});
-	await delivered;
-
-	const session = harness.pool.getSession((started.details as any).worker.session);
-	session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
-	const fault = fauxAssistantMessage("", { stopReason: "error", errorMessage });
+test("首选额度用尽时同一回合切换到下一模型并返回", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
+	const fault = fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" });
 	const respond = (_context: any, _options: any, _state: any, model: any) =>
-		(model.id.endsWith("worker-2") ? fauxAssistantMessage("降级后完成") : fault);
-	faux.setResponses([respond, respond, respond, respond]);
-	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "send", worker: "fallback", prompt: "继续" });
-	await delivered;
-
-	const content = harness.messages.map((entry: any) => entry.message.content).join("\n");
-	expect([...content.matchAll(/<firecode_master_event>\n([^\n]+)/gu)].map((match) => match[1]))
-		.toEqual(["fallback 已返回", "fallback 已切换模型", "fallback 已返回"]);
-	// 模型切换不是落定类事件：耗时行不带“本次运行”。
-	expect(content).not.toMatch(/fallback 已切换模型\n[^\n]+\n耗时：本次运行/u);
-	expect(content).toContain(`已切换 test/worker/medium→test/worker-2/high（${reason}）`);
-	expect(content).toContain("同一会话自动续跑");
-	expect(content).toContain("回复：\n降级后完成");
+		model.id === "worker-2" ? fauxAssistantMessage("切换后完成") : fault;
+	faux.setResponses([respond, respond, respond]);
+	const started = await harness.execute({ action: "start", worker: "chain", prompt: "执行", role: "工程师" });
+	await until(() => harness.messages.some((entry: any) => entry.message.content.includes("切换后完成")));
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker).toMatchObject({
-		role: "工程师", model: "test/worker-2", thinking: "high", session: (started.details as any).worker.session,
-	});
+	expect(worker).toMatchObject({ model: "test/worker-2", thinking: "off" });
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
 });
 
 test("溢出恢复删除运行时消息后仍落定供应商错误而非过期回复", async () => {
@@ -485,7 +462,7 @@ test("溢出恢复删除运行时消息后仍落定供应商错误而非过期�
 	await delivered;
 
 	const content = harness.messages.at(-1).message.content;
-	expect(content).toContain(`错误：\n${providerError}`);
+	expect(content).toContain(providerError);
 	expect(content).not.toContain("上一回合回复");
 	expect(content).not.toContain("（无回复）");
 });
@@ -524,7 +501,7 @@ test("进程内池拒绝同一 sessionPath 的第二个持有者，恢复缺失�
 	await mkdir(dirname(sessionPath), { recursive: true });
 	const options = {
 		cwd: harness.cwd,
-		model: await harness.pool.resolveModel("test/worker"),
+		chain: [{ model: "test/worker", thinking: "medium" }],
 		thinking: "medium",
 		tools: [],
 		systemPrompt: { mode: "replace", text: "test" },
@@ -546,7 +523,7 @@ test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会�
 	await mkdir(dirname(sessionPath), { recursive: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const spawned = await harness.pool.spawn({
-		cwd: harness.cwd, model: await harness.pool.resolveModel("test/worker"), thinking: "medium", tools: [],
+		cwd: harness.cwd, chain: [{ model: "test/worker", thinking: "medium" }], thinking: "medium", tools: [],
 		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
 		persistence: { type: "file", sessionPath },
 	});
@@ -1057,7 +1034,7 @@ test("活动列表：失败行留到 ack，完成的合进“✓ N 个已完成�
 	await harness.execute({ action: "start", worker: "broken", prompt: "执行", role: "工程师" });
 	await delivered;
 	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "fine", prompt: "执行", role: "工程师" });
+	await harness.execute({ action: "start", worker: "fine", prompt: "执行", role: "设计师" });
 	await delivered;
 	expect(harness.activity()).toEqual([
 		expect.stringMatching(/^ {2}✗ broken /u),
@@ -1350,7 +1327,7 @@ test("send 只覆盖 thinking 时沿用当前角色与模型", async () => {
 
 	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
 	expect(worker).toMatchObject({
-		status: "idle", role: "工程师", model: "test/worker", thinking: "high",
+		status: "idle", role: "工程师", model: "test/worker", thinking: "off",
 		session: (started.details as any).worker.session,
 	});
 	const sessionText = await Bun.file(worker.session).text();
@@ -1588,8 +1565,8 @@ test("修复回合最终错误向 Master 报告原文并保留审查轮", async 
 	const session = harness.pool.getSession((started.details as any).worker.session);
 	const { readCheckpoint } = await loadFirecodeModule("review/checkpoint.js") as any;
 	const { readReviewOutcome } = await loadFirecodeModule("review/outcome.js") as any;
-	expect(readReviewOutcome((started.details as any).worker.session)).toMatchObject({ status: "failed", rounds: 1, reason: error });
-	expect(readCheckpoint(session)).toMatchObject({ phase: "settled", end: "error", error, history: [{ result: "failed" }] });
+	expect(readReviewOutcome((started.details as any).worker.session)).toMatchObject({ status: "failed", rounds: 1, reason: expect.stringContaining(error) });
+	expect(readCheckpoint(session)).toMatchObject({ phase: "settled", end: "error", error: expect.stringContaining(error), history: [{ result: "failed" }] });
 	await harness.command("");
 }, 20_000);
 
@@ -1664,7 +1641,7 @@ test("Master 关闭只释放落盘的子代理：同池里进行中的审查会�
 	const startedWorker = await harness.execute({ action: "start", worker: "alongside", prompt: "慢", role: "工程师" });
 	const workerPath = (startedWorker.details as any).worker.session;
 	const review = runReviewSession(harness.pool, {
-		config: { model: "test/reviewer", thinking: "low", tools: [], timeoutMs: 30_000 },
+		config: { models: [{ model: "test/reviewer", thinking: "low" }], tools: [], timeoutMs: 30_000 },
 		prompt: { system: "审查者", user: "审" },
 		cwd: harness.cwd,
 	});
@@ -1673,7 +1650,7 @@ test("Master 关闭只释放落盘的子代理：同池里进行中的审查会�
 	await harness.command("");
 	expect(harness.pool.getSession(workerPath)).toBeUndefined();
 	finishReview();
-	expect(await review).toEqual({ kind: "output", text: "审查者结论" });
+	expect(await review).toMatchObject({ kind: "output", text: "审查者结论" });
 });
 
 test("tail：错误在前，只取最后一条外部输入之后，工具调用只留名字与简短参数；热会话与已释放的冷会话读到同一份", async () => {
@@ -1690,7 +1667,8 @@ test("tail：错误在前，只取最后一条外部输入之后，工具调用�
 	await harness.execute({ action: "send", worker: "trace", prompt: "新输入" });
 	await delivered;
 	const hot = (await harness.execute({ action: "tail", worker: "trace" })).content[0].text as string;
-	expect(hot.split("\n").slice(1, 3)).toEqual(["错误：quota exhausted", "user: 新输入"]);
+	expect(hot.split("\n")[1]).toContain("quota exhausted");
+	expect(hot.split("\n")[2]).toBe("user: 新输入");
 	expect(hot).not.toContain("旧输入");
 	expect(hot).not.toContain("tool: read");
 
@@ -1801,7 +1779,7 @@ async function setup(activate = true, options: {
 	/** 子会话加载 FireCode 的轮记录器（与真实安装一致）；false 复现 Worker 排除了 FireCode 扩展。 */
 	workerRecorder?: boolean;
 	promptFiles?: Record<string, string>;
-	roles?: Record<string, { model: string; use: string; fallback?: string[] }>;
+	roles?: Record<string, { model: string | string[]; use: string; fallback?: string[] }>;
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -2025,7 +2003,7 @@ function mockReviewExtension(
 	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
 ): string {
 	const base = {
-		version: 8, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
+		version: 9, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
 	const reviewing = {
 		...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1,

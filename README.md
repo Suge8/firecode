@@ -26,14 +26,14 @@
 ## Why FireCode
 
 - **Works out of the box.** The recommended config is written on first launch; swap in the models you are logged in to. The UI and the prompts follow your system language.
-- **Sub-agents under control.** Run them in parallel, pick a model per role, switch automatically on failure, step in any time.
-- **Hands-off review.** Complex work is reviewed by several models and sent back to be fixed until it passes. You see how each review ended.
+- **Sub-agents under control.** Run them in parallel, give each role an ordered model chain, switch automatically on failure, step in any time.
+- **Hands-off review.** Complex work is reviewed and sent back to be fixed until it passes. You see how each review ended.
 - **An ultra-light core.** Built the Pi way: minimal, so your context stays lean.
 - **Low visual load.** Focus on the results that matter. Everything in between folds away until you open it.
 
 ## Fully automatic review and delivery
 
-Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: any number of models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
+Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: up to five models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 
@@ -41,7 +41,7 @@ Other reviewers mostly hand you a list of problems. FireCode keeps fixing and re
 
 | | Reviewers | What you get |
 | --- | --- | --- |
-| **FireCode** | Any number of models, reviewing adversarially | **Fixed code, re-reviewed** |
+| **FireCode** | Up to five models, reviewing adversarially | **Fixed code, re-reviewed** |
 | Claude Code `/code-review` | One sub-agent of your session | A findings list; `--fix` applies it |
 | Codex `/review` | One reviewer on your session's model | A summary of the issues |
 | Open Code Review (Alibaba) | One model, a sub-agent per file group | Line comments to fix yourself |
@@ -65,12 +65,12 @@ Built the Pi way: sub-agents add just two small tools, and review and the watche
 
 | | Sub-agent tools | Characters |
 | --- | --- | --- |
-| **FireCode** | 2 | **1,713** |
+| **FireCode** | 2 | **1,715** |
 | pi-subagents (0.77.0) | 2–3 | 1,561–4,918 |
 | omp (18.10.1) | 2 | 3,369 |
 | Codex CLI (0.162.1) | 5–6 | 5,045–9,641 |
 
-<sub>Tool definitions sent to the model (name, description and parameters), default settings, measured 2026-10-12.</sub>
+<sub>Tool definitions sent to the model (name, description and parameters), default settings. FireCode measured 2026-10-31; others 2026-10-12.</sub>
 
 ## Also in the box
 
@@ -82,7 +82,7 @@ Built the Pi way: sub-agents add just two small tools, and review and the watche
 pi install npm:pi-firecode
 ```
 
-Restart Pi (1.3.0+) and it's ready. The config is created on first launch at `~/.pi/agent/extensions/firecode/config.jsonc`: put in the models you use, and turn anything off with `"features": { "<name>": false }`.
+Restart Pi (1.4.0+) and it's ready. The config is created on first launch at `~/.pi/agent/extensions/firecode/config.jsonc`: put in the models you use, and turn anything off with `"features": { "<name>": false }`.
 
 - Using herdr? Run `herdr integration uninstall pi` first; FireCode reports the pane state itself.
 - Sub-agents and reviewers can run `bash` without a sandbox. Run Pi in a container if you need isolation.

@@ -5,7 +5,7 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
-import { loadConfig, type MasterRole, modelAtomText, THINKING_LEVELS } from "../config.js";
+import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { registerMasterEventRenderer } from "./event-card.js";
@@ -29,7 +29,26 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	const prompts = loadMasterPrompts();
 	// 配置或提示词有问题时拒绝激活：runtime 存在就意味着两者都可用。
 	const startupError = "error" in loaded ? loaded.error : prompts.error;
-	const roster = "error" in loaded ? [] : loaded.config.roles;
+	const configuredRoles = "error" in loaded ? [] : loaded.config.roles;
+	const roster: MasterRole[] = [...configuredRoles];
+	const roleParameter = Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: msg.tool.role }));
+	let rosterReady = false;
+	const prepareRoster = async (ctx: ExtensionContext) => {
+		if (rosterReady) return;
+		const checks = await Promise.all(configuredRoles.map(async (role) => {
+			try { await pool.resolveChain(role.models); return true; } catch { return false; }
+		}));
+		roster.splice(0, roster.length, ...configuredRoles.filter((_role, index) => checks[index]));
+		const names = (roleParameter as unknown as { enum: string[] }).enum;
+		names.splice(0, names.length, ...roster.map((role) => role.role));
+		const missing = configuredRoles.filter((_role, index) => !checks[index]);
+		if (missing.length) {
+			const warning = msg.roster.unavailable(missing.map((role) => `${role.role}: ${role.models.map((atom) => atom.model).join(", ")}`).join("; "));
+			if (ctx.hasUI) ctx.ui.notify(warning, "warning");
+			else console.error(warning);
+		}
+		rosterReady = true;
+	};
 	const autoActivate = "error" in loaded ? false : loaded.config.autoActivate;
 	// 在飞子代理数的唯一发布者。
 	let publishedInFlight = 0;
@@ -66,8 +85,9 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
 	/** 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt，这里补挂续跑提醒并重投未确认事件。 */
-	const activate = (ctx: ExtensionContext): void => {
+	const activate = async (ctx: ExtensionContext): Promise<void> => {
 		if (startupError) throw new Error(startupError);
+		await prepareRoster(ctx);
 		const active = runtime = new MasterRuntime(setup, ctx);
 		setTools(true);
 		if (active.store.discardedLegacyVersion !== undefined)
@@ -108,7 +128,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 				return;
 			}
 			try {
-				activate(ctx);
+				await activate(ctx);
 				ctx.ui.notify(msg.command.on, "info");
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -165,7 +185,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 			worker: Type.String({ description: msg.tool.worker }),
 			prompt: Type.Optional(Type.String({ description: msg.tool.prompt })),
 			// 角色词只来自角色表，代码不持有固定词表；代价是角色名拼错无法在加载时报出。
-			role: Type.Optional(StringEnum(roster.map((entry) => entry.role), { description: msg.tool.role })),
+			role: roleParameter,
 			thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: msg.tool.thinking })),
 			cwd: Type.Optional(Type.String({ description: msg.tool.cwd })),
 			review: Type.Optional(Type.Boolean({ description: msg.tool.review })),
@@ -179,9 +199,11 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 
 	pi.on("session_start", async (_event, ctx) => {
 		await deactivate();
+		rosterReady = false;
+		if (!startupError) await prepareRoster(ctx);
 		if (!autoActivate) return;
 		try {
-			activate(ctx);
+			await activate(ctx);
 		} catch (error) {
 			ctx.ui.notify(msg.command.restoreFailed(error instanceof Error ? error.message : String(error)), "error");
 		}
@@ -205,8 +227,5 @@ function loadMasterPrompts(): { master: string; worker: string; error?: string }
 }
 
 function rosterText(models: MasterRole[]): string {
-	return models.map((entry) => {
-		const fallback = entry.fallback.length ? msg.roster.fallback(entry.fallback.map(modelAtomText).join(" → ")) : "";
-		return msg.roster.entry(entry.role, modelAtomText(entry), entry.use, fallback);
-	}).join(msg.roster.join);
+	return models.map((entry) => msg.roster.entry(entry.role, entry.use)).join(msg.roster.join);
 }

@@ -50,7 +50,7 @@ async function presetHost() {
 	const emit = (name: string, event: unknown = {}) => fake.fire(name, event, ctx);
 	const ctx = {
 		get model() { return state.model; },
-		modelRegistry: { find: (provider: string, id: string) => models[`${provider}/${id}`] },
+		modelRegistry: { find: (provider: string, id: string) => models[`${provider}/${id}`], getAvailable: () => Object.values(models) },
 		sessionManager: { getEntries: () => state.branch, getBranch: () => state.branch },
 		ui: { notify() {}, setStatus: (_key: string, text?: string) => { state.status = text; }, theme: { fg: (_color: string, text: string) => text } },
 	};

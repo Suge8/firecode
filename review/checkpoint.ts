@@ -17,7 +17,7 @@ const CHECKPOINT_TYPE = "firecode-review-checkpoint";
 const ROUND_TYPE = "firecode-review-round";
 const REFUSAL_TYPE = "firecode-review-refusal";
 
-const VERSION = 8;
+const VERSION = 9;
 
 /** 命令入口拒绝启动的记录：无 UI 的会话（Worker）里这是拒绝原因唯一的读取通道，id 让读取方区分每一次拒绝。 */
 export function recordRefusal(pi: ExtensionAPI, message: string): void {

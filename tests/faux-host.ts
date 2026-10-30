@@ -13,6 +13,8 @@ const MISSING_KEY = "$FIRECODE_TEST_UNSET_API_KEY";
  * keyless 里的供应商没有凭据（认证失败的场景）。调用方负责把 PI_CODING_AGENT_DIR 指向 agentDir。
  */
 export async function installFaux(agentDir: string, atoms: string[], keyless: string[] = []) {
+	// 每次安装都是独立测试的供应商；同一次安装内的所有池仍共享冷却表。
+	((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown> | undefined)?.clear();
 	const faux = registerFauxProvider();
 	const template = faux.getModel();
 	const providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: unknown[] }> = {};

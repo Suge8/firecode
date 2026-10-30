@@ -15,6 +15,7 @@ function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>)
 	const pool = {
 		options: undefined as Record<string, unknown> | undefined,
 		resolveModel: async () => ({ id: "model" }),
+		resolveChain: async () => ({ model: "provider/model", thinking: "high" }),
 		async spawn(options: Record<string, unknown>) {
 			this.options = options;
 			return {
@@ -35,7 +36,7 @@ async function runner() {
 	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => runReviewSession(pool, options) };
 }
 
-const config = { model: "provider/model", thinking: "high", tools: ["read", "bash"], timeoutMs: 1_000 };
+const config = { models: [{ model: "provider/model", thinking: "high" }], tools: ["read", "bash"], timeoutMs: 1_000 };
 const base = (pool: unknown) => ({
 	pool,
 	config,
@@ -52,7 +53,7 @@ describe("review in-process session", () => {
 		});
 		const { runReviewSession } = await runner();
 		const result = await runReviewSession(base(runtime.pool));
-		expect(result).toEqual({ kind: "output", text: body });
+		expect(result).toEqual({ kind: "output", text: body, atom: { model: "provider/model", thinking: "high" } });
 		expect(runtime.pool.options).toMatchObject({
 			tools: ["read", "bash"],
 			contextFiles: false,
@@ -86,6 +87,7 @@ describe("review in-process session", () => {
 		expect(await runReviewSession(base(runtime.pool))).toEqual({
 			kind: "output",
 			text: "PASS\n重试成功",
+			atom: { model: "provider/model", thinking: "high" },
 		});
 	});
 
