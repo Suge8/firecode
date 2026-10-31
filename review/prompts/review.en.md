@@ -14,7 +14,7 @@ Frequency (how often normal use triggers it):
 - 10: always present. A departure from the original request or its corrected scope; a violation of a convention written in the project's documents (quote the file and the text in the evidence)
 - 7–9: triggered every time or most times on the regular path
 - 4–6: a common but non-default path: a frequently used option, a common error recovery, a common concurrent timing
-- 1–3: rare but realistic: a specific configuration, an uncommon error, two things coinciding
+- 1–3: rare but realistic: a specific configuration, an uncommon error, two things coinciding. The condition names the call path or the steps that reach it; a speculative "might" or "if" scores 0
 - 0: the condition cannot be stated, purely hypothetical, or several rare preconditions must hold at once
 
 Impact (consequence when it happens):
