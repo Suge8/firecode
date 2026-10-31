@@ -13,10 +13,17 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { parseList } from "../delegation/lib.ts";
 import { caseById } from "./cases.ts";
-import type { RoundJudgement } from "./judge.ts";
+import type { Finding, RoundJudgement } from "./judge.ts";
 import { WORK } from "./lib.ts";
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { set: { type: "string", default: "all" } } });
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { set: { type: "string", default: "all" }, threshold: { type: "string" }, cases: { type: "string" } } });
+/** --threshold 20,8：按分数重算哪些发现阻塞（扫描门槛用）；没有分数的旧契约发现照原样。 */
+const threshold = values.threshold?.split(",").map(Number);
+const onlyCases = parseList(values.cases);
+const isBlocking = (finding: Finding) =>
+	threshold && finding.frequency !== undefined && finding.impact !== undefined
+		? finding.frequency * finding.impact >= threshold[0]! || (finding.frequency >= 1 && finding.impact >= threshold[1]!)
+		: finding.blocking !== false;
 const labels = parseList(positionals[0]);
 if (!labels?.length) throw new Error("用法见文件头注释");
 
@@ -31,11 +38,15 @@ interface Run {
 	cost: number;
 	tokens: number;
 	meterComplete?: boolean;
+	/** 有一次请求超过 STALL_MS 且出字极慢：网关或上游卡住，墙钟不代表模型速度，统计墙钟时剔除并单列。 */
+	stalled: boolean;
 	rounds: Array<{ round: number; result: string }>;
 	end?: string;
 	judged?: RoundJudgement[];
 }
 
+const STALL_MS = 90_000;
+const STALL_RATE = 20;
 const runs: Run[] = [];
 for (const label of labels) {
 	const root = join(WORK, "runs", label);
@@ -44,10 +55,14 @@ for (const label of labels) {
 		if (!existsSync(file)) continue;
 		const result = JSON.parse(readFileSync(file, "utf8"));
 		if (values.set !== "all" && result.set !== values.set) continue;
+		if (onlyCases && !onlyCases.includes(result.case)) continue;
 		const judge = join(root, name, "judge.json");
 		const tokens = Object.values(result.usage as Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>)
 			.reduce((sum, row) => sum + row.input + row.output + row.cacheRead + row.cacheWrite, 0);
-		runs.push({ ...result, label, tokens, judged: existsSync(judge) ? JSON.parse(readFileSync(judge, "utf8")).rounds : undefined });
+		const requests = existsSync(join(root, name, "usage.jsonl")) ? readFileSync(join(root, name, "usage.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+		const stalled = requests.some((request: { start: number; end: number; usage?: { output: number } }) =>
+			request.end - request.start > STALL_MS && (request.usage?.output ?? 0) / ((request.end - request.start) / 1000) < STALL_RATE);
+		runs.push({ ...result, label, tokens, stalled, judged: existsSync(judge) ? JSON.parse(readFileSync(judge, "utf8")).rounds : undefined });
 	}
 }
 
@@ -64,8 +79,8 @@ const groups = new Map<string, Run[]>();
 for (const run of runs) groups.set(`${run.label} | ${run.reviewer}`, [...(groups.get(`${run.label} | ${run.reviewer}`) ?? []), run]);
 
 console.log(`集合：${values.set}`);
-console.log("批次 | 审查模型 | 运行 | 命中率（建议区） | bug/需求/约定 | 阻塞发现 | 误报率 | 吹毛求疵率 | 需求质疑 | 陷阱 | 对照 FAIL | 缺陷判过 | 单轮墙钟 中位/P90 | 每次花费 | 每次 token | 未判/未定发现 | 计量不完整");
-console.log("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
+console.log("批次 | 审查模型 | 运行 | 命中率（建议区） | bug/需求/约定 | 阻塞发现 | 误报率 | 吹毛求疵率 | 需求质疑 | 陷阱 | 裁决交用户 | 对照 FAIL | 缺陷判过 | 单轮墙钟 中位/P90 | 每次花费 | 每次 token | 未判/未定发现 | 计量不完整");
+console.log("--- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---");
 for (const [key, group] of groups) {
 	const done = group.filter((run) => run.status === "done");
 	let truths = 0;
@@ -77,6 +92,8 @@ for (const [key, group] of groups) {
 	let nit = 0;
 	let questionable = 0;
 	let traps = 0;
+	let trapRuns = 0;
+	let decided = 0;
 	let unjudged = 0;
 	let unsure = 0;
 	let cleanRuns = 0;
@@ -87,7 +104,8 @@ for (const [key, group] of groups) {
 		const item = caseById(run.case);
 		const first = run.judged?.find((round) => round.round === 1);
 		if (!run.judged) unjudged += 1;
-		const verdict = run.rounds[0]?.result;
+		const judgedFirst = run.judged?.find((round) => round.round === 1);
+		const verdict = judgedFirst ? (judgedFirst.findings.some(isBlocking) ? "failed" : "passed") : run.rounds[0]?.result;
 		if (item.truth.length) {
 			defectRuns += 1;
 			if (verdict === "passed") defectPass += 1;
@@ -96,16 +114,22 @@ for (const [key, group] of groups) {
 			if (verdict === "failed") cleanFail += 1;
 		}
 		if (!first) continue;
-		const matched = new Set(first.findings.filter((finding) => finding.valid === "yes").map((finding) => finding.truth).filter(Boolean));
+		const block = first.findings.filter(isBlocking);
+		const matched = new Set(block.filter((finding) => finding.valid === "yes").map((finding) => finding.truth).filter(Boolean));
+		const below = new Set(first.findings.filter((finding) => !isBlocking(finding) && finding.valid === "yes").map((finding) => finding.truth).filter(Boolean));
+		if (item.traps?.length) {
+			trapRuns += 1;
+			if (item.traps.some((trap) => first.decided?.includes(trap.id))) decided += 1;
+		}
 		for (const defect of item.truth) {
 			truths += 1;
 			byKind[defect.kind]![1] += 1;
 			if (matched.has(defect.id)) {
 				hit += 1;
 				byKind[defect.kind]![0] += 1;
-			} else if (first.suggested.includes(defect.id)) suggested += 1;
+			} else if (below.has(defect.id) || first.suggested.includes(defect.id)) suggested += 1;
 		}
-		for (const finding of first.findings) {
+		for (const finding of block) {
 			blocking += 1;
 			if (finding.valid === "unsure") unsure += 1;
 			if (finding.valid === "no") invalid += 1;
@@ -114,11 +138,11 @@ for (const [key, group] of groups) {
 			if (finding.trap) traps += 1;
 		}
 	}
-	const wall = done.map((run) => run.wallSec);
+	const wall = done.filter((run) => !run.stalled).map((run) => run.wallSec);
 	const kinds = ["bug", "requirement", "convention"].map((kind) => pct(byKind[kind]![0], byKind[kind]![1])).join("/");
 	console.log([
 		key, `${done.length}/${group.length}`, `${hit}/${truths} ${pct(hit, truths)}（${suggested}）`, kinds, blocking, `${invalid}/${blocking} ${pct(invalid, blocking)}`, `${nit}/${blocking} ${pct(nit, blocking)}`, questionable, traps,
-		pct(cleanFail, cleanRuns), pct(defectPass, defectRuns), `${median(wall).toFixed(0)}s/${p90(wall).toFixed(0)}s`,
+		`${decided}/${trapRuns}`, pct(cleanFail, cleanRuns), pct(defectPass, defectRuns), `${median(wall).toFixed(0)}s/${p90(wall).toFixed(0)}s（剔除停顿 ${done.length - wall.length}）`,
 		`$${(done.reduce((sum, run) => sum + run.cost, 0) / (done.length || 1)).toFixed(3)}`,
 		`${Math.round(done.reduce((sum, run) => sum + run.tokens, 0) / (done.length || 1) / 1000)}k`, `${unjudged}/${unsure}`, done.filter((run) => run.meterComplete !== true).length,
 	].join(" | "));

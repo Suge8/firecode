@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // 判分：把每轮的阻塞发现对到真值、归类、判成立与否，写 judge.json。
-//   bun judge.ts <label> [--model gpt-6-luna/medium] [--verify claude-sonnet-5-5/medium | --verify none] [--force]
+//   bun judge.ts <label> [--set opt|hold|all] [--model gpt-6-luna/medium] [--verify gpt-6.1-terra/medium | --verify none] [--force]
 // 第一段（--model，无工具）：对照需求、改动 diff、真值与修复 diff，逐条给出命中哪条真值、类别、是否成立。
 // 第二段（--verify，只读工具，在被审仓库副本里）：第一段没对上真值的发现逐条核实（包括第一裁判判假的）；结论按（用例, 发现正文）缓存在 $EVAL_DIR/verdicts/。
 // 裁判的准确率先人工抽样核过再用（见 README）。
@@ -16,15 +16,22 @@ import { cliModel, fixtureHost, git, quotaBlock, SOURCES, WORK } from "./lib.ts"
 export const CATEGORIES = ["bug", "requirement", "convention", "questionable", "verification", "nitpick"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
-export interface Finding {
-	n: number;
+/** 审查者的一条发现：阻塞的是完整小节；打分契约下门槛以下的发现被收成建议区一行，带着分数，阈值扫描要用它们。 */
+export interface Candidate {
 	title: string;
-	severity: string;
 	text: string;
+	blocking: boolean;
+	/** 打分契约的分数；旧的严重程度契约没有。 */
+	frequency?: number;
+	impact?: number;
+}
+
+export interface Finding extends Candidate {
+	n: number;
 	truth: string | null;
 	trap: string | null;
 	category: Category;
-	valid: "yes" | "no" | "unsure" | "unsure";
+	valid: "yes" | "no" | "unsure";
 	reason: string;
 	verified?: boolean;
 }
@@ -34,25 +41,45 @@ export interface RoundJudgement {
 	findings: Finding[];
 	/** 只写在建议区（不阻塞）里的真值。 */
 	suggested: string[];
+	/** 审查者在“需用户裁决”或建议区里正确交给用户裁决的陷阱。 */
+	decided: string[];
 }
 
 const DIFF_LIMIT = 60_000;
 const FIX_LIMIT = 12_000;
 const HEADING = /^#{1,6}\s*(?:发现|Finding)\s*\d*.*$/gimu;
 const SUGGESTIONS = /^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/imu;
+const DECISIONS = /^##\s+(?:需用户裁决|Needs user decision)\s*$/imu;
+/** review/messages.ts 的 reviewer.demoted 产出的那一行。 */
+const DEMOTED = /(?:频率|Frequency)\s*(\d+(?:\.\d+)?)\s*·\s*(?:影响|Impact)\s*(\d+(?:\.\d+)?)[）)]\s*$/u;
+const score = (text: string, name: string) => {
+	const value = new RegExp(`^[-*+]\\s*\\**(?:${name})\\**\\s*[:：]\\s*\\**\\s*(\\d+(?:\\.\\d+)?)`, "mu").exec(text)?.[1];
+	return value === undefined ? undefined : Number(value);
+};
 
-/** 审查者原文拆成阻塞发现与建议区；格式不合契约的 FAIL 整段算一条。 */
-export function splitFindings(details: string): { blocking: Array<{ title: string; severity: string; text: string }>; suggestions: string } {
-	const [head = "", suggestions = ""] = details.split(SUGGESTIONS);
+/** 审查者原文拆成发现与建议区；failed 的票格式不合契约、没有发现小节时整段算一条。 */
+export function splitFindings(details: string, failed: boolean): { findings: Candidate[]; suggestions: string } {
+	const [beforeSuggestions = "", suggestionText = ""] = details.split(SUGGESTIONS);
+	const [head = "", decisions = ""] = beforeSuggestions.split(DECISIONS);
 	const starts = [...head.matchAll(HEADING)].map((match) => match.index!);
-	const sections = starts.length ? starts.map((start, index) => head.slice(start, starts[index + 1] ?? head.length).trim()) : head.trim() ? [head.trim()] : [];
+	const sections = starts.length ? starts.map((start, index) => head.slice(start, starts[index + 1] ?? head.length).trim()) : failed && head.trim() ? [head.trim()] : [];
+	const lines = suggestionText.split("\n").map((line) => line.trim()).filter(Boolean);
+	const demoted = lines.filter((line) => DEMOTED.test(line));
 	return {
-		blocking: sections.map((text) => ({
-			title: text.split("\n")[0]!.replace(/^#{1,6}\s*(?:发现|Finding)\s*\d*\s*[:：]?\s*/u, "").trim(),
-			severity: /(?:严重程度|Severity)\**\s*[:：]\s*\**\s*([^\s*]+)/u.exec(text)?.[1] ?? "",
-			text,
-		})),
-		suggestions: suggestions.trim(),
+		findings: [
+			...sections.map((text) => ({
+				title: text.split("\n")[0]!.replace(/^#{1,6}\s*(?:发现|Finding)\s*\d*\s*[:：]?\s*/u, "").trim(),
+				text,
+				blocking: true,
+				frequency: score(text, "频率|Frequency"),
+				impact: score(text, "影响|Impact"),
+			})),
+			...demoted.map((line) => {
+				const [, frequency, impact] = DEMOTED.exec(line)!;
+				return { title: line.replace(/^[-*+]\s*/u, ""), text: line, blocking: false, frequency: Number(frequency), impact: Number(impact) };
+			}),
+		],
+		suggestions: [decisions.trim() && `需用户裁决：\n${decisions.trim()}`, lines.filter((line) => !DEMOTED.test(line)).join("\n")].filter(Boolean).join("\n\n"),
 	};
 }
 
@@ -65,7 +92,7 @@ function caseMaterial(item: Case): string {
 	const injections = item.turns.flatMap((turn) => turn.inject ?? []);
 	const fixOf = (fix: string) => fix === "inject"
 		? injections.map((change) => `植入在 ${change.file}：原文\n\`\`\`\n${change.find}\n\`\`\`\n被改成\n\`\`\`\n${change.replace}\n\`\`\``).join("\n")
-		: `修复提交 ${fix} 的 diff：\n\`\`\`diff\n${clipText(git(source, "show", "--format=", fix), FIX_LIMIT)}\n\`\`\``;
+		: `修复提交 ${fix} 的 diff：\n\`\`\`diff\n${clipText(git(source, "show", "--format=", ...fix.split(":").flatMap((part, index) => (index ? ["--", part] : [part]))), FIX_LIMIT)}\n\`\`\``;
 	const truth = item.truth.length
 		? item.truth.map((defect) => `- ${defect.id}（${defect.kind}）：${defect.summary}\n  ${fixOf(defect.fix)}`).join("\n")
 		: "（无已知缺陷；这是待核实的对照提交，不能因此认定所有发现都是误报）";
@@ -76,8 +103,8 @@ function caseMaterial(item: Case): string {
 	return `## 项目约定\n${conventions}\n\n## 需求\n${requests}\n\n## 被审改动（git diff main..work）\n\`\`\`diff\n${diff}\n\`\`\`\n\n## 已知缺陷（真值）\n${truth}\n\n## 已知陷阱（会诱发有害修复的说法）\n${traps}`;
 }
 
-const JUDGE_POLICY = `你是代码审查评测的裁判。给你一次改动的需求、diff、已知缺陷（真值，来自后来的修复提交）、已知陷阱，以及审查者给出的阻塞发现与建议区。逐条判定每个阻塞发现，只输出一个 JSON 对象，不要其他文字：
-{"findings":[{"n":1,"truth":"真值 id 或 null","trap":"陷阱 id 或 null","category":"…","valid":"yes|no|unsure","reason":"一句话"}],"suggested":["只出现在建议区里的真值 id"]}
+const JUDGE_POLICY = `你是代码审查评测的裁判。给你一次改动的需求、diff、已知缺陷（真值，来自后来的修复提交）、已知陷阱，以及审查者给出的发现（含已被门槛挡在建议区的）与建议区。逐条判定每条发现，只输出一个 JSON 对象，不要其他文字：
+{"findings":[{"n":1,"truth":"真值 id 或 null","trap":"陷阱 id 或 null","category":"…","valid":"yes|no|unsure","reason":"一句话"}],"suggested":["只出现在建议区里的真值 id"],"decided":["审查者在需用户裁决或建议区里正确指出冲突、要求交用户裁决的陷阱 id"]}
 
 判定规则：
 - truth：发现指出的是该真值描述的同一个缺陷（同一处代码、同一种错误），哪怕措辞或给的修法不同，就填它的 id；只是碰到同一个文件、或泛泛提到相关主题不算。一条发现最多对一个真值。
@@ -117,11 +144,13 @@ async function ask(model: string, system: string, prompt: string, o: { cwd: stri
 	const child = startPi(args, { agentDir: agent, cwd: o.cwd, tmp, stdin: "ignore", env: o.env });
 	let text = "";
 	let cost = 0;
+	let failure: string | undefined;
 	onJsonLines(child, (event) => {
 		if (event.type !== "message_end" || event.message?.role !== "assistant") return;
 		cost += event.message.usage?.cost?.total ?? 0;
 		const body = (event.message.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("");
 		if (body.trim()) text = body;
+		if (event.message.stopReason === "error") failure = event.message.errorMessage ?? "error";
 	});
 	const errors: Buffer[] = [];
 	child.stderr!.on("data", (chunk: Buffer) => errors.push(chunk));
@@ -131,6 +160,7 @@ async function ask(model: string, system: string, prompt: string, o: { cwd: stri
 		child.once("exit", (code) => {
 			clearTimeout(timer);
 			if (code !== 0) reject(new Error(`裁判退出 ${code}：${Buffer.concat(errors).toString().slice(-1000)}`));
+			else if (!text.trim()) reject(new Error(`裁判没有回复：${failure ?? Buffer.concat(errors).toString().slice(-500)}`));
 			else resolve();
 		});
 	});
@@ -149,13 +179,42 @@ async function verify(item: Case, finding: Finding, model: string): Promise<{ va
 	if (existsSync(cached)) return { ...JSON.parse(readFileSync(cached, "utf8")), cost: 0 };
 	const repo = copyRepo(item, join(WORK, "verify", `${item.id}-${key}`));
 	const requests = item.turns.map((turn) => turn.user).join("\n\n---\n\n");
-	const { text, cost } = await ask(model, VERIFY_POLICY, `用户需求：\n${requests}\n\n待核实的审查发现：\n${finding.text}`, { cwd: repo, tools: "read,grep,find,ls,bash", timeoutMin: 20, env: item.source === "firecode" ? fixtureHost(repo).env : undefined });
+	let cost = 0;
+	let verdict: { valid: "yes" | "no" | "unsure"; category: Category; reason: string } | undefined;
+	for (let attempt = 1; !verdict; attempt += 1) {
+		try {
+		const answer = await ask(model, VERIFY_POLICY, `用户需求：\n${requests}\n\n待核实的审查发现：\n${finding.text}`, { cwd: repo, tools: "read,grep,find,ls,bash", timeoutMin: 20, env: item.source === "firecode" ? fixtureHost(repo).env : undefined });
+		cost += answer.cost;
+			const parsed = parseJson<{ valid: "yes" | "no" | "unsure"; category: Category; reason: string }>(answer.text);
+			if (!["yes", "no", "unsure"].includes(parsed.valid) || !CATEGORIES.includes(parsed.category)) throw new Error("核实裁判输出不合契约");
+			verdict = parsed;
+		} catch (error) {
+			if (attempt >= JUDGE_ATTEMPTS) throw error;
+			await Bun.sleep(attempt * RETRY_MS);
+		}
+	}
 	rmSync(repo, { recursive: true, force: true });
-	const verdict = parseJson<{ valid: "yes" | "no" | "unsure"; category: Category; reason: string }>(text);
-	if (!["yes", "no", "unsure"].includes(verdict.valid) || !CATEGORIES.includes(verdict.category)) throw new Error("核实裁判输出不合契约");
 	mkdirSync(join(WORK, "verdicts", item.id), { recursive: true });
 	writeFileSync(cached, JSON.stringify({ ...verdict, model }, null, 1));
 	return { ...verdict, cost };
+}
+
+const JUDGE_ATTEMPTS = 3;
+/** 网关过载时请求会成批失败（额度查询超时、回复为空）：重判前退避。 */
+const RETRY_MS = 15_000;
+
+function checkVerdicts(item: Case, blocking: Candidate[], verdicts: Array<Omit<Finding, keyof Candidate>>): Finding[] {
+	if (verdicts.length !== blocking.length) throw new Error("裁判发现数量不符");
+	return blocking.map((finding, index) => {
+		const entries = verdicts.filter((entry) => entry.n === index + 1);
+		if (entries.length !== 1) throw new Error(`裁判漏判或重复：${index + 1}`);
+		const verdict = entries[0]!;
+		if (!CATEGORIES.includes(verdict.category) || !["yes", "no", "unsure"].includes(verdict.valid)) throw new Error("裁判类别不合契约");
+		if (verdict.truth && !item.truth.some((truth) => truth.id === verdict.truth)) throw new Error(`未知真值：${verdict.truth}`);
+		if (verdict.trap && !item.traps?.some((trap) => trap.id === verdict.trap)) throw new Error(`未知陷阱：${verdict.trap}`);
+		if (verdict.truth && verdict.valid !== "yes") throw new Error("命中真值与判假冲突");
+		return { ...finding, ...verdict };
+	});
 }
 
 export async function judgeRun(dir: string, o: { model: string; verifier?: string }): Promise<{ rounds: RoundJudgement[]; cost: number }> {
@@ -167,38 +226,43 @@ export async function judgeRun(dir: string, o: { model: string; verifier?: strin
 	for (const round of result.rounds as Array<{ round: number; result: string; reviewers: Array<{ status: string; details: string }> }>) {
 		// 后续轮的代码已被执行模型改过；没有逐轮仓库快照时不拿首轮真值硬判修复结果。
 		if (round.round !== 1) continue;
-		const parts = round.reviewers.filter((reviewer) => reviewer.status === "failed").map((reviewer) => splitFindings(reviewer.details));
-		const passSuggestions = round.reviewers.filter((reviewer) => reviewer.status === "passed").map((reviewer) => splitFindings(reviewer.details).suggestions);
-		const blocking = parts.flatMap((part) => part.blocking);
-		const suggestions = [...parts.map((part) => part.suggestions), ...passSuggestions].filter(Boolean).join("\n\n");
+		const parts = round.reviewers.filter((reviewer) => reviewer.status !== "error").map((reviewer) => splitFindings(reviewer.details, reviewer.status === "failed"));
+		const blocking = parts.flatMap((part) => part.findings);
+		const suggestions = parts.map((part) => part.suggestions).filter(Boolean).join("\n\n");
 		if (!blocking.length && !suggestions) {
-			rounds.push({ round: round.round, findings: [], suggested: [] });
+			rounds.push({ round: round.round, findings: [], suggested: [], decided: [] });
 			continue;
 		}
-		const listing = blocking.map((finding, index) => `### 阻塞发现 ${index + 1}\n${finding.text}`).join("\n\n") || "（无）";
-		const prompt = `${material}\n\n## 审查者第 ${round.round} 轮的阻塞发现\n${listing}\n\n## 审查者的建议区（非阻塞）\n${suggestions || "（无）"}`;
-		const answer = await ask(o.model, JUDGE_POLICY, prompt, { cwd: WORK, timeoutMin: 10 });
-		cost += answer.cost;
-		const parsed = parseJson<{ findings: Array<Omit<Finding, "title" | "severity" | "text">>; suggested?: string[] }>(answer.text);
-		if (parsed.findings.length !== blocking.length) throw new Error("裁判发现数量不符");
-		const findings: Finding[] = blocking.map((finding, index) => {
-			const entries = parsed.findings.filter((entry) => entry.n === index + 1);
-			if (entries.length !== 1) throw new Error(`裁判漏判或重复：${index + 1}`);
-			const verdict = entries[0]!;
-			if (!CATEGORIES.includes(verdict.category) || !["yes", "no", "unsure"].includes(verdict.valid)) throw new Error("裁判类别不合契约");
-			if (verdict.truth && !item.truth.some((truth) => truth.id === verdict.truth)) throw new Error(`未知真值：${verdict.truth}`);
-			if (verdict.trap && !item.traps?.some((trap) => trap.id === verdict.trap)) throw new Error(`未知陷阱：${verdict.trap}`);
-			if (verdict.truth && verdict.valid !== "yes") throw new Error("命中真值与判假冲突");
-			return { ...finding, ...verdict };
-		});
+		const listing = blocking.map((finding, index) => `### 发现 ${index + 1}（${finding.blocking ? "阻塞" : "门槛以下，进了建议区"}）\n${finding.text}`).join("\n\n") || "（无）";
+		const prompt = `${material}\n\n## 审查者第 ${round.round} 轮的发现（逐条判，包括门槛以下的）\n${listing}\n\n## 审查者的建议区与需用户裁决（不是发现）\n${suggestions || "（无）"}`;
+		// 便宜裁判偶尔漏判、写错类别或 id：整轮重判，几次都不合契约才算这次判分失败。
+		let findings: Finding[] | undefined;
+		let parsed!: { findings: Array<Omit<Finding, keyof Candidate>>; suggested?: string[]; decided?: string[] };
+		for (let attempt = 1; !findings; attempt += 1) {
+			try {
+				const answer = await ask(o.model, JUDGE_POLICY, prompt, { cwd: WORK, timeoutMin: 10 });
+				cost += answer.cost;
+				parsed = parseJson(answer.text);
+				findings = checkVerdicts(item, blocking, parsed.findings);
+			} catch (error) {
+				if (attempt >= JUDGE_ATTEMPTS) throw error;
+				await Bun.sleep(attempt * RETRY_MS);
+			}
+		}
 		if (o.verifier)
 			for (const finding of findings) {
-				if (finding.truth) continue;
+				// 只核实阻塞的：门槛以下的发现成不成立只影响阈值扫描，用第一段的判定。
+				if (finding.truth || !finding.blocking) continue;
 				const verdict = await verify(item, finding, o.verifier);
 				cost += verdict.cost;
 				Object.assign(finding, { valid: verdict.valid, category: verdict.category, reason: verdict.reason, verified: true });
 			}
-		rounds.push({ round: round.round, findings, suggested: (parsed.suggested ?? []).filter((id) => item.truth.some((defect) => defect.id === id)) });
+		rounds.push({
+			round: round.round,
+			findings,
+			suggested: (parsed.suggested ?? []).filter((id) => item.truth.some((defect) => defect.id === id)),
+			decided: (parsed.decided ?? []).filter((id) => item.traps?.some((trap) => trap.id === id)),
+		});
 	}
 	return { rounds, cost };
 }
@@ -206,7 +270,7 @@ export async function judgeRun(dir: string, o: { model: string; verifier?: strin
 if (import.meta.main) {
 	const { values, positionals } = parseArgs({
 		allowPositionals: true,
-		options: { model: { type: "string", default: "gpt-6-luna/medium" }, verify: { type: "string", default: "claude-sonnet-5-5/medium" }, force: { type: "boolean" }, concurrency: { type: "string", default: "4" } },
+		options: { set: { type: "string", default: "all" }, model: { type: "string", default: "gpt-6-luna/medium" }, verify: { type: "string", default: "gpt-6.1-terra/medium" }, force: { type: "boolean" }, concurrency: { type: "string", default: "4" } },
 	});
 	const label = positionals[0];
 	if (!label) throw new Error("用法见文件头注释");
@@ -216,7 +280,8 @@ if (import.meta.main) {
 	let failed = 0;
 	await pool(dirs.map((dir) => async () => {
 		if (!values.force && existsSync(join(dir, "judge.json"))) return;
-		if (JSON.parse(readFileSync(join(dir, "result.json"), "utf8")).status !== "done") return;
+		const result = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));
+		if (result.status !== "done" || (values.set !== "all" && result.set !== values.set)) return;
 		try {
 			const judged = await judgeRun(dir, { model: values.model!, ...(values.verify === "none" ? {} : { verifier: values.verify! }) });
 			total += judged.cost;

@@ -144,7 +144,7 @@ let spent = 0;
 async function runOne(item: Case, reviewer: string, n: number): Promise<void> {
 	const id = `${item.id}__${slug(reviewer)}__${n}`;
 	const dir = join(WORK, "runs", label, id);
-	const recipe = createHash("sha256").update(JSON.stringify({ item: fixtureKey(item), code, mode, reviewer, executor: values.executor, advisor: values.advisor, baseReview, modelSignature, concurrency: values.concurrency, pi: process.env.PI_PACKAGES_DIR ?? "PATH" }))
+	const recipe = createHash("sha256").update(JSON.stringify({ item: fixtureKey(item), turns: item.turns.map(({ user, checks }) => ({ user, checks })), code, mode, reviewer, executor: values.executor, advisor: values.advisor, baseReview, modelSignature, concurrency: values.concurrency, pi: process.env.PI_PACKAGES_DIR ?? "PATH" }))
 		.update(readFileSync(import.meta.path)).update(readFileSync(join(import.meta.dir, "meter.ts"))).digest("hex");
 	if (!values.force && existsSync(join(dir, "result.json"))) {
 		const previous = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));

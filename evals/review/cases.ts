@@ -10,7 +10,7 @@ export interface Defect {
 	kind: DefectKind;
 	/** 缺陷本身：在什么情况下出什么错、违反了哪条约定。裁判按它判命中。 */
 	summary: string;
-	/** 后来修掉它的提交；植入的缺陷写 "inject"（裁判看到的是植入前后的差异）。 */
+	/** 后来修掉它的提交，可写成“提交:路径”只给裁判看那个文件；植入的缺陷写 "inject"（裁判看到的是植入前后的差异）。 */
 	fix: string;
 }
 
@@ -82,6 +82,7 @@ export const CASES: Case[] = [
 			{ id: "enum-mutation", kind: "convention", summary: "master/index.ts 为了把不可用角色剔出 role 枚举，原地改写 StringEnum 生成的 schema 内部 enum 数组（as unknown as 强转后 splice），依赖库内部结构、悄悄改掉已注册的工具定义", fix: "a0149d3" },
 			{ id: "thinking-two-sources", kind: "convention", summary: "spawn 选项另收一个 thinking 传给 createAgentSession，而实际生效的强度来自虚拟模型路由（候选原子或本次覆盖），同一事实两个来源", fix: "a0149d3" },
 			{ id: "truncation-no-chain", kind: "bug", summary: "输出被截断（stopReason length）时 Worker 与审查者都按失败处理，但路由的 agent_before_settle 只接 error 结局（宿主把截断记为 completed），链里还有候选也不换，直接交付失败", fix: "d3146af" },
+			{ id: "reset-format", kind: "requirement", summary: "需求要求“报错里能读到重置时间就用”，resetTime 只认 try again in N min、resets_in_seconds、resets_at：Claude 订阅额度用尽的原文“You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)”读不出，只按 5 分钟冷却，之后派活再撞同一个限额", fix: "75720b9:model-route.ts" },
 		],
 	},
 	{
@@ -106,6 +107,7 @@ export const CASES: Case[] = [
 		],
 		truth: [
 			{ id: "truncation-no-chain", kind: "bug", summary: "输出被截断（stopReason length）时 Worker 与审查者都按失败处理，但路由的 agent_before_settle 只接 error 结局，链里还有候选也不换，直接交付失败", fix: "d3146af" },
+			{ id: "reset-format", kind: "requirement", summary: "需求要求“报错里能读到重置时间就用”，resetTime 只认 try again in N min、resets_in_seconds、resets_at：Claude 订阅额度用尽的原文“You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)”读不出，只按 5 分钟冷却，之后派活再撞同一个限额", fix: "75720b9:model-route.ts" },
 		],
 		traps: [{ id: "compat-projection", summary: "要求新快照写入旧代码需要的 fallback 等字段、或加兼容投影/迁移，让旧代码能读新快照", right: "指出“旧代码不读新字段”的前提不成立，按约定升版本或交用户在“升版作废进行中审查”与“接受降级风险”之间裁决，不写兼容层" }],
 	},
@@ -399,10 +401,10 @@ ${FC_TAIL}`,
 		set: "opt",
 		tags: ["external", "large", "scheduler"],
 		turns: [{
-			user: `packages/durable：用持久的 sleeping 状态取代 runtime.sleep。任务以 runtime.sleepUntil() 或 { status: "sleeping", until, checkpoint } 结束一个阶段：不占用 invocation，截止时间跨重启保留，到点后从 checkpoint 恢复。生成的重试/轮询与压缩重试都改这样睡。Harness.wake() 与 HarnessOptions.onWake 让 Durable Object 这类宿主自己唤醒进程；HarnessOptions.setTimer 接管 Harness 的所有计时器，chord 的 Progress 改用可注入的时钟。SQLite 迁到 schema 2 以接纳 sleeping 状态。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+			user: `packages/durable：用持久的 sleeping 状态取代 runtime.sleep。任务以 runtime.sleepUntil() 或 { status: "sleeping", until, checkpoint } 结束一个阶段：不占用 invocation，截止时间跨重启保留，到点后从 checkpoint 恢复。生成的重试/轮询与压缩重试都改这样睡。Harness.wake() 与 HarnessOptions.onWake 让 Durable Object 这类宿主自己唤醒进程；HarnessOptions.setTimer 接管 Harness 的所有计时器，chord 的 Progress 改用可注入的时钟。SQLite 迁到 schema 2 以接纳 sleeping 状态。遵守仓库 AGENTS.md；本机的 npm run check 会因模型目录比源码新报出与改动无关的类型错误，改跑受影响包的类型检查与相关测试；提交在本分支，不推送。`,
 			to: "f75b3240a",
 
-			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-sleep.test.ts test/sqlite-migrations.test.ts"],
+			checks: ["cd packages/chord && npx tsc --noEmit -p tsconfig.build.json", "cd packages/chord && node ../../node_modules/vitest/dist/cli.js --run test/output.test.ts", "cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-sleep.test.ts test/sqlite-migrations.test.ts"],
 		}],
 		truth: [
 			{ id: "due-sleep-stranded", kind: "bug", summary: "到点的 sleep 只由计时器或 resume() 唤醒：其他变化触发的调度轮次跑在截止时间之后也不处理已到期的 sleeping 任务，而为它排的计时器可能已被丢弃，任务就此搁浅", fix: "ec1be23eb" },
@@ -424,7 +426,7 @@ ${FC_TAIL}`,
 - settings.afterFailedRun：keep、continue 或 withdraw 排在失败运行之后的输入。
 - TaskGraphNode.blocked 跟随注册表变化与失败的迁移。
 - README 的 Durable Object 示例在 Harness.open 之前排兜底闹钟。
-遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+遵守仓库 AGENTS.md；本机的 npm run check 会因模型目录比源码新报出与改动无关的类型错误，改跑受影响包的类型检查与相关测试；提交在本分支，不推送。`,
 			to: "a30c2a81d",
 
 			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-reports.test.ts test/harness-blocked.test.ts test/harness-generation.test.ts"],
@@ -443,7 +445,7 @@ ${FC_TAIL}`,
 		set: "opt",
 		tags: ["external", "regression", "small"],
 		turns: [{
-			user: `packages/durable：per-model 压缩设置 compaction.modelOverrides，按精确的 "provider/modelId" 为每个模型单独设压缩阈值，阈值检查、溢出恢复与压缩范围选择都用它们所服务模型的那一项（closes #10942）。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+			user: `packages/durable：per-model 压缩设置 compaction.modelOverrides，按精确的 "provider/modelId" 为每个模型单独设压缩阈值，阈值检查、溢出恢复与压缩范围选择都用它们所服务模型的那一项（closes #10942）。遵守仓库 AGENTS.md；本机的 npm run check 会因模型目录比源码新报出与改动无关的类型错误，改跑受影响包的类型检查与相关测试；提交在本分支，不推送。`,
 			to: "c4cf7957b",
 
 			checks: ["cd packages/durable && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && node ../../node_modules/vitest/dist/cli.js --run test/harness-tools.test.ts test/harness-compaction.test.ts"],
@@ -479,10 +481,10 @@ ${FC_TAIL}`,
 ${FC_TAIL}`,
 		["bun run typecheck", "bun test tests/round.test.ts tests/statusbar.test.ts tests/tool-groups.test.ts"]),
 	clean("pi-list-files", "pi", "abfe62928", "opt", ["external"],
-		`packages/env 与 packages/durable：ExecutionEnv 增加可选的 listFiles，列出目录下的文件、目录与符号链接——相对路径、深度优先按名字排序、跳过 .git 与工作树里 git 忽略的内容，有上限并带 truncated 标记。调用方在它缺失或报 not_supported 时退回自己的遍历。env 的一致性测试套件用新的 listFiles 选项检查它。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+		`packages/env 与 packages/durable：ExecutionEnv 增加可选的 listFiles，列出目录下的文件、目录与符号链接——相对路径、深度优先按名字排序、跳过 .git 与工作树里 git 忽略的内容，有上限并带 truncated 标记。调用方在它缺失或报 not_supported 时退回自己的遍历。env 的一致性测试套件用新的 listFiles 选项检查它。遵守仓库 AGENTS.md；本机的 npm run check 会因模型目录比源码新报出与改动无关的类型错误，改跑受影响包的类型检查（env 的一致性套件要先编译 Rust daemon，本机没有，这次不跑）；提交在本分支，不推送。`,
 		["cd packages/env && npx tsc --noEmit -p tsconfig.build.json", "cd packages/durable && npx tsc --noEmit -p tsconfig.build.json"]),
 	clean("pi-responses-tool-cache", "pi", "caa6967b6", "hold", ["external", "cache"],
-		`packages/ai：Responses 上工具集变化时保住提示缓存（#10940）。带 additional_tools 的模型把每个工具都声明在 additional_tools 条目里、输入开头先放一条（与 Codex 一致）；后面的条目可以覆盖前面同名的定义，但不能覆盖顶层工具也不能移除工具，所以移除用文本宣布，之后的更新重述仍不可用的工具。工具搜索与 Kimi 的工具消息每次移除或重声明时只挪一次顶层工具表，之后的加载保持锚定，不在第一次移除后的每次加载都重发整张工具表。遵守仓库 AGENTS.md，跑受影响包的类型检查与相关测试。`,
+		`packages/ai：Responses 上工具集变化时保住提示缓存（#10940）。带 additional_tools 的模型把每个工具都声明在 additional_tools 条目里、输入开头先放一条（与 Codex 一致）；后面的条目可以覆盖前面同名的定义，但不能覆盖顶层工具也不能移除工具，所以移除用文本宣布，之后的更新重述仍不可用的工具。工具搜索与 Kimi 的工具消息每次移除或重声明时只挪一次顶层工具表，之后的加载保持锚定，不在第一次移除后的每次加载都重发整张工具表。遵守仓库 AGENTS.md；本机的 npm run check 会因模型目录比源码新报出与改动无关的类型错误，改跑受影响包的类型检查与相关测试；提交在本分支，不推送。`,
 		["cd packages/ai && npx tsc --noEmit -p tsconfig.build.json", "cd packages/ai && node ../../node_modules/vitest/dist/cli.js --run test/transcript-tool-changes.test.ts"]),
 ];
 
