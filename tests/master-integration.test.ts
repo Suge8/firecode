@@ -1433,6 +1433,45 @@ test("子会话不注册只属于交互主会话的功能：横幅、工具渲�
 	expect([fake.commands, fake.tools, fake.shortcuts, fake.entryRenderers].map((table) => table.size)).toEqual([0, 0, 0, 0]);
 });
 
+test("指挥官开着 codemode 时 Worker 也用 codemode：三个 Worker 各在脚本里跑长命令，指挥官自己的脚本照样立即执行", async () => {
+	const harness = await setup(true, { activeTools: ["read", "bash", "edit", "write", "codemode"] });
+	const limitBefore = process.env.PI_CODEMODE_MAX_WORKERS;
+	const started = join(harness.cwd, "started");
+	await mkdir(started);
+	const respond = (context: any) => {
+		const last = context.messages.at(-1);
+		if (last.role === "toolResult") return fauxAssistantMessage("完成");
+		const code = JSON.stringify(last.content).includes("MASTER")
+			? 'return "master ok";'
+			: 'await tools.bash({ command: "touch ' + started + '/$$; sleep 6" });';
+		return fauxAssistantMessage(fauxToolCall("codemode", { code }), { stopReason: "toolUse" });
+	};
+	faux.setResponses(Array.from({ length: 8 }, () => respond));
+	for (const worker of ["w1", "w2", "w3"]) await harness.execute({ action: "start", worker, prompt: "跑长命令", role: "工程师" });
+	// 三个脚本同时在跑，不是排队轮流：长命令只睡 6 秒，3 秒内到齐才算。
+	await until(async () => (await readdir(started)).length === 3, 3_000);
+
+	// 主会话：与 CLI 一样自带内置 codemode，不经池，名额只用宿主缺省的那份。
+	const host = await import(PI_CODING_AGENT_URL) as any;
+	const agentDir = process.env.PI_CODING_AGENT_DIR!;
+	const loader = new host.DefaultResourceLoader({
+		cwd: harness.cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+		extensionFactories: [{ name: "codemode", factory: host.createCodemodeExtension() }],
+	});
+	await loader.reload();
+	const { session } = await host.createAgentSession({ cwd: harness.cwd, agentDir, resourceLoader: loader, sessionManager: host.SessionManager.inMemory(), tools: ["codemode"] });
+	const begin = performance.now();
+	await session.prompt("MASTER 查看进度");
+	const elapsed = performance.now() - begin;
+	const result = session.messages.find((message: any) => message.role === "toolResult");
+	session.dispose();
+	await harness.pool.disposeWorkers();
+	expect(JSON.stringify(result.content)).toContain("master ok");
+	expect(elapsed).toBeLessThan(3_000);
+	// 名额随子会话释放收回：环境变量还原成进程原值。
+	expect(process.env.PI_CODEMODE_MAX_WORKERS).toBe(limitBefore);
+}, 20_000);
+
 test("Worker 会话只注册 checkout 守卫，不暴露 Master 工具面", async () => {
 	directory = await mkdtemp(join(tmpdir(), "firecode-worker-guard-"));
 	const cwd = join(directory, "checkout");
@@ -1835,6 +1874,8 @@ async function setup(activate = true, options: {
 	workerRecorder?: boolean;
 	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string | string[]; use: string; fallback?: string[] }>;
+	/** 指挥官会话激活前的工具集。 */
+	activeTools?: string[];
 } = {}) {
 	directory = await mkdtemp(join(tmpdir(), "firecode-master-sdk-"));
 	const cwd = join(directory, "project");
@@ -1915,7 +1956,7 @@ async function setup(activate = true, options: {
 	let idle = false;
 	const turnRequested = Promise.withResolvers<void>();
 	let starting: any;
-	let activeTools = ["read", "bash", "edit", "write"];
+	let activeTools = options.activeTools ?? ["read", "bash", "edit", "write"];
 	const pi = Object.assign(fake.pi, {
 		getActiveTools: () => [...activeTools],
 		setActiveTools: (next: string[]) => { activeTools = next; },

@@ -64,7 +64,7 @@ Master 调度行为与 Worker 行为的唯一事实源分别是 `prompts/master.
 
 ## 隔离与配置
 
-Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；只用默认四工具，不开 codemode（理由见 `run.ts` 的 `WORKER_TOOLS`）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫放行当前 checkout 与系统临时目录（交付物写在临时目录是正当用途）；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
+Worker 默认加载全部扩展，可由 `workerExcludeExtensions` 按完整路径或 basename 排除；用默认四工具，指挥官开着 codemode 时另加 codemode（同进程共用名额的加开见 `spawn.ts`）。Master 模块在 Worker 会话中只注册 edit/write checkout 守卫，不注册命令、subagents 或生命周期。守卫放行当前 checkout 与系统临时目录（交付物写在临时目录是正当用途）；bash 仍是可信能力（开放它是为了让 Worker 自跑测试；守卫只防误伤，物理隔离要容器或只读挂载，不在本插件范围），最终边界由委派纪律、自测、审查和指挥官验收共同承担。
 
 Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它从 Worker 会话里刚追加的记录增量解析，回合结束时才读一次文件兜底，Master 不解析 checkpoint 内部字段；工具行复用共享纯渲染组件。状态变化经 store 的 onChange 驱动状态栏，UI 只投影事实，不在动作调用点补绘。
 

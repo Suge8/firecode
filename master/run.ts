@@ -11,14 +11,12 @@ import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome
 import { masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
+import { CODEMODE_TOOL } from "../spawn.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, WorkerLive } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
-/**
- * Worker 不开 codemode：宿主让同一进程里所有会话共用两个 codemode 名额，脚本等工具返回时也占着，满额直接报错。
- * Worker 与指挥官同进程，两个 Worker 各跑一条长命令就会占满，codemode only 的指挥官随之一个工具都调不了，连中断都发不出。
- */
+/** 指挥官开着 codemode 时 Worker 也开（on/only 读同一份 settings）；同进程共用的名额由池按子会话加开，见 spawn.ts。 */
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 /** 算作“有输出”的子会话事件：模型 token 流与工具执行；活动列表据此判卡住。 */
 const OUTPUT_EVENTS = new Set(["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]);
@@ -51,7 +49,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 			if (from.model !== atom.model)
 				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name);
 		},
-		tools: WORKER_TOOLS,
+		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
 		contextFiles: true,

@@ -4,6 +4,7 @@ import { basename, dirname } from "node:path";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
+	createCodemodeExtension,
 	DefaultResourceLoader,
 	getAgentDir,
 	hasTrustRequiringProjectResources,
@@ -14,6 +15,7 @@ import {
 	type AgentSession,
 	type ExtensionError,
 	type ExtensionFactory,
+	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
@@ -58,6 +60,32 @@ interface HeldSession {
 	timer?: NodeJS.Timeout;
 	releasing?: Promise<void>;
 	route?: Awaited<ReturnType<typeof createModelRoute>>;
+}
+
+export const CODEMODE_TOOL = "codemode";
+/** 宿主只给 CLI 主会话装内置扩展；要 codemode 的子会话自带一份（不标 builtin：隔离会话关掉扩展时也要在），on/only 读同一份 settings。 */
+const CODEMODE_EXTENSION: InlineExtension = { name: CODEMODE_TOOL, factory: createCodemodeExtension(), replaceable: true };
+/**
+ * 宿主让进程里所有会话共用 codemode 名额（缺省 2，每次调用现读环境变量），脚本等工具返回时也占着，满额排队 60 秒后失败。
+ * 子会话与主会话同进程：不加名额的话，两个子会话各跑一条长命令就能让 codemode only 的主会话连中断都发不出。
+ * 所以每个带 codemode 的子会话另加两个名额（一个运行、一个留给取消后尚未退出的），主会话原有的名额永远不被挤占。
+ */
+const CODEMODE_LIMIT_ENV = "PI_CODEMODE_MAX_WORKERS";
+const HOST_DEFAULT_CODEMODE_WORKERS = 2;
+const CODEMODE_SLOTS_PER_SESSION = 2;
+// 有子会话在用时环境变量由这里独写，都释放后还原成进程里第一次读到的原值（含未设置）；登记跨模块拷贝共享。
+const CODEMODE_SLOTS = processShared("codemode-slots", () => ({ original: process.env[CODEMODE_LIMIT_ENV], sessions: new Set<string>() }));
+
+function trackCodemodeSession(key: string, live: boolean): void {
+	const { original, sessions } = CODEMODE_SLOTS;
+	if (live) sessions.add(key);
+	else if (!sessions.delete(key)) return;
+	if (sessions.size > 0) {
+		const base = Number(original);
+		const limit = Number.isInteger(base) && base > 0 ? base : HOST_DEFAULT_CODEMODE_WORKERS;
+		process.env[CODEMODE_LIMIT_ENV] = String(limit + CODEMODE_SLOTS_PER_SESSION * sessions.size);
+	} else if (original === undefined) delete process.env[CODEMODE_LIMIT_ENV];
+	else process.env[CODEMODE_LIMIT_ENV] = original;
 }
 
 // 单写者登记必须进程唯一，跨模块拷贝共享。
@@ -108,6 +136,7 @@ export class InProcessSessionPool {
 			throw new Error(msg.spawn.missingFile(sessionPath!));
 		if (sessionPath) SESSION_WRITERS.add(sessionPath);
 
+		const codemode = options.tools.includes(CODEMODE_TOOL);
 		let created: AgentSession;
 		let partial: AgentSession | undefined;
 		let route: Awaited<ReturnType<typeof createModelRoute>> | undefined;
@@ -124,6 +153,7 @@ export class InProcessSessionPool {
 				settingsManager,
 				noContextFiles: !options.contextFiles,
 				extensionFactories: [
+					...(codemode ? [CODEMODE_EXTENSION] : []),
 					...(!options.isolated && this.environment.firecode ? [{ name: "firecode", factory: this.environment.firecode, hidden: true }] : []),
 					...(route ? [{ name: "firecode-route", factory: route.extension, hidden: true }] : []),
 				],
@@ -167,6 +197,7 @@ export class InProcessSessionPool {
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
 		const held: HeldSession = { key, session: created, sessionPath, route };
 		this.held.set(key, held);
+		if (codemode) trackCodemodeSession(key, true);
 		return {
 			session: created,
 			prompt: (text) => created.prompt(text),
@@ -233,6 +264,8 @@ export class InProcessSessionPool {
 			} finally {
 				held.session.dispose();
 				held.route?.dispose();
+				// 会话作废、脚本已被中止后才收回名额。
+				trackCodemodeSession(held.key, false);
 				if (held.sessionPath) {
 					SESSION_WRITERS.delete(held.sessionPath);
 					for (const listener of this.releaseListeners) listener(held.sessionPath);
