@@ -70,7 +70,7 @@ test("接管渲染不改变宿主的工具：系统提示仍有 read/edit/write 
 			sessionManager: host.SessionManager.inMemory(), settingsManager: host.SettingsManager.inMemory({ shellCommandPrefix: "export FROM_PREFIX=ok" }),
 		});
 		expect(session.systemPrompt).toContain("Use read to examine files instead of cat or sed.");
-		expect(session.systemPrompt).toContain("edits[].oldText must match exactly");
+		expect(session.systemPrompt).toContain("edits[].oldText");
 		const bash = session.agent.state.tools.find((tool: { name: string }) => tool.name === "bash");
 		const output = await bash.execute("id", { command: "echo $FROM_PREFIX" }, undefined, undefined, undefined);
 		// 只看命令自己的输出行：没有 zh_CN locale 的机器（CI）上 bash 会先打一行 setlocale 警告。

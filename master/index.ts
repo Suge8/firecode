@@ -2,7 +2,8 @@
  * /fire-master 的注册入口：激活与停用、命令、两个工具与生命周期。
  * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts。
  */
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
 import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";

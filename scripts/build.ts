@@ -1,6 +1,6 @@
 /**
  * 发布构建：把运行时代码打成单文件 dist/index.js，提示词复制到 dist 里与源码相同的相对位置。
- * 宿主包由 pi 注入，必须 external；模块用 import.meta.url 定位同目录资源（提示词），打包后它指向 dist/index.js，
+ * 宿主包（`@earendil-works/*` 与 `typebox`）由 pi 注入，必须 external；模块用 import.meta.url 定位同目录资源（提示词），打包后它指向 dist/index.js，
  * 所以构建时对每个含 import.meta.url 的源码模块把它改写成“该模块在 dist 里应在的位置”，源码因此不用为打包改动。
  */
 import { cp, rm } from "node:fs/promises";
@@ -18,7 +18,7 @@ const result = await Bun.build({
 	outdir: DIST,
 	target: "node",
 	format: "esm",
-	external: ["@earendil-works/*"],
+	external: ["@earendil-works/*", "typebox"],
 	plugins: [
 		{
 			name: "import-meta-url",
