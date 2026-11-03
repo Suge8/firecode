@@ -2,7 +2,7 @@
  * 观察会话：进程内 memory 子会话 + 只读工具 + 唯一自定义工具 advise。
  * 系统提示以 prompts/watch.{zh,en}.md 为唯一事实源（整体替换，不受项目文件改写）。
  */
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ExtensionError } from "@earendil-works/pi-coding-agent";
 import type { InProcessSessionPool } from "../spawn.js";
 import type { ModelChain } from "../config.js";

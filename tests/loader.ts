@@ -1,6 +1,6 @@
 /**
- * 在测试里加载 FireCode 模块：扩展运行时由 pi 注入 `@earendil-works/*`，
- * 测试环境没有这层注入，因此把插件目录复制到临时目录并把包名改写到 pi 源码。
+ * 在测试里加载 FireCode 模块：扩展运行时由 pi 注入 `@earendil-works/*` 与 `typebox`，
+ * 测试环境没有这层注入，因此把插件目录复制到临时目录并把包名改写到 pi 源码（typebox 取 pi 自带的那份）。
  */
 import { rmSync } from "node:fs";
 import { chmod, cp, link, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -17,6 +17,7 @@ export const PI_CODING_AGENT_URL = pathToFileURL(join(PI_PACKAGES, "coding-agent
 export const PI_AI_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/index.ts")).href;
 export const PI_AI_COMPAT_URL = pathToFileURL(join(PI_PACKAGES, "ai/src/compat.ts")).href;
 export const PI_TUI_URL = pathToFileURL(join(PI_PACKAGES, "tui/src/index.ts")).href;
+const TYPEBOX_URL = pathToFileURL(Bun.resolveSync("typebox", join(PI_PACKAGES, "coding-agent"))).href;
 
 /** 测试默认中文：配置未写 language 时 FireCode 跟随系统 locale，这里固定它，断言才与机器无关。 */
 process.env.LC_ALL = "zh_CN.UTF-8";
@@ -84,7 +85,8 @@ async function rewriteImports(directory: string): Promise<void> {
 		const source = (await readFile(path, "utf8"))
 			.replaceAll('"@earendil-works/pi-coding-agent"', JSON.stringify(PI_CODING_AGENT_URL))
 			.replaceAll('"@earendil-works/pi-ai"', JSON.stringify(PI_AI_URL))
-			.replaceAll('"@earendil-works/pi-tui"', JSON.stringify(PI_TUI_URL));
+			.replaceAll('"@earendil-works/pi-tui"', JSON.stringify(PI_TUI_URL))
+			.replaceAll('"typebox"', JSON.stringify(TYPEBOX_URL));
 		await writeFile(path, source);
 	}
 }

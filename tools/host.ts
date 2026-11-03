@@ -10,6 +10,8 @@ import {
 	AssistantMessageComponent,
 	CustomMessageComponent,
 	getMarkdownTheme,
+	keyHint,
+	keyText,
 	type CustomEntry,
 	type EntryRenderer,
 	type Theme,
@@ -329,7 +331,7 @@ export class ChatMirror {
 	/** 自定义记录（如轮记录）：有渲染器的以宿主 CustomEntry 的同一形态放进聊天树，没有的不显示（与宿主一致）。 */
 	private addEntry(entry: { customType: string; data?: unknown; timestamp: string }): boolean {
 		const renderer = this.sources.entryRenderer(entry.customType);
-		const component = renderer?.(entry as CustomEntry, { expanded: false }, this.sources.theme);
+		const component = renderer?.(entry as CustomEntry, { expanded: false, keyText, keyHint }, this.sources.theme);
 		if (!component) return false;
 		this.chat.addChild(entryShell(component));
 		return true;

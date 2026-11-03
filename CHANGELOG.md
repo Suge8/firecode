@@ -6,7 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **Breaking:** Model settings for roles, reviewers, the advisor and watcher now accept an atom or ordered array. Remove role `fallback` fields and reviewer `{ model, fallback }` objects. Provider prefixes are optional. Pi 1.4.0 or later is required.
+- **Breaking:** Model settings for roles, reviewers, the advisor and watcher now accept an atom or ordered array. Remove role `fallback` fields and reviewer `{ model, fallback }` objects. Provider prefixes are optional.
+- **Breaking:** Pi 1.5.0 or later is required. Tool schemas import TypeBox from `typebox`, which Pi provides to extensions, instead of the re-export Pi 1.5 dropped from `@earendil-works/pi-ai`.
 - **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
 
 ### Fixed

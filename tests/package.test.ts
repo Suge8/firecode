@@ -38,7 +38,7 @@ test("npm pack ships only the build output and user-facing files", async () => {
 test("bundle leaves only Node built-ins and host packages to be resolved at load time", async () => {
 	packedPaths();
 	const bundle = await Bun.file(join(FIRECODE_DIR, "dist/index.js")).text();
-	const bare = transpiler.scan(bundle).imports.map(({ path }) => path).filter((path) => !path.startsWith("node:") && !path.startsWith("@earendil-works/"));
+	const bare = transpiler.scan(bundle).imports.map(({ path }) => path).filter((path) => !path.startsWith("node:") && !path.startsWith("@earendil-works/") && path !== "typebox");
 
 	expect(bare).toEqual([]);
 });
