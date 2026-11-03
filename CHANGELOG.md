@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **Breaking:** Model settings for roles, reviewers, the advisor and watcher now accept an atom or ordered array. Remove role `fallback` fields and reviewer `{ model, fallback }` objects. Provider prefixes are optional.
 - **Breaking:** Pi 1.5.0 or later is required. Tool schemas import TypeBox from `typebox`, which Pi provides to extensions, instead of the re-export Pi 1.5 dropped from `@earendil-works/pi-ai`.
+- Master Workers use codemode again when the Master session has it on. Each subsession with codemode raises Pi's process-wide codemode worker limit (`PI_CODEMODE_MAX_WORKERS`) by two while it lives, so Workers running long scripts never take the slots the Master needs; the variable returns to its original value once they are released.
 - **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
 
 ### Fixed
