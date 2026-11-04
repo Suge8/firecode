@@ -15,7 +15,7 @@ import { parseJsonc } from "../../jsonc.ts";
 import { killTree, onJsonLines, parseList, pool, readJsonl, REPO, startPi, USER_AGENT_DIR } from "../delegation/lib.ts";
 import { type Case, selectCases } from "./cases.ts";
 import { copyRepo, fixtureKey, fixtureRepo, writeSession } from "./fixture.ts";
-import { fixtureHost, git, physical, quotaBlock, quotaSnapshot, USER_MODELS, WORK } from "./lib.ts";
+import { fixtureHost, git, physical, quotaSnapshot, USER_MODELS, WORK } from "./lib.ts";
 import { type Request, startMeter } from "./meter.ts";
 
 const MINUTE = 60_000;
@@ -45,8 +45,6 @@ for (const key of ["runs", "concurrency"] as const)
 	if (!Number.isInteger(Number(values[key])) || Number(values[key]) < 1) throw new Error(`${key} 必须是正整数`);
 if (values.budget && !(Number(values.budget) > 0)) throw new Error("budget 必须大于 0");
 const mode = values.mode!;
-const initialBlock = await quotaBlock([...models, ...(mode === "loop" ? [values.executor!, values.advisor!] : [])].map((atom) => physical(atom).model));
-if (initialBlock) throw new Error(`停止付费评测：${initialBlock}`);
 const code = git(REPO, "rev-parse", values.code!).trim();
 const label = values.label ?? `${code.slice(0, 7)}-${mode}`;
 if (!/^[\w.-]+$/u.test(label) || label === "." || label === "..") throw new Error("label 只能含字母、数字、点、连字符与下划线");
@@ -150,11 +148,6 @@ async function runOne(item: Case, reviewer: string, n: number): Promise<void> {
 		const previous = JSON.parse(readFileSync(join(dir, "result.json"), "utf8"));
 		if (previous.recipe !== recipe) throw new Error(`${id} 的评测输入已变化；另取 label，或 --force 保留旧结果后重跑`);
 		if (previous.status === "done") return;
-	}
-	const block = await quotaBlock([reviewer, ...(mode === "loop" ? [values.executor!, values.advisor!] : [])].map((atom) => physical(atom).model));
-	if (block) {
-		stopped ||= block;
-		for (const running of active) killTree(running);
 	}
 	if (stopped) return;
 	if (existsSync(dir)) {

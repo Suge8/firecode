@@ -1,4 +1,4 @@
-// 审查评测的共享底座：工作目录、被审仓库来源、git 操作、额度闸门。
+// 审查评测的共享底座：工作目录、被审仓库来源、git 操作、额度快照。
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -19,10 +19,7 @@ export function git(cwd: string, ...args: string[]): string {
 }
 
 const GATEWAY = process.env.MAGPIE_URL ?? "http://127.0.0.1:3425/v1";
-/** 订阅额度的停止线，审查与裁判共用。Codex 超额后按 credit 计费，不设停止线；只保 Claude 5 小时窗口（主会话也靠它）。 */
-export const QUOTA_FLOOR = {
-	claude: { window: "5 hours", min: 20 },
-};
+/** 不设额度停止线：网关自己换号，调用真失败时按失败记录。快照只记进批次记录，供核对消耗。 */
 type Quotas = Array<{ provider: string; windows: Array<{ name: string; remaining: number }> }>;
 
 export async function quotaSnapshot(): Promise<Record<string, number>> {
@@ -33,33 +30,6 @@ export async function quotaSnapshot(): Promise<Record<string, number>> {
 	if (!response.ok) throw new Error(`额度查询 HTTP ${response.status}`);
 	const { data } = await response.json() as { data: Quotas };
 	return Object.fromEntries(data.flatMap((entry) => entry.windows.map((window) => [`${entry.provider} ${window.name}`, window.remaining])));
-}
-
-let owners: Promise<Map<string, string>> | undefined;
-
-/**
- * 停止线只看这次调用会用到的订阅（网关 /models 的 owned_by）：某家低于停止线时另一家的模型照常可用。
- * 查不到归属的模型按全部订阅检查；查询失败或窗口缺失一律停。
- */
-export async function quotaBlock(models: string[]): Promise<string | undefined> {
-	try {
-		const key = USER_MODELS.providers.magpie?.apiKey;
-		owners ??= fetch(`${GATEWAY}/models`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(10_000) })
-			.then(async (response) => new Map(((await response.json()) as { data: Array<{ id: string; owned_by: string }> }).data.map((entry) => [entry.id, entry.owned_by])));
-		const map = await owners;
-		const used = new Set(models.map((model) => map.get(model)));
-		const quotas = await quotaSnapshot();
-		for (const [provider, floor] of Object.entries(QUOTA_FLOOR)) {
-			if (!used.has(provider) && !used.has(undefined)) continue;
-			const remaining = quotas[`${provider} ${floor.window}`];
-			if (!Number.isFinite(remaining)) return `额度窗口缺失：${provider} ${floor.window}`;
-			if (remaining! < floor.min) return `${provider} ${floor.window} 剩余 ${remaining}% < ${floor.min}%`;
-		}
-	} catch (error) {
-		owners = undefined;
-		return `读不到额度：${error}`;
-	}
-	return undefined;
 }
 
 /** 被审代码的宿主版本只影响其验证命令；运行 /fire-review 的 pi 仍由 delegation/lib.ts 选取。 */

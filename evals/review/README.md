@@ -24,7 +24,7 @@ bun evals/review/report.ts baseline --set hold --threshold 20,8   # 按分数重
 
 先用少量 `--cases id,id` 跑通并人工核实判分，再跑整批。模型名从本机 `models.json` 解析；省略供应商时取首个段边界匹配项。用完整的 `provider/model/thinking` 原子固定供应商；运行结果记录实际使用的模型。`--models` 是比较矩阵，不代表生产推荐。
 
-每次派审查和裁判前查 Magpie 的 `/v1/magpie/quotas`（`MAGPIE_URL` 可覆盖 `/v1` 根地址）。本次调用用到 Claude 模型且 Claude 5 小时剩余低于 20%，或查询失败/窗口缺失，就停止派新调用；Codex 超额后按 credit 计费，不设停止线。预算在每次运行完成后检查，在飞的运行会收尾，可能超出预算。
+不设额度停止线：Magpie 网关自己换号，Codex 超额后按 credit 计费；调用真失败时按失败记录。每批前后读一次 Magpie 的 `/v1/magpie/quotas`（`MAGPIE_URL` 可覆盖 `/v1` 根地址）记进批次记录，供核对消耗。预算在每次运行完成后检查，在飞的运行会收尾，可能超出预算。
 
 同批候选交错运行；一个 label 同时只开一个进程。已有完整结果跳过；输入变化则拒绝复用。`--force` 把旧运行移到 `attempts/` 后重跑。异常退出留下 `.running` 时，先确认原进程已退出再移除该目录。
 

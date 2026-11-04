@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { killTree, onJsonLines, pool, startPi, USER_AGENT_DIR } from "../delegation/lib.ts";
 import { type Case, caseById } from "./cases.ts";
 import { copyRepo, fixtureKey, fixtureRepo } from "./fixture.ts";
-import { cliModel, fixtureHost, git, physical, quotaBlock, SOURCES, WORK } from "./lib.ts";
+import { cliModel, fixtureHost, git, SOURCES, WORK } from "./lib.ts";
 
 export const CATEGORIES = ["bug", "requirement", "convention", "questionable", "verification", "nitpick"] as const;
 export type Category = (typeof CATEGORIES)[number];
@@ -130,8 +130,6 @@ interface PiResult {
 
 /** 一次性的 pi 调用：不加载扩展、技能与上下文文件，用户的 Agent 目录只读（不落会话）。 */
 async function ask(model: string, system: string, prompt: string, o: { cwd: string; tools?: string; timeoutMin: number; env?: Record<string, string> }): Promise<PiResult> {
-	const block = await quotaBlock([physical(model).model]);
-	if (block) throw new Error(`停止裁判调用：${block}`);
 	const agent = join(WORK, "judge-agent");
 	if (!existsSync(agent)) {
 		mkdirSync(agent, { recursive: true });
