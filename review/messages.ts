@@ -162,11 +162,11 @@ export const msg = defineMessages({
 			materialLabel: { passed: "末轮审查结论：", max_rounds: "末轮未通过的发现：", advisor_stop: "顾问裁决：" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由；4) 审查提出的「需用户裁决」事项——逐条原样列出，交用户决定。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
+					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由；4) 审查提出的「需用户裁决」事项——逐条原样列出，交用户决定。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
 				max_rounds: (rounds: number) =>
-					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办；5) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办；5) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
 				advisor_stop: (rounds: number) =>
-					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步；4) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步；4) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
 			},
 		},
 		reviewer: {
@@ -288,11 +288,11 @@ export const msg = defineMessages({
 			materialLabel: { passed: "Final review verdict:", max_rounds: "Final round findings:", advisor_stop: "Advisor ruling:" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why; 4) items the review marked "Needs user decision" — list each as raised, for the user to decide. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why; 4) items the review marked "Needs user decision" — list each as raised, for the user to decide. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not change code or run tools; end this turn with the final reply.`,
 				max_rounds: (rounds: number) =>
-					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next; 5) list the items marked "Needs user decision" and the suggestions left unaddressed. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
+					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next; 5) list the items marked "Needs user decision" and the suggestions left unaddressed. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
 				advisor_stop: (rounds: number) =>
-					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step; 4) list the items marked "Needs user decision" and the suggestions left unaddressed. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step; 4) list the items marked "Needs user decision" and the suggestions left unaddressed. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not change code or run tools; end this turn with the final reply.`,
 			},
 		},
 		reviewer: {
