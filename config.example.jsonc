@@ -62,7 +62,7 @@
 	"review": {
 		"advisor": ["claude-opus-5-5/high", "gpt-6-astra/high"],
 		"reviewers": [["gpt-6.1-terra/low", "claude-sonnet-5-5/low"]],
-		"maxRounds": 5,
+		"maxRounds": 3, // two repair rounds get most of the gain; later rounds mostly add noise
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
 		"tools": ["read", "grep", "find", "ls", "bash"]
