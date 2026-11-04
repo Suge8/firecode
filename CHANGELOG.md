@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
 - `/fire-review` reviewers score every finding with the condition that triggers it, a frequency (0–10) and an impact (1–10) instead of High/Medium/Low. Only findings with frequency × impact ≥ 20, or frequency ≥ 1 and impact ≥ 8, send the work back for a repair round; findings below that, or whose condition cannot be stated, are listed as suggestions in the result card and the wrap-up. Conflicts in the request itself are listed under "Needs user decision" instead of being fixed. Reviewers read the ticket or document a pointer-only request refers to, and the advisor now sees the original request.
 - `/fire-review` reviewers reproduce a finding when they can and quote the command and its output; otherwise they give the trigger path. From round 2 a review re-runs the earlier findings' commands and checks the repair for regressions instead of re-auditing the whole task, and the wrap-up names finding patterns worth turning into a lint rule or type check. The template's `review.maxRounds` is now 3.
+- When a reviewer seat's first-choice model is unavailable and a later candidate in its chain does the review, the result card and the Master's review event name that model and mark it as a fallback. The template's reviewer chain now ends with `claude-opus-5-5/low` instead of `claude-sonnet-5-5/low`.
 
 ### Fixed
 

@@ -43,6 +43,8 @@ export interface ReviewerResult extends ModelAtom {
 	summary: string;
 	/** 全文：摘要+证据锚点、阻塞发现、需用户裁决与建议区（门槛以下的发现收在其中）/ error 的故障说明（模型链中各候选的原因）。 */
 	details: string;
+	/** 席位首选不可用、由链里的备用模型审出的票：备用模型漏检率高得多，它的结论在卡片与 Master 事件里都要标明。 */
+	fallback?: boolean;
 }
 
 /** 审查中席位的结果；null 即还在审。 */
@@ -437,9 +439,10 @@ export function summaryKindOf(round: ReviewRound | undefined): SummaryKind {
 
 function passSummary(passed: ReviewerResult[]) {
 	const fallback = msg.summary.passedFallback;
-	const lines = passed.length === 1
-		? [passBody(passed[0]?.summary ?? "") || fallback]
-		: passed.map((item) => msg.summary.modelBullet(shortModel(item.model), passBody(item.summary) || fallback));
+	const only = passed.length === 1 ? passed[0]! : undefined;
+	const lines = only
+		? [passBody(only.summary) || fallback, ...(only.fallback ? [msg.summary.fallbackReviewer(reviewerName(only))] : [])]
+		: passed.map((item) => msg.summary.modelBullet(reviewerName(item), passBody(item.summary) || fallback));
 	const extra = ([[msg.terms.decisions, DECISIONS_HEADING], [msg.terms.suggestions, SUGGESTIONS_HEADING]] as const).flatMap(([title, heading]) => {
 		const items = [...new Set(passed.flatMap((item) => splitSection(item.details, heading)))];
 		return items.length ? ["", `## ${title}`, ...items.map((item) => `- ${item}`)] : [];
@@ -462,6 +465,11 @@ function passBody(summary: string) {
 
 export function shortModel(model: string) {
 	return model.split("/").at(-1) || model;
+}
+
+/** 审查者在卡片与事件里的名字：备用模型带标记。 */
+export function reviewerName(item: Pick<ReviewerResult, "model" | "fallback">) {
+	return item.fallback ? msg.summary.fallbackName(shortModel(item.model)) : shortModel(item.model);
 }
 
 function appendClosedFindings(summary: string, history: ReviewRound[], beforeRound: number) {
@@ -487,5 +495,5 @@ function appendClosedFindings(summary: string, history: ReviewRound[], beforeRou
 }
 
 function modelLabel(item: ReviewerResult) {
-	return msg.summary.modelSection(item.index + 1, shortModel(item.model));
+	return msg.summary.modelSection(item.index + 1, reviewerName(item));
 }

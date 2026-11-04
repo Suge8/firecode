@@ -108,9 +108,9 @@ export async function createModelRoute(
 		const selected = !restart && failure === undefined && state.current && list.find(({ model }) => key(model) === key(state.current!.model)) || available[0];
 		if (!selected) {
 			const reasons = chain.flatMap((atom) => {
-				const matches = list.filter((entry) => entry.model.id === atom.model || key(entry.model) === atom.model || key(entry.model).endsWith(`/${atom.model}`));
+				const matches = matchModels(list.map((entry) => entry.model), atom.model);
 				if (!matches.length) return [msg.spawn.modelUnavailable(atom.model)];
-				return matches.map(({ model }) => {
+				return matches.map((model) => {
 					const name = key(model);
 					const failure = cooldowns.get(name);
 					const reason = attempted.get(name);

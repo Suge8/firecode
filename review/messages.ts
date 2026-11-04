@@ -132,6 +132,8 @@ export const msg = defineMessages({
 		summary: {
 			passedFallback: "审查通过。",
 			modelBullet: (model: string, body: string) => `• ${model}：${body}`,
+			fallbackName: (model: string) => `${model}（备用）`,
+			fallbackReviewer: (name: string) => `审查模型：${name}，席位首选不可用`,
 			noVerdict: "有审查者没给出结论，本轮不算通过：",
 			modelSection: (index: number, model: string) => `${zhTerms.model} ${index} · ${model}`,
 			closedHeading: "**本次收口的问题**：",
@@ -258,6 +260,8 @@ export const msg = defineMessages({
 		summary: {
 			passedFallback: "Review passed.",
 			modelBullet: (model: string, body: string) => `• ${model}: ${body}`,
+			fallbackName: (model: string) => `${model} (fallback)`,
+			fallbackReviewer: (name: string) => `Reviewed by ${name}; the seat's first choice was unavailable`,
 			noVerdict: "A reviewer gave no verdict, so this round does not pass:",
 			modelSection: (index: number, model: string) => `${enTerms.model} ${index} · ${model}`,
 			closedHeading: "**Issues closed in this check**:",

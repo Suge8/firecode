@@ -59,9 +59,11 @@
 
 	// Review only calls models when the user or the Master starts it.
 	// A pass needs a PASS from every reviewer; a model failure tries the next candidate in its chain.
+	// A verdict from a later candidate is marked "fallback" on the card and in the Master event: fallback reviewers miss far more defects.
+	// The Claude tail is the reviewer for Claude-only subscriptions; Opus low finds about twice what Sonnet low does.
 	"review": {
 		"advisor": ["claude-opus-5-5/high", "gpt-6-astra/high"],
-		"reviewers": [["gpt-6.1-terra/low", "claude-sonnet-5-5/low"]],
+		"reviewers": [["gpt-6.1-terra/low", "claude-opus-5-5/low"]],
 		"maxRounds": 3, // two repair rounds get most of the gain; later rounds mostly add noise
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,

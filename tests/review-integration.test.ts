@@ -1169,6 +1169,8 @@ describe("review cards and degraded paths", () => {
 		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
 		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
 		expect(card).toContain("核对完毕");
+		// 链首不可用、备用模型审出的通过不能冒充首选的通过。
+		expect(card).toContain("审查模型：three（备用），席位首选不可用");
 		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/three");
 	}, 20_000);
 

@@ -25,8 +25,9 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 		cwd: options.cwd,
 		signal: options.signal,
 	});
-	const parsed = result.kind === "output" ? parseReviewOutput(result.text) : processFailure(result);
-	return { index: options.index, ...(result.kind === "output" ? result.atom : options.config.models[0]), ...parsed };
+	if (result.kind !== "output") return { index: options.index, ...options.config.models[0], ...processFailure(result) };
+	const fallback = !(await options.pool.isChainHead(options.config.models, result.atom.model));
+	return { index: options.index, ...result.atom, ...(fallback ? { fallback } : {}), ...parseReviewOutput(result.text) };
 }
 
 /**
