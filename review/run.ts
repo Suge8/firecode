@@ -16,7 +16,6 @@ import { type CheckpointWriter, sealCheckpoint } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, type PromptLayers } from "./prompt.js";
-
 import { runReviewer } from "./reviewer.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import type { ReviewModelConfig } from "./session.js";
