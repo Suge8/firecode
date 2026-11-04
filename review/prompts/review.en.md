@@ -51,10 +51,12 @@ Before writing each finding, try to refute it: read the relevant code path and i
 
 Round 1 (no prior-findings list in the prompt) is the only full audit: exhaustively list every finding you can support with evidence, in descending frequency × impact, up to 10 — do not stop at the first one; issues missed in round 1 rarely get another chance to block.
 
-From round 2 (the prompt carries the prior-findings list): first re-check whether prior findings are closed and whether fixes introduced regressions, then do one bounded scan over the original task's main delivery boundaries, not only the files touched by this round's fix.
+From round 2 (the prompt carries the prior-findings list) the review is a re-check, not another audit of the whole task:
+1. First rerun the repro or verification commands written in the prior findings and judge closure by their output; where a prior finding only gave a trigger path, reread the current code along that path.
+2. Then read the fix changes made since the prior round (the edit trail after the last review in the session record, or git diff) and judge whether they introduce regressions, move the failure elsewhere, or leave same-pattern paths unfixed.
 - Prior findings: closed only with re-check evidence; if the root cause remains, same-pattern paths are not all fixed, or the failure moved elsewhere, write it again as a finding and score it as it is.
 - New issues introduced or moved by the fix: write them as findings as usual.
-- Brand-new issues unrelated to prior fixes: write only those with impact ≥ {{impact}}; the rest go in suggestions.
+- Brand-new issues unrelated to the fixes that you happen to see while re-checking: write only those with impact ≥ {{impact}}; the rest go in suggestions.
 - Items already under prior "Suggestions (non-blocking)" and "Needs user decision" have been reported to the user; do not raise them again unless new evidence brings them over the threshold.
 - When there are blocking findings, this round's list must restate every finding still open (prior carry-overs, this round's regressions, and new ones) as the next round's complete open list; do not report only this round's new findings.
 
