@@ -209,7 +209,7 @@ function checkVerdicts(item: Case, blocking: Candidate[], verdicts: Array<Omit<F
 		const entries = verdicts.filter((entry) => entry.n === index + 1);
 		if (entries.length !== 1) throw new Error(`裁判漏判或重复：${index + 1}`);
 		const verdict = entries[0]!;
-		if (!CATEGORIES.includes(verdict.category) || !["yes", "no", "unsure"].includes(verdict.valid)) throw new Error("裁判类别不合契约");
+		if (!CATEGORIES.includes(verdict.category) || !["yes", "no", "unsure"].includes(verdict.valid)) throw new Error(`裁判类别不合契约：${verdict.category}/${verdict.valid}`);
 		if (verdict.truth && !item.truth.some((truth) => truth.id === verdict.truth)) throw new Error(`未知真值：${verdict.truth}`);
 		if (verdict.trap && !item.traps?.some((trap) => trap.id === verdict.trap)) throw new Error(`未知陷阱：${verdict.trap}`);
 		if (verdict.truth && verdict.valid !== "yes") throw new Error("命中真值与判假冲突");

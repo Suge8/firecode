@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 // 汇总：按（批次, 审查模型）出一张表，可按集合过滤。
-//   bun report.ts <label[,label…]> [--set opt|hold|all]
+//   bun report.ts <label[,label…]> [--set opt|hold|all] [--runs N] [--union 模型a,模型b]
+//   --runs N 只取每个（用例, 审查模型）的前 N 次运行，让运行次数不同的批次用同一分母比较。
+//   --union 把同一批次、同一用例、同一运行序号的两个审查模型合成一个双席位（发现取并集，墙钟取慢者，花费相加），离线估两席位的收益。
 // 口径（阻塞发现 = FAIL 票里“发现”小节，建议区不计）：
 //   命中率 = 被阻塞发现对上的真值数 / 缺陷用例的真值总数（每次运行分别计，再合计）；建议区 = 只出现在建议区的真值。
 //   误报率 = 判为不成立的阻塞发现 / 全部阻塞发现；吹毛求疵率 = 类别不属于 bug、requirement、convention 的阻塞发现 / 全部阻塞发现；
@@ -16,7 +18,9 @@ import { caseById } from "./cases.ts";
 import type { Finding, RoundJudgement } from "./judge.ts";
 import { WORK } from "./lib.ts";
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { set: { type: "string", default: "all" }, threshold: { type: "string" }, cases: { type: "string" } } });
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { set: { type: "string", default: "all" }, threshold: { type: "string" }, cases: { type: "string" }, runs: { type: "string" }, union: { type: "string" } } });
+const maxRun = values.runs ? Number(values.runs) : Infinity;
+const union = parseList(values.union);
 /** --threshold 20,8：按分数重算哪些发现阻塞（扫描门槛用）；没有分数的旧契约发现照原样。 */
 const threshold = values.threshold?.split(",").map(Number);
 const onlyCases = parseList(values.cases);
@@ -31,6 +35,7 @@ interface Run {
 	label: string;
 	case: string;
 	reviewer: string;
+	run: number;
 	mode: string;
 	status: string;
 	wallSec: number;
@@ -56,6 +61,7 @@ for (const label of labels) {
 		const result = JSON.parse(readFileSync(file, "utf8"));
 		if (values.set !== "all" && result.set !== values.set) continue;
 		if (onlyCases && !onlyCases.includes(result.case)) continue;
+		if (result.run > maxRun) continue;
 		const judge = join(root, name, "judge.json");
 		const tokens = Object.values(result.usage as Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>)
 			.reduce((sum, row) => sum + row.input + row.output + row.cacheRead + row.cacheWrite, 0);
@@ -74,6 +80,25 @@ const median = (values: number[]) => {
 };
 const p90 = (values: number[]) => (values.length ? [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.ceil(values.length * 0.9) - 1)]! : 0);
 const NITPICK = new Set(["verification", "nitpick", "questionable"]);
+
+if (union) {
+	const [a, b] = union;
+	for (const run of runs.filter((entry) => entry.reviewer === a)) {
+		const other = runs.find((entry) => entry.reviewer === b && entry.label === run.label && entry.case === run.case && entry.run === run.run);
+		if (!other) continue;
+		const mine = run.judged?.find((round) => round.round === 1);
+		const theirs = other.judged?.find((round) => round.round === 1);
+		const judged = mine && theirs ? [{
+			round: 1, findings: [...mine.findings, ...theirs.findings], suggested: [...mine.suggested, ...theirs.suggested],
+			decided: [...(mine.decided ?? []), ...(theirs.decided ?? [])],
+		}] : undefined;
+		runs.push({
+			...run, reviewer: `${a}+${b}`, status: run.status === "done" && other.status === "done" ? "done" : "partial", wallSec: Math.max(run.wallSec, other.wallSec),
+			cost: run.cost + other.cost, tokens: run.tokens + other.tokens, stalled: run.stalled || other.stalled, meterComplete: run.meterComplete && other.meterComplete, judged,
+			rounds: [{ round: 1, result: run.rounds[0]?.result === "failed" || other.rounds[0]?.result === "failed" ? "failed" : "passed" }],
+		});
+	}
+}
 
 const groups = new Map<string, Run[]>();
 for (const run of runs) groups.set(`${run.label} | ${run.reviewer}`, [...(groups.get(`${run.label} | ${run.reviewer}`) ?? []), run]);
