@@ -18,10 +18,9 @@ export function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", cwd, "-c", "user.name=eval", "-c", "user.email=eval@example.com", ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
 }
 
-/** 任一订阅低于停止线，或查询失败/窗口缺失，就停止付费调用；审查与裁判共用。 */
 const GATEWAY = process.env.MAGPIE_URL ?? "http://127.0.0.1:3425/v1";
+/** 订阅额度的停止线，审查与裁判共用。Codex 超额后按 credit 计费，不设停止线；只保 Claude 5 小时窗口（主会话也靠它）。 */
 export const QUOTA_FLOOR = {
-	codex: { window: "7 days", min: 15 },
 	claude: { window: "5 hours", min: 20 },
 };
 type Quotas = Array<{ provider: string; windows: Array<{ name: string; remaining: number }> }>;
@@ -36,15 +35,28 @@ export async function quotaSnapshot(): Promise<Record<string, number>> {
 	return Object.fromEntries(data.flatMap((entry) => entry.windows.map((window) => [`${entry.provider} ${window.name}`, window.remaining])));
 }
 
-export async function quotaBlock(): Promise<string | undefined> {
+let owners: Promise<Map<string, string>> | undefined;
+
+/**
+ * 停止线只看这次调用会用到的订阅（网关 /models 的 owned_by）：某家低于停止线时另一家的模型照常可用。
+ * 查不到归属的模型按全部订阅检查；查询失败或窗口缺失一律停。
+ */
+export async function quotaBlock(models: string[]): Promise<string | undefined> {
 	try {
+		const key = USER_MODELS.providers.magpie?.apiKey;
+		owners ??= fetch(`${GATEWAY}/models`, { headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(10_000) })
+			.then(async (response) => new Map(((await response.json()) as { data: Array<{ id: string; owned_by: string }> }).data.map((entry) => [entry.id, entry.owned_by])));
+		const map = await owners;
+		const used = new Set(models.map((model) => map.get(model)));
 		const quotas = await quotaSnapshot();
 		for (const [provider, floor] of Object.entries(QUOTA_FLOOR)) {
+			if (!used.has(provider) && !used.has(undefined)) continue;
 			const remaining = quotas[`${provider} ${floor.window}`];
 			if (!Number.isFinite(remaining)) return `额度窗口缺失：${provider} ${floor.window}`;
 			if (remaining! < floor.min) return `${provider} ${floor.window} 剩余 ${remaining}% < ${floor.min}%`;
 		}
 	} catch (error) {
+		owners = undefined;
 		return `读不到额度：${error}`;
 	}
 	return undefined;

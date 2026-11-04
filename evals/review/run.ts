@@ -45,7 +45,7 @@ for (const key of ["runs", "concurrency"] as const)
 	if (!Number.isInteger(Number(values[key])) || Number(values[key]) < 1) throw new Error(`${key} 必须是正整数`);
 if (values.budget && !(Number(values.budget) > 0)) throw new Error("budget 必须大于 0");
 const mode = values.mode!;
-const initialBlock = await quotaBlock();
+const initialBlock = await quotaBlock([...models, ...(mode === "loop" ? [values.executor!, values.advisor!] : [])].map((atom) => physical(atom).model));
 if (initialBlock) throw new Error(`停止付费评测：${initialBlock}`);
 const code = git(REPO, "rev-parse", values.code!).trim();
 const label = values.label ?? `${code.slice(0, 7)}-${mode}`;
@@ -151,7 +151,7 @@ async function runOne(item: Case, reviewer: string, n: number): Promise<void> {
 		if (previous.recipe !== recipe) throw new Error(`${id} 的评测输入已变化；另取 label，或 --force 保留旧结果后重跑`);
 		if (previous.status === "done") return;
 	}
-	const block = await quotaBlock();
+	const block = await quotaBlock([reviewer, ...(mode === "loop" ? [values.executor!, values.advisor!] : [])].map((atom) => physical(atom).model));
 	if (block) {
 		stopped ||= block;
 		for (const running of active) killTree(running);
