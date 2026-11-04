@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Master Workers use codemode again when the Master session has it on. Each subsession with codemode raises Pi's process-wide codemode worker limit (`PI_CODEMODE_MAX_WORKERS`) by two while it lives, so Workers running long scripts never take the slots the Master needs; the variable returns to its original value once they are released.
 - **Breaking:** Review checkpoints use a new format; after upgrading, restart any review that was in progress with `/fire-review`.
 - `/fire-review` reviewers score every finding with the condition that triggers it, a frequency (0–10) and an impact (1–10) instead of High/Medium/Low. Only findings with frequency × impact ≥ 20, or frequency ≥ 1 and impact ≥ 8, send the work back for a repair round; findings below that, or whose condition cannot be stated, are listed as suggestions in the result card and the wrap-up. Conflicts in the request itself are listed under "Needs user decision" instead of being fixed. Reviewers read the ticket or document a pointer-only request refers to, and the advisor now sees the original request.
+- `/fire-review` reviewers reproduce a finding when they can and quote the command and its output; otherwise they give the trigger path. From round 2 a review re-runs the earlier findings' commands and checks the repair for regressions instead of re-auditing the whole task, and the wrap-up names finding patterns worth turning into a lint rule or type check. The template's `review.maxRounds` is now 3.
 
 ### Fixed
 
