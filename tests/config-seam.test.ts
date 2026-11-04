@@ -179,11 +179,15 @@ async function seedHarness(options: { configJsonc: string | null; subsession?: b
 	const { registerFirecode } = await loadFirecodeModule("index.ts", loadOptions) as any;
 	const { CONFIG_PATH } = await loadFirecodeModule("config-file.ts", loadOptions) as { CONFIG_PATH: string };
 	await options.beforeRegister?.(CONFIG_PATH);
-	const fake = fakePi({ registerProvider() {} });
-	registerFirecode(fake.pi, options.subsession ?? false);
+	const register = () => {
+		const instance = fakePi({ registerProvider() {} });
+		registerFirecode(instance.pi, options.subsession ?? false);
+		return instance;
+	};
+	let fake = register();
 	const notices: [string, string][] = [];
 	const agentDir = dirname(dirname(dirname(CONFIG_PATH)));
-	const sessionStart = async (sessionId = "test-session") => {
+	const sessionStart = async () => {
 		const environment = { ...process.env };
 		try {
 			for (const key of Object.keys(process.env)) delete process.env[key];
@@ -194,29 +198,34 @@ async function seedHarness(options: { configJsonc: string | null; subsession?: b
 				hasUI: options.hasUI ?? true,
 				cwd: "/tmp",
 				ui: new Proxy({ notify: (message: string, level: string) => notices.push([level, message]) }, { get: (target, key) => (target as any)[key] ?? (() => {}) }),
-				sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => sessionId },
+				sessionManager: { getBranch: () => [], getEntries: () => [], getSessionName: () => undefined, getSessionId: () => "test-session" },
 			});
 		} finally {
 			for (const key of Object.keys(process.env)) delete process.env[key];
 			Object.assign(process.env, environment);
 		}
 	};
-	return { CONFIG_PATH, fake, notices, sessionStart };
+	/** 宿主的 reload、新建与切换会话都会重新执行扩展工厂：新实例只收到自己的一次 session_start。 */
+	const reload = async () => {
+		fake = register();
+		await sessionStart();
+	};
+	return { CONFIG_PATH, get fake() { return fake; }, notices, sessionStart, reload };
 }
 
-test("扩展加载时配置缺失：主会话写入随包模板，本次会话即按新配置生效，提示只出现一次", async () => {
-	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null });
+test("扩展加载时配置缺失：主会话写入随包模板，本次会话即按新配置生效，生成提示只在这次启动出现", async () => {
+	const { CONFIG_PATH, notices, sessionStart, reload } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
 	const warning = "角色没有可用模型：engineer: claude-opus-5-5, gpt-6-astra; designer: claude-opus-5-5, gpt-6-astra; junior: claude-sonnet-5-5, gpt-6.1-terra; chores: gpt-6.1-terra, claude-haiku-5-5; researcher: gpt-6.1-terra, claude-sonnet-5-5; sentinel: gpt-6-luna, claude-haiku-5-5";
-	await sessionStart();
 	await sessionStart();
 
 	expect(notices).toEqual([
 		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
 		["warning", warning],
 	]);
-	await sessionStart("another-session");
+	// 配置已在盘上，重载后不再提示生成；角色仍然没有可用模型，照常提示。
+	await reload();
 	expect(notices).toEqual([
 		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
 		["warning", warning],

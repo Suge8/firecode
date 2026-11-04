@@ -124,6 +124,11 @@ export class InProcessSessionPool {
 		return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
 	}
 
+	/** 实际用的物理模型（provider/id）是不是这条链首选原子匹配到的模型；匹配规则与路由选候选同一份。 */
+	async isChainHead(chain: ModelChain, model: string): Promise<boolean> {
+		return (await candidates(await this.modelRuntime(), chain.slice(0, 1))).some((entry) => `${entry.model.provider}/${entry.model.id}` === model);
+	}
+
 	configureRoute(sessionPath: string, chain: ModelChain, override?: ThinkingLevelValue): void {
 		this.held.get(sessionPath)?.route?.configure(chain, override);
 	}

@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MasterStore, type WorkerRef } from "../master/state.js";
+import type { MasterStore as Store, WorkerRef } from "../master/state.js";
+import { loadFirecodeModule } from "./loader.ts";
+
+// 经 loader 加载：state.ts 间接依赖宿主包，直接 import 要靠 bun 的自动安装，时好时坏。
+const { MasterStore } = await loadFirecodeModule("master/state.ts") as { MasterStore: typeof Store };
 
 const VERSION = 10;
 const worker: WorkerRef = {

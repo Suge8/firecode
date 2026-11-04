@@ -33,7 +33,7 @@
 
 ## Fully automatic review and delivery
 
-Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: up to five models you choose look for problems, every problem goes back to be fixed, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
+Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: up to five models you choose look for problems and score how often each one would bite and how bad it would be; the ones worth fixing go back to be fixed, the rest are listed for you, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 

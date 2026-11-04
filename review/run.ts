@@ -36,6 +36,9 @@ import {
 } from "./state.js";
 import { ReviewUi } from "./ui.js";
 
+/** 顾问看的需求证据只要锚点与最近几步：它核实的是发现，不重做全量审查。 */
+const ADVISOR_EVIDENCE_TOKENS = 6_000;
+
 const PROMPTS = new URL("./prompts/", import.meta.url);
 
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
@@ -303,6 +306,7 @@ export class Run {
 		try {
 			const prompt = buildAdvisorPrompt(readPrompt(PROMPTS, "advisor"), {
 				focus: state.focus,
+				requirement: buildEvidence(this.sessionEntries(), { budgetTokens: ADVISOR_EVIDENCE_TOKENS, sessionFile: this.ctx.sessionManager.getSessionFile() }),
 				details: findingsOf(state.voters),
 				history: state.history,
 				round: state.round,

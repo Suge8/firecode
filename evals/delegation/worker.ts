@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { PI_PACKAGES } from "../../tests/loader.ts";
 import { citedTruth, e2eScript, fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
-import { finalText, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, startPi, USER_AGENT_DIR, WORK } from "./lib.ts";
+import { finalText, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, startPi, USER_AGENT_DIR, variantAgent, WORK } from "./lib.ts";
 import { auditPrompt, TMP_NOTE, taskById } from "./tasks.ts";
 
 const OUT = join(WORK, "worker");
@@ -58,7 +58,7 @@ function durationCorrect(repo: string): boolean {
 
 /** 凭据与设置链回用户目录；firecode 只开 claudeSub（订阅请求要带归因），不激活指挥官，Worker 提示词由命令行追加。 */
 function setupAgent(): void {
-	const agent = join(WORK, "variants", VARIANT, "agent");
+	const agent = variantAgent(VARIANT);
 	if (existsSync(agent)) return;
 	mkdirSync(join(agent, "extensions/firecode"), { recursive: true });
 	for (const file of ["auth.json", "settings.json", "models.json", "models-store.json", "SYSTEM.md", "bin"])
@@ -79,7 +79,7 @@ async function runOne(task: string, atom: string, run: number): Promise<void> {
 	const { repo, tmp } = prepareRun(dir, fixtureDir(spec.fixture));
 	for (const [path, content] of Object.entries(spec.setup ?? {})) writeFileSync(join(repo, path), content, { mode: 0o755 });
 	const workerPrompt = '<firecode_worker name="eval">\n' + readFileSync(join(REPO, "master/prompts/worker.zh.md"), "utf8").trim() + "\n</firecode_worker>";
-	const child = startPi(["-p", "--mode", "json", "--model", piModel(atom), "--append-system-prompt", workerPrompt, "--session-dir", join(dir, "sessions"), spec.prompt], { variant: VARIANT, cwd: repo, tmp, stdin: "ignore" });
+	const child = startPi(["-p", "--mode", "json", "--model", piModel(atom), "--append-system-prompt", workerPrompt, "--session-dir", join(dir, "sessions"), spec.prompt], { agentDir: variantAgent(VARIANT), cwd: repo, tmp, stdin: "ignore" });
 	child.stdout!.resume();
 	child.stderr!.on("data", (chunk: Buffer) => appendFileSync(join(dir, "stderr.txt"), chunk));
 	const started = Date.now();

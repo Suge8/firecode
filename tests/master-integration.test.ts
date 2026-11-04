@@ -463,6 +463,20 @@ test("首选额度用尽时同一回合切换到下一模型并返回", async ()
 	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
 });
 
+test("Claude 订阅额度用尽的报错写明当地重置时刻：冷却到那一刻，派活失败报出的最早恢复时间就是它", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)" })]);
+	const before = Date.now();
+	const failed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "limit", prompt: "执行", role: "工程师" });
+	await failed;
+	// 新加坡全年 UTC+8：当地 5:10 是 UTC 21:10，取 before 之后最近的一次。
+	const today = new Date(before);
+	let reset = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 21, 10);
+	if (reset <= before) reset += 86_400_000;
+	expect(harness.messages.at(-1).message.content).toContain(`最早恢复时间 ${new Date(reset).toISOString()}`);
+});
+
 test("溢出恢复删除运行时消息后仍落定供应商错误而非过期回复", async () => {
 	const harness = await setup();
 	faux.setResponses([fauxAssistantMessage("上一回合回复")]);
@@ -1617,7 +1631,7 @@ test("子代理在第一条回复前随会话关闭被打断（还没有会话�
 test("修复回合自动重试后继续下一轮审查", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } }));
-	const fail = "FAIL\n## 发现 1\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
+	const fail = "核对了 a.ts。\n证据：文件=a.ts；命令=bun test\n## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 5\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
 	const pass = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
 	faux.setResponses([
 		fauxAssistantMessage("实现完成"),
@@ -1640,7 +1654,7 @@ test("修复回合自动重试后继续下一轮审查", async () => {
 test("修复回合最终错误向 Master 报告原文并保留审查轮", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-	const fail = "FAIL\n## 发现 1\n- 严重程度: 中\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
+	const fail = "核对了 a.ts。\n证据：文件=a.ts；命令=bun test\n## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 5\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
 	const error = "供应商认证失败 401";
 	faux.setResponses([
 		fauxAssistantMessage("实现完成"),

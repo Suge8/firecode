@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { checkpointOf, refusalOf, type Snapshot } from "./checkpoint.js";
 import { msg } from "./messages.js";
-import { roundText } from "./state.js";
+import { reviewerName, roundText } from "./state.js";
 
 /**
  * 对外中止一场进行中的审查：在审查所在的会话里执行这条命令（`session.prompt`）。走用户取消的同一条路径——
@@ -12,8 +12,9 @@ export const CANCEL_REVIEW_ARG = "--cancel";
 export const CANCEL_REVIEW_COMMAND = `/fire-review ${CANCEL_REVIEW_ARG}`;
 
 export type ReviewOutcome =
-	| { status: "passed"; runId: string; rounds: number }
-	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string }
+	/** fallback：末轮由备用模型审出的席位（带备用标记的名字）；首选照常时省略。 */
+	| { status: "passed"; runId: string; rounds: number; fallback?: string[] }
+	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string; fallback?: string[] }
 	| { status: "failed"; runId: string; rounds: number; reason: string }
 	/** 被取消（用户或 CANCEL_REVIEW_COMMAND）；不是故障，也不是质量裁决。 */
 	| { status: "cancelled"; runId: string; rounds: number }
@@ -78,14 +79,16 @@ function outcomeOf(latest: Snapshot): ReviewOutcome {
 	if (latest.phase !== "settled") return { status: "in_progress", runId: latest.runId };
 	const { runId } = latest;
 	const { rounds, last } = latest;
+	const names = last?.reviewers.filter((item) => item.fallback).map(reviewerName) ?? [];
+	const fallback = names.length ? { fallback: names } : {};
 	switch (latest.end) {
 		case "passed":
-			return { status: "passed", runId, rounds };
+			return { status: "passed", runId, rounds, ...fallback };
 		// 顾问叫停与轮数用尽都是质量裁决终止；顾问叫停时把裁决带给读取方：Master 拿到停止原因才能调整方向。
 		case "stopped":
-			return { status: "stopped", runId, rounds, ...(last?.advisor?.advice ? { advisorAdvice: last.advisor.advice } : {}) };
+			return { status: "stopped", runId, rounds, ...(last?.advisor?.advice ? { advisorAdvice: last.advisor.advice } : {}), ...fallback };
 		case "exhausted":
-			return { status: "stopped", runId, rounds };
+			return { status: "stopped", runId, rounds, ...fallback };
 		// 故障与超时是基础设施故障，取消是人为中断，都不弱化成“停止”；原因给人话，不把枚举名交给读取方。
 		case "error":
 			return { status: "failed", runId, rounds, reason: latest.error || (last && roundText(last).trim()) || msg.outcome.error };

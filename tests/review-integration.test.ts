@@ -206,9 +206,12 @@ const fireReview = (registered: ReturnType<typeof makePi>["registered"]) =>
 	registered.commands.get("fire-review") as { handler: (args: string, ctx: unknown) => Promise<void> };
 
 const FAIL_VERDICT = [
-	"FAIL",
+	"核对了 a.ts。",
+	"证据：文件=a.ts；命令=bun test",
 	"## 发现 1",
-	"- 严重程度: 中",
+	"- 发生条件: 每次",
+	"- 频率: 10",
+	"- 影响: 5",
 	"- 问题: x",
 	"- 证据: a.ts",
 	"- 违反的约定与期望行为: y",
@@ -287,6 +290,48 @@ describe("registerReview wiring", () => {
 		const summary = registered.delivered[0]?.content ?? "";
 		expect(summary).toContain("The adversarial review passed after 1 round(s)");
 		expect(`${card}${summary}`).not.toMatch(/[\u3400-\u9fff]/u);
+	}, 20_000);
+
+	test("findings under the threshold or without a condition trigger no repair and reach the pass card and the summary as suggestions", async () => {
+		const verdict = [
+			"核对了 a.ts。",
+			"证据：文件=a.ts；命令=bun test",
+			"## 发现 1：命名与文档不一致",
+			"- 发生条件: 每次读配置",
+			"- 频率: 10",
+			"- 影响: 1",
+			"- 问题: 字段名与文档写法不同",
+			"- 证据: a.ts",
+			"- 违反的约定与期望行为: 文档写法",
+			"- 验证命令: bun test",
+			"## 发现 2：可能丢数据",
+			"- 频率: 9",
+			"- 影响: 9",
+			"- 问题: 说不清什么时候发生",
+			"- 证据: a.ts",
+			"- 违反的约定与期望行为: 不丢数据",
+			"- 验证命令: bun test",
+		].join("\n");
+		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length > 0);
+		// 没有修复回合：投给执行模型的第一条也是唯一一条就是总结提示。
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
+		expect(registered.delivered).toHaveLength(1);
+		const summary = registered.delivered[0].content;
+		expect(summary).toContain("对抗审查已通过");
+		expect(summary).toContain("命名与文档不一致（发生条件：每次读配置；频率 10 · 影响 1）");
+		expect(summary).toContain("可能丢数据（发生条件未说明；频率 0 · 影响 9）");
+		const cards = (registered.sent as { content: string }[]).map((message) => message.content).join("\n");
+		expect(cards).toContain("审查通过");
+		expect(cards).not.toContain("审查未通过");
+		expect(cards).toContain("命名与文档不一致");
+		expect(cards).toContain("可能丢数据");
 	}, 20_000);
 
 	test("a pass reports the summarizing stage through occupancy until the summary turn ends, then releases it", async () => {
@@ -1034,10 +1079,10 @@ describe("review cards and degraded paths", () => {
 		expect(registered.sentOptions[0]).toEqual({ triggerTurn: false });
 	});
 
-	// 以 FAIL 开头的票格式再差也是阻断意见：另一票 PASS 不能让整轮通过，原文随反馈交给执行模型。
-	test("a malformed FAIL beats another reviewer's PASS and its original text reaches the executor", async () => {
+	// 过了门槛的发现格式再差也是阻断意见：另一票 PASS 不能让整轮通过，原文随反馈交给执行模型。
+	test("a malformed blocking finding beats another reviewer's PASS and its original text reaches the executor", async () => {
 		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) =>
-			model === "p/one" ? "FAIL\n没按模板写，但数据会丢：重启后 checkpoint 被覆盖" : "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test",
+			model === "p/one" ? "## 发现 1：没按模板写，但数据会丢：重启后 checkpoint 被覆盖\n- 发生条件: 每次重启\n- 频率: 10\n- 影响: 9" : "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test",
 		);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -1124,12 +1169,14 @@ describe("review cards and degraded paths", () => {
 		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
 		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
 		expect(card).toContain("核对完毕");
+		// 链首不可用、备用模型审出的通过不能冒充首选的通过。
+		expect(card).toContain("审查模型：three（备用），席位首选不可用");
 		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/three");
 	}, 20_000);
 
 	test("an unavailable advisor is skipped with a visible card and the repair carries on", async () => {
 		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) =>
-			model === "test/advisor" ? undefined : "FAIL\n## 发现 1\n- 严重程度: 高\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test",
+			model === "test/advisor" ? undefined : "核对了 a.ts。\n证据：文件=a.ts；命令=bun test\n## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 8\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test",
 		);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);

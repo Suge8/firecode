@@ -12,7 +12,7 @@
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 import type { ModelAtom, ReviewConfig } from "../config.js";
-import { fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
+import { DECISIONS_HEADING, fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
 const ISSUE_LINE = fieldLine((terms) => terms.field.issue, { value: "(.+)$" });
@@ -35,14 +35,16 @@ export type SummaryKind = "passed" | "max_rounds" | "advisor_stop";
 export const SETTLED_ENDS = ["passed", "stopped", "exhausted", "error", "cancelled", "timed_out"] as const;
 export type SettledEnd = (typeof SETTLED_ENDS)[number];
 
-/** 单个审查者的输出（output 契约解析结果，纯数据）。failed 含格式无效但以 FAIL 开头的票：原文进 details。 */
+/** 单个审查者的输出（output 契约解析结果，纯数据）。failed 是有发现过了阻塞门槛的票（格式不全也算，原文进 details）。 */
 export interface ReviewerResult extends ModelAtom {
 	index: number;
 	status: "passed" | "failed" | "error";
-	/** 短摘要：PASS 一行收敛摘要 / FAIL 发现一句话。 */
+	/** 短摘要：通过时一行收敛摘要 / 未通过时首条阻塞发现的一句话。 */
 	summary: string;
-	/** 全文：PASS 摘要+证据锚点 / FAIL 发现列表（或原文）/ error 的故障说明（模型链中各候选的原因）。 */
+	/** 全文：摘要+证据锚点、阻塞发现、需用户裁决与建议区（门槛以下的发现收在其中）/ error 的故障说明（模型链中各候选的原因）。 */
 	details: string;
+	/** 席位首选不可用、由链里的备用模型审出的票：备用模型漏检率高得多，它的结论在卡片与 Master 事件里都要标明。 */
+	fallback?: boolean;
 }
 
 /** 审查中席位的结果；null 即还在审。 */
@@ -437,20 +439,24 @@ export function summaryKindOf(round: ReviewRound | undefined): SummaryKind {
 
 function passSummary(passed: ReviewerResult[]) {
 	const fallback = msg.summary.passedFallback;
-	const lines = passed.length === 1
-		? [passBody(passed[0]?.summary ?? "") || fallback]
-		: passed.map((item) => msg.summary.modelBullet(shortModel(item.model), passBody(item.summary) || fallback));
-	const suggestions = [...new Set(passed.flatMap((item) => splitSuggestions(item.details)))];
-	if (suggestions.length === 0) return lines.join("\n");
-	return [...lines, "", `## ${msg.terms.suggestions}`, ...suggestions.map((item) => `- ${item}`)].join("\n");
+	const only = passed.length === 1 ? passed[0]! : undefined;
+	const lines = only
+		? [passBody(only.summary) || fallback, ...(only.fallback ? [msg.summary.fallbackReviewer(reviewerName(only))] : [])]
+		: passed.map((item) => msg.summary.modelBullet(reviewerName(item), passBody(item.summary) || fallback));
+	const extra = ([[msg.terms.decisions, DECISIONS_HEADING], [msg.terms.suggestions, SUGGESTIONS_HEADING]] as const).flatMap(([title, heading]) => {
+		const items = [...new Set(passed.flatMap((item) => splitSection(item.details, heading)))];
+		return items.length ? ["", `## ${title}`, ...items.map((item) => `- ${item}`)] : [];
+	});
+	return [...lines, ...extra].join("\n");
 }
 
-/** 建议区（“## 建议（非阻塞）”之后）的条目。 */
-function splitSuggestions(details: string): string[] {
+/** 某个二级标题小节（建议区、需用户裁决）的条目，到下一个二级标题为止。 */
+function splitSection(details: string, heading: RegExp): string[] {
 	const lines = details.split(/\r?\n/u);
-	const index = lines.findIndex((line) => SUGGESTIONS_HEADING.test(line.trim()));
+	const index = lines.findIndex((line) => heading.test(line.trim()));
 	if (index < 0) return [];
-	return lines.slice(index + 1).map((line) => line.replace(/^[-*]\s*/u, "").trim()).filter(Boolean);
+	const end = lines.findIndex((line, at) => at > index && /^##\s/u.test(line.trim()));
+	return lines.slice(index + 1, end < 0 ? undefined : end).map((line) => line.replace(/^[-*]\s*/u, "").trim()).filter(Boolean);
 }
 
 function passBody(summary: string) {
@@ -459,6 +465,11 @@ function passBody(summary: string) {
 
 export function shortModel(model: string) {
 	return model.split("/").at(-1) || model;
+}
+
+/** 审查者在卡片与事件里的名字：备用模型带标记。 */
+export function reviewerName(item: Pick<ReviewerResult, "model" | "fallback">) {
+	return item.fallback ? msg.summary.fallbackName(shortModel(item.model)) : shortModel(item.model);
 }
 
 function appendClosedFindings(summary: string, history: ReviewRound[], beforeRound: number) {
@@ -484,5 +495,5 @@ function appendClosedFindings(summary: string, history: ReviewRound[], beforeRou
 }
 
 function modelLabel(item: ReviewerResult) {
-	return msg.summary.modelSection(item.index + 1, shortModel(item.model));
+	return msg.summary.modelSection(item.index + 1, reviewerName(item));
 }

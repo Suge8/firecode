@@ -50,10 +50,12 @@ export const masterEvent = {
 	/** 审查终态；reply 是 Worker 最后一条回复。停止与未完成是失败：原因进“错误：”分节，顾问意见在其后。 */
 	review(name: string, outcome: ReviewOutcome, reply: string): MasterEvent {
 		const final = [SECTIONS.finalReply, reply || msg.event.noReply];
-		if (outcome.status === "passed") return settled(`${name} ${msg.event.reviewPassed(outcome.rounds)}`, ...final);
+		const fallback = "fallback" in outcome && outcome.fallback ? msg.event.reviewFallback(outcome.fallback.join(", ")) : undefined;
+		if (outcome.status === "passed") return settled(`${name} ${msg.event.reviewPassed(outcome.rounds)}`, fallback, ...final);
 		if (outcome.status === "stopped")
 			return settled(
 				`${name} ${msg.event.reviewStopped(outcome.rounds)}`,
+				fallback,
 				SECTIONS.error,
 				outcome.advisorAdvice ? msg.event.stoppedByAdvisor(outcome.rounds) : msg.event.roundsExhausted(outcome.rounds),
 				...(outcome.advisorAdvice ? [SECTIONS.advice, outcome.advisorAdvice] : []),
