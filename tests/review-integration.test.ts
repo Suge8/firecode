@@ -1109,9 +1109,105 @@ describe("review cards and degraded paths", () => {
 		const reason = (result as { reason: string }).reason;
 		expect(reason).toContain("sol");
 		expect(reason).toContain("expired/sol");
+		// 指挥官曾把登录失效当成要等人修好，干等一个多小时：终态要说清是审查器失效、不是代码问题，并给出出路。
+		expect(reason).toContain("审查器失效，不是代码问题");
+		expect(reason).toContain("或由指挥官亲自审查");
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
 		expect(cards.some((content) => content.includes("审查未完成") && content.includes("sol"))).toBe(true);
 		expect(cards.some((content) => content.includes("审查通过"))).toBe(false);
+	}, 20_000);
+
+	// 事故：terra 连续 8 轮输出格式无效，每轮都以“审查未完成”收尾，链里的备用模型从没被用上。
+	test("输出格式无效的席位在同一轮换链里的下一个模型重审", async () => {
+		const pass = "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint } = await loadTwoReviewers(
+			(model) => model === "p/one" ? "结论如下\n随便写" : pass,
+			[["p/one/low", "p/two/low"]],
+		);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => ["summarizing", "settled"].includes(readCheckpoint({ sessionManager })?.phase ?? ""));
+		const state = readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.round).toBe(1);
+		expect(state?.history[0].reviewers[0].model).toBe("p/two");
+		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
+		expect(card).toContain("审查模型：two（备用），席位首选不可用");
+	}, 20_000);
+
+	test("同一场审查的后续轮从上一轮给出结论的备用模型审起，首选一直格式无效也不再每轮先跑它", async () => {
+		const calls: Record<string, number> = {};
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
+			calls[model] = (calls[model] ?? 0) + 1;
+			if (model === "p/one") return "结论如下\n随便写";
+			return calls[model] === 1 ? FAIL_VERDICT : "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		}, [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		await startTurn(registered, ctx);
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", {}, ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
+		expect(readCheckpoint({ sessionManager })?.round).toBe(2);
+		expect(calls).toEqual({ "p/one": 1, "p/two": 2 });
+		// 第 2 轮的结论仍是备用模型给的，卡片照样标明。
+		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
+		expect(card).toContain("two（备用）");
+	}, 20_000);
+
+	// 从上一轮的投票模型审起不能截掉链的前段：它此刻失效时，已经恢复的首选还要能兜底。
+	test("后续轮从投票模型起跑的链仍以首选兜底：投票模型额度用尽时由恢复的首选审完", async () => {
+		const calls: Record<string, number> = {};
+		const pass = "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
+			calls[model] = (calls[model] ?? 0) + 1;
+			if (model === "p/one") return calls[model] === 1 ? undefined : pass;
+			return calls[model] === 1 ? FAIL_VERDICT : undefined;
+		}, [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/two");
+		// 修复期间首选的额度恢复。
+		((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown>).clear();
+		await startTurn(registered, ctx);
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", {}, ctx);
+		await until(() => ["summarizing", "settled"].includes(readCheckpoint({ sessionManager })?.phase ?? "") && readCheckpoint({ sessionManager })?.round === 2);
+		const state = readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.history[1].reviewers[0].model).toBe("p/one");
+		expect(calls).toEqual({ "p/one": 2, "p/two": 2 });
+	}, 20_000);
+
+	test("整条链都输出格式无效时，终态写明审查器失效与每个模型的格式问题", async () => {
+		const { registerReview, readCheckpoint, outcome } = await loadTwoReviewers(() => "结论如下\n随便写", [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
+		expect(registered.delivered).toEqual([]);
+		const reason = ((await outcome(sessionManager)) as { reason: string }).reason;
+		expect(reason).toContain("审查器失效，不是代码问题");
+		expect(reason).toContain("p/one");
+		expect(reason).toContain("p/two");
+		expect(reason.match(/审查输出格式无效/gu)?.length).toBe(2);
 	}, 20_000);
 
 	test("审查者输出截断后沿链切换并完成审查", async () => {

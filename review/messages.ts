@@ -76,6 +76,12 @@ export const REDUNDANT_VERDICT_LINES: ReadonlySet<string> = new Set([
 	...ALL_TERMS.flatMap((terms) => [terms.passed, terms.failed]),
 ]);
 
+/** 审查因审查者自身失效没有结论时的定性与出路：读者（用户、Master）据此换模型或亲审，而不是去修代码或干等。 */
+const zhReviewerBroken =
+	"审查器失效，不是代码问题：有审查者没给出结论（输出格式无效、登录或额度失效、超时），本轮不算通过。建议换一个可用的模型重审（调整该席位的模型链或补备用模型），或由指挥官亲自审查这次改动。";
+const enReviewerBroken =
+	"Reviewer failure, not a code problem: a reviewer gave no verdict (invalid output format, expired login or quota, or timeout), so this round does not pass. Suggested: re-review with a working model (adjust that seat's model chain or add a fallback), or have the Master review the change itself.";
+
 export const msg = defineMessages({
 	zh: {
 		terms: zhTerms,
@@ -95,7 +101,7 @@ export const msg = defineMessages({
 			cancelled: "审查已取消\n已按你的操作停止",
 		},
 		failure: {
-			reviewerSession: (reason: string) => `审查会话异常：${reason}`,
+			reviewerSession: (reason: string) => `${zhReviewerBroken}\n\n审查会话异常：${reason}`,
 			cannotReadSession: (reason: string) => `无法读取 session 文件：${reason}`,
 			badJsonLine: (line: number) => `session 第 ${line} 行不是有效 JSON`,
 		},
@@ -134,7 +140,7 @@ export const msg = defineMessages({
 			modelBullet: (model: string, body: string) => `• ${model}：${body}`,
 			fallbackName: (model: string) => `${model}（备用）`,
 			fallbackReviewer: (name: string) => `审查模型：${name}，席位首选不可用`,
-			noVerdict: "有审查者没给出结论，本轮不算通过：",
+			reviewerBroken: zhReviewerBroken,
 			modelSection: (index: number, model: string) => `${zhTerms.model} ${index} · ${model}`,
 			closedHeading: "**本次收口的问题**：",
 			closedItem: (issue: string, round: number) => `• ${issue}（第 ${round} 轮）`,
@@ -163,15 +169,17 @@ export const msg = defineMessages({
 			materialLabel: { passed: "末轮审查结论：", max_rounds: "末轮未通过的发现：", advisor_stop: "顾问裁决：" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`对抗审查已通过（共 ${rounds} 轮）。请给用户一个简洁的人话收尾总结：1) 各轮审查发现了什么、你修了什么；2) 最终靠什么通过（关键修复与验证证据）；3) 审查中提到但未阻塞通过的建议——逐条列出，并给出你建议处理还是不处理及理由；4) 审查提出的「需用户裁决」事项——逐条原样列出，交用户决定。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
+					`对抗审查已通过（共 ${rounds} 轮）。用人话给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用一两句说修了什么、凭什么通过；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
 				max_rounds: (rounds: number) =>
-					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。请如实向用户总结（人话）：1) 各轮分别卡在什么发现上、你做了哪些修复尝试；2) 你认为无法收敛的根因；3) 当前代码的真实状态与剩余风险；4) 建议用户下一步怎么办；5) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。用人话如实给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用两三句说卡在哪些发现上、你判断的根因、代码的真实状态与建议的下一步；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
 				advisor_stop: (rounds: number) =>
-					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。请结合下方顾问裁决向用户总结：1) 审查循环走到了哪一步、修了什么；2) 顾问为什么叫停；3) 当前状态与你建议的下一步；4) 审查提出的「需用户裁决」事项与未处理的建议，逐条列出。若有发现属于机械可判的模式（能写成 lint 规则、类型约束或脚本检查挡住再犯），点名该模式并建议做成哪种检查；没有就不写。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
+					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。结合下方顾问裁决，用人话给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用两三句说修了什么、顾问为什么叫停、当前状态与建议的下一步；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
 			},
+
 		},
 		reviewer: {
 			formatInvalid: (issue: string) => `审查输出格式无效：${issue}`,
+			attempt: (model: string, details: string) => `${model}：${details}`,
 			failFormatNote: (issue: string) => `（审查输出未满足格式契约：${issue}。以下为原文，过门槛的发现仍按未通过处理）`,
 			demoted: (title: string, condition: string, frequency: number, impact: number) =>
 				`${title}（${condition ? `${zhTerms.field.condition}：${condition}` : "发生条件未说明"}；${zhTerms.field.frequency} ${frequency} · ${zhTerms.field.impact} ${impact}）`,
@@ -222,7 +230,7 @@ export const msg = defineMessages({
 			cancelled: "Review cancelled\nStopped by user",
 		},
 		failure: {
-			reviewerSession: (reason: string) => `reviewer session error: ${reason}`,
+			reviewerSession: (reason: string) => `${enReviewerBroken}\n\nreviewer session error: ${reason}`,
 			cannotReadSession: (reason: string) => `Cannot read the session file: ${reason}`,
 			badJsonLine: (line: number) => `session line ${line} is not valid JSON`,
 		},
@@ -261,7 +269,7 @@ export const msg = defineMessages({
 			modelBullet: (model: string, body: string) => `• ${model}: ${body}`,
 			fallbackName: (model: string) => `${model} (fallback)`,
 			fallbackReviewer: (name: string) => `Reviewed by ${name}; the seat's first choice was unavailable`,
-			noVerdict: "A reviewer gave no verdict, so this round does not pass:",
+			reviewerBroken: enReviewerBroken,
 			modelSection: (index: number, model: string) => `${enTerms.model} ${index} · ${model}`,
 			closedHeading: "**Issues closed in this check**:",
 			closedItem: (issue: string, round: number) => `• ${issue} (Round ${round})`,
@@ -290,15 +298,17 @@ export const msg = defineMessages({
 			materialLabel: { passed: "Final review verdict:", max_rounds: "Final round findings:", advisor_stop: "Advisor ruling:" },
 			summaryInstruction: {
 				passed: (rounds: number) =>
-					`The adversarial review passed after ${rounds} round(s). Give the user a concise plain-language wrap-up: 1) what the review rounds found and what you fixed; 2) how it finally passed (key fixes and verification evidence); 3) non-blocking suggestions raised during review — list each and say whether you recommend addressing it and why; 4) items the review marked "Needs user decision" — list each as raised, for the user to decide. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review passed after ${rounds} round(s). Wrap up for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first one or two sentences on what you fixed and why it passed; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`,
 				max_rounds: (rounds: number) =>
-					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Summarize honestly for the user in plain language: 1) what each round got stuck on and what fixes you attempted; 2) your root-cause read on why it would not converge; 3) the real current state of the code and remaining risks; 4) what you recommend the user do next; 5) list the items marked "Needs user decision" and the suggestions left unaddressed. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
+					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Wrap up honestly for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first two or three sentences on which findings it got stuck on, your root-cause read, the real state of the code and the next step you recommend; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
 				advisor_stop: (rounds: number) =>
-					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, summarize for the user: 1) how far the review loop got and what was fixed; 2) why the advisor called it off; 3) the current state and your recommended next step; 4) list the items marked "Needs user decision" and the suggestions left unaddressed. If any finding is a mechanically checkable pattern (one a lint rule, a type constraint or a scripted check could stop from recurring), name the pattern and suggest which kind of check; otherwise leave this out. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, wrap up for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first two or three sentences on what was fixed, why the advisor called it off, the current state and the next step you recommend; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`,
 			},
+
 		},
 		reviewer: {
 			formatInvalid: (issue: string) => `review output format invalid: ${issue}`,
+			attempt: (model: string, details: string) => `${model}: ${details}`,
 			failFormatNote: (issue: string) => `(The review output did not meet the format contract: ${issue}. Original text follows; findings over the threshold still count as a failure.)`,
 			demoted: (title: string, condition: string, frequency: number, impact: number) =>
 				`${title} (${condition ? `${enTerms.field.condition}: ${condition}` : "condition not stated"}; ${enTerms.field.frequency} ${frequency} · ${enTerms.field.impact} ${impact})`,
