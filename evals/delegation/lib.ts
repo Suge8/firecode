@@ -1,8 +1,8 @@
 // 委派评测的共享底座：工作目录、pi 启动、会话记录读取。
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const REPO = join(import.meta.dir, "..", "..");
 export const WORK = process.env.EVAL_DIR ?? join(tmpdir(), "firecode-delegation-eval");
@@ -14,9 +14,10 @@ function piCommand(): [string, string[]] {
 	return packages ? ["bun", [join(packages, "coding-agent/src/cli.ts")]] : ["pi", []];
 }
 
+/** 不带 evals/：变体副本在 Worker 可读的范围里，评测代码里有真值（植入缺陷、隐藏验收）。 */
 export function gitArchive(ref: string, dest: string): void {
 	mkdirSync(dest, { recursive: true });
-	execFileSync("sh", ["-c", 'git -C "$0" archive "$1" | tar -x -C "$2"', REPO, ref, dest]);
+	execFileSync("sh", ["-c", 'git -C "$0" archive "$1" -- . ":(exclude)evals" | tar -x -C "$2"', REPO, ref, dest]);
 }
 
 export function gitShow(ref: string, path: string): string {
@@ -47,7 +48,7 @@ export const variantAgent = (variant: string): string => join(WORK, "variants", 
  * 子进程不继承任何 PI_* 与 HERDR_*：前者含外层 pi 给工具设的会话变量（PI_SESSION_FILE、PI_MODEL 等）和个人设置（PI_CACHE_RETENTION），
  * 会让不同人跑出的结果不可比；后者会让子进程回写用户自己的 herdr pane。评测需要的 PI_* 在下面显式给出。
  */
-export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string> }): ChildProcess {
+export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string>; allow?: string[] }): ChildProcess {
 	const env: Record<string, string | undefined> = {
 		...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(PI|HERDR)_/u.test(key))),
 		PI_CODING_AGENT_DIR: o.agentDir,
@@ -57,7 +58,22 @@ export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp:
 		...o.env,
 	};
 	const [cmd, base] = piCommand();
-	return spawn(cmd, [...base, ...args], { cwd: o.cwd, env, detached: true, stdio: [o.stdin, "pipe", "pipe"] });
+	const jail = ["-p", sandboxProfile([dirname(o.cwd), dirname(o.agentDir), join(WORK, "host-modules"), ...(o.allow ?? [])])];
+	return spawn("sandbox-exec", [...jail, cmd, ...base, ...args], { cwd: o.cwd, env, detached: true, stdio: [o.stdin, "pipe", "pipe"] });
+}
+
+/**
+ * 被测会话跑在 macOS sandbox-exec 里（子进程继承）：整个 $EVAL_DIR、本仓库的全部 git 工作树与 .git、你的会话记录都不可读写，
+ * 只放开本次运行目录、变体目录与 allow。真值（t9-truth.json、tasks.ts、fixtures.ts、accept.ts）和其他运行的结果都在禁区里；
+ * 冒烟见过 Worker 跳出副本翻 $EVAL_DIR 读到真值。规则按后写的优先，所以先禁后放。路径须是真实路径（/tmp 要写 /private/tmp）。
+ */
+function sandboxProfile(allow: string[]): string {
+	const worktrees = execFileSync("git", ["-C", REPO, "worktree", "list", "--porcelain"], { encoding: "utf8" })
+		.split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
+	const real = (path: string) => JSON.stringify(realpathSync(path));
+	const deny = [WORK, ...worktrees, join(USER_AGENT_DIR, "sessions")].filter(existsSync).map((p) => `(subpath ${real(p)})`);
+	const open = allow.filter(existsSync).map((p) => `(subpath ${real(p)})`);
+	return `(version 1)(allow default)(deny file-read* file-write* ${deny.join(" ")})(allow file-read* file-write* ${open.join(" ")})`;
 }
 
 /** pi 的 bash 工具把命令放进自己的进程组，只杀 pi 的组会留下孤儿（比如 15 分钟的 e2e），所以先按父子关系收集全部后代。 */

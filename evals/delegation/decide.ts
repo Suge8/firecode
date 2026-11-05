@@ -33,7 +33,7 @@ function runOne(task: Task, variant: string, run: number, o: { steps: number; ti
 	const { repo, tmp } = prepareRun(dir, fixtureDir(task.fixture));
 	const probePath = join(dir, "probe.jsonl");
 	const child = startPi(["--mode", "json", "--session-dir", join(dir, "sessions"), "-e", join(import.meta.dir, "probe.ts"), task.prompt], {
-		agentDir: variantAgent(variant), cwd: repo, tmp, stdin: "ignore", env: { EVAL_LOG: probePath },
+		agentDir: variantAgent(variant), cwd: repo, tmp, stdin: "ignore", env: { EVAL_LOG: probePath }, allow: [join(import.meta.dir, "probe.ts")],
 	});
 	const t0 = Date.now();
 	let tAgent = 0;
