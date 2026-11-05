@@ -24,8 +24,9 @@ export interface WorkerRef {
 	launch: number;
 	reviewNeeded?: boolean;
 	/**
-	 * 瞬时失败后的自动续跑：idle 且带它就是“暂停到 at，到时自动续跑”（review 为真时续的是审查）。持久化，reload 后按 at 重挂；
-	 * 续跑开始、指挥官 send/review/interrupt/ack 都会清掉它，所以同一次暂停只续跑一次。
+	 * 瞬时失败后的自动续跑：idle 且带它就是“暂停到 at，到时自动续跑”（review 为真时续的是审查）。持久化，reload 后按 at 重挂。
+	 * 自动续跑开始后保留到这次运行落定才清：续跑中被 reload 打断时载入收敛回暂停、立即再续，而不是变成等指挥官的中断。
+	 * 指挥官 send/review/interrupt/ack 会清掉它（工作归指挥官接手），所以同一次暂停只续跑一次。
 	 */
 	resume?: WorkerResume;
 }
@@ -61,11 +62,13 @@ export class MasterStore {
 		const recovered: string[] = [];
 		this.list = loaded.workers.map((worker) => {
 			if (worker.status === "idle") return worker;
+			// 自动续跑中被打断：仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续。
+			if (worker.resume) return { ...worker, status: "idle" };
 			recovered.push(worker.name);
 			return { ...worker, status: "idle", interruptedAt: now };
 		});
 		this.recovered = recovered;
-		if (recovered.length) this.persist();
+		if (loaded.workers.some((worker) => worker.status !== "idle")) this.persist();
 	}
 
 	get workers(): readonly WorkerRef[] {

@@ -7,7 +7,7 @@ import { THINKING_LEVELS, type MasterRole, type ModelAtom, type ThinkingLevelVal
 import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
-import { openWorkerSession, resumeCheckPrompt, runWorker, spawnWorker, startReview } from "./run.js";
+import { armResume, openWorkerSession, resumeCheckPrompt, runWorker, spawnWorker, startReview } from "./run.js";
 import type { MasterRuntime, RunOrigin } from "./runtime.js";
 import { WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
@@ -263,9 +263,15 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	}
 }
 
-/** 准备段失败而票仍是 idle：openWorkerSession 取消了池的释放计时，这里补回，否则这个热会话再也不会被释放。 */
+/**
+ * 准备段失败而票仍是 idle：openWorkerSession 取消了池的释放计时，这里补回，否则这个热会话再也不会被释放。
+ * 暂停中的票同样补回自动续跑：准备期间到期的续跑见 transitioning 已让路，这次接手又没成，不补就再也没人续。
+ */
 function rearmRelease(active: MasterRuntime, target: WorkerRef): void {
-	if (active.find(target)?.status === "idle") active.setup.pool.markIdle(target.sessionPath);
+	const current = active.find(target);
+	if (current?.status !== "idle") return;
+	active.setup.pool.markIdle(target.sessionPath);
+	armResume(active, current);
 }
 
 function toolResult(value: unknown): ToolResult {

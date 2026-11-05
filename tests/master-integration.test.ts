@@ -590,6 +590,77 @@ test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次"
 	await harness.command("");
 }, 20_000);
 
+test("自动续跑的回合进行中被 reload 打断：恢复后仍自动再续，不变成等指挥官处理的中断，最终只落定一次", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const entered = Promise.withResolvers<void>();
+	const gate = Promise.withResolvers<void>();
+	faux.setResponses([
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.2}` }),
+		async () => { entered.resolve(); await gate.promise; return fauxAssistantMessage("被打断的旧回复"); },
+		fauxAssistantMessage("重载后续跑完成"),
+	]);
+	await harness.execute({ action: "start", worker: "midway", prompt: "执行", role: "工程师" });
+	await entered.promise;
+	await harness.emit("session_start", {});
+	await until(() => eventTitles(harness).includes("midway 已返回"));
+	gate.resolve();
+	await Bun.sleep(200);
+	expect(eventTitles(harness)).toEqual(["midway 已暂停", "midway 已返回"]);
+	expect(harness.messages.at(-1).message.content).toContain("重载后续跑完成");
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle" });
+	expect(worker.interruptedAt).toBeUndefined();
+	expect(worker.resume).toBeUndefined();
+	await harness.command("");
+}, 20_000);
+
+test("暂停期间指挥官的 send 还在准备时续跑到期、随后 send 失败：自动续跑不丢，照常续上", async () => {
+	const harness = await setup(true, { loadGate: true, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const other = join(harness.cwd, "other");
+	await mkdir(other);
+	faux.setResponses([
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.2}` }),
+		fauxAssistantMessage("send 失败后续跑完成"),
+	]);
+	await harness.execute({ action: "start", worker: "handover", prompt: "执行", role: "工程师" });
+	await until(() => eventTitles(harness).includes("handover 已暂停"));
+	const load = Promise.withResolvers<void>();
+	(globalThis as any).__loadGate = load.promise;
+	// 换 cwd 的 send 释放热会话后重开，卡在加载上；期间续跑到期，见 send 在准备而让路。
+	const sending = harness.execute({ action: "send", worker: "handover", prompt: "换个检出", cwd: other }).catch((error: Error) => error);
+	await Bun.sleep(400);
+	(globalThis as any).__loadGate = undefined;
+	load.reject(new Error("加载失败"));
+	expect(await sending).toBeInstanceOf(Error);
+	await until(() => eventTitles(harness).includes("handover 已返回"));
+	expect(eventTitles(harness)).toEqual(["handover 已暂停", "handover 已返回"]);
+	expect(harness.messages.at(-1).message.content).toContain("send 失败后续跑完成");
+	await harness.command("");
+}, 20_000);
+
+test("链上另一个模型还在瞬时冷却、这次实际调用的模型鉴权失败：照常以失败送达，不被冷却盖成暂停", async () => {
+	const harness = await setup(true, { roles: {
+		工程师: { model: "test/worker/medium", use: "实现" },
+		设计师: { model: ["test/worker/medium", "test/worker-2/high"], use: "切换测试" },
+	} });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	faux.setResponses([
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 600}` }),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid x-api-key" }),
+	]);
+	await harness.execute({ action: "start", worker: "cooling", prompt: "执行", role: "工程师" });
+	await until(() => eventTitles(harness).includes("cooling 已暂停"));
+	await harness.execute({ action: "start", worker: "badkey", prompt: "执行", role: "设计师" });
+	await until(() => eventTitles(harness).includes("badkey 失败"));
+	expect(harness.messages.find((entry: any) => entry.message.content.includes("badkey 失败")).message.content).toContain("401 Unauthorized");
+	const workers = (await harness.list().then((result) => result.details as any)).workers;
+	expect(workers.find((worker: any) => worker.name === "badkey").resume).toBeUndefined();
+	await harness.execute({ action: "kill", worker: "cooling" });
+	await harness.command("");
+});
+
 test("非瞬时错误（鉴权失败）照常以失败送达，不暂停、不重试；指挥官回合遇到鉴权错误也不被补唤醒", async () => {
 	const harness = await setup(true, { timing: { cooldownMs: [20] }, failTurns: { count: 1, error: "401 Unauthorized: invalid x-api-key" }, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
 	harness.idle = true;

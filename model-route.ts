@@ -8,8 +8,11 @@ import { processShared } from "./process-shared.js";
 /** transient：失败会自己过去（网络、过载、限流、写明重置时刻的额度窗口）；否则是鉴权、参数、模型不存在这类要人处理的。 */
 interface Cooldown { failures: number; until: number; reason: string; transient: boolean }
 interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue }
-/** candidates 是最近一次选模型时的候选表：链暂停判定按它查冷却表，不再异步取可用模型。 */
-interface RouteState { current?: Candidate; candidates?: Candidate[] }
+/**
+ * candidates 是最近一次选模型时的候选表：链暂停判定按它查冷却表，不再异步取可用模型。
+ * failures 是最近一个任务里各模型最终失败的原文：新任务开始时清空，落定后留给读取方判断这次失败本身是否瞬时。
+ */
+interface RouteState { current?: Candidate; candidates?: Candidate[]; failures?: string[] }
 const cooldowns = processShared("model-cooldowns", () => new Map<string, Cooldown>());
 const routes = processShared("physical-models", () => new Map<string, RouteState>());
 export function physicalModel(model: Model<Api> | undefined): Model<Api> | undefined {
@@ -38,13 +41,15 @@ export function retryAt(reason: string, failures: number, ladder: readonly numbe
 export interface ChainPause { until: number; reason: string }
 
 /**
- * 路由的链此刻是否整条暂停：候选表里每个都有冷却记录（失败过且没成功过），且至少一个是瞬时失败；
- * 恢复时刻取瞬时失败里最早的那个（已过就是现在）。有没失败过的候选、或全是非瞬时失败时没有暂停，照常算失败。
+ * 路由的链此刻是否整条暂停：最近一个任务里实际失败的模型全是瞬时失败，候选表里每个都有冷却记录（失败过且没成功过），
+ * 且至少一个是瞬时失败；恢复时刻取瞬时失败里最早的那个（已过就是现在）。这个任务里有模型以非瞬时错误失败（鉴权、参数、
+ * 模型不存在）时不暂停，照常算失败：否则别的候选的瞬时冷却会把要人处理的错误盖住。有没失败过的候选时同样不暂停。
  * 物理模型（不经路由的会话）没有暂停。
  */
 export function routePause(model: Model<Api> | undefined): ChainPause | undefined {
-	const list = model?.api === "pi-virtual" ? routes.get(key(model))?.candidates : undefined;
-	if (!list?.length) return undefined;
+	const state = model?.api === "pi-virtual" ? routes.get(key(model)) : undefined;
+	const list = state?.candidates;
+	if (!list?.length || state!.failures?.some((reason) => !transientFailure(reason))) return undefined;
 	const entries = list.map(({ model: candidate }) => cooldowns.get(key(candidate)));
 	if (entries.some((entry) => !entry)) return undefined;
 	const first = entries.filter((entry) => entry!.transient).sort((a, b) => a!.until - b!.until)[0];
@@ -130,6 +135,7 @@ export async function createModelRoute(
 		const name = key(model);
 		task.attempted.set(name, reason);
 		task.failure = reason;
+		state.failures = [...task.attempted.values()];
 		if (!cool) return;
 		const failures = (cooldowns.get(name)?.failures ?? 0) + 1;
 		cooldowns.set(name, { failures, reason, until: retryAt(reason, failures, ladder), transient: transientFailure(reason) });
@@ -183,7 +189,11 @@ export async function createModelRoute(
 	routes.set(`${provider}/${id}`, state);
 	const extension: ExtensionFactory = (pi) => {
 		// 续跑（agent_before_settle 返回 continue）在同一任务里再开回合，不是新任务。
-		pi.on("agent_start", () => { if (task.phase === "idle") task = { phase: "pending", attempted: new Map() }; });
+		pi.on("agent_start", () => {
+			if (task.phase !== "idle") return;
+			task = { phase: "pending", attempted: new Map() };
+			state.failures = undefined;
+		});
 		pi.on("agent_settled", () => { task = { phase: "idle" }; });
 		pi.on("message_end", (event) => {
 			const message = event.message;

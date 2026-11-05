@@ -180,7 +180,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = false): void {
 	const current = active.find(identity);
 	if (!current) return;
-	const interrupted: WorkerRef = { ...current, status: "idle", interruptedAt: Date.now() };
+	const interrupted: WorkerRef = { ...landed(current), interruptedAt: Date.now() };
 	active.store.upsert(interrupted);
 	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
 	const obligation = current.reviewNeeded === true;
@@ -207,6 +207,11 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
 	}, delay);
 	live.interruptTimer.unref?.();
+}
+
+/** 运行落定回到 idle：这次运行（含自动续跑）到此结束，续跑意图随之清掉。 */
+function landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
+	return { ...worker, status: "idle" };
 }
 
 /** 瞬时故障暂停：回到 idle 并记下续跑时刻；这次运行第一次暂停时告知指挥官（不唤醒），到时 armResume 自动续跑。 */
@@ -255,14 +260,15 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 		const session = await openWorkerSession(active, current);
 		await session.waitForIdle();
 		active.assertOpen();
-		const working = active.commit(current, ({ resume: _resume, ...rest }) => ({ ...rest, status: "working" }));
+		// resume 留到落定：续跑中被 reload 打断时载入收敛回暂停再续（state.ts）。
+		const working = active.commit(current, (latest) => ({ ...latest, status: "working" }));
 		live.runStartedAt ??= Date.now();
 		const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
 		await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
 	} catch (error) {
 		const latest = active.find(identity);
-		if (latest?.status !== "idle") return;
-		const { resume: _resume, ...idle } = latest;
+		if (!latest?.resume) return;
+		const idle = landed(latest);
 		active.store.upsert(idle);
 		const failure = error instanceof Error ? error.message : String(error);
 		active.markIdle(idle, { kind: "failed", note: firstSentence(failure) });
@@ -281,7 +287,8 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	await session.waitForIdle();
 	active.assertOpen();
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-	active.commit(target, ({ interruptedAt: _interruptedAt, resume: _resume, ...rest }) => ({ ...rest, status: "reviewing" }));
+	// 指挥官发起的审查接手了这票，清掉续跑意图；自动续审保留到落定（同 resumeWorker）。
+	active.commit(target, ({ interruptedAt: _interruptedAt, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
 	observeWorker(active, target, session);
 	if (!resumed) active.beginRun(target.name);
 	else active.liveOf(target.name).runStartedAt ??= Date.now();
@@ -292,7 +299,7 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 	const current = active.find(identity);
 	if (!current) return;
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
-	const idle: WorkerRef = { ...current, status: "idle" };
+	const idle = landed(current);
 	active.store.upsert(idle);
 	// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
 	active.markIdle(idle, failure ? { kind: "failed", note: firstSentence(failure) } : { kind: "done", note: firstSentence(terminal!.text) });
@@ -319,7 +326,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			if (interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
 			if (outcome.status === "failed" && outcome.retry) return pauseWorker(active, current, outcome.retry, true);
 			const { reviewNeeded: _needed, ...fulfilled } = current;
-			const idle: WorkerRef = { ...(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current), status: "idle" };
+			const idle = landed(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current);
 			active.store.upsert(idle);
 			active.markIdle(idle, reviewOutcomeRow(outcome));
 			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
@@ -328,7 +335,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
-			const idle: WorkerRef = { ...current, status: "idle" };
+			const idle = landed(current);
 			active.store.upsert(idle);
 			active.markIdle(idle, { kind: "failed", note: msg.run.reviewIncomplete });
 			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
