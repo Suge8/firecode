@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { requirePiPackages } from "../../scripts/pi-source.ts";
 import { citedTruth, e2eScript, fixtureDir, T9_TRUTH_FILE } from "./fixtures.ts";
-import { finalText, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, startPi, USER_AGENT_DIR, variantAgent, WORK } from "./lib.ts";
+import { finalText, gitArchive, jsonlFiles, killTree, parseList, pool, prepareRun, readJsonl, REPO, runCost, startPi, USER_AGENT_DIR, variantAgent, WORK } from "./lib.ts";
 import { auditPrompt, TMP_NOTE, taskById } from "./tasks.ts";
 
 const OUT = join(WORK, "worker");
@@ -78,17 +78,19 @@ function accept(task: string, repo: string): string {
 	return total - failed.length + "/" + total + (failed.length ? "（缺 " + failed.join("、") + "）" : "");
 }
 
-/** 凭据与设置链回用户目录；firecode 只开 claudeSub（订阅请求要带归因），不激活指挥官，Worker 提示词由命令行追加。 */
+/** 凭据与设置链回用户目录；firecode 取已提交代码的副本（沙箱不放行本仓库），只开 claudeSub（订阅请求要带归因），不激活指挥官，Worker 提示词由命令行追加。 */
 function setupAgent(): void {
 	const agent = variantAgent(VARIANT);
 	if (existsSync(agent)) return;
+	const source = join(dirname(agent), "firecode");
+	gitArchive("HEAD", source);
 	mkdirSync(join(agent, "extensions/firecode"), { recursive: true });
 	for (const file of ["auth.json", "settings.json", "models.json", "models-store.json", "SYSTEM.md", "bin"])
 		if (existsSync(join(USER_AGENT_DIR, file))) symlinkSync(join(USER_AGENT_DIR, file), join(agent, file));
 	const off = Object.fromEntries(["header", "statusbar", "tools", "presets", "rename", "stats", "openaiNative", "review", "master", "watcher"].map((k) => [k, false]));
 	writeFileSync(join(agent, "extensions/firecode/config.jsonc"), JSON.stringify({ features: { ...off, claudeSub: true } }));
 	writeFileSync(join(agent, "extensions/firecode/index.ts"), 'export { default } from "./source/index.ts";\n');
-	symlinkSync(REPO, join(agent, "extensions/firecode/source"));
+	symlinkSync(source, join(agent, "extensions/firecode/source"));
 }
 
 const piModel = (atom: string) => atom.replace(/\/([^/]+)$/, ":$1");
@@ -118,15 +120,7 @@ async function runOne(task: string, atom: string, run: number): Promise<void> {
 		});
 	});
 	killTree(child);
-	const entries = jsonlFiles(join(dir, "sessions")).flatMap(readJsonl);
-	const usage = entries.filter((e) => e.message?.role === "assistant").map((e) => e.message.usage ?? {});
-	const result = {
-		task, atom, run, status,
-		wall: (Date.now() - started) / 1000,
-		cost: usage.reduce((sum, u) => sum + (u.cost?.total ?? 0), 0),
-		output: usage.reduce((sum, u) => sum + (u.output ?? 0), 0),
-		tools: entries.filter((e) => e.message?.role === "toolResult").length,
-	};
+	const result = { task, atom, run, status, wall: (Date.now() - started) / 1000, cost: runCost(dir) };
 	writeFileSync(join(dir, "final.md"), jsonlFiles(join(dir, "sessions")).map(finalText).join("\n"));
 	writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 1));
 	console.log(runId(task, atom, run), status, result.wall.toFixed(0) + "s", "$" + result.cost.toFixed(3));
@@ -143,6 +137,14 @@ function quality(task: string, dir: string): string {
 	return spec.verdict ? (spec.verdict(final) ? "对" : "错") : "人读";
 }
 
+/** 过程量从会话记录数：回合 = 模型回复条数，工具 = 顶层工具调用数（codemode 脚本里的嵌套调用不计），输出 = 输出 token。 */
+function effort(dir: string): string {
+	const replies = jsonlFiles(join(dir, "sessions")).flatMap(readJsonl).filter((e) => e.message?.role === "assistant").map((e) => e.message);
+	const tools = replies.reduce((sum, m) => sum + m.content.filter((c: { type: string }) => c.type === "toolCall").length, 0);
+	const output = replies.reduce((sum, m) => sum + (m.usage?.output ?? 0), 0);
+	return replies.length + "回合 " + tools + "工具 " + (output / 1000).toFixed(1) + "k出";
+}
+
 function report(): void {
 	const rows = new Map<string, string[]>();
 	for (const name of existsSync(OUT) ? readdirSync(OUT).sort() : []) {
@@ -150,9 +152,10 @@ function report(): void {
 		if (!existsSync(file)) continue;
 		const r = JSON.parse(readFileSync(file, "utf8"));
 		const key = r.task + " | " + r.atom;
-		rows.set(key, [...(rows.get(key) ?? []), [quality(r.task, join(OUT, name)), r.wall.toFixed(0) + "s", "$" + r.cost.toFixed(3), r.status === "ok" ? "" : r.status].join(" ").trim()]);
+		const cell = [quality(r.task, join(OUT, name)), r.wall.toFixed(0) + "s", "$" + r.cost.toFixed(3), effort(join(OUT, name)), r.status === "ok" ? "" : r.status];
+		rows.set(key, [...(rows.get(key) ?? []), cell.join(" ").trim()]);
 	}
-	console.log("任务 | 原子 | 每次：质量 墙钟 花费（审计质量 = 指到植入缺陷 ±5 行的个数，漏指行号的须人读）");
+	console.log("任务 | 原子 | 每次：质量 墙钟 花费 回合 工具调用 输出token（审计质量 = 指到植入缺陷 ±5 行的个数，漏指行号的须人读）");
 	for (const [key, runs] of rows) console.log(key + " | " + runs.join(" ; "));
 }
 
