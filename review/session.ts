@@ -1,5 +1,6 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain } from "../config.js";
+import { routePause, type ChainPause } from "../model-route.js";
 import { msg } from "../messages.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import type { PromptLayers } from "./prompt.js";
@@ -10,7 +11,8 @@ export type ReviewSessionResult =
 	| { kind: "empty" }
 	| { kind: "timeout" }
 	| { kind: "aborted" }
-	| { kind: "error"; message: string };
+	/** retry：模型调用失败且席位的模型链此刻整条暂时不可用（瞬时故障）。 */
+	| { kind: "error"; message: string; retry?: ChainPause };
 
 export interface ReviewModelConfig {
 	models: ModelChain;
@@ -84,7 +86,10 @@ export async function runReviewSession(
 		await Promise.race([run, interruption]);
 		// 中断只靠 finally 的 dispose 收尾：pi 的 abort 在模型流卡死时永不返回，等它会拖住整个关闭链。
 		if (interrupted) return { kind: interrupted };
-		if (finalError) return { kind: "error", message: [finalError, ...extensionFailures].join("；") };
+		if (finalError) {
+			const retry = routePause(spawned.session.model);
+			return { kind: "error", message: [finalError, ...extensionFailures].join("；"), ...(retry ? { retry } : {}) };
+		}
 		if (finalText?.trim()) return { kind: "output", text: finalText, atom: actual };
 		return extensionFailures.length ? { kind: "error", message: extensionFailures.join("；") } : { kind: "empty" };
 	} finally {

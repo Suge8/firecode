@@ -15,7 +15,7 @@ import {
 } from "./list-view.js";
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, MASTER_PROMPT, WORKER_PROMPT } from "./prompt.js";
-import { armInterruptReminder } from "./run.js";
+import { armInterruptReminder, armResume } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import type { InProcessSessionPool } from "../spawn.js";
@@ -80,7 +80,10 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		const tools = pi.getActiveTools().filter((name) => !MASTER_TOOLS.includes(name));
 		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
-	/** 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt，这里补挂续跑提醒并重投未确认事件。 */
+	/**
+	 * 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt，这里补挂续跑提醒、按档案重挂暂停的自动续跑，
+	 * 重投未确认事件，并重判上一回合是否因瞬时故障留下没处理的事件。
+	 */
 	const activate = async (ctx: ExtensionContext): Promise<void> => {
 		if (startupError) throw new Error(startupError);
 		await prepareRoster(ctx);
@@ -91,7 +94,9 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		active.render();
 		// 只有本次载入收敛的子代理是被重载打断的；指挥官自己 interrupt 的、早已提醒过的不再提醒。
 		for (const name of active.store.recovered) armInterruptReminder(active, active.store.require(name));
+		for (const worker of active.store.workers) armResume(active, worker);
 		active.outbox.replayUnacked(ctx);
+		active.outbox.resumeIfStranded();
 	};
 	/** 会话关闭先清空当前 runtime，再释放池、订阅与定时器：迟到任务不写状态、投递、UI 或持久化。 */
 	const deactivate = async () => {
@@ -131,6 +136,8 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 			}
 		},
 	});
+
+	pi.on("agent_settled", () => runtime?.outbox.resumeIfStranded());
 
 	pi.on("input", (event) => {
 		if (event.source !== "extension") runtime?.collapseList();

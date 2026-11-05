@@ -479,18 +479,148 @@ test("首选额度用尽时同一回合切换到下一模型并返回", async ()
 	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
 });
 
-test("Claude 订阅额度用尽的报错写明当地重置时刻：冷却到那一刻，派活失败报出的最早恢复时间就是它", async () => {
+test("Claude 订阅 5 小时额度用尽（报错写明当地重置时刻）：子代理暂停到那一刻，指挥官只收到一条不唤醒的暂停说明，不是失败", async () => {
 	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
-	faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)" })]);
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const limit = `429: {"message":"Claude Code: You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)","type":"rate_limit_error"}`;
+	faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: limit })]);
 	const before = Date.now();
-	const failed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const noticed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	await harness.execute({ action: "start", worker: "limit", prompt: "执行", role: "工程师" });
-	await failed;
+	await noticed;
 	// 新加坡全年 UTC+8：当地 5:10 是 UTC 21:10，取 before 之后最近的一次。
 	const today = new Date(before);
 	let reset = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 21, 10);
 	if (reset <= before) reset += 86_400_000;
-	expect(harness.messages.at(-1).message.content).toContain(`最早恢复时间 ${new Date(reset).toISOString()}`);
+	const { clockText } = await loadFirecodeModule("format.js") as any;
+	const notice = harness.messages.at(-1);
+	expect(titleOf(notice.message.content)).toBe("limit 已暂停");
+	expect(notice.message.content).toContain(`${clockText(reset)}（约 `);
+	expect(notice.message.content).toContain("You've hit your 5-hour limit");
+	expect(notice.message.content).not.toContain("错误：");
+	expect(notice.options).toEqual({ triggerTurn: false });
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle", resume: { at: reset } });
+	expect(harness.activity().join("\n")).toContain(`暂停至 ${clockText(reset)}`);
+	await harness.execute({ action: "kill", worker: "limit" });
+});
+
+/** 指挥官收到的事件标题，按到达顺序。 */
+const eventTitles = (harness: { messages: any[] }) => harness.messages.flatMap((entry: any) =>
+	[...String(entry.message.content).matchAll(/<firecode_master_event>\n(.*)/gu)].map((match) => match[1]));
+
+test("Worker 回合断网失败：暂停后到时自动续跑，网络恢复后完成，指挥官只收到一次最终落定；断网期间不在同一回合里死循环重试", async () => {
+	const harness = await setup(true, { timing: { cooldownMs: [40, 80] }, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } }));
+	// 先是宿主认得的 “Connection error.”，再是 Bun 断网时宿主不认的 “Unable to connect”，然后网络恢复。
+	const offline = ["Connection error.", "Connection error.", "Unable to connect. Is the computer able to access the url?"];
+	let calls = 0;
+	const respond = () => {
+		const error = offline[calls++];
+		return error ? fauxAssistantMessage("", { stopReason: "error", errorMessage: error }) : fauxAssistantMessage("网络恢复后完成");
+	};
+	faux.setResponses(Array.from({ length: 10 }, () => respond));
+	const started = await harness.execute({ action: "start", worker: "net", prompt: "执行", role: "工程师" });
+	await until(() => eventTitles(harness).includes("net 已返回"));
+	expect(eventTitles(harness)).toEqual(["net 已暂停", "net 已返回"]);
+	expect(harness.messages[0].options).toEqual({ triggerTurn: false });
+	expect(harness.messages.at(-1).message.content).toContain("网络恢复后完成");
+	expect(calls).toBe(offline.length + 1);
+	const session = harness.pool.getSession((started.details as any).worker.session);
+	const resumes = session.messages.filter((message: any) => message.role === "custom" && String(message.content).includes("自动续跑时间"));
+	expect(resumes).toHaveLength(2);
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker.status).toBe("idle");
+	expect(worker.resume).toBeUndefined();
+	await harness.command("");
+}, 20_000);
+
+test("链上全部模型限流：按冷却到期续跑；期间指挥官收到一条写明暂停到何时、为何的说明，不唤醒、不当失败", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const limited = (seconds: number) => fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 Too Many Requests {"resets_in_seconds": ${seconds}}` });
+	const models: string[] = [];
+	let recovered = false;
+	const respond = (_context: any, _options: any, _state: any, model: any) => {
+		models.push(model.id);
+		if (recovered) return fauxAssistantMessage("额度恢复后完成");
+		return model.id === "worker" ? limited(0.6) : limited(0.3);
+	};
+	faux.setResponses(Array.from({ length: 6 }, () => respond));
+	await harness.execute({ action: "start", worker: "quota", prompt: "执行", role: "工程师" });
+	await until(() => eventTitles(harness).includes("quota 已暂停"));
+	const notice = harness.messages.find((entry: any) => entry.message.content.includes("quota 已暂停"));
+	expect(notice.message.content).toContain("自动续跑");
+	expect(notice.message.content).toContain("原因：429 Too Many Requests");
+	expect(notice.options).toEqual({ triggerTurn: false });
+	const paused = (await harness.list().then((result) => result.details as any)).workers[0];
+	// 先恢复的是 worker-2（0.3 秒）：续跑时刻取链上最早恢复的那个。
+	expect(paused.resume.at - Date.now()).toBeLessThan(400);
+	recovered = true;
+	await until(() => eventTitles(harness).includes("quota 已返回"));
+	// 换模型与暂停都只告知不唤醒；唯一唤醒指挥官的是最终落定。
+	expect(eventTitles(harness)).toEqual(["quota 已切换模型", "quota 已暂停", "quota 已返回"]);
+	for (const entry of harness.messages)
+		expect(entry.options.triggerTurn).toBe(entry.message.content.includes("quota 已返回"));
+	// 续跑从链首选起：worker 还在冷却，所以落到 worker-2。
+	expect(models).toEqual(["worker", "worker-2", "worker-2"]);
+	await harness.command("");
+}, 20_000);
+
+test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	let calls = 0;
+	faux.setResponses(Array.from({ length: 4 }, () => () => (calls++ === 0
+		? fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.5}` })
+		: fauxAssistantMessage("重载后续跑完成"))));
+	const noticed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const started = await harness.execute({ action: "start", worker: "reload", prompt: "执行", role: "工程师" });
+	await noticed;
+	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-event-ack"));
+	// 两次重载：旧运行时的计时随会话关闭作废，只有最后一个运行时按档案重挂。
+	await harness.emit("session_start", {});
+	await harness.emit("session_start", {});
+	await until(() => eventTitles(harness).includes("reload 已返回"));
+	await Bun.sleep(300);
+	expect(eventTitles(harness)).toEqual(["reload 已暂停", "reload 已返回"]);
+	expect(calls).toBe(2);
+	const text = await readFile((started.details as any).worker.session, "utf8");
+	expect(text.match(/自动续跑时间/gu)).toHaveLength(1);
+	await harness.command("");
+}, 20_000);
+
+test("非瞬时错误（鉴权失败）照常以失败送达，不暂停、不重试；指挥官回合遇到鉴权错误也不被补唤醒", async () => {
+	const harness = await setup(true, { timing: { cooldownMs: [20] }, failTurns: { count: 1, error: "401 Unauthorized: invalid x-api-key" }, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	harness.idle = true;
+	let calls = 0;
+	faux.setResponses(Array.from({ length: 3 }, () => () => (calls++, fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid x-api-key" }))));
+	await harness.execute({ action: "start", worker: "auth", prompt: "执行", role: "工程师" });
+	await until(() => harness.turns.length === 1);
+	await Bun.sleep(200);
+	expect(eventTitles(harness)).toEqual(["auth 失败"]);
+	expect(harness.messages[0].message.content).toContain("401 Unauthorized");
+	expect(calls).toBe(1);
+	expect(harness.turns).toHaveLength(1);
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker.resume).toBeUndefined();
+	await harness.command("");
+});
+
+test("指挥官自己的回合断网失败、手上的子代理事件还没处理：恢复后被重新唤起一次，回合成功后不再补", async () => {
+	const harness = await setup(true, { timing: { cooldownMs: [30, 60] }, failTurns: { count: 2, error: "Connection error." } });
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "event", prompt: "执行", role: "工程师" });
+	await until(() => harness.turns.length === 3);
+	await Bun.sleep(200);
+	expect(harness.turns).toHaveLength(3);
+	expect(titleOf(harness.turns[0])).toBe("event 已返回");
+	for (const turn of harness.turns.slice(1)) {
+		expect(titleOf(turn)).toBe("指挥官 续跑");
+		expect(turn).toContain("Connection error.");
+	}
+	await harness.command("");
 });
 
 test("溢出恢复删除运行时消息后仍落定供应商错误而非过期回复", async () => {
@@ -1667,6 +1797,50 @@ test("修复回合自动重试后继续下一轮审查", async () => {
 	await harness.command("");
 }, 20_000);
 
+test("审查的修复回合撞上 429 限流：审查暂停，到时自动重新发起审查，通过后审查义务消除，指挥官只收到一次审查终态", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	faux.setResponses([
+		fauxAssistantMessage("实现完成"),
+		fauxAssistantMessage(REVIEW_FAIL),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429: {"type":"rate_limit_error","resets_in_seconds": 0.3}` }),
+		fauxAssistantMessage(REVIEW_PASS),
+		fauxAssistantMessage("审查通过"),
+	]);
+	await harness.execute({ action: "start", worker: "fix-limit", prompt: "实现", role: "工程师", review: true });
+	await until(() => eventTitles(harness).includes("fix-limit 已返回"));
+	await harness.execute({ action: "review", worker: "fix-limit" });
+	await until(() => eventTitles(harness).some((title) => title.startsWith("fix-limit 审查通过")), 15_000);
+	expect(eventTitles(harness)).toEqual(["fix-limit 已返回", "fix-limit 审查已暂停", "fix-limit 审查通过（1 轮）"]);
+	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
+	expect(worker).toMatchObject({ status: "idle" });
+	expect(worker.reviewNeeded).toBeUndefined();
+	expect(worker.resume).toBeUndefined();
+	await harness.execute({ action: "ack", worker: "fix-limit" });
+	await harness.command("");
+}, 20_000);
+
+test("审查者撞上 429 限流整轮缺席：审查暂停后自动续审并通过", async () => {
+	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	faux.setResponses([
+		fauxAssistantMessage("实现完成"),
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 Too Many Requests {"resets_in_seconds": 0.3}` }),
+		fauxAssistantMessage(REVIEW_PASS),
+		fauxAssistantMessage("审查通过"),
+	]);
+	await harness.execute({ action: "start", worker: "seat-limit", prompt: "实现", role: "工程师", review: true });
+	await until(() => eventTitles(harness).includes("seat-limit 已返回"));
+	await harness.execute({ action: "review", worker: "seat-limit" });
+	await until(() => eventTitles(harness).some((title) => title.startsWith("seat-limit 审查通过")), 15_000);
+	expect(eventTitles(harness)).toEqual(["seat-limit 已返回", "seat-limit 审查已暂停", "seat-limit 审查通过（1 轮）"]);
+	expect((await harness.list().then((result) => result.details as any)).workers[0].reviewNeeded).toBeUndefined();
+	await harness.command("");
+}, 20_000);
+
+const REVIEW_FAIL = "核对了 a.ts。\n证据：文件=a.ts；命令=bun test\n## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 5\n- 问题: x\n- 证据: a.ts\n- 违反的约定与期望行为: y\n- 验证命令: bun test";
+const REVIEW_PASS = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
+
 test("修复回合最终错误向 Master 报告原文并保留审查轮", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
@@ -1900,6 +2074,8 @@ async function setup(activate = true, options: {
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
+	/** 前 n 个被唤起的指挥官回合以这条供应商错误收场（宿主自动重试已用完）：复现指挥官自己的回合断网。 */
+	failTurns?: { count: number; error: string };
 	/** 子会话加载 FireCode 的轮记录器（与真实安装一致）；false 复现 Worker 排除了 FireCode 扩展。 */
 	workerRecorder?: boolean;
 	roles?: Record<string, { model: string | string[]; use: string; fallback?: string[] }>;
@@ -1996,6 +2172,7 @@ async function setup(activate = true, options: {
 		sendMessage: (message: any, sendOptions: any) => {
 			if (failures > 0) { failures--; throw new Error("投递失败"); }
 			messages.push({ message, options: sendOptions });
+			entries.push({ type: "custom_message", customType: message.customType, content: message.content });
 			if (sendOptions?.triggerTurn === true && idle) {
 				idle = false;
 				starting = message;
@@ -2012,9 +2189,13 @@ async function setup(activate = true, options: {
 		await fake.fire("agent_start", {}, ctx);
 		await fake.fire("message_start", { message: { role: "custom", customType, content, display } }, ctx);
 	};
+	let failedTurns = options.failTurns?.count ?? 0;
 	const finishTurn = async () => {
+		const failure = failedTurns > 0 ? (failedTurns--, options.failTurns!.error) : undefined;
+		const reply = failure ? { role: "assistant", stopReason: "error", errorMessage: failure } : { role: "assistant", stopReason: "stop" };
+		entries.push({ type: "message", message: reply });
 		idle = true;
-		await fake.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await fake.fire("agent_end", { messages: [reply] }, ctx);
 		await fake.fire("agent_settled", {}, ctx);
 	};
 	const statuses = new Map<string, string>();
@@ -2037,6 +2218,7 @@ async function setup(activate = true, options: {
 			getSessionId: () => sessionId,
 			getSessionFile: () => main.getSessionFile(),
 			getEntries: () => entries,
+			getBranch: () => entries,
 		},
 		ui: {
 			notify: (message: string) => notices.push(message),

@@ -23,6 +23,17 @@ export interface WorkerRef {
 	 */
 	launch: number;
 	reviewNeeded?: boolean;
+	/**
+	 * 瞬时失败后的自动续跑：idle 且带它就是“暂停到 at，到时自动续跑”（review 为真时续的是审查）。持久化，reload 后按 at 重挂；
+	 * 续跑开始、指挥官 send/review/interrupt/ack 都会清掉它，所以同一次暂停只续跑一次。
+	 */
+	resume?: WorkerResume;
+}
+
+export interface WorkerResume {
+	at: number;
+	reason: string;
+	review?: true;
 }
 
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
@@ -140,6 +151,12 @@ function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 	return { workers: workers.sort(byLaunch) };
 }
 
+function isResume(value: unknown): value is WorkerResume {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const { at, reason, review } = value as Record<string, unknown>;
+	return typeof at === "number" && at > 0 && typeof reason === "string" && (review === undefined || review === true);
+}
+
 function isWorker(value: unknown): value is WorkerRef {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
@@ -155,5 +172,6 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
+	if (record.resume !== undefined && !isResume(record.resume)) return false;
 	return typeof record.launch === "number" && Number.isInteger(record.launch) && record.launch > 0;
 }

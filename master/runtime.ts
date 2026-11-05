@@ -58,6 +58,10 @@ export interface WorkerLive {
 	/** interrupt 对审查中的子代理取消了审查：审查以取消收场时按中断落定（义务保留），而不是审查失败。 */
 	interruptedReview?: true;
 	interruptTimer?: NodeJS.Timeout;
+	/** 暂停后的自动续跑计时（档案里的 resume.at）：run.ts 的 armResume。 */
+	resumeTimer?: NodeJS.Timeout;
+	/** 这次运行的暂停已告知指挥官：续跑后再次暂停不重复告知，指挥官起新运行时清掉。 */
+	pauseNotified?: true;
 	/** 本次运行（start/send/review 投递）的起点：活动列表的实时耗时，以及从子代理会话里挑出属于这次运行的轮记录。 */
 	runStartedAt?: number;
 	/** 这次运行里用户在子代理全过程视图直接说的话；落定事件据此注明来源。 */
@@ -178,6 +182,7 @@ export class MasterRuntime {
 		const live = this.live.get(name);
 		if (live && live === expected) {
 			clearTimeout(live.interruptTimer);
+			clearTimeout(live.resumeTimer);
 			clearTimeout(live.stallTimer);
 			if (live.observed) this.unobserve(live);
 			this.live.delete(name);
@@ -223,11 +228,11 @@ export class MasterRuntime {
 		this.schedulePublish();
 	}
 
-	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒作废。 */
+	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒与暂停续跑作废。 */
 	beginRun(name: string, origin: RunOrigin = "master"): void {
 		const live = this.liveOf(name);
-		clearTimeout(live.interruptTimer);
-		live.interruptTimer = undefined;
+		this.cancelTimers(live);
+		live.pauseNotified = undefined;
 		live.runStartedAt = Date.now();
 		live.interruptedReview = undefined;
 		live.viewPrompts = [];
@@ -262,7 +267,7 @@ export class MasterRuntime {
 		this.closedValue = true;
 		this.stopReleaseWatch();
 		for (const live of this.live.values()) {
-			clearTimeout(live.interruptTimer);
+			this.cancelTimers(live);
 			clearTimeout(live.stallTimer);
 			if (live.observed) this.unobserve(live);
 		}
@@ -271,6 +276,13 @@ export class MasterRuntime {
 		this.list?.dispose();
 		this.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
 		this.ctx.ui.setStatus(STATUS_KEYS.master, undefined);
+	}
+
+	/** 指挥官接手（起新运行、ack、interrupt 暂停中的票）时作废还没触发的续跑提醒与自动续跑。 */
+	cancelTimers(live: WorkerLive): void {
+		clearTimeout(live.interruptTimer);
+		clearTimeout(live.resumeTimer);
+		live.interruptTimer = live.resumeTimer = undefined;
 	}
 
 	private unobserve(live: WorkerLive): void {

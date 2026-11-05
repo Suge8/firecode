@@ -24,6 +24,12 @@ export interface Timing {
 	 * 真卡死的命令一卡就是数小时（ffmpeg 无限输入卡了 8.5 小时），晚报十几分钟代价很小。
 	 */
 	stallMs: number;
+	/**
+	 * 瞬时失败（网络、过载、限流）且报错里读不出重置时刻时，第 1、2、3… 次连续失败后多久再试，末项封顶：
+	 * 模型路由的冷却、暂停的子代理与指挥官回合的自动续跑共用这一份。首项 1 分钟：断网多在几分钟内恢复，晚续一分钟代价小；
+	 * 封顶 15 分钟：长时间故障里每次重试只是一次失败的请求，恢复后最多晚 15 分钟续上。否决 5/15/60 分钟：一次 31 分钟的断网要拖到 80 分钟才续上。
+	 */
+	cooldownMs: readonly number[];
 }
 
 export const DEFAULT_TIMING: Timing = {
@@ -32,4 +38,5 @@ export const DEFAULT_TIMING: Timing = {
 	wakeQuietMs: 1_500,
 	eventRetryMs: 5_000,
 	stallMs: 30 * 60_000,
+	cooldownMs: [1, 5, 15].map((minutes) => minutes * 60_000),
 };

@@ -1,15 +1,20 @@
 /**
- * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断）、审查监视与中断续跑提醒。
+ * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断/暂停）、审查监视、中断续跑提醒与暂停后的自动续跑。
  * 所有 await 之后的写回经 runtime.current/commit 重读档案：kill 赢过迟到的异步写回。
+ *
+ * 暂停：回合或审查因瞬时故障（模型路由判定整条链暂时不可用，见 model-route.ts 的 routePause）收场时不报失败，
+ * 档案记 idle + resume（到时刻与原因），只告知指挥官一次不唤醒，到时在原会话自动续跑；续跑结束才是这次运行唯一的落定事件。
+ * 非瞬时失败（鉴权、参数、模型不存在）照常作为失败落定。
  */
 import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 import { modelAtomText, type ThinkingLevelValue } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
-import { firstSentence, textOf, tildeHome } from "../format.js";
+import { clip, firstSentence, oneLine, textOf, tildeHome } from "../format.js";
+import { routePause, type ChainPause } from "../model-route.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { quietMinutes, workerPhase } from "./activity-list.js";
-import { masterEvent, type MasterEvent } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
 import { CODEMODE_TOOL } from "../spawn.js";
@@ -19,6 +24,8 @@ import type { WorkerRef } from "./state.js";
 
 /** 指挥官开着 codemode 时 Worker 也开（on/only 读同一份 settings）；同进程共用的名额由池按子会话加开，见 spawn.ts。 */
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
+/** 续跑提示里的故障原文截到这么宽：供应商报错常带整段 JSON。 */
+const RESUME_REASON_WIDTH = 300;
 /** 算作“有输出”的子会话事件：模型 token 流与工具执行；活动列表据此判卡住。 */
 const OUTPUT_EVENTS = new Set(["message_update", "tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 
@@ -47,8 +54,9 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 			if (!current) return;
 			const from = previous ?? { model: current.model, thinking: current.thinking };
 			active.commit(current, (latest) => ({ ...latest, ...atom }));
+			// 只告知不唤醒：同一会话自动续跑，指挥官无事可做（断网时每次切换都唤醒它，只换来一串同样失败的指挥官回合）。
 			if (from.model !== atom.model)
-				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name);
+				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name, true);
 		},
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
@@ -153,6 +161,8 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 			settleInterrupted(active, worker);
 			return;
 		}
+		const pause = error === undefined && terminal?.stopReason === "error" ? routePause(session.model) : undefined;
+		if (pause) return pauseWorker(active, worker, pause);
 		settleWorker(active, worker, terminal, error);
 	};
 	if (typeof input !== "string") {
@@ -199,6 +209,85 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 	live.interruptTimer.unref?.();
 }
 
+/** 瞬时故障暂停：回到 idle 并记下续跑时刻；这次运行第一次暂停时告知指挥官（不唤醒），到时 armResume 自动续跑。 */
+function pauseWorker(active: MasterRuntime, identity: WorkerRef, pause: ChainPause, review = false): void {
+	const current = active.find(identity);
+	if (!current) return;
+	const paused: WorkerRef = { ...current, status: "idle", resume: { at: pause.until, reason: pause.reason, ...(review ? { review: true as const } : {}) } };
+	active.store.upsert(paused);
+	active.markIdle(paused, undefined);
+	const live = active.liveOf(identity.name);
+	if (!live.pauseNotified) {
+		live.pauseNotified = true;
+		active.outbox.enqueue(masterEvent.paused(identity.name, pause.until, pause.reason, review), identity.name, true);
+	}
+	armResume(active, paused);
+}
+
+/** 按档案里的 resume.at 挂自动续跑（激活时对每个暂停中的票调用）；没有 resume 的票不挂。 */
+export function armResume(active: MasterRuntime, worker: WorkerRef): void {
+	const resume = worker.resume;
+	if (!resume || active.closed) return;
+	const live = active.liveOf(worker.name);
+	clearTimeout(live.resumeTimer);
+	live.resumeTimer = setTimeout(() => {
+		live.resumeTimer = undefined;
+		if (!active.closed && active.live.get(worker.name) === live) void resumeWorker(active, worker, resume);
+	}, Math.max(0, resume.at - Date.now()));
+	live.resumeTimer.unref?.();
+}
+
+/**
+ * 到时续跑：档案仍是这次暂停（指挥官没有 send/review/interrupt/ack 接手）才续；任务在原会话里以续跑提示开回合，
+ * 审查则重新发起 fire-review。本次运行的起点与来源沿用暂停前的，落定事件只有续跑结束的那一条。
+ * 续跑准备失败（会话打不开、角色已删）不是瞬时故障，照常作为失败交给指挥官。
+ */
+async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): Promise<void> {
+	const live = active.liveOf(identity.name);
+	const current = active.find(identity);
+	if (current?.status !== "idle" || current.resume?.at !== resume.at || live.transitioning) return;
+	live.transitioning = true;
+	try {
+		if (resume.review) {
+			await startReview(active, current, true);
+			return;
+		}
+		const session = await openWorkerSession(active, current);
+		await session.waitForIdle();
+		active.assertOpen();
+		const working = active.commit(current, ({ resume: _resume, ...rest }) => ({ ...rest, status: "working" }));
+		live.runStartedAt ??= Date.now();
+		const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
+		await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
+	} catch (error) {
+		const latest = active.find(identity);
+		if (latest?.status !== "idle") return;
+		const { resume: _resume, ...idle } = latest;
+		active.store.upsert(idle);
+		const failure = error instanceof Error ? error.message : String(error);
+		active.markIdle(idle, { kind: "failed", note: firstSentence(failure) });
+		active.outbox.enqueue(masterEvent.failed(identity.name, failure, idle.reviewNeeded === true, takeViewPrompts(active, identity)), identity.name);
+	} finally {
+		live.transitioning = undefined;
+	}
+}
+
+/**
+ * 在原 Worker 会话里发起 fire-review（review 动作与暂停后的续审共用）。续审沿用暂停前的运行起点与来源。
+ * 先写档案再挂订阅：kill 或会话关闭时 commit 抛错，不会给已删的票留下订阅。
+ */
+export async function startReview(active: MasterRuntime, target: WorkerRef, resumed = false): Promise<void> {
+	const session = await openWorkerSession(active, target);
+	await session.waitForIdle();
+	active.assertOpen();
+	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
+	active.commit(target, ({ interruptedAt: _interruptedAt, resume: _resume, ...rest }) => ({ ...rest, status: "reviewing" }));
+	observeWorker(active, target, session);
+	if (!resumed) active.beginRun(target.name);
+	else active.liveOf(target.name).runStartedAt ??= Date.now();
+	monitorAndSettleReview(active, target, session, previousRunId);
+}
+
 function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: WorkerTerminal | undefined, error?: unknown): void {
 	const current = active.find(identity);
 	if (!current) return;
@@ -228,6 +317,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			const current = reviewing();
 			if (!current) return;
 			if (interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
+			if (outcome.status === "failed" && outcome.retry) return pauseWorker(active, current, outcome.retry, true);
 			const { reviewNeeded: _needed, ...fulfilled } = current;
 			const idle: WorkerRef = { ...(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current), status: "idle" };
 			active.store.upsert(idle);

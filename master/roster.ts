@@ -7,7 +7,10 @@ import { workerPhase, type ActivityFacts, type RowKind } from "./activity-list.j
 
 export const SUBAGENTS_CHANNEL = "firecode:subagents";
 
-/** 活动列表的分组减去“卡住”（卡住仍是在跑，要靠计时才判得出，名册不发时间驱动的变化）。 */
+/**
+ * 活动列表的分组减去“卡住”（卡住仍是在跑，要靠计时才判得出，名册不发时间驱动的变化）：
+ * running、review、paused（瞬时故障后暂停，到时自动续跑）、done、failed、interrupted、idle。
+ */
 type SubagentState = Exclude<RowKind, "stuck">;
 
 export interface SubagentInfo {

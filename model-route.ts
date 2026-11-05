@@ -1,20 +1,55 @@
-import { clampThinkingLevel, type Api, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ThinkingLevelValue } from "./config.js";
 import { matchModels } from "./model-match.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 
-interface Cooldown { failures: number; until: number; reason: string }
+/** transient：失败会自己过去（网络、过载、限流、写明重置时刻的额度窗口）；否则是鉴权、参数、模型不存在这类要人处理的。 */
+interface Cooldown { failures: number; until: number; reason: string; transient: boolean }
 interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue }
-interface RouteState { current?: Candidate }
+/** candidates 是最近一次选模型时的候选表：链暂停判定按它查冷却表，不再异步取可用模型。 */
+interface RouteState { current?: Candidate; candidates?: Candidate[] }
 const cooldowns = processShared("model-cooldowns", () => new Map<string, Cooldown>());
 const routes = processShared("physical-models", () => new Map<string, RouteState>());
 export function physicalModel(model: Model<Api> | undefined): Model<Api> | undefined {
 	return model?.api === "pi-virtual" ? routes.get(`${model.provider}/${model.id}`)?.current?.model : model;
 }
-const DELAYS = [5, 15, 60].map((minutes) => minutes * 60_000);
 const key = (model: Model<Api>) => `${model.provider}/${model.id}`;
+
+/**
+ * 宿主分类器之外的瞬时网络错误：Bun fetch 断网时报 “Unable to connect…” 与 ECONNRESET 一类系统错误码，宿主的模式表不认；
+ * 不补上它们，断网就会被当成要人处理的失败，恢复后没人续跑。
+ */
+const NETWORK_ERROR = /unable to connect|\beconn(?:reset|refused|aborted)\b|\benetunreach\b|\behostunreach\b|\betimedout\b/iu;
+
+/** 失败会不会自己过去：宿主判为可重试的、宿主漏掉的断网错误，或报错写明了额度重置时刻。 */
+export function transientFailure(reason: string): boolean {
+	const message = { role: "assistant", stopReason: "error", errorMessage: reason } as AssistantMessage;
+	return isRetryableAssistantError(message) || NETWORK_ERROR.test(reason) || resetTime(reason, Date.now()) !== undefined;
+}
+
+/** 第 failures 次连续失败后何时再试：报错写明的重置时刻优先，否则按冷却阶梯（Timing.cooldownMs）。 */
+export function retryAt(reason: string, failures: number, ladder: readonly number[], now = Date.now()): number {
+	return resetTime(reason, now) ?? now + ladder[Math.min(failures, ladder.length) - 1]!;
+}
+
+/** 整条链暂时不可用：最早恢复的瞬时失败候选的时刻与原因。 */
+export interface ChainPause { until: number; reason: string }
+
+/**
+ * 路由的链此刻是否整条暂停：候选表里每个都有冷却记录（失败过且没成功过），且至少一个是瞬时失败；
+ * 恢复时刻取瞬时失败里最早的那个（已过就是现在）。有没失败过的候选、或全是非瞬时失败时没有暂停，照常算失败。
+ * 物理模型（不经路由的会话）没有暂停。
+ */
+export function routePause(model: Model<Api> | undefined): ChainPause | undefined {
+	const list = model?.api === "pi-virtual" ? routes.get(key(model))?.candidates : undefined;
+	if (!list?.length) return undefined;
+	const entries = list.map(({ model: candidate }) => cooldowns.get(key(candidate)));
+	if (entries.some((entry) => !entry)) return undefined;
+	const first = entries.filter((entry) => entry!.transient).sort((a, b) => a!.until - b!.until)[0];
+	return first && { until: Math.max(first.until, Date.now()), reason: first.reason };
+}
 
 /** 报错里写明的额度重置时刻；读不出就交给退避表。 */
 function resetTime(reason: string, now: number): number | undefined {
@@ -73,6 +108,7 @@ export async function candidates(runtime: ModelRuntime, chain: ModelChain): Prom
 export async function createModelRoute(
 	runtime: ModelRuntime,
 	initialChain: ModelChain,
+	ladder: readonly number[],
 	initialOverride?: ThinkingLevelValue,
 	onChange?: (atom: ModelAtom, previous?: ModelAtom, reason?: string) => void,
 ): Promise<{ model: Model<Api>; extension: ExtensionFactory; configure(chain: ModelChain, override?: ThinkingLevelValue): void; dispose(): void }> {
@@ -95,13 +131,12 @@ export async function createModelRoute(
 		task.attempted.set(name, reason);
 		task.failure = reason;
 		if (!cool) return;
-		const previous = cooldowns.get(name);
-		const failures = (previous?.failures ?? 0) + 1;
-		const now = Date.now();
-		cooldowns.set(name, { failures, reason, until: resetTime(reason, now) ?? now + DELAYS[Math.min(failures - 1, DELAYS.length - 1)] });
+		const failures = (cooldowns.get(name)?.failures ?? 0) + 1;
+		cooldowns.set(name, { failures, reason, until: retryAt(reason, failures, ladder), transient: transientFailure(reason) });
 	};
 	const choose = async (restart: boolean) => {
 		const list = await candidates(runtime, chain);
+		state.candidates = list;
 		const attempted = attemptedOf(task);
 		const failure = task.phase === "idle" ? undefined : task.failure;
 		const available = list.filter(({ model }) => !attempted.has(key(model)) && (cooldowns.get(key(model))?.until ?? 0) <= Date.now());
@@ -134,7 +169,9 @@ export async function createModelRoute(
 	};
 	runtime.registerVirtualModel({ provider, id, name: "FireCode", thinkingLevels: THINKING_LEVELS,
 		route: async (request) => {
-			if (request.reason === "retry" && state.current) {
+			// 宿主重试的是路由自己抛的“链已用尽”时没有 failed：重新选（冷却期内照旧抛），不把刚冷却的模型再交出去——
+			// 否则报错文本命中宿主的可重试模式时，重试与续跑交替，整条链冷却期间也在同一回合里无限循环。
+			if (request.reason === "retry" && request.failed && state.current) {
 				if (task.phase === "pending") task = { ...task, phase: "running" };
 				return { model: state.current.model, thinkingLevel: state.current.thinking };
 			}

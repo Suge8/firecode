@@ -12,6 +12,7 @@
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
 import type { ModelAtom, ReviewConfig } from "../config.js";
+import type { ChainPause } from "../model-route.js";
 import { DECISIONS_HEADING, fieldLine, msg, SUGGESTIONS_HEADING } from "./messages.js";
 
 // 字段名两种语言都认，见 messages.ts 的 terms。
@@ -45,6 +46,8 @@ export interface ReviewerResult extends ModelAtom {
 	details: string;
 	/** 席位首选不可用、由链里的备用模型审出的票：备用模型漏检率高得多，它的结论在卡片与 Master 事件里都要标明。 */
 	fallback?: boolean;
+	/** 缺席（error）是因为席位的模型链暂时整条不可用（瞬时故障）：最早恢复的时刻与原因。 */
+	retry?: ChainPause;
 }
 
 /** 审查中席位的结果；null 即还在审。 */
@@ -86,10 +89,16 @@ interface Base {
 	updatedAt: number;
 }
 
+/**
+ * 故障终态（end 为 error）的 retry：故障全是瞬时的（缺席席位的模型链、修复回合的执行模型链暂时不可用），到这个时刻重审即可，
+ * Master 据此暂停子代理、到时自动续审，而不是把它当成审查未完成交给指挥官。
+ */
+type Settled = { phase: "settled"; end: SettledEnd; error?: string; retry?: ChainPause };
+
 export type ReviewState = Base &
 	(
 		| { phase: "idle" | "queued" }
-		| { phase: "settled"; end: SettledEnd; error?: string }
+		| Settled
 		| { phase: "reviewing"; slots: ReviewerSlot[] }
 		/** FAIL 轮等顾问仲裁：本轮全部审查结果，收口前不进 history。 */
 		| { phase: "needs_fix"; voters: ReviewerResult[] }
@@ -107,7 +116,7 @@ export type ReviewEvent =
 	| { type: "ADVISOR_SETTLED"; result: AdvisorResult }
 	/** 跳过顾问继续修复；带 message 表示顾问不可用（发可见卡），不带表示用户按 esc 跳过。 */
 	| { type: "ADVISOR_SKIPPED"; message?: string }
-	| { type: "INFRASTRUCTURE_ERROR"; details: string }
+	| { type: "INFRASTRUCTURE_ERROR"; details: string; retry?: ChainPause }
 	| { type: "ADVANCE" }
 	| { type: "TURN_STARTED" }
 	| { type: "TURN_ENDED"; aborted: boolean }
@@ -159,7 +168,7 @@ function baseOf(state: ReviewState): Base {
 
 type PhaseData =
 	| { phase: "idle" | "queued" }
-	| { phase: "settled"; end: SettledEnd; error?: string }
+	| Settled
 	| { phase: "reviewing"; slots: ReviewerSlot[] }
 	| { phase: "needs_fix"; voters: ReviewerResult[] }
 	| { phase: "awaiting_fix" | "summarizing"; turn: TurnStatus };
@@ -188,7 +197,7 @@ export function reduce(state: ReviewState, event: ReviewEvent, limits: ReviewLim
 		case "ADVISOR_SKIPPED":
 			return onAdvisorSkipped(state, event.message, now);
 		case "INFRASTRUCTURE_ERROR":
-			return onInfrastructureError(state, event.details, now);
+			return onInfrastructureError(state, event.details, event.retry, now);
 		case "ADVANCE":
 			return onAdvance(state, limits, now);
 		case "TURN_STARTED":
@@ -263,8 +272,10 @@ function settleRound(state: ReviewState, results: ReviewerResult[], limits: Revi
 	if (!failed && absent.length > 0) {
 		const error = `${msg.summary.reviewerBroken}\n\n${sections(absent)}`;
 		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error });
+		// 每个缺席席位都是暂时不可用时才可续审：等最晚恢复的那个，届时整轮的席位都回来了。
+		const retry = absent.every((item) => item.retry) ? absent.map((item) => item.retry!).sort((a, b) => b.until - a.until)[0] : undefined;
 		return {
-			state: go(state, now, { phase: "settled", end: "error" }, { history: [...state.history, closed] }),
+			state: go(state, now, { phase: "settled", end: "error", ...(retry ? { retry } : {}) }, { history: [...state.history, closed] }),
 			effects: [{ kind: "send_card", card: { kind: "error", message: error, elapsedMs: closed.elapsedMs } }],
 		};
 	}
@@ -348,9 +359,9 @@ function toRepair(
 	};
 }
 
-function onInfrastructureError(state: ReviewState, details: string, now: number): ReduceResult {
+function onInfrastructureError(state: ReviewState, details: string, retry: ChainPause | undefined, now: number): ReduceResult {
 	if (state.phase === "awaiting_fix") return {
-		state: go(state, now, { phase: "settled", end: "error", error: details }),
+		state: go(state, now, { phase: "settled", end: "error", error: details, ...(retry ? { retry } : {}) }),
 		effects: [{ kind: "send_card", card: { kind: "error", message: details } }],
 	};
 	const reviewers = state.phase === "reviewing" ? resultsOf(state.slots) : state.phase === "needs_fix" ? state.voters : undefined;

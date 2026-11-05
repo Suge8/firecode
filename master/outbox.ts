@@ -5,8 +5,9 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";
+import { retryAt, transientFailure } from "../model-route.js";
 import { roundFromEntry } from "../round.js";
-import { MASTER_EVENT_TYPE, withElapsed, type MasterEvent } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent, withElapsed, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import type { MasterRuntime } from "./runtime.js";
 
@@ -38,13 +39,16 @@ export class Outbox {
 	private firstQueuedAt?: number;
 	/** 发件箱收口时中止悬而未决的唤起：停用后不再确认旧事件。 */
 	private readonly closing = new AbortController();
+	/** 指挥官回合瞬时失败后补唤醒的计时（resumeIfStranded）。 */
+	private resumeTimer?: NodeJS.Timeout;
+	/** 连续几次补唤醒的回合仍以瞬时失败收场：冷却阶梯的序号；一次正常收尾归零。 */
+	private resumeFailures = 0;
 
 	constructor(private readonly active: MasterRuntime) {}
 
-	/** 新产出的事件：追加耗时、持久化为 pending、排队投递。 */
-	enqueue(produced: MasterEvent, worker?: string): void {
+	/** 新产出的事件：追加耗时、持久化为 pending、排队投递。informOnly 只告知不唤醒（视图起的运行默认如此）。 */
+	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view"): void {
 		if (this.active.closed) return;
-		const informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view";
 		const event: PendingMasterEvent = {
 			id: crypto.randomUUID(),
 			content: this.withElapsed(produced, worker),
@@ -76,7 +80,38 @@ export class Outbox {
 
 	close(): void {
 		clearTimeout(this.flushTimer);
+		clearTimeout(this.resumeTimer);
 		this.closing.abort();
+	}
+
+	/**
+	 * 指挥官回合落定后调用（激活时也调一次）：回合以瞬时错误收场（宿主自动重试已用完）、回合里收到的事件却还没处理时，
+	 * 事件已确认送达不会再投，也不会再有人唤醒它。按冷却阶梯（报错写明重置时刻就到那时）补一次唤醒；那一回合又失败就再挂，
+	 * 期间别的回合先开并正常收尾就不再补。判定只读主会话分支、不另存：reload 后重判一次，等待中 reload 也只补一次。
+	 */
+	resumeIfStranded(): void {
+		clearTimeout(this.resumeTimer);
+		this.resumeTimer = undefined;
+		const reason = strandedFailure(this.active.ctx);
+		if (reason === undefined) {
+			this.resumeFailures = 0;
+			return;
+		}
+		this.resumeFailures++;
+		const delay = retryAt(reason, this.resumeFailures, this.active.setup.pool.timing.cooldownMs) - Date.now();
+		this.resumeTimer = setTimeout(() => {
+			this.resumeTimer = undefined;
+			const { active } = this;
+			// 忙着就不补：那个回合落定时会再判一次。
+			if (active.closed || !active.ctx.isIdle() || strandedFailure(active.ctx) === undefined) return;
+			const content = wrapEnvelope("firecode_master_event", masterEvent.masterResume(reason).body);
+			deliver(active.setup.pi, active.ctx, { customType: MASTER_EVENT_TYPE, content }, this.closing.signal).catch((error) => {
+				if (active.closed) return;
+				active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
+				this.resumeIfStranded();
+			});
+		}, Math.max(0, delay));
+		this.resumeTimer.unref?.();
 	}
 
 	/**
@@ -164,6 +199,20 @@ export class Outbox {
 			...(sessionSince === undefined ? {} : { task: Date.now() - sessionSince }),
 		});
 	}
+}
+
+/**
+ * 指挥官的最后一条回复是瞬时错误，且上一次完整收尾（stop；用户中止也算他已接手）之后收到过子代理事件：返回故障原文。
+ * 中途的工具调用回复不算收尾——回合在处理事件的半路断掉，事件同样没处理完。
+ */
+function strandedFailure(ctx: ExtensionContext): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	const assistants = branch.flatMap((entry, index) => (entry.type === "message" && entry.message.role === "assistant" ? [{ index, message: entry.message }] : []));
+	const last = assistants.at(-1)?.message;
+	if (last?.stopReason !== "error" || !last.errorMessage || !transientFailure(last.errorMessage)) return undefined;
+	const answered = assistants.findLast(({ message }) => message.stopReason !== "error" && message.stopReason !== "toolUse")?.index ?? -1;
+	const pending = branch.slice(answered + 1).some((entry) => entry.type === "custom_message" && entry.customType === MASTER_EVENT_TYPE);
+	return pending ? last.errorMessage : undefined;
 }
 
 function unackedEvents(ctx: ExtensionContext): PendingMasterEvent[] {

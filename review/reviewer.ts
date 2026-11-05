@@ -17,7 +17,7 @@ interface RunReviewerOptions {
 	lastVoter?: string;
 }
 
-type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
+type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details" | "retry">;
 
 /**
  * 运行一个席位的审查并解析输出。模型调用失败由统一路由在会话内沿链续跑；输出格式无效是模型自身的毛病，
@@ -111,7 +111,7 @@ function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>
 		: result.kind === "timeout" ? msg.reviewer.timeout
 		: result.kind === "error" ? msg.reviewer.sessionFailed(result.message)
 		: msg.reviewer.emptyOutput;
-	return { status: "error", summary: "", details };
+	return { status: "error", summary: "", details, ...(result.kind === "error" && result.retry ? { retry: result.retry } : {}) };
 }
 
 /** 输出契约违例：该票作废记为缺席。 */

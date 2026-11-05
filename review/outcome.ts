@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { ChainPause } from "../model-route.js";
 import { checkpointOf, refusalOf, type Snapshot } from "./checkpoint.js";
 import { msg } from "./messages.js";
 import { reviewerName, roundText } from "./state.js";
@@ -15,7 +16,8 @@ export type ReviewOutcome =
 	/** fallback：末轮由备用模型审出的席位（带备用标记的名字）；首选照常时省略。 */
 	| { status: "passed"; runId: string; rounds: number; fallback?: string[] }
 	| { status: "stopped"; runId: string; rounds: number; advisorAdvice?: string; fallback?: string[] }
-	| { status: "failed"; runId: string; rounds: number; reason: string }
+	/** retry：故障全是瞬时的（模型链暂时不可用），到这个时刻重审即可；见 state.ts 的 Settled。 */
+	| { status: "failed"; runId: string; rounds: number; reason: string; retry?: ChainPause }
 	/** 被取消（用户或 CANCEL_REVIEW_COMMAND）；不是故障，也不是质量裁决。 */
 	| { status: "cancelled"; runId: string; rounds: number }
 	| { status: "in_progress"; runId: string }
@@ -91,7 +93,7 @@ function outcomeOf(latest: Snapshot): ReviewOutcome {
 			return { status: "stopped", runId, rounds, ...fallback };
 		// 故障与超时是基础设施故障，取消是人为中断，都不弱化成“停止”；原因给人话，不把枚举名交给读取方。
 		case "error":
-			return { status: "failed", runId, rounds, reason: latest.error || (last && roundText(last).trim()) || msg.outcome.error };
+			return { status: "failed", runId, rounds, reason: latest.error || (last && roundText(last).trim()) || msg.outcome.error, ...(latest.retry ? { retry: latest.retry } : {}) };
 		case "cancelled":
 			return { status: "cancelled", runId, rounds };
 		case "timed_out":
