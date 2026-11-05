@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // 首步决策（probe）：主会话面对任务，是亲手、委派还是并行委派。到第一次 subagents start（被探针拦截，不真起 Worker）、
-// --steps 个工具步内未委派（判亲手）、agent_end 或超时即止。
-//   bun decide.ts <变体> [--tasks t1-oneline,t2-qa] [--runs 2] [--concurrency 4] [--steps 5] [--timeout 300] [--force]
+// 第一次 edit/write（亲手动手改）、--steps 个模型回合内未委派（判亲手；按回合不按工具调用，codemode 一个脚本里的嵌套调用不算多步）、agent_end 或超时即止。
+//   bun decide.ts <变体> [--tasks t1-oneline,t2-qa] [--runs 2] [--concurrency 4] [--steps 15] [--timeout 300] [--force]
 //   bun decide.ts report <变体>      只汇总已有结果
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { TASKS, taskById, type Task } from "./tasks.ts";
 interface Start {
 	worker?: string;
 	role?: string;
+	review?: boolean;
 	promptChars: number;
 }
 interface Decision {
@@ -48,11 +49,9 @@ function runOne(task: Task, variant: string, run: number, o: { steps: number; ti
 	onJsonLines(child, (event) => {
 		if (event.type === "agent_start" && !tAgent) tAgent = Date.now();
 		if (event.type === "message_end" && event.message?.stopReason === "error") finish("error: " + (event.message.errorMessage ?? "assistant error"));
-		if (event.type === "tool_execution_end") {
-			steps++;
-			if (probeStarts(probePath).length) finish("subagents-start");
-			else if (steps >= o.steps) finish("steps");
-		}
+		if (event.type === "tool_execution_end" && probeStarts(probePath).length) finish("subagents-start");
+		else if (event.type === "tool_execution_end" && (event.toolName === "edit" || event.toolName === "write")) finish("edit");
+		if (event.type === "turn_end" && ++steps >= o.steps && !probeStarts(probePath).length) finish("steps");
 		if (event.type === "agent_end") finish("agent_end");
 	});
 	return new Promise((resolve) => {
@@ -61,7 +60,7 @@ function runOne(task: Task, variant: string, run: number, o: { steps: number; ti
 			const starts = probeStarts(probePath);
 			const result: Decision = {
 				task: task.id, run, reason,
-				starts: starts.map((r) => ({ worker: r.args.worker, role: r.args.role, promptChars: String(r.args.prompt ?? "").length })),
+				starts: starts.map((r) => ({ worker: r.args.worker, role: r.args.role, review: r.args.review === true, promptChars: String(r.args.prompt ?? "").length })),
 				decisionSec: ((starts[0]?.t ?? Date.now()) - (tAgent || t0)) / 1000,
 				cost: runCost(dir),
 			};
@@ -76,13 +75,14 @@ function verdict(task: Task, r: Decision): boolean {
 	if (r.reason.startsWith("error")) return false;
 	if (ideal.mode === "hand") return !r.starts.length;
 	if (r.starts.length < (ideal.mode === "parallel" ? 2 : 1)) return false;
+	if (ideal.review && !r.starts.some((s) => s.review)) return false;
 	return !ideal.roles || r.starts.some((s) => ideal.roles!.includes(s.role ?? ""));
 }
 
 function cell(task: Task, r: Decision | undefined): string {
 	if (!r) return "—";
 	const roles = [...new Set(r.starts.map((s) => s.role))].join("/");
-	const what = r.starts.length ? `委派×${r.starts.length} ${roles}` : r.reason === "agent_end" ? "亲手（做完）" : "亲手†";
+	const what = r.starts.length ? `委派×${r.starts.length} ${roles}${r.starts.some((s) => s.review) ? " 审" : ""}` : r.reason === "agent_end" ? "亲手（做完）" : r.reason === "edit" ? "亲手（动手改）" : "亲手†";
 	return `${verdict(task, r) ? "✓" : "✗"} ${what}<br>${r.decisionSec.toFixed(0)}s · $${r.cost.toFixed(2)}`;
 }
 
@@ -112,7 +112,7 @@ const { values, positionals } = parseArgs({
 	allowPositionals: true,
 	options: {
 		tasks: { type: "string" }, runs: { type: "string", default: "2" }, concurrency: { type: "string", default: "4" },
-		steps: { type: "string", default: "5" }, timeout: { type: "string", default: "300" }, force: { type: "boolean" },
+		steps: { type: "string", default: "15" }, timeout: { type: "string", default: "300" }, force: { type: "boolean" },
 	},
 });
 const reportOnly = positionals[0] === "report";

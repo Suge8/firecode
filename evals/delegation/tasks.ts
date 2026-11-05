@@ -8,7 +8,7 @@ export interface Task {
 	kind: string;
 	prompt: string;
 	fixture: FixtureKind;
-	ideal?: { mode: Mode; roles?: string[] };
+	ideal?: { mode: Mode; roles?: string[]; review?: boolean };
 	timeoutSec?: number;
 	/** Worker 爱用写死的 /tmp 路径，这类任务只能一个接一个跑。 */
 	serial?: boolean;
@@ -59,6 +59,13 @@ export const TASKS: Task[] = [
 		prompt: "审计 review/ 整个模块：找状态机、并发、持久化和错误处理上的真实缺陷，给我一份带文件和行号证据的清单（按严重度排序），不要改代码。",
 	},
 	{ id: "t8-single", kind: "单模块中等实现", fixture: "base", ideal: { mode: "hand" }, prompt: "给 session/quota.ts 的供应商查询加 8 秒超时：超时算该家失败、报超时原因，不影响另一家的结果；补测试并跑通。" },
+	{
+		id: "t11-risky",
+		kind: "高影响实现（持久化与恢复）",
+		fixture: "base",
+		ideal: { mode: "delegate", roles: ["工程师"], review: true },
+		prompt: "审查进行中进程被杀，review/checkpoint.ts 写下的快照可能停在修复派发与轮记录之间的中间态，重开会话后审查卡死或重复派发修复。改成崩溃后恢复能识别这种中间态、从最后一个一致的状态继续，并实测杀进程后恢复。",
+	},
 	{ id: "t9-big", kind: "大任务：六目录审计（植入缺陷）", fixture: "t9", timeoutSec: 50 * MINUTES, prompt: T9_AUDIT },
 	{ id: "t9-hand", kind: "t9 强制亲手基线", fixture: "t9", timeoutSec: 60 * MINUTES, prompt: T9_AUDIT + " 本次请完全亲手完成，不要使用 subagents。" },
 ];

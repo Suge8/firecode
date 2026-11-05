@@ -23,7 +23,7 @@ bun $D/variant.ts B --prompt-ref 74d9c01                # 同一份代码，只�
 bun $D/variant.ts C --prompt-file /path/to/master.md    # 或取文件；--cut '原文' 再删掉其中一段（须恰好出现一次）
 bun $D/variant.ts H --model anthropic/claude-haiku-5-5/low   # 主会话与全部角色、审查、观察员都换成这个原子（冒烟用，见下）
 
-bun $D/decide.ts A                                      # 首步决策（一次一个变体）：t1–t8 各 2 次，到决策即止
+bun $D/decide.ts A                                      # 首步决策（一次一个变体）：t1–t8、t11 各 2 次，到决策即止
 bun $D/decide.ts A --tasks t4-longwait --runs 1         # 只跑某几条
 bun $D/decide.ts report A                               # 只重打汇总表
 
@@ -38,7 +38,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 
 **便宜地验证脚本能跑通**（不测质量）：用上面的 `--model` 变体跑 `decide.ts H --runs 1`、`run.ts H --tasks t3-research --runs 1 --budget 3`、`worker.ts <同一个原子> --runs 1`，再依次 `summary.ts`、`blind.ts`、`check.ts`。Haiku low 这一套约 $0.6。要走到“指挥官派 Worker”的路径，用 `--prompt-file` 在提示词末尾加一句“调研一律派调研员”。
 
-`run.ts` 其余参数：`--tasks`（默认 t3-research,t7-audit,t9-big，可加 t9-hand）、`--runs`（默认 3）、`--concurrency`（默认 2）、`--force`。已 settled 的结果会跳过，被预算打断的重跑会续上。`decide.ts` 参数：`--steps`（脚本数上限，超过判亲手，默认 5）、`--timeout`（秒，默认 300）。
+`run.ts` 其余参数：`--tasks`（默认 t3-research,t7-audit,t9-big，可加 t9-hand）、`--runs`（默认 3）、`--concurrency`（默认 2）、`--force`。已 settled 的结果会跳过，被预算打断的重跑会续上。`decide.ts` 参数：`--steps`（模型回合数上限，超过判亲手，默认 15）、`--timeout`（秒，默认 300）。
 
 ## 机制
 
@@ -58,6 +58,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 | t6 | 三处文案小改 | 亲手 | 对照“并行”条款会不会被滥用 |
 | t7 | 审计 `review/` | 并行委派 | 完成跑；真值：16 条已核实缺陷（`tasks.ts` 的 `T7_TRUTH`，非穷举） |
 | t8 | 单模块实现 | 亲手 | |
+| t11 | 高影响实现（持久化与崩溃恢复） | 委派工程师且 review:true | 当前提示词下指挥官亲手做、不送审（2026-11） |
 | t9-big | 六目录审计（约 1.06 万行，14 处植入缺陷） | 无预设 | 完成跑；真值：`t9-truth.json` |
 | t9-hand | 同上，末尾加“完全亲手” | — | 亲手基线 |
 
