@@ -4,7 +4,7 @@
  * 红色、失败计数与活动列表失败组都从这一个事实来（失败、审查停止、审查未完成；被中断不是失败）。
  * 折叠界面（tools/machine.ts）按标题、错误分节与“耗时：本次运行 …”行投影，改格式两侧都要同步。
  */
-import { formatDuration } from "../format.js";
+import { clip, formatDuration, oneLine } from "../format.js";
 import { msg as root } from "../messages.js";
 import type { ReviewOutcome } from "../review/outcome.js";
 import { msg } from "./messages.js";
@@ -13,6 +13,8 @@ export const MASTER_EVENT_TYPE = "firecode-master-event";
 
 /** 分节与耗时词汇同源于根 messages.ts 的 envelope：折叠界面（tools/machine.ts）读同一份。 */
 const SECTIONS = root.envelope.sections;
+/** 停摆事件里正在跑的动作截到这么宽：认得出是哪条命令即可，整条命令用 tail 看。 */
+const STALL_ACTION_WIDTH = 160;
 
 /**
  * 产出的事件：正文与是否落定类。落定类（已返回、失败、被中断、审查通过/停止/未完成）才带“本次运行”耗时，
@@ -73,6 +75,13 @@ export const masterEvent = {
 		notice(`${name} ${msg.event.extensionError}`, msg.event.extensionErrorBody(extension, event, error)),
 	stranded: (name: string, texts: string[]) =>
 		notice(`${name} ${msg.event.stranded}`, msg.event.strandedBody(texts.length), texts.join("\n---\n")),
+	/** 在跑的回合卡住（活动列表同一判定）：正在跑的动作与本次运行已用时长；不是落定，子代理仍在跑。 */
+	stalled: (name: string, minutes: number, action: string, elapsed?: number) =>
+		notice(
+			`${name} ${msg.activity.silentFull(minutes)}`,
+			msg.event.stalledAction(clip(oneLine(action), STALL_ACTION_WIDTH)),
+			elapsed === undefined ? undefined : msg.event.stalledElapsed(formatDuration(elapsed)),
+		),
 	modelSwitched: (name: string, from: string, to: string, reason: string) =>
 		notice(`${name} ${msg.event.modelSwitched}`, msg.event.modelSwitchedBody(from, to, reason)),
 };

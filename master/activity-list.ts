@@ -29,6 +29,8 @@ export interface ActivityFacts {
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
 	settled: ReadonlyMap<string, SettledFact>;
+	/** working 子代理这么久没有任何输出就算卡住（Timing.stallMs）。 */
+	stallMs: number;
 }
 
 type Toggle = "running" | "done" | "idle";
@@ -37,8 +39,6 @@ type Line = { row: Row } | { label: string; mark: string; toggle: Toggle; names:
 /** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
 type Target = { toggle: Toggle } | { open: string };
 
-/** working 子代理这么久没有任何输出（模型 token 或工具事件）就追加“N 分钟无输出”。 */
-const STUCK_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 const STUCK_GLYPH = "◌";
 const INTERRUPTED_GLYPH = "‖";
@@ -84,27 +84,29 @@ export const ANIMATING_KINDS: ReadonlySet<RowKind> = new Set(["stuck", "running"
 
 /**
  * 一个子代理此刻的相位：所在分组、动作文字与时刻。纯事实不带着色——活动列表的行与 `subagentInfos`（外部扩展读的名册）共用这一处，
- * 分组与动作只在这里判定一次。`settledAt` 是落定时刻；`silentMinutes` 只在卡住时有。
+ * 停摆唤醒（run.ts 的 watchStall）也只认这里的“卡住”。`settledAt` 是落定时刻；`quietMs` 是 working 时这段无输出已持续多久。
  */
 interface WorkerPhase {
 	kind: RowKind;
 	action: string;
 	startedAt?: number;
 	settledAt?: number;
-	silentMinutes?: number;
+	quietMs?: number;
 }
+
+/** 卡住提醒里的整分钟数。 */
+export const quietMinutes = (quietMs: number) => Math.floor(quietMs / MINUTE_MS);
 
 export function workerPhase(facts: ActivityFacts, index: number, now: number): WorkerPhase {
 	const worker = facts.workers[index];
 	const path = worker.sessionPath;
 	const startedAt = facts.runStartedAt.get(path);
 	if (worker.status === "working") {
-		const silent = now - Math.max(startedAt ?? now, facts.lastOutputAt.get(path) ?? 0);
+		const quietMs = now - Math.max(startedAt ?? now, facts.lastOutputAt.get(path) ?? 0);
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
 		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
-		if (silent >= STUCK_MS) return { kind: "stuck", action, startedAt, silentMinutes: Math.floor(silent / MINUTE_MS) };
-		return { kind: "running", action, startedAt };
+		return { kind: quietMs >= facts.stallMs ? "stuck" : "running", action, startedAt, quietMs };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
@@ -122,11 +124,11 @@ export function workerPhase(facts: ActivityFacts, index: number, now: number): W
 export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row } {
 	const worker = facts.workers[index];
 	const phase = phaseOf(index);
-	const { kind, action, startedAt, settledAt, silentMinutes } = workerPhase(facts, index, now);
+	const { kind, action, startedAt, settledAt, quietMs } = workerPhase(facts, index, now);
 	const base = { name: worker.name, role: worker.role, action, elapsed: startedAt === undefined ? "" : duration(now - startedAt) };
 	switch (kind) {
 		// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
-		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(silentMinutes!) } };
+		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(quietMinutes(quietMs!)) } };
 		case "running": return { kind, row: { ...base, mark: flame(1, phase) } };
 		case "review": return { kind, row: { ...base, mark: reviewMark(phase), tone: "review" } };
 		// 组名已经说了“空闲”，展开行只列谁。

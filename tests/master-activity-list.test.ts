@@ -8,6 +8,8 @@ const theme = { fg: (_color: string, text: string) => text, bg: (_color: string,
 const tagged = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bg: (color: string, text: string) => `{${color}}${text}{/${color}}` };
 const NOW = 1_000_000_000;
 const MINUTE = 60_000;
+/** 用例里的卡住时限（生产默认见 timing.ts）。 */
+const STALL_MS = 5 * MINUTE;
 
 type Spec = {
 	name: string;
@@ -33,6 +35,7 @@ function facts(specs: Spec[]) {
 		runStartedAt: byPath((spec) => spec.started ?? (spec.status === "idle" ? undefined : NOW - 10_000)),
 		lastOutputAt: byPath((spec) => spec.output),
 		settled: byPath((spec) => spec.settled && { at: spec.settled[0], kind: spec.settled[1], ...(spec.settled[2] ? { note: spec.settled[2] } : {}) }),
+		stallMs: STALL_MS,
 	};
 }
 
@@ -116,7 +119,7 @@ test("被中断不是失败：静态黄色标记、不画 ✗，与失败、卡�
 	expect(later.raw(160)[1].slice(0, 22)).toBe(halt.slice(0, 22));
 });
 
-test("卡住：working 五分钟没有任何输出时保留动作文字，追加黄色“· N 分钟无输出”，字形静止；有输出立即恢复", async () => {
+test("卡住：working 到卡住时限没有任何输出时保留动作文字，追加黄色“· N 分钟无输出”，字形静止；有输出立即恢复", async () => {
 	const silentSince = NOW - 5 * MINUTE;
 	const stuck = await list([{ name: "slow", started: silentSince - MINUTE, output: silentSince, tool: "bash", args: { command: "sleep 330" } }], { paint: tagged, now: NOW });
 	const [line] = stuck.raw(160);
