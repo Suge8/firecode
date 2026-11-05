@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The Master sends only costly, hard-to-test work to review (persistence and crash recovery, concurrency and state machines, migrations and releases, data deletion, billing, auth and security), reviews each ticket once when its code is complete, and does its final diff review while the review runs instead of after it. Small fixes after a pass are read by the Master, not reviewed again.
+- Workers wait for CI, deployments and other external state with one conditional loop that returns as soon as the state changes, instead of sleeping for minutes between checks.
+
 ## [1.8.0] - 2026-11-05
 
 ### Changed
