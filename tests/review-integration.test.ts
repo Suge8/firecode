@@ -1139,6 +1139,31 @@ describe("review cards and degraded paths", () => {
 		expect(card).toContain("审查模型：two（备用），席位首选不可用");
 	}, 20_000);
 
+	test("同一场审查的后续轮从上一轮给出结论的备用模型审起，首选一直格式无效也不再每轮先跑它", async () => {
+		const calls: Record<string, number> = {};
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
+			calls[model] = (calls[model] ?? 0) + 1;
+			if (model === "p/one") return "结论如下\n随便写";
+			return calls[model] === 1 ? FAIL_VERDICT : "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		}, [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		await startTurn(registered, ctx);
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", {}, ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
+		expect(readCheckpoint({ sessionManager })?.round).toBe(2);
+		expect(calls).toEqual({ "p/one": 1, "p/two": 2 });
+		// 第 2 轮的结论仍是备用模型给的，卡片照样标明。
+		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
+		expect(card).toContain("two（备用）");
+	}, 20_000);
+
 	test("整条链都输出格式无效时，终态写明审查器失效与每个模型的格式问题", async () => {
 		const { registerReview, readCheckpoint, outcome } = await loadTwoReviewers(() => "结论如下\n随便写", [["p/one/low", "p/two/low"]]);
 		const sessionManager = makeSessionManager();

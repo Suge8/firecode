@@ -13,6 +13,8 @@ interface RunReviewerOptions {
 	cwd: string;
 	signal?: AbortSignal;
 	pool: InProcessSessionPool;
+	/** 同一场审查上一轮给出结论的模型：本轮从它在链里的位置审起。 */
+	lastVoter?: string;
 }
 
 type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
@@ -20,12 +22,14 @@ type ParseOutcome = Pick<ReviewerResult, "status" | "summary" | "details">;
 /**
  * 运行一个席位的审查并解析输出。模型调用失败由统一路由在会话内沿链续跑；输出格式无效是模型自身的毛病，
  * 路由看不到，就在这里用链里的下一个模型重开一场审查（同一轮），整条链都无效或会话故障才记 error（缺席），
- * 并列出每个模型各自的问题。
+ * 并列出每个模型各自的问题。同一场审查记住换上的模型：从上一轮给出结论的模型审起，不再每轮先等首选失败
+ * （路由的冷却只覆盖调用失败，格式无效的首选会被每轮重跑）；新一场审查没有上一轮，从链首开始。
  */
 export async function runReviewer(options: RunReviewerOptions): Promise<ReviewerResult> {
 	const chain = options.config.models;
 	const invalid: string[] = [];
-	for (let models = chain; ;) {
+	const start = options.lastVoter ? await chainIndex(options.pool, chain, options.lastVoter) : -1;
+	for (let models = chain.slice(Math.max(0, start)); ;) {
 		const result = await runReviewSession(options.pool, {
 			config: { ...options.config, models },
 			prompt: options.prompt,
@@ -48,11 +52,17 @@ export async function runReviewer(options: RunReviewerOptions): Promise<Reviewer
 	}
 }
 
-/** 链里排在 model 所属原子之后的部分；model 是路由解析出的具体模型，原子可能只写了模型名。 */
-async function chainAfter(pool: InProcessSessionPool, chain: RunReviewerOptions["config"]["models"], model: string) {
+/** model 所属原子在链里的位置，不在链里为 -1；model 是路由解析出的具体模型，原子可能只写了模型名。 */
+async function chainIndex(pool: InProcessSessionPool, chain: RunReviewerOptions["config"]["models"], model: string) {
 	for (let index = 0; index < chain.length; index += 1)
-		if (await pool.isChainHead(chain.slice(index), model)) return chain.slice(index + 1);
-	return [];
+		if (await pool.isChainHead(chain.slice(index), model)) return index;
+	return -1;
+}
+
+/** 链里排在 model 所属原子之后的部分。 */
+async function chainAfter(pool: InProcessSessionPool, chain: RunReviewerOptions["config"]["models"], model: string) {
+	const index = await chainIndex(pool, chain, model);
+	return index < 0 ? [] : chain.slice(index + 1);
 }
 
 /**
