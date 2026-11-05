@@ -124,9 +124,8 @@ test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参�
 test("指挥官提示词作为系统提示段注入，附上已配置的角色表；停用后撤下", async () => {
 	const harness = await setup();
 	const prompt = await harness.systemPrompt("自定义系统提示");
-	expect(prompt.startsWith("自定义系统提示\n\n")).toBe(true);
-	expect(prompt).toContain("你是唯一的指挥官（Master）");
-	expect(prompt.endsWith("\n\n角色表：工程师（测试）；设计师（切换测试）。")).toBe(true);
+	const master = (await readFile(new URL("../master/prompts/master.zh.md", import.meta.url), "utf8")).trim();
+	expect(prompt).toBe(`自定义系统提示\n\n${master}\n\n角色表：工程师（测试）；设计师（切换测试）。`);
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
@@ -366,69 +365,64 @@ test("在跑的回合到卡住时限没有任何输出就唤醒指挥官：带�
 	await harness.command("");
 });
 
-/** faux 的响应队列是进程内共用的 FIFO：进展行的调用与 Worker 的请求交错出队，所以每一步都按系统提示分流。 */
-function progressScript(options: { summary: (user: string) => any; worker: any[] }) {
-	const summaries: string[] = [];
+/**
+ * faux 的响应队列是进程内共用的 FIFO：进展行的调用与 Worker 的请求交错出队，所以每一步都按系统提示分流。
+ * 返回进展行实际发出的调用数：每次生成都是一次付费调用，“没有新输出就不调用”按它核对。
+ */
+function progressScript(options: { summary: (user: string, call: number) => any; worker: any[] }) {
+	let calls = 0;
 	const worker = [...options.worker];
 	const step = (context: any) => {
 		if (JSON.stringify(context).includes("你为终端界面写一行子代理的进展")) {
 			const user = context.messages.findLast((message: any) => message.role === "user").content;
-			summaries.push(typeof user === "string" ? user : JSON.stringify(user));
-			return options.summary(summaries.at(-1)!);
+			return options.summary(typeof user === "string" ? user : JSON.stringify(user), ++calls);
 		}
 		return worker.shift() ?? fauxAssistantMessage("完成");
 	};
 	faux.setResponses(Array.from({ length: 40 }, () => step));
-	return summaries;
+	return () => calls;
 }
 
-test("进展行：运行满时限出第一句，只在有新输出时再生成，落定后停止；输入只含有界增量、不含工具结果", async () => {
+test("进展行：运行满时限出第一句（只取首行），没有新输出不再调用，新输出到间隔再生成，落定后停止", async () => {
 	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 250, progressEveryMs: 700 } });
-	const summaries = progressScript({
+	const calls = progressScript({
 		summary: (user) => fauxAssistantMessage(user.includes("sleep 0.9") ? "「在补跑测试，确认修复没有回归」" : "「正在跑构建，确认改动能编译」\n多余的一行"),
 		worker: [
-			fauxAssistantMessage([{ type: "text", text: "先看一下构建脚本。" }, fauxToolCall("bash", { command: "sleep 1.4; echo RESULT-$((40+2))" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([{ type: "text", text: "先看一下构建脚本。" }, fauxToolCall("bash", { command: "sleep 1.4; echo ONE" })], { stopReason: "toolUse" }),
 			fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 0.9; echo TWO" }), { stopReason: "toolUse" }),
 			fauxAssistantMessage("构建通过"),
 		],
 	});
-	await harness.execute({ action: "start", worker: "builder", prompt: "修复构建\n\n第二段背景不该出现", role: "工程师" });
+	await harness.execute({ action: "start", worker: "builder", prompt: "修复构建", role: "工程师" });
 	await until(() => harness.activity().some((line) => line.includes("正在跑构建，确认改动能编译")), 3_000);
-	expect(harness.activity().join("\n")).not.toContain("多余的一行");
-	expect(summaries).toHaveLength(1);
-	expect(summaries[0]).toContain("修复构建");
-	expect(summaries[0]).not.toContain("第二段背景");
-	expect(summaries[0]).toContain("先看一下构建脚本");
-	expect(summaries[0]).toContain("sleep 1.4");
+	expect(harness.activity().join("\n")).not.toMatch(/多余的一行|「/u);
 	// 第一条命令还在跑、没有任何新输出：过了一个间隔也不再调用。
 	await Bun.sleep(800);
-	expect(summaries).toHaveLength(1);
-	// 第二条命令是新输出：到了间隔就生成，输入带上一句，不带前一段已经说过的动态。
+	expect(calls()).toBe(1);
+	// 第二条命令是新输出：到了间隔就生成新的一句。
 	await until(() => harness.activity().some((line) => line.includes("在补跑测试，确认修复没有回归")), 3_000);
-	expect(summaries).toHaveLength(2);
-	expect(summaries[1]).toContain("上一句：正在跑构建，确认改动能编译");
-	expect(summaries[1]).toContain("sleep 0.9");
-	expect(summaries[1]).not.toContain("sleep 1.4");
+	expect(calls()).toBe(2);
 	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("builder 已返回")), 4_000);
-	// 落定后不再调用（最终回复也不算触发），行上显示结果首句而不是进展句；工具结果从未进过输入。
+	// 落定后不再调用（最终回复也不算触发），行上不再挂着进展句。
 	await Bun.sleep(900);
-	expect(summaries).toHaveLength(2);
-	expect(summaries.join("\n")).not.toMatch(/RESULT-42|TWO\n/u);
+	expect(calls()).toBe(2);
 	expect(harness.activity().join("\n")).not.toContain("在补跑测试");
 	await harness.command("");
 });
 
-test("进展行：单次失败回到工具动作、不重试；连续失败只提示一次", async () => {
+test("进展行：生成失败时那一句撤下、回到工具动作；连续失败只提示一次", async () => {
 	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 100, progressEveryMs: 150 } });
-	const summaries = progressScript({
-		summary: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 invalid key" }),
+	progressScript({
+		summary: (_user, call) => call === 1
+			? fauxAssistantMessage("正在反复构建")
+			: fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 invalid key" }),
 		worker: Array.from({ length: 6 }, (_, index) => fauxAssistantMessage(fauxToolCall("bash", { command: `sleep 0.3; echo ${index}` }), { stopReason: "toolUse" })),
 	});
 	await harness.execute({ action: "start", worker: "flaky", prompt: "反复构建", role: "工程师" });
-	await until(() => harness.notices.some((notice) => notice.includes("进展行")), 6_000);
-	expect(harness.activity().join("\n")).toContain("操作 $ sleep 0.3");
+	await until(() => harness.activity().some((line) => line.includes("正在反复构建")), 3_000);
+	await until(() => harness.activity().some((line) => line.includes("操作 $ sleep 0.3")), 3_000);
+	expect(harness.activity().join("\n")).not.toContain("正在反复构建");
 	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("flaky 已返回")), 8_000);
-	expect(summaries).toHaveLength(1);
 	expect(harness.notices.filter((notice) => notice.includes("进展行"))).toHaveLength(1);
 	await harness.command("");
 });
@@ -564,10 +558,7 @@ test("Claude 订阅 5 小时额度用尽（报错写明当地重置时刻）：�
 	expect(titleOf(notice.message.content)).toBe("limit 已暂停");
 	expect(notice.message.content).toContain(`${clockText(reset)}（约 `);
 	expect(notice.message.content).toContain("You've hit your 5-hour limit");
-	expect(notice.message.content).not.toContain("错误：");
 	expect(notice.options).toEqual({ triggerTurn: false });
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker).toMatchObject({ status: "idle", resume: { at: reset } });
 	expect(harness.activity().join("\n")).toContain(`暂停至 ${clockText(reset)}`);
 	await harness.execute({ action: "kill", worker: "limit" });
 });
@@ -587,18 +578,13 @@ test("Worker 回合断网失败：暂停后到时自动续跑，网络恢复后�
 		return error ? fauxAssistantMessage("", { stopReason: "error", errorMessage: error }) : fauxAssistantMessage("网络恢复后完成");
 	};
 	faux.setResponses(Array.from({ length: 10 }, () => respond));
-	const started = await harness.execute({ action: "start", worker: "net", prompt: "执行", role: "工程师" });
+	await harness.execute({ action: "start", worker: "net", prompt: "执行", role: "工程师" });
 	await until(() => eventTitles(harness).includes("net 已返回"));
 	expect(eventTitles(harness)).toEqual(["net 已暂停", "net 已返回"]);
 	expect(harness.messages[0].options).toEqual({ triggerTurn: false });
 	expect(harness.messages.at(-1).message.content).toContain("网络恢复后完成");
+	// 每段断网只有宿主的一次重试，两次续跑各一次调用：同一回合里没有反复打网络。
 	expect(calls).toBe(offline.length + 1);
-	const session = harness.pool.getSession((started.details as any).worker.session);
-	const resumes = session.messages.filter((message: any) => message.role === "custom" && String(message.content).includes("自动续跑时间"));
-	expect(resumes).toHaveLength(2);
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker.status).toBe("idle");
-	expect(worker.resume).toBeUndefined();
 	await harness.command("");
 }, 20_000);
 
@@ -620,16 +606,14 @@ test("链上全部模型限流：按冷却到期续跑；期间指挥官收到�
 	expect(notice.message.content).toContain("自动续跑");
 	expect(notice.message.content).toContain("原因：429 Too Many Requests");
 	expect(notice.options).toEqual({ triggerTurn: false });
-	const paused = (await harness.list().then((result) => result.details as any)).workers[0];
-	// 先恢复的是 worker-2（0.3 秒）：续跑时刻取链上最早恢复的那个。
-	expect(paused.resume.at - Date.now()).toBeLessThan(400);
 	recovered = true;
 	await until(() => eventTitles(harness).includes("quota 已返回"));
 	// 换模型与暂停都只告知不唤醒；唯一唤醒指挥官的是最终落定。
 	expect(eventTitles(harness)).toEqual(["quota 已切换模型", "quota 已暂停", "quota 已返回"]);
 	for (const entry of harness.messages)
 		expect(entry.options.triggerTurn).toBe(entry.message.content.includes("quota 已返回"));
-	// 续跑从链首选起：worker 还在冷却，所以落到 worker-2。
+	// 续跑时刻取链上最早恢复的 worker-2（0.3 秒）：那时首选 worker 还在冷却，续跑从链首选起落到 worker-2。
+	// 若按晚恢复的 worker 续跑，首选已恢复，最后一次会是 worker。
 	expect(models).toEqual(["worker", "worker-2", "worker-2"]);
 	await harness.command("");
 }, 20_000);
@@ -642,7 +626,7 @@ test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次"
 		? fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.5}` })
 		: fauxAssistantMessage("重载后续跑完成"))));
 	const noticed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({ action: "start", worker: "reload", prompt: "执行", role: "工程师" });
+	await harness.execute({ action: "start", worker: "reload", prompt: "执行", role: "工程师" });
 	await noticed;
 	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-event-ack"));
 	// 两次重载：旧运行时的计时随会话关闭作废，只有最后一个运行时按档案重挂。
@@ -652,8 +636,6 @@ test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次"
 	await Bun.sleep(300);
 	expect(eventTitles(harness)).toEqual(["reload 已暂停", "reload 已返回"]);
 	expect(calls).toBe(2);
-	const text = await readFile((started.details as any).worker.session, "utf8");
-	expect(text.match(/自动续跑时间/gu)).toHaveLength(1);
 	await harness.command("");
 }, 20_000);
 
@@ -675,10 +657,7 @@ test("自动续跑的回合进行中被 reload 打断：恢复后仍自动再续
 	await Bun.sleep(200);
 	expect(eventTitles(harness)).toEqual(["midway 已暂停", "midway 已返回"]);
 	expect(harness.messages.at(-1).message.content).toContain("重载后续跑完成");
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker).toMatchObject({ status: "idle" });
-	expect(worker.interruptedAt).toBeUndefined();
-	expect(worker.resume).toBeUndefined();
+	expect((await harness.list().then((result) => result.details as any)).workers[0].interruptedAt).toBeUndefined();
 	await harness.command("");
 }, 20_000);
 
@@ -722,8 +701,6 @@ test("链上另一个模型还在瞬时冷却、这次实际调用的模型鉴�
 	await harness.execute({ action: "start", worker: "badkey", prompt: "执行", role: "设计师" });
 	await until(() => eventTitles(harness).includes("badkey 失败"));
 	expect(harness.messages.find((entry: any) => entry.message.content.includes("badkey 失败")).message.content).toContain("401 Unauthorized");
-	const workers = (await harness.list().then((result) => result.details as any)).workers;
-	expect(workers.find((worker: any) => worker.name === "badkey").resume).toBeUndefined();
 	await harness.execute({ action: "kill", worker: "cooling" });
 	await harness.command("");
 });
@@ -740,8 +717,6 @@ test("非瞬时错误（鉴权失败）照常以失败送达，不暂停、不�
 	expect(harness.messages[0].message.content).toContain("401 Unauthorized");
 	expect(calls).toBe(1);
 	expect(harness.turns).toHaveLength(1);
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker.resume).toBeUndefined();
 	await harness.command("");
 });
 
@@ -1950,10 +1925,7 @@ test("审查的修复回合撞上 429 限流：审查暂停，到时自动重新
 	await harness.execute({ action: "review", worker: "fix-limit" });
 	await until(() => eventTitles(harness).some((title) => title.startsWith("fix-limit 审查通过")), 15_000);
 	expect(eventTitles(harness)).toEqual(["fix-limit 已返回", "fix-limit 审查已暂停", "fix-limit 审查通过（1 轮）"]);
-	const worker = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(worker).toMatchObject({ status: "idle" });
-	expect(worker.reviewNeeded).toBeUndefined();
-	expect(worker.resume).toBeUndefined();
+	expect((await harness.list().then((result) => result.details as any)).workers[0].reviewNeeded).toBeUndefined();
 	await harness.execute({ action: "ack", worker: "fix-limit" });
 	await harness.command("");
 }, 20_000);

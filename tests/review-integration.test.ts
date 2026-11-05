@@ -56,11 +56,12 @@ const contentText = (content: unknown): string =>
 const systemOf = (context: any): string => getCurrentSystemPrompt(context.messages) ?? "";
 const userOf = (context: any): string => contentText(context.messages.findLast((message: any) => message.role === "user")?.content);
 
-/** 每个会话的回答；返回 undefined 表示该会话的供应商报错（额度不足）。 */
-function script(reply: (context: any, model: { provider: string; id: string }) => string | undefined) {
+/** 每个会话的回答；返回 undefined 表示该会话的供应商报错（额度不足），{ error } 是指定原文的供应商报错。 */
+type Reply = string | { error: string } | undefined;
+function script(reply: (context: any, model: { provider: string; id: string }) => Reply) {
 	faux.setResponses(Array.from({ length: 30 }, () => (context: any, _options: unknown, _state: unknown, model: any) => {
-		const text = reply(context, model);
-		return text === undefined ? fauxAssistantMessage([], { stopReason: "error", errorMessage: "额度不足" }) : fauxAssistantMessage(text);
+		const text = reply(context, model) ?? { error: "额度不足" };
+		return typeof text === "string" ? fauxAssistantMessage(text) : fauxAssistantMessage([], { stopReason: "error", errorMessage: text.error });
 	}));
 }
 
@@ -1166,11 +1167,12 @@ describe("review cards and degraded paths", () => {
 
 	// 从上一轮的投票模型审起不能截掉链的前段：它此刻失效时，已经恢复的首选还要能兜底。
 	test("后续轮从投票模型起跑的链仍以首选兜底：投票模型额度用尽时由恢复的首选审完", async () => {
+		const COOLDOWN_MS = 200;
 		const calls: Record<string, number> = {};
 		const pass = "核对完毕。\n证据：文件=a.ts；命令=bun test";
 		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
 			calls[model] = (calls[model] ?? 0) + 1;
-			if (model === "p/one") return calls[model] === 1 ? undefined : pass;
+			if (model === "p/one") return calls[model] === 1 ? { error: `额度不足 {"resets_in_seconds": ${COOLDOWN_MS / 1000}}` } : pass;
 			return calls[model] === 1 ? FAIL_VERDICT : undefined;
 		}, [["p/one/low", "p/two/low"]]);
 		const sessionManager = makeSessionManager();
@@ -1181,8 +1183,8 @@ describe("review cards and degraded paths", () => {
 		await fireReview(registered).handler("", ctx);
 		await until(() => registered.delivered.length === 1);
 		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/two");
-		// 修复期间首选的额度恢复。
-		((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown>).clear();
+		// 修复期间首选的冷却按报错写明的时刻到期。
+		await Bun.sleep(COOLDOWN_MS);
 		await startTurn(registered, ctx);
 		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
 		await registered.fire("agent_settled", {}, ctx);
@@ -1315,7 +1317,7 @@ describe("review cards and degraded paths", () => {
 });
 
 /** 审查者（默认 p/one、p/two）加顾问；answer 按模型给出会话输出，返回 undefined 表示该会话没有产出。 */
-async function loadTwoReviewers(answer: (model: string) => string | undefined, reviewers: unknown[] = ["p/one/low", "p/two/low"]) {
+async function loadTwoReviewers(answer: (model: string) => Reply, reviewers: unknown[] = ["p/one/low", "p/two/low"]) {
 	const review = (await loadReviewModule("review/index.js", {
 		configJsonc: reviewConfig({ reviewers, maxRounds: 3 }),
 	})) as { registerReview: (pi: unknown, options?: unknown) => void };
