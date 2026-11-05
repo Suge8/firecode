@@ -3,12 +3,13 @@
  * 运行时事实只在进程内；档案与 JSONL 才是身份与续派的事实源。会话关闭后 closed 置位，迟到的异步续延一律作废。
  */
 import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { MasterRole } from "../config.js";
+import type { MasterRole, ModelChain } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewRoundProgress } from "../review/outcome.js";
 import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from "./activity-list.js";
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
+import { ProgressLines } from "./progress.js";
 import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
@@ -20,6 +21,8 @@ export interface MasterSetup {
 	pi: ExtensionAPI;
 	pool: InProcessSessionPool;
 	roster: MasterRole[];
+	/** 在跑子代理进展行的小模型链；false 不生成。 */
+	progress: ModelChain | false;
 	exclusions: string[];
 	workerPrompt: string;
 	/** fire-review 不可用的原因；可用时为 undefined。 */
@@ -94,6 +97,8 @@ export class MasterRuntime {
 	readonly store: MasterStore;
 	readonly outbox: Outbox;
 	readonly live = new Map<string, WorkerLive>();
+	/** 在跑子代理的进展行；配置关闭时没有。 */
+	readonly progress?: ProgressLines;
 	/** 最近取出的启动序；接着档案里已有的最大值，恢复后新 start 仍排在后面。 */
 	private launchSeq: number;
 	/** 全过程视图的草稿（名字 → 没发出的话）：活到会话结束，不持久化。 */
@@ -111,6 +116,13 @@ export class MasterRuntime {
 
 	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext) {
 		this.outbox = new Outbox(this);
+		if (setup.progress)
+			this.progress = new ProgressLines(setup.progress, {
+				complete: (chain, context, options) => setup.pool.complete(chain, context, options),
+				timing: setup.pool.timing,
+				changed: () => this.render(),
+				warn: (text) => ctx.ui.notify(text, "warning"),
+			});
 		this.store = new MasterStore(masterStatePath(getAgentDir(), ctx.sessionManager.getSessionId()), () => this.render());
 		this.launchSeq = Math.max(0, ...this.store.workers.map((worker) => worker.launch));
 		// 池空闲释放热会话后放掉订阅：不再持有已关闭的会话。
@@ -186,6 +198,7 @@ export class MasterRuntime {
 			clearTimeout(live.stallTimer);
 			if (live.observed) this.unobserve(live);
 			this.live.delete(name);
+			this.progress?.remove(name);
 		}
 		if (!this.store.remove(name)) return;
 		for (const notify of this.removedListeners) notify(name);
@@ -224,12 +237,13 @@ export class MasterRuntime {
 		live.stallReported = undefined;
 		live.currentTools.clear();
 		live.reviewProgress = undefined;
+		this.progress?.stop(worker.name);
 		this.setup.pool.markIdle(worker.sessionPath);
 		this.schedulePublish();
 	}
 
-	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒与暂停续跑作废。 */
-	beginRun(name: string, origin: RunOrigin = "master"): void {
+	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒与暂停续跑作废；给了工作说明就为它起进展行。 */
+	beginRun(name: string, origin: RunOrigin = "master", prompt?: string): void {
 		const live = this.liveOf(name);
 		this.cancelTimers(live);
 		live.pauseNotified = undefined;
@@ -237,6 +251,7 @@ export class MasterRuntime {
 		live.interruptedReview = undefined;
 		live.viewPrompts = [];
 		live.origin = origin;
+		if (prompt !== undefined) this.progress?.begin(name, prompt);
 		this.schedulePublish();
 	}
 
@@ -272,6 +287,7 @@ export class MasterRuntime {
 			if (live.observed) this.unobserve(live);
 		}
 		this.live.clear();
+		this.progress?.close();
 		this.outbox.close();
 		this.list?.dispose();
 		this.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
@@ -304,6 +320,10 @@ export class MasterRuntime {
 			reviewProgress: byPath((live) => live.reviewProgress),
 			runStartedAt: byPath((live) => live.runStartedAt),
 			lastOutputAt: byPath((live) => live.lastOutputAt),
+			progress: new Map(workers.flatMap((worker) => {
+				const text = this.progress?.text(worker.name);
+				return text ? [[worker.sessionPath, text] as const] : [];
+			})),
 			settled: byPath((live) => (live.outcome && live.idleAt !== undefined ? { ...live.outcome, at: live.idleAt } : undefined)),
 			stallMs: this.setup.pool.timing.stallMs,
 		};

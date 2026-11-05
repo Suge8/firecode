@@ -97,8 +97,13 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 				watchStall(active, worker);
 			}
 		}
-		if (event.type === "tool_execution_start")
+		if (event.type === "tool_execution_start") {
 			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
+			active.progress?.toolCall(worker.name, event.toolName, event.args, worker.cwd ?? "");
+		}
+		// 只记带工具调用的正文（边说边做）；以 stop 收尾的最终回复意味着回合马上落定，为它再调一次模型是白花。
+		if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "toolUse")
+			active.progress?.said(worker.name, textOf(event.message.content));
 		if (event.type === "tool_execution_end") live.currentTools.delete(event.toolCallId);
 		if (event.type === "entry_appended") live.reviewProgress = reviewProgressOf(event.entry) ?? live.reviewProgress;
 		if (event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "entry_appended") active.schedulePublish();
@@ -263,6 +268,7 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 		// resume 留到落定：续跑中被 reload 打断时载入收敛回暂停再续（state.ts）。
 		const working = active.commit(current, (latest) => ({ ...latest, status: "working" }));
 		live.runStartedAt ??= Date.now();
+		active.progress?.resume(identity.name);
 		const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
 		await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
 	} catch (error) {

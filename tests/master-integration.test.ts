@@ -366,6 +366,73 @@ test("在跑的回合到卡住时限没有任何输出就唤醒指挥官：带�
 	await harness.command("");
 });
 
+/** faux 的响应队列是进程内共用的 FIFO：进展行的调用与 Worker 的请求交错出队，所以每一步都按系统提示分流。 */
+function progressScript(options: { summary: (user: string) => any; worker: any[] }) {
+	const summaries: string[] = [];
+	const worker = [...options.worker];
+	const step = (context: any) => {
+		if (JSON.stringify(context).includes("你为终端界面写一行子代理的进展")) {
+			const user = context.messages.findLast((message: any) => message.role === "user").content;
+			summaries.push(typeof user === "string" ? user : JSON.stringify(user));
+			return options.summary(summaries.at(-1)!);
+		}
+		return worker.shift() ?? fauxAssistantMessage("完成");
+	};
+	faux.setResponses(Array.from({ length: 40 }, () => step));
+	return summaries;
+}
+
+test("进展行：运行满时限出第一句，只在有新输出时再生成，落定后停止；输入只含有界增量、不含工具结果", async () => {
+	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 250, progressEveryMs: 700 } });
+	const summaries = progressScript({
+		summary: (user) => fauxAssistantMessage(user.includes("sleep 0.9") ? "「在补跑测试，确认修复没有回归」" : "「正在跑构建，确认改动能编译」\n多余的一行"),
+		worker: [
+			fauxAssistantMessage([{ type: "text", text: "先看一下构建脚本。" }, fauxToolCall("bash", { command: "sleep 1.4; echo RESULT-$((40+2))" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 0.9; echo TWO" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("构建通过"),
+		],
+	});
+	await harness.execute({ action: "start", worker: "builder", prompt: "修复构建\n\n第二段背景不该出现", role: "工程师" });
+	await until(() => harness.activity().some((line) => line.includes("正在跑构建，确认改动能编译")), 3_000);
+	expect(harness.activity().join("\n")).not.toContain("多余的一行");
+	expect(summaries).toHaveLength(1);
+	expect(summaries[0]).toContain("修复构建");
+	expect(summaries[0]).not.toContain("第二段背景");
+	expect(summaries[0]).toContain("先看一下构建脚本");
+	expect(summaries[0]).toContain("sleep 1.4");
+	// 第一条命令还在跑、没有任何新输出：过了一个间隔也不再调用。
+	await Bun.sleep(800);
+	expect(summaries).toHaveLength(1);
+	// 第二条命令是新输出：到了间隔就生成，输入带上一句，不带前一段已经说过的动态。
+	await until(() => harness.activity().some((line) => line.includes("在补跑测试，确认修复没有回归")), 3_000);
+	expect(summaries).toHaveLength(2);
+	expect(summaries[1]).toContain("上一句：正在跑构建，确认改动能编译");
+	expect(summaries[1]).toContain("sleep 0.9");
+	expect(summaries[1]).not.toContain("sleep 1.4");
+	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("builder 已返回")), 4_000);
+	// 落定后不再调用（最终回复也不算触发），行上显示结果首句而不是进展句；工具结果从未进过输入。
+	await Bun.sleep(900);
+	expect(summaries).toHaveLength(2);
+	expect(summaries.join("\n")).not.toMatch(/RESULT-42|TWO\n/u);
+	expect(harness.activity().join("\n")).not.toContain("在补跑测试");
+	await harness.command("");
+});
+
+test("进展行：单次失败回到工具动作、不重试；连续失败只提示一次", async () => {
+	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 100, progressEveryMs: 150 } });
+	const summaries = progressScript({
+		summary: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 invalid key" }),
+		worker: Array.from({ length: 6 }, (_, index) => fauxAssistantMessage(fauxToolCall("bash", { command: `sleep 0.3; echo ${index}` }), { stopReason: "toolUse" })),
+	});
+	await harness.execute({ action: "start", worker: "flaky", prompt: "反复构建", role: "工程师" });
+	await until(() => harness.notices.some((notice) => notice.includes("进展行")), 6_000);
+	expect(harness.activity().join("\n")).toContain("操作 $ sleep 0.3");
+	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("flaky 已返回")), 8_000);
+	expect(summaries).toHaveLength(1);
+	expect(harness.notices.filter((notice) => notice.includes("进展行"))).toHaveLength(1);
+	await harness.command("");
+});
+
 test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达", async () => {
 	// 窗口远大于用例超时：送达若等了窗口，用例会超时失败，不靠墙钟阈值判断。
 	const harness = await setup(true, { timing: { wakeQuietMs: 60_000 } });
@@ -2137,6 +2204,8 @@ async function setup(activate = true, options: {
 	autoActivate?: boolean;
 	/** 子会话加载扩展时卡在 globalThis.__loadGate 上：复现 start 准备期间被 kill 的现场。 */
 	loadGate?: boolean;
+	/** 进展行的小模型链（master.progress）；省略即关闭。 */
+	progress?: string[];
 	/** 有界面：/fire-master 关闭时会弹确认，返回值由 confirmAnswer 决定。 */
 	confirmAnswer?: boolean;
 	/** 在子会话里装一个事件处理器抛错的扩展：复现子代理扩展出错。 */
@@ -2191,7 +2260,7 @@ async function setup(activate = true, options: {
 	if (options.loadGate)
 		await writeFile(join(extensions, "load-gate.ts"), "export default async function() { await globalThis.__loadGate; }");
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/reviewer", "test/advisor", "nokey/model"], ["nokey"]);
+	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/reviewer", "test/advisor", "test/summary", "nokey/model"], ["nokey"]);
 	const { SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("spawn.js");
 	// 测试默认立即唤醒指挥官、让事件重试远在测试之外；用例按需缩短别的等待。
@@ -2203,6 +2272,7 @@ async function setup(activate = true, options: {
 			master: {
 				roles: options.roles ?? TEST_ROLES,
 				workerExcludeExtensions: [],
+				...(options.progress ? { progress: options.progress } : {}),
 				...(options.autoActivate === undefined ? {} : { autoActivate: options.autoActivate }),
 			},
 		}),

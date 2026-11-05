@@ -44,6 +44,10 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 
 排序、折叠与行布局见 `activity-list.ts`、`activity.ts` 头注释。底栏只发布纯文字“指挥官”；列表的输入由 runtime 从档案加 live 表投影一次给出，落定事实（时刻、成败与说明）只在 live 里一份，reload 后不展示历史；列表冻结的耗时与 `subagents_list` 的“落定 X 前”共用这一份。`ctrl+o` 不展开活动列表的原因：它常驻输入框上方，再展开只会挤掉正文视口。
 
+## 进展行
+
+在跑（working）的子代理可以有一句“现在在做什么”，显示在活动列表的在跑行（替代工具动作，卡住行不替代）与全过程视图头部；`master.progress` 配小模型链，`false` 或省略即关闭（每次生成都是真实调用，不替用户选模型）。触发、输入边界与失败口径见 `progress.ts` 头注释，延迟与冷却走根级 `completeOnChain`（与 Worker 共用冷却表，输出被截断不冷却）。它只给人看：不进指挥官上下文，不发事件，名册与停摆事件仍读工具动作。以 stop 收尾的最终回复不触发生成（回合马上落定）。间隔在 `timing.ts`（首句 30 秒、之后至少 2 分钟）。实测（gpt-6-luna/low 与 claude-haiku-5-5/low 各 10 次，约 1.6k 字符输入）：luna p50 2.2s、每次约 $0.00009，haiku p50 3.0s、约 $0.00007，模板取更快的 luna。
+
 ## 名册发布
 
 同进程的其他扩展订阅 `pi.events` 的 `firecode:subagents` 频道读子代理名册；字段、状态取值与发布时机见 `roster.ts` 头注释。读者只读这份投影，不读档案、会话文件或 `subagents/` 目录。

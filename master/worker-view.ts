@@ -336,7 +336,9 @@ export class WorkerView implements Component, Focusable {
 		const index = worker ? facts.workers.findIndex((entry) => entry.name === worker.name) : -1;
 		const state = index < 0 ? undefined : rowState(facts, index, Date.now(), this.theme);
 		const queued = this.queued(width);
-		this.bodyRows = Math.max(1, this.tui.terminal.rows - CHROME_ROWS - queued.length);
+		// 进展行（见 progress.ts）是视图头部的一行；没有就不占行。
+		const header = state?.summary ? [clip(this.theme.fg("muted", ` ${state.summary}`), width)] : [];
+		this.bodyRows = Math.max(1, this.tui.terminal.rows - CHROME_ROWS - queued.length - header.length);
 		const { lines: body, animating } = this.body(width);
 		// 动效与上横线耗时只在有东西在动时订阅全局时钟，静止即取消。
 		this.syncFrames(animating || (state !== undefined && ANIMATING_KINDS.has(state.kind)));
@@ -351,7 +353,7 @@ export class WorkerView implements Component, Focusable {
 		}
 		const shown = body.slice(top, top + this.bodyRows);
 		while (shown.length < this.bodyRows) shown.push("");
-		return [...shown, ...queued, this.topLine(width, worker, state), this.inputLine(width), this.bottomLine(width, worker)];
+		return [...header, ...shown, ...queued, this.topLine(width, worker, state), this.inputLine(width), this.bottomLine(width, worker)];
 	}
 
 	private body(width: number): { lines: string[]; animating: boolean } {

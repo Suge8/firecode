@@ -145,6 +145,14 @@ export const msg = defineMessages({
 			pool: (count: number, summary: string) => `池 ${count}：${summary}`,
 			noWorkers: "没有子代理",
 		},
+		progress: {
+			brief: (text: string) => `工作说明：${text}`,
+			previous: (text: string) => `上一句：${text}`,
+			notes: (text: string) => `新动态：\n${text}`,
+			said: (text: string) => `说：${text}`,
+			empty: "模型没有给出进展",
+			failing: (count: number, reason: string) => `子代理进展行连续 ${count} 次生成失败，先显示工具动作：${reason}`,
+		},
 		activity: {
 			silentFull: (minutes: number) => `${minutes} 分钟无输出`,
 			silentShort: (minutes: number) => `${minutes}m 无输出`,
@@ -317,6 +325,14 @@ export const msg = defineMessages({
 			poolEmpty: "Pool 0",
 			pool: (count: number, summary: string) => `Pool ${count}: ${summary}`,
 			noWorkers: "No Workers",
+		},
+		progress: {
+			brief: (text: string) => `Brief: ${text}`,
+			previous: (text: string) => `Previous: ${text}`,
+			notes: (text: string) => `New activity:\n${text}`,
+			said: (text: string) => `Said: ${text}`,
+			empty: "The model gave no progress line",
+			failing: (count: number, reason: string) => `Sub-agent progress lines failed ${count} times in a row; showing tool actions instead: ${reason}`,
 		},
 		activity: {
 			silentFull: (minutes: number) => `${minutes} min no output`,

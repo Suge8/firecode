@@ -28,6 +28,8 @@ export interface ActivityFacts {
 	runStartedAt: ReadonlyMap<string, number>;
 	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
 	lastOutputAt: ReadonlyMap<string, number>;
+	/** 在跑子代理的进展行（见 progress.ts）：一句现在时的“在做什么”，有就替代在跑行的工具动作。 */
+	progress: ReadonlyMap<string, string>;
 	settled: ReadonlyMap<string, SettledFact>;
 	/** working 子代理这么久没有任何输出就算卡住（Timing.stallMs）。 */
 	stallMs: number;
@@ -93,6 +95,8 @@ interface WorkerPhase {
 	startedAt?: number;
 	settledAt?: number;
 	quietMs?: number;
+	/** working 且没卡住时的进展行；名册与停摆事件只读 action，不受它影响。 */
+	summary?: string;
 }
 
 /** 卡住提醒里的整分钟数。 */
@@ -107,7 +111,8 @@ export function workerPhase(facts: ActivityFacts, index: number, now: number): W
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
 		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
-		return { kind: quietMs >= facts.stallMs ? "stuck" : "running", action, startedAt, quietMs };
+		const stuck = quietMs >= facts.stallMs;
+		return { kind: stuck ? "stuck" : "running", action, startedAt, quietMs, ...(stuck ? {} : { summary: facts.progress.get(path) }) };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
@@ -124,15 +129,15 @@ export function workerPhase(facts: ActivityFacts, index: number, now: number): W
 }
 
 /** 一个子代理的行状态：所在分组与这一行（标记、动作、耗时）。index 是它在 facts.workers 里的位置（决定火苗相位）。 */
-export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row } {
+export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row; summary?: string } {
 	const worker = facts.workers[index];
 	const phase = phaseOf(index);
-	const { kind, action, startedAt, settledAt, quietMs } = workerPhase(facts, index, now);
+	const { kind, action, startedAt, settledAt, quietMs, summary } = workerPhase(facts, index, now);
 	const base = { name: worker.name, role: worker.role, action, elapsed: startedAt === undefined ? "" : duration(now - startedAt) };
 	switch (kind) {
 		// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
 		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(quietMinutes(quietMs!)) } };
-		case "running": return { kind, row: { ...base, mark: flame(1, phase) } };
+		case "running": return { kind, summary, row: { ...base, action: summary ?? action, mark: flame(1, phase) } };
 		case "review": return { kind, row: { ...base, mark: reviewMark(phase), tone: "review" } };
 		// 静止的一行：没有在跑的耗时，等的是续跑时刻。
 		case "paused": return { kind, row: { ...base, elapsed: "", mark: theme.fg("dim", PAUSED_GLYPH), settled: true } };

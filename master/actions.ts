@@ -185,7 +185,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 			status: "working",
 			...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),
 		}));
-		active.beginRun(target.name, fromView ? "view" : "master");
+		active.beginRun(target.name, fromView ? "view" : "master", prompt);
 		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, cutOff ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
 		return toolResult({ sent: true });
@@ -252,7 +252,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		};
 		active.store.upsert(worker);
 		live.starting = undefined;
-		active.beginRun(name);
+		active.beginRun(name, "master", prompt);
 		const session = await spawnWorker(active, worker, false, override);
 		await runWorker(active, worker, session, prompt);
 		return toolResult({ started: true, worker: compactWorker(worker) });

@@ -55,6 +55,8 @@ interface MasterConfig {
 	roles: MasterRole[];
 	workerExcludeExtensions: string[];
 	autoActivate: boolean;
+	/** 在跑子代理进展行用的小模型链；false（省略时同）不生成进展行。 */
+	progress: ModelChain | false;
 }
 
 const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
@@ -390,7 +392,7 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 
 // ---- master 节 ----
 
-const MASTER_KEYS = ["roles", "workerExcludeExtensions", "autoActivate"] as const;
+const MASTER_KEYS = ["roles", "workerExcludeExtensions", "autoActivate", "progress"] as const;
 
 /** 与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
 function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
@@ -402,7 +404,9 @@ function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): Ma
 	const roles = isRecord(table)
 		? Object.entries(table).map(([role, value]) => masterRole(value, `master.roles.${role}`, role, problems))
 		: [];
-	return { roles, workerExcludeExtensions: exclusions, autoActivate };
+	// 省略即关闭：进展行每次生成都是真实的模型调用，不替用户选模型。
+	const progress = raw.progress === undefined || raw.progress === false ? false : parseModelChain(raw.progress, "master.progress", problems);
+	return { roles, workerExcludeExtensions: exclusions, autoActivate, progress };
 }
 
 function masterRole(value: unknown, field: string, role: string, problems: string[]): MasterRole {

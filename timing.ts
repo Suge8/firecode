@@ -30,6 +30,13 @@ export interface Timing {
 	 * 封顶 15 分钟：长时间故障里每次重试只是一次失败的请求，恢复后最多晚 15 分钟续上。否决 5/15/60 分钟：一次 31 分钟的断网要拖到 80 分钟才续上。
 	 */
 	cooldownMs: readonly number[];
+	/**
+	 * 在跑子代理的进展行：运行满这么久才出第一句。更短的运行看工具行就够了，不值得为它花一次调用。
+	 * 取 30 秒与 Claude Code 后台子代理的状态行同一节奏。
+	 */
+	progressFirstMs: number;
+	/** 进展行两次生成之间至少隔这么久（只在有新输出时才生成）：每个子代理每小时最多 30 次小模型调用。 */
+	progressEveryMs: number;
 }
 
 export const DEFAULT_TIMING: Timing = {
@@ -39,4 +46,6 @@ export const DEFAULT_TIMING: Timing = {
 	eventRetryMs: 5_000,
 	stallMs: 30 * 60_000,
 	cooldownMs: [1, 5, 15].map((minutes) => minutes * 60_000),
+	progressFirstMs: 30_000,
+	progressEveryMs: 2 * 60_000,
 };

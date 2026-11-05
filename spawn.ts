@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { clampThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Context } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	createCodemodeExtension,
@@ -19,7 +19,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
-import { candidates, createModelRoute } from "./model-route.js";
+import { candidates, type ChainCompletion, completeOnChain, createModelRoute } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -127,6 +127,11 @@ export class InProcessSessionPool {
 	/** 实际用的物理模型（provider/id）是不是这条链首选原子匹配到的模型；匹配规则与路由选候选同一份。 */
 	async isChainHead(chain: ModelChain, model: string): Promise<boolean> {
 		return (await candidates(await this.modelRuntime(), chain.slice(0, 1))).some((entry) => `${entry.model.provider}/${entry.model.id}` === model);
+	}
+
+	/** 在链上做一次不开会话的单请求（选择、冷却与失败记账同 model-route.ts 的 completeOnChain）。 */
+	async complete(chain: ModelChain, context: Context, options: { maxTokens: number; signal: AbortSignal }): Promise<ChainCompletion> {
+		return completeOnChain(await this.modelRuntime(), chain, this.timing.cooldownMs, context, options);
 	}
 
 	configureRoute(sessionPath: string, chain: ModelChain, override?: ThinkingLevelValue): void {
