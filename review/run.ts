@@ -10,6 +10,7 @@ import { OCCUPANCY_CHANNEL, type ReviewProgress, type ReviewStage } from "../bus
 import { type ModelChain, type ReviewConfig } from "../config.js";
 import { deliver, wrapEnvelope } from "../deliver.js";
 import { readPrompt } from "../i18n.js";
+import { routePause } from "../model-route.js";
 import { runAdvisor } from "./advisor.js";
 import { buildCard, CARD_TYPE } from "./card.js";
 import { type CheckpointWriter, sealCheckpoint } from "./checkpoint.js";
@@ -221,7 +222,8 @@ export class Run {
 			const assistant = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
 			if (event.aborted) this.dispatch({ type: "TURN_ENDED", aborted: true });
 			else if (assistant?.type === "message" && assistant.message.role === "assistant" && assistant.message.stopReason === "error")
-				this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: assistant.message.errorMessage || msg.outcome.error });
+				// 执行模型链暂时整条不可用（瞬时故障）时带上恢复时刻：Master 到时续审，而不是报审查未完成。
+				this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: assistant.message.errorMessage || msg.outcome.error, retry: routePause(ctx.model) });
 			else this.dispatch({ type: "TURN_ENDED", aborted: false });
 		}
 		this.advance(ctx);

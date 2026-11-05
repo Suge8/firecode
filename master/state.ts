@@ -23,6 +23,18 @@ export interface WorkerRef {
 	 */
 	launch: number;
 	reviewNeeded?: boolean;
+	/**
+	 * 瞬时失败后的自动续跑：idle 且带它就是“暂停到 at，到时自动续跑”（review 为真时续的是审查）。持久化，reload 后按 at 重挂。
+	 * 自动续跑开始后保留到这次运行落定才清：续跑中被 reload 打断时载入收敛回暂停、立即再续，而不是变成等指挥官的中断。
+	 * 指挥官 send/review/interrupt/ack 会清掉它（工作归指挥官接手），所以同一次暂停只续跑一次。
+	 */
+	resume?: WorkerResume;
+}
+
+export interface WorkerResume {
+	at: number;
+	reason: string;
+	review?: true;
 }
 
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
@@ -50,11 +62,13 @@ export class MasterStore {
 		const recovered: string[] = [];
 		this.list = loaded.workers.map((worker) => {
 			if (worker.status === "idle") return worker;
+			// 自动续跑中被打断：仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续。
+			if (worker.resume) return { ...worker, status: "idle" };
 			recovered.push(worker.name);
 			return { ...worker, status: "idle", interruptedAt: now };
 		});
 		this.recovered = recovered;
-		if (recovered.length) this.persist();
+		if (loaded.workers.some((worker) => worker.status !== "idle")) this.persist();
 	}
 
 	get workers(): readonly WorkerRef[] {
@@ -140,6 +154,12 @@ function load(path: string): { workers: WorkerRef[]; legacyVersion?: number } {
 	return { workers: workers.sort(byLaunch) };
 }
 
+function isResume(value: unknown): value is WorkerResume {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const { at, reason, review } = value as Record<string, unknown>;
+	return typeof at === "number" && at > 0 && typeof reason === "string" && (review === undefined || review === true);
+}
+
 function isWorker(value: unknown): value is WorkerRef {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const record = value as Record<string, unknown>;
@@ -155,5 +175,6 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
+	if (record.resume !== undefined && !isResume(record.resume)) return false;
 	return typeof record.launch === "number" && Number.isInteger(record.launch) && record.launch > 0;
 }

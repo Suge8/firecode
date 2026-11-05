@@ -4,7 +4,7 @@
  * 红色、失败计数与活动列表失败组都从这一个事实来（失败、审查停止、审查未完成；被中断不是失败）。
  * 折叠界面（tools/machine.ts）按标题、错误分节与“耗时：本次运行 …”行投影，改格式两侧都要同步。
  */
-import { clip, formatDuration, oneLine } from "../format.js";
+import { clip, clockText, formatDuration, oneLine } from "../format.js";
 import { msg as root } from "../messages.js";
 import type { ReviewOutcome } from "../review/outcome.js";
 import { msg } from "./messages.js";
@@ -15,6 +15,8 @@ export const MASTER_EVENT_TYPE = "firecode-master-event";
 const SECTIONS = root.envelope.sections;
 /** 停摆事件里正在跑的动作截到这么宽：认得出是哪条命令即可，整条命令用 tail 看。 */
 const STALL_ACTION_WIDTH = 160;
+/** 暂停与续跑事件里的故障原文截到这么宽：供应商报错常带整段 JSON，认得出是哪类故障即可。 */
+const FAILURE_WIDTH = 300;
 
 /**
  * 产出的事件：正文与是否落定类。落定类（已返回、失败、被中断、审查通过/停止/未完成）才带“本次运行”耗时，
@@ -84,6 +86,15 @@ export const masterEvent = {
 		),
 	modelSwitched: (name: string, from: string, to: string, reason: string) =>
 		notice(`${name} ${msg.event.modelSwitched}`, msg.event.modelSwitchedBody(from, to, reason)),
+	/** 瞬时失败后暂停、到时自动续跑：不是落定，指挥官不必处理（只告知不唤醒）。 */
+	paused: (name: string, until: number, reason: string, review: boolean) =>
+		notice(
+			`${name} ${review ? msg.event.reviewPaused : msg.event.paused}`,
+			msg.event.pausedBody(clockText(until), formatDuration(Math.max(0, until - Date.now())), review),
+			msg.event.pausedReason(clip(oneLine(reason), FAILURE_WIDTH)),
+		),
+	/** 指挥官自己的回合因瞬时故障中断、手上的事件还没处理：恢复后补的唤醒。 */
+	masterResume: (reason: string) => notice(msg.event.masterResume, msg.event.masterResumeBody(clip(oneLine(reason), FAILURE_WIDTH))),
 };
 
 /** 落定类正文末尾追加 Worker 本次运行耗时（子代理会话写下的轮记录给出）；没有记录或非落定事件不追加，不用别处的计时冒充。 */

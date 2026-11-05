@@ -4,12 +4,10 @@ import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type MasterRole, type ModelAtom, type ThinkingLevelValue } from "../config.js";
-import { CANCEL_REVIEW_COMMAND, readReviewOutcome } from "../review/outcome.js";
+import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
-import {
-	monitorAndSettleReview, observeWorker, openWorkerSession, resumeCheckPrompt, reviewRunId, runWorker, spawnWorker,
-} from "./run.js";
+import { armResume, openWorkerSession, resumeCheckPrompt, runWorker, spawnWorker, startReview } from "./run.js";
 import type { MasterRuntime, RunOrigin } from "./runtime.js";
 import { WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
@@ -51,12 +49,15 @@ async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = targetOf(active, params);
 	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
-	// ack 清掉失败与被中断的行，并取消还没发出的续跑提醒；完成的留在“✓ N 个已完成”里直到 kill。
+	// ack 清掉失败与被中断的行，并取消还没发出的续跑提醒与暂停后的自动续跑；完成的留在“✓ 已完成”里直到 kill。
 	const live = active.live.get(target.name);
 	if (live) {
-		clearTimeout(live.interruptTimer);
-		live.interruptTimer = undefined;
+		active.cancelTimers(live);
 		if (live.outcome && live.outcome.kind !== "done") live.outcome = undefined;
+	}
+	if (target.resume) {
+		const { resume: _resume, ...rest } = target;
+		active.store.upsert(rest);
 	}
 	active.render();
 	return toolResult({ acked: true });
@@ -69,15 +70,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
 	live.transitioning = true;
 	try {
-		const session = await openWorkerSession(active, target);
-		await session.waitForIdle();
-		active.assertOpen();
-		const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-		// 先写档案再挂订阅：kill 或会话关闭时 commit 抛错，不会给已删的票留下订阅。
-		active.commit(target, ({ interruptedAt: _interruptedAt, ...rest }) => ({ ...rest, status: "reviewing" }));
-		observeWorker(active, target, session);
-		active.beginRun(target.name);
-		monitorAndSettleReview(active, target, session, previousRunId);
+		await startReview(active, target);
 		return toolResult({ reviewing: true });
 	} catch (error) {
 		rearmRelease(active, target);
@@ -90,6 +83,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	const target = targetOf(active, params);
 	if (target.status === "reviewing") return interruptReview(active, target);
+	if (target.status === "idle" && target.resume) return interruptPause(active, target);
 	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
 	const session = active.setup.pool.getSession(target.sessionPath);
 	if (!session) throw new Error(msg.action.sessionReleased(target.name));
@@ -105,6 +99,17 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 		if (live.interruptedRun === run) live.interruptedRun = undefined;
 		throw error;
 	}
+}
+
+/** 暂停中的子代理：取消自动续跑，按被中断落定（会话与审查义务保留，等指挥官续派或收口）。 */
+async function interruptPause(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
+	if (active.live.get(target.name)?.transitioning) throw new Error(msg.action.switching(target.name));
+	active.cancelTimers(active.liveOf(target.name));
+	const { resume: _resume, ...rest } = target;
+	const interrupted: WorkerRef = { ...rest, interruptedAt: Date.now() };
+	active.store.upsert(interrupted);
+	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
+	return toolResult({ interrupted: true });
 }
 
 /**
@@ -168,8 +173,10 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		const role = selectedRole.role;
 		const model = target.model;
 		const thinking = target.thinking;
-		const interruptedAt = active.current(target).interruptedAt;
-		const working = active.commit(target, ({ interruptedAt: _interrupted, ...rest }) => ({
+		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
+		const latest = active.current(target);
+		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
+		const working = active.commit(target, ({ interruptedAt: _interrupted, resume: _resume, ...rest }) => ({
 			...rest,
 			role,
 			model,
@@ -180,7 +187,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		}));
 		active.beginRun(target.name, fromView ? "view" : "master");
 		if (fromView) live.viewPrompts.push(prompt);
-		await runWorker(active, working, session, interruptedAt ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
+		await runWorker(active, working, session, cutOff ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
 		return toolResult({ sent: true });
 	} catch (error) {
 		rearmRelease(active, target);
@@ -256,9 +263,15 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	}
 }
 
-/** 准备段失败而票仍是 idle：openWorkerSession 取消了池的释放计时，这里补回，否则这个热会话再也不会被释放。 */
+/**
+ * 准备段失败而票仍是 idle：openWorkerSession 取消了池的释放计时，这里补回，否则这个热会话再也不会被释放。
+ * 暂停中的票同样补回自动续跑：准备期间到期的续跑见 transitioning 已让路，这次接手又没成，不补就再也没人续。
+ */
 function rearmRelease(active: MasterRuntime, target: WorkerRef): void {
-	if (active.find(target)?.status === "idle") active.setup.pool.markIdle(target.sessionPath);
+	const current = active.find(target);
+	if (current?.status !== "idle") return;
+	active.setup.pool.markIdle(target.sessionPath);
+	armResume(active, current);
 }
 
 function toolResult(value: unknown): ToolResult {

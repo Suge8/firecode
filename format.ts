@@ -137,6 +137,14 @@ export function formatDuration(milliseconds: number): string {
 	return `${hours ? `${hours}h` : ""}${minutes ? `${minutes}m` : ""}${seconds ? `${seconds}s` : ""}`;
 }
 
+/** 本地时刻：当天只写 HH:MM，跨天前面加 M-D（额度窗口可能在几天后重置）。 */
+export function clockText(at: number, now = Date.now()): string {
+	const date = new Date(at);
+	const pad = (value: number) => String(value).padStart(2, "0");
+	const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+	return date.toDateString() === new Date(now).toDateString() ? time : `${date.getMonth() + 1}-${date.getDate()} ${time}`;
+}
+
 /** 去掉模型 id 的 provider 前缀与日期后缀。 */
 export function formatModelName(id: string | undefined): string {
 	if (!id) return "no-model";

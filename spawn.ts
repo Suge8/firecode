@@ -148,7 +148,7 @@ export class InProcessSessionPool {
 		try {
 			const agentDir = getAgentDir();
 			const runtime = await this.modelRuntime();
-			route = await createModelRoute(runtime, options.chain, options.thinkingOverride, options.onModelChange);
+			route = await createModelRoute(runtime, options.chain, this.timing.cooldownMs, options.thinkingOverride, options.onModelChange);
 			// 加载器与会话共用同一个 SettingsManager：项目信任只判定一次，两处读到的设置也不会分叉。
 			const settingsManager = SettingsManager.create(options.cwd, agentDir, { projectTrusted: false });
 			settingsManager.setProjectTrusted(projectTrusted(options.cwd, agentDir, settingsManager));
