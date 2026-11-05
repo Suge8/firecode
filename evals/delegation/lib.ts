@@ -48,7 +48,7 @@ export const variantAgent = (variant: string): string => join(WORK, "variants", 
  * 子进程不继承任何 PI_* 与 HERDR_*：前者含外层 pi 给工具设的会话变量（PI_SESSION_FILE、PI_MODEL 等）和个人设置（PI_CACHE_RETENTION），
  * 会让不同人跑出的结果不可比；后者会让子进程回写用户自己的 herdr pane。评测需要的 PI_* 在下面显式给出。
  */
-export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string>; allow?: string[] }): ChildProcess {
+export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp: string; stdin: "pipe" | "ignore"; env?: Record<string, string>; allow?: string[]; lockdown?: { modelPort?: number } }): ChildProcess {
 	const env: Record<string, string | undefined> = {
 		...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(PI|HERDR)_/u.test(key))),
 		PI_CODING_AGENT_DIR: o.agentDir,
@@ -56,9 +56,11 @@ export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp:
 		PI_TELEMETRY: "0",
 		TMPDIR: o.tmp,
 		...o.env,
+		// 网络只通模型端口时，本机模型请求不能再绕 settings 里的 HTTP 代理（代理端口不通）。
+		...(o.lockdown?.modelPort ? { NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" } : {}),
 	};
 	const [cmd, base] = piCommand();
-	const jail = ["-p", sandboxProfile([dirname(o.cwd), dirname(o.agentDir), join(WORK, "host-modules"), ...(o.allow ?? [])])];
+	const jail = ["-p", sandboxProfile([dirname(o.cwd), dirname(o.agentDir), join(WORK, "host-modules"), ...(o.allow ?? [])], o.lockdown && { writable: [dirname(o.agentDir), ...(o.allow ?? [])], modelPort: o.lockdown.modelPort })];
 	return spawn("sandbox-exec", [...jail, cmd, ...base, ...args], { cwd: o.cwd, env, detached: true, stdio: [o.stdin, "pipe", "pipe"] });
 }
 
@@ -66,14 +68,21 @@ export function startPi(args: string[], o: { agentDir: string; cwd: string; tmp:
  * 被测会话跑在 macOS sandbox-exec 里（子进程继承）：整个 $EVAL_DIR、本仓库的全部 git 工作树与 .git、你的会话记录都不可读写，
  * 只放开本次运行目录、变体目录与 allow。真值（t9-truth.json、tasks.ts、fixtures.ts、accept.ts）和其他运行的结果都在禁区里；
  * 冒烟见过 Worker 跳出副本翻 $EVAL_DIR 读到真值。规则按后写的优先，所以先禁后放。路径须是真实路径（/tmp 要写 /private/tmp）。
+ * lockdown（重放真实会话用，cwd 是真实项目）：再收紧为只能写 writable 与 /dev；给了 modelPort（模型供应商在本机）时网络只通本机这个端口，
+ * 连本机的 HTTP 代理也不通。sandbox-exec 只能按本机端口或 * 限定对端，供应商不在本机就挡不住网络，只剩文件这一层。
  */
-function sandboxProfile(allow: string[]): string {
+function sandboxProfile(allow: string[], lockdown?: { writable: string[]; modelPort?: number }): string {
 	const worktrees = execFileSync("git", ["-C", REPO, "worktree", "list", "--porcelain"], { encoding: "utf8" })
 		.split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
 	const real = (path: string) => JSON.stringify(realpathSync(path));
 	const deny = [WORK, ...worktrees, join(USER_AGENT_DIR, "sessions")].filter(existsSync).map((p) => `(subpath ${real(p)})`);
 	const open = allow.filter(existsSync).map((p) => `(subpath ${real(p)})`);
-	return `(version 1)(allow default)(deny file-read* file-write* ${deny.join(" ")})(allow file-read* file-write* ${open.join(" ")})`;
+	const profile = `(version 1)(allow default)(deny file-read* file-write* ${deny.join(" ")})(allow file-read* file-write* ${open.join(" ")})`;
+	if (!lockdown) return profile;
+	const write = lockdown.writable.filter(existsSync).map((p) => `(subpath ${real(p)})`);
+	const files = `(deny file-write* (subpath "/"))(allow file-write* (subpath "/dev") ${write.join(" ")})`;
+	const network = lockdown.modelPort ? `(deny network-outbound)(allow network-outbound (remote ip "localhost:${lockdown.modelPort}") (remote unix-socket))` : "";
+	return profile + files + network;
 }
 
 /** pi 的 bash 工具把命令放进自己的进程组，只杀 pi 的组会留下孤儿（比如 15 分钟的 e2e），所以先按父子关系收集全部后代。 */
