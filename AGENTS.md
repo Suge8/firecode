@@ -2,7 +2,7 @@
 
 pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
 
-单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
 - 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数与审查占用在 `busy.ts`（读者经 `watchBusy`、`busyView`），轮记录写入通知在 `round.ts`，子代理名册 `firecode:subagents`（给同进程其他扩展的对外接口）在 `master/roster.ts`；契约都在各自头注释。
 - Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
@@ -21,6 +21,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
+| `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环加整体超时 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
 | `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review、Watcher 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
