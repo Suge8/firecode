@@ -49,13 +49,13 @@ test("en：Master 事件的标题与正文不含中文", async () => {
 
 for (const { language, configJsonc } of LANGUAGES) {
 	test(`${language}：指挥官与 Worker 提示词存在，且引用的视图来源标记与事件产文一致`, async () => {
-		const { readMasterPrompt } = await loadFirecodeModule("master/prompt.ts", { configJsonc }) as any;
+		const { MASTER_PROMPT, WORKER_PROMPT } = await loadFirecodeModule("master/prompt.ts", { configJsonc }) as any;
 		const { masterEvent } = await loadFirecodeModule("master/event-format.ts", { configJsonc }) as any;
 		const title = (event: any) => event.body.split("\n", 1)[0];
 		const viewed = title(masterEvent.returned("a", "ok", false, ["hi"])).slice(title(masterEvent.returned("a", "ok")).length).trim();
 		expect(viewed.length).toBeGreaterThan(0);
-		expect(readMasterPrompt("master")).toContain(viewed);
-		expect(CJK.test(readMasterPrompt("worker"))).toBe(language === "zh");
-		expect(CJK.test(readMasterPrompt("master"))).toBe(language === "zh");
+		expect(MASTER_PROMPT).toContain(viewed);
+		expect(CJK.test(WORKER_PROMPT)).toBe(language === "zh");
+		expect(CJK.test(MASTER_PROMPT)).toBe(language === "zh");
 	});
 }

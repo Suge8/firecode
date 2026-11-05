@@ -40,6 +40,8 @@ import { ReviewUi } from "./ui.js";
 const ADVISOR_EVIDENCE_TOKENS = 6_000;
 
 const PROMPTS = new URL("./prompts/", import.meta.url);
+const REVIEW_PROMPT = readPrompt(PROMPTS, "review");
+const ADVISOR_PROMPT = readPrompt(PROMPTS, "advisor");
 
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
 function overallTimeoutMs(config: ReviewConfig) {
@@ -284,7 +286,7 @@ export class Run {
 		const { state } = this;
 		if (state.phase !== "reviewing") return;
 		const evidence = buildEvidence(this.sessionEntries(), { sessionFile: this.ctx.sessionManager.getSessionFile() });
-		const prompt = buildReviewPrompt(readPrompt(PROMPTS, "review"), {
+		const prompt = buildReviewPrompt(REVIEW_PROMPT, {
 			scope: msg.command.scope,
 			focus: state.focus,
 			evidence,
@@ -304,7 +306,7 @@ export class Run {
 		const { state } = this;
 		if (state.phase !== "needs_fix") return;
 		try {
-			const prompt = buildAdvisorPrompt(readPrompt(PROMPTS, "advisor"), {
+			const prompt = buildAdvisorPrompt(ADVISOR_PROMPT, {
 				focus: state.focus,
 				requirement: buildEvidence(this.sessionEntries(), { budgetTokens: ADVISOR_EVIDENCE_TOKENS, sessionFile: this.ctx.sessionManager.getSessionFile() }),
 				details: findingsOf(state.voters),

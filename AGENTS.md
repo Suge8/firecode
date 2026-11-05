@@ -60,7 +60,7 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 界面与给模型看的文字支持中英。所有用户/模型可见文案必须经文案表，新增文案中英同时提供；代码注释保持中文。语言由 `config.jsonc` 顶层 `language` 决定（省略则跟随系统 locale：`LC_ALL`/`LC_MESSAGES`/`LANG`，再退到运行时默认 locale，zh 开头为中文，其余英文），模块加载时定下，改语言重启生效，调用处不传语言。
 
 - 每个目录一个 `messages.ts`：`export const msg = defineMessages({ zh: {...}, en: {...} })`，用 `msg.分组.键`；带参数的文案写成函数。en 与 zh 的键、嵌套、函数参数不一致是类型错误。
-- 提示词按语言分文件 `<name>.zh.md` / `<name>.en.md`，用 `i18n.ts` 的 `readPrompt(new URL("./prompts/", import.meta.url), name)` 读；英文版是等价翻译，改一边必须同步另一边。
+- 提示词按语言分文件 `<name>.zh.md` / `<name>.en.md`，用 `i18n.ts` 的 `readPrompt(new URL("./prompts/", import.meta.url), name)` 在模块顶层读成常量（与代码同属进程加载的那一版，理由见其头注释）；英文版是等价翻译，改一边必须同步另一边。
 - 生产端与解析端共用的词汇只有一份：信封分节词与耗时词汇在根 `messages.ts` 的 `envelope`（信封格式归 `deliver.ts`；生产端与折叠界面 `tools/machine.ts` 都读它，解析端只读当前语言），审查输出契约与结果卡的字段名在 `review/messages.ts` 的 `terms`（解析端两种语言都认，理由见 [review/AGENTS.md](review/AGENTS.md)）。
 - 不进文案表的：代码标识符、协议字段名、模型原子等配置值、`active: … / all: …` 这类纯技术输出。
 - 测试把 `LC_ALL` 固定为 zh（`tests/loader.ts`），断言默认中文；英文行为在 `tests/i18n.test.ts` 用 `language: "en"` 的配置验证。

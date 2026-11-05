@@ -246,26 +246,6 @@ describe("registerReview wiring", () => {
 		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 	});
 
-	test("a missing control prompt settles as an infrastructure error", async () => {
-		const module = (await loadReviewModule("review/index.js", {
-			extraFiles: { "review/prompts/review.zh.md": "" },
-		})) as { registerReview: (pi: unknown) => void };
-		const checkpoint = (await loadFirecodeModule("review/checkpoint.js")) as {
-			readCheckpoint: (ctx: unknown) => { phase: string; history: { result: string; details: string }[] } | undefined;
-		};
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi);
-		const ctx = makeCtx(sessionManager);
-		const command = fireReview(registered);
-		await command.handler("", ctx);
-		await until(() => checkpoint.readCheckpoint({ sessionManager })?.phase === "settled");
-		const state = checkpoint.readCheckpoint({ sessionManager });
-		expect(state?.phase).toBe("settled");
-		expect(state?.history.at(-1)?.result).toBe("error");
-		expect(state?.history.at(-1)?.error).toContain("system prompt 为空");
-	}, 10_000);
-
 	test("language en: the reviewer gets the English policy; the result card, summary prompt and notices are English", async () => {
 		const verdict = "PASS\nVerification exited 0.\nEvidence: files=a.ts; commands=bun test";
 		const systems: string[] = [];

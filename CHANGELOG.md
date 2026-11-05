@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Changed
 
 - **Breaking:** Model settings for roles, reviewers, the advisor and watcher now accept an atom or ordered array. Remove role `fallback` fields and reviewer `{ model, fallback }` objects. Provider prefixes are optional.
@@ -16,6 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Prompts are read once when FireCode loads, so a running session keeps the prompts that match the code it loaded. Before, updating FireCode's files while Pi was running (`pi update`, or `git pull` on a source install) paired the old code with the new prompts on disk. **After upgrading to this release, restart Pi sessions that were already running:** they still run the old review parser, and with the new review prompt every review fails with "first line must be PASS or FAIL".
 - A Claude subscription limit such as "You've hit your 5-hour limit · resets 5:10am (Asia/Singapore)" now cools the model down until that time instead of for 5 minutes, so the next task no longer hits the same limit again.
 - A model switch reported to the Master no longer carries the failure reason of an earlier task.
 - `/fire-review` waits for a repair or summary turn to settle after automatic retries and continuations, so a transient provider error no longer cancels the review. A final repair error or feedback delivery failure is reported to the Master with its original message.
@@ -265,7 +268,9 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/Suge8/firecode/compare/v1.7.0...v1.8.0
+[1.7.0]: https://github.com/Suge8/firecode/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Suge8/firecode/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/Suge8/firecode/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Suge8/firecode/compare/v1.3.1...v1.4.0

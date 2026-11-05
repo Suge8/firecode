@@ -9,7 +9,7 @@ import type { ModelChain } from "../config.js";
 import { readPrompt } from "../i18n.js";
 import { msg } from "./messages.js";
 
-const PROMPTS = new URL("./prompts/", import.meta.url);
+const WATCH_PROMPT = readPrompt(new URL("./prompts/", import.meta.url), "watch");
 const OBSERVER_TOOLS = ["read", "grep", "find", "ls", "advise"];
 
 export interface Observer {
@@ -34,7 +34,7 @@ export async function createObserver(options: ObserverOptions): Promise<Observer
 		chain: options.chain,
 		tools: OBSERVER_TOOLS,
 		customTools: [adviseTool(() => advice, (note) => { advice = note; })],
-		systemPrompt: { mode: "replace", text: readPrompt(PROMPTS, "watch") },
+		systemPrompt: { mode: "replace", text: WATCH_PROMPT },
 		contextFiles: true,
 		persistence: { type: "memory" },
 		// 观察员只读、只靠自己的提示词与 advise：不带用户的扩展、技能与模板（扩展会在观察会话里产生外部副作用，技能表白占上下文）。

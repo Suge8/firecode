@@ -141,7 +141,6 @@ export const msg = defineMessages({
 			closedMore: (count: number) => `…另有 ${count} 项，详见审查报告`,
 		},
 		prompt: {
-			systemEmpty: "FireReview system prompt 为空",
 			target: "审查对象：",
 			focus: "关注点：",
 			sessionRecord: "会话记录：",
@@ -269,7 +268,6 @@ export const msg = defineMessages({
 			closedMore: (count: number) => `…and ${count} more; see the review report`,
 		},
 		prompt: {
-			systemEmpty: "FireReview system prompt is empty",
 			target: "Review target:",
 			focus: "Focus:",
 			sessionRecord: "Session record:",

@@ -148,12 +148,6 @@ test("Worker 的系统提示带上自己的名字，包在协议信封里", asyn
 	expect(systemPrompt).toContain("</firecode_worker>");
 });
 
-test.each(["master", "worker"])("%s 提示词为空时拒绝激活并说明原因", async (kind) => {
-	const harness = await setup(true, { promptFiles: { [`master/prompts/${kind}.zh.md`]: " \n" } });
-	expect(harness.notices.at(-1)).toContain(`Master ${kind} prompt 为空`);
-	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
-});
-
 test("角色表配置有错时拒绝启动（具体问题文案由配置解析的测试守）", async () => {
 	const harness = await setup(true, {
 		roles: {
@@ -1886,7 +1880,6 @@ async function setup(activate = true, options: {
 	failDeliveries?: number;
 	/** 子会话加载 FireCode 的轮记录器（与真实安装一致）；false 复现 Worker 排除了 FireCode 扩展。 */
 	workerRecorder?: boolean;
-	promptFiles?: Record<string, string>;
 	roles?: Record<string, { model: string | string[]; use: string; fallback?: string[] }>;
 	/** 指挥官会话激活前的工具集。 */
 	activeTools?: string[];
@@ -1935,7 +1928,6 @@ async function setup(activate = true, options: {
 	// 测试默认立即唤醒指挥官、让事件重试远在测试之外；用例按需缩短别的等待。
 	const pool = new (spawnModule as any).InProcessSessionPool({ timing: { wakeQuietMs: 0, eventRetryMs: 3_600_000, ...options.timing } });
 	const moduleOptions = {
-		extraFiles: options.promptFiles,
 		configJsonc: JSON.stringify({
 			features: { master: true, review: options.review === true },
 			review: TEST_REVIEW_CONFIG,
