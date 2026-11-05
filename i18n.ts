@@ -37,7 +37,11 @@ export function defineMessages<T extends Messages>(tables: { zh: T; en: NoInfer<
 	return tables[LANGUAGE] as T;
 }
 
-/** 读 `<name>.<语言>.md`；dir 由调用方以 `new URL("./prompts/", import.meta.url)` 给出（构建据此改写打包后的位置）。 */
+/**
+ * 读 `<name>.<语言>.md`；dir 由调用方以 `new URL("./prompts/", import.meta.url)` 给出（构建据此改写打包后的位置）。
+ * 只在模块顶层调用、读成常量：提示词与读它、解析其输出的代码必须同属进程加载的那一版。会话运行中更新 FireCode 文件
+ * （git pull、pi update）时，用到才读盘会让旧代码配新提示词——审查改输出契约那次，没重启的会话每场审查都判格式无效。
+ */
 export function readPrompt(dir: URL, name: string): string {
 	return readFileSync(new URL(`${name}.${LANGUAGE}.md`, dir), "utf8");
 }

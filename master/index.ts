@@ -14,7 +14,7 @@ import {
 	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
 import { msg } from "./messages.js";
-import { assembleMasterPrompt, readMasterPrompt } from "./prompt.js";
+import { assembleMasterPrompt, MASTER_PROMPT, WORKER_PROMPT } from "./prompt.js";
 import { armInterruptReminder } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
@@ -27,9 +27,8 @@ const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
 export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): void {
 	const all = loadConfig();
 	const loaded = all.master;
-	const prompts = loadMasterPrompts();
-	// 配置或提示词有问题时拒绝激活：runtime 存在就意味着两者都可用。
-	const startupError = "error" in loaded ? loaded.error : prompts.error;
+	// 配置有问题时拒绝激活：runtime 存在就意味着配置可用。
+	const startupError = "error" in loaded ? loaded.error : undefined;
 	const configuredRoles = "error" in loaded ? [] : loaded.config.roles;
 	const roster: MasterRole[] = [...configuredRoles];
 	const roleParameter = Type.Optional(StringEnum(configuredRoles.map((entry) => entry.role), { description: msg.tool.role }));
@@ -67,7 +66,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		pool,
 		roster,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
-		workerPrompt: prompts.worker,
+		workerPrompt: WORKER_PROMPT,
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
 		publishInFlight,
 		publishRoster,
@@ -139,7 +138,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
-		event.systemPromptOptions.sections.firecode_master = assembleMasterPrompt(prompts.master, rosterText(roster));
+		event.systemPromptOptions.sections.firecode_master = assembleMasterPrompt(MASTER_PROMPT, rosterText(roster));
 	});
 
 	pi.registerTool({
@@ -213,14 +212,6 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 async function confirmStop(active: MasterRuntime, ctx: ExtensionContext): Promise<boolean> {
 	const running = active.store.workers.filter((worker) => worker.status !== "idle").length;
 	return !running || !ctx.hasUI || ctx.ui.confirm(msg.command.confirmOffTitle, msg.command.confirmOff(running));
-}
-
-function loadMasterPrompts(): { master: string; worker: string; error?: string } {
-	try {
-		return { master: readMasterPrompt("master"), worker: readMasterPrompt("worker") };
-	} catch (error) {
-		return { master: "", worker: "", error: error instanceof Error ? error.message : String(error) };
-	}
 }
 
 function rosterText(models: MasterRole[]): string {

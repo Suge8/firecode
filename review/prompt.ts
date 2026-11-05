@@ -31,12 +31,7 @@ export function buildReviewPrompt(template: string, input: ReviewPromptInput): P
 		msg.prompt.reviewReminder,
 	);
 	const system = template.replaceAll("{{score}}", String(BLOCKING.score)).replaceAll("{{impact}}", String(BLOCKING.impact));
-	return promptLayers(system, parts.filter((part) => part !== "").join("\n\n"));
-}
-
-function promptLayers(system: string, user: string): PromptLayers {
-	if (!system.trim()) throw new Error(msg.prompt.systemEmpty);
-	return { system, user };
+	return { system, user: parts.filter((part) => part !== "").join("\n\n") };
 }
 
 /** 往轮 FAIL 发现清单（两相收敛的闭环输入）：第 2 轮起注入。 */
@@ -73,7 +68,7 @@ export function buildAdvisorPrompt(template: string, input: AdvisorPromptInput):
 	const prior = priorRoundsSection(input.history, input.round);
 	if (prior) parts.push(`${msg.prompt.priorHistory}\n${prior}`);
 	parts.push(msg.prompt.advisorReminder);
-	return promptLayers(template, parts.join("\n\n"));
+	return { system: template, user: parts.join("\n\n") };
 }
 
 interface FixFeedbackInput {

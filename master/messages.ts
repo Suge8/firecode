@@ -37,10 +37,6 @@ export const msg = defineMessages({
 			join: "；",
 			prompt: (roster: string) => `角色表：${roster}。`,
 		},
-		prompt: {
-			readFailed: (kind: string, reason: string) => `Master ${kind} prompt 读取失败：${reason}`,
-			empty: (kind: string) => `Master ${kind} prompt 为空`,
-		},
 		event: {
 			obligation: "此票有审查义务，请显式 review。",
 			viewMark: "（你在子代理视图里直接派的）",
@@ -200,10 +196,6 @@ export const msg = defineMessages({
 			unavailable: (roles: string) => `Roles have no available models: ${roles}`,
 			join: "; ",
 			prompt: (roster: string) => `Role roster: ${roster}.`,
-		},
-		prompt: {
-			readFailed: (kind: string, reason: string) => `Failed to read the Master ${kind} prompt: ${reason}`,
-			empty: (kind: string) => `The Master ${kind} prompt is empty`,
 		},
 		event: {
 			obligation: "This ticket carries a review obligation; run review explicitly.",
