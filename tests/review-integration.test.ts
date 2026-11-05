@@ -1109,9 +1109,51 @@ describe("review cards and degraded paths", () => {
 		const reason = (result as { reason: string }).reason;
 		expect(reason).toContain("sol");
 		expect(reason).toContain("expired/sol");
+		// 指挥官曾把登录失效当成要等人修好，干等一个多小时：终态要说清是审查器失效、不是代码问题，并给出出路。
+		expect(reason).toContain("审查器失效，不是代码问题");
+		expect(reason).toContain("或由指挥官亲自审查");
 		const cards = registered.sent.map((message) => (message as { content: string }).content);
 		expect(cards.some((content) => content.includes("审查未完成") && content.includes("sol"))).toBe(true);
 		expect(cards.some((content) => content.includes("审查通过"))).toBe(false);
+	}, 20_000);
+
+	// 事故：terra 连续 8 轮输出格式无效，每轮都以“审查未完成”收尾，链里的备用模型从没被用上。
+	test("输出格式无效的席位在同一轮换链里的下一个模型重审", async () => {
+		const pass = "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint } = await loadTwoReviewers(
+			(model) => model === "p/one" ? "结论如下\n随便写" : pass,
+			[["p/one/low", "p/two/low"]],
+		);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => ["summarizing", "settled"].includes(readCheckpoint({ sessionManager })?.phase ?? ""));
+		const state = readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.round).toBe(1);
+		expect(state?.history[0].reviewers[0].model).toBe("p/two");
+		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查通过"));
+		expect(card).toContain("审查模型：two（备用），席位首选不可用");
+	}, 20_000);
+
+	test("整条链都输出格式无效时，终态写明审查器失效与每个模型的格式问题", async () => {
+		const { registerReview, readCheckpoint, outcome } = await loadTwoReviewers(() => "结论如下\n随便写", [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
+		expect(registered.delivered).toEqual([]);
+		const reason = ((await outcome(sessionManager)) as { reason: string }).reason;
+		expect(reason).toContain("审查器失效，不是代码问题");
+		expect(reason).toContain("p/one");
+		expect(reason).toContain("p/two");
+		expect(reason.match(/审查输出格式无效/gu)?.length).toBe(2);
 	}, 20_000);
 
 	test("审查者输出截断后沿链切换并完成审查", async () => {
