@@ -92,7 +92,31 @@ async function stats(check: Check): Promise<void> {
 	});
 }
 
-const SUITES: Record<string, (check: Check) => Promise<void>> = { "impl-duration": duration, "impl-stats": stats };
+async function cacheHitRate(check: Check): Promise<void> {
+	const { cacheHitRate: f } = await load("session/stats.ts");
+	const totals = (input: number, cacheRead: number) => ({ requests: 1, input, output: 0, cacheRead, cacheWrite: 0, tokens: input + cacheRead, cost: 0 });
+	check("cache:25%", () => f(totals(75, 25)) === 0.25);
+	check("cache:全命中", () => f(totals(0, 10)) === 1);
+	check("cache:零命中", () => f(totals(10, 0)) === 0);
+	check("cache:分母0", () => f(totals(0, 0)) === undefined);
+}
+
+async function bytes(check: Check): Promise<void> {
+	const { formatBytes: f } = await load("bytes.ts");
+	const GB = 1024 ** 3;
+	const cases: Array<[number, string]> = [[0, "0B"], [1023, "1023B"], [1024, "1KB"], [1100, "1.1KB"], [1536, "1.5KB"], [10240, "10KB"], [1048576, "1MB"], [1.5 * GB, "1.5GB"], [5 * GB, "5GB"], [2048 * GB, "2048GB"], [-1, "?"], [NaN, "?"], [Infinity, "?"]];
+	for (const [n, want] of cases) check("bytes:" + want + "←" + n, () => f(n) === want);
+}
+
+const SUITES: Record<string, (check: Check) => Promise<void>> = {
+	"impl-duration": duration,
+	"impl-stats": stats,
+	parallel3: async (check) => {
+		await duration(check);
+		await cacheHitRate(check);
+		await bytes(check);
+	},
+};
 const cases: Array<[string, () => unknown]> = [];
 await SUITES[task]!((name, run) => cases.push([name, run]));
 const failed = cases.filter(([, run]) => {

@@ -9,7 +9,7 @@ export const WORK = process.env.EVAL_DIR ?? join(tmpdir(), "firecode-delegation-
 export const USER_AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 
 /** 与 tests/loader.ts 同一套定位：设了 PI_PACKAGES_DIR 就跑那份源码，否则用 PATH 里的 pi。 */
-function piCommand(): [string, string[]] {
+export function piCommand(): [string, string[]] {
 	const packages = process.env.PI_PACKAGES_DIR;
 	return packages ? ["bun", [join(packages, "coding-agent/src/cli.ts")]] : ["pi", []];
 }
@@ -39,6 +39,24 @@ export function prepareRun(dir: string, fixture: string): { repo: string; tmp: s
 	mkdirSync(tmp, { recursive: true });
 	cpSync(fixture, repo, { recursive: true });
 	return { repo, tmp };
+}
+
+/** 工具形态：defaultTools 与 codemode.mode 的组合（mode "off" = 不开 codemode）。 */
+export interface ToolForm {
+	tools: string[];
+	mode: "only" | "on" | "off";
+}
+const BUILTIN = ["read", "bash", "edit", "write"];
+export const TOOL_FORMS: Record<string, ToolForm> = {
+	only: { tools: [...BUILTIN, "+codemode"], mode: "only" },
+	on: { tools: [...BUILTIN, "+codemode"], mode: "on" },
+	off: { tools: BUILTIN, mode: "off" },
+};
+
+/** 在用户 settings 的副本上覆盖工具形态（只写变体自己的 settings，不动用户文件）。 */
+export function withToolForm(settings: Record<string, any>, form: ToolForm): Record<string, any> {
+	const { codemode, ...rest } = settings;
+	return form.mode === "off" ? { ...rest, defaultTools: form.tools } : { ...rest, defaultTools: form.tools, codemode: { ...codemode, mode: form.mode } };
 }
 
 /** 变体的临时 Agent 目录。 */
@@ -168,6 +186,25 @@ export async function pool(jobs: Array<() => Promise<void>>, limit: number): Pro
 	await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, async () => {
 		while (next < jobs.length) await jobs[next++]!();
 	}));
+}
+
+/** 固定种子的洗牌（mulberry32）：同一 (种子, 键) 永远给出同一顺序，评测可复现。 */
+export function seededShuffle<T>(items: readonly T[], seed: string): T[] {
+	let state = 0;
+	for (const ch of seed) state = (Math.imul(state, 31) + ch.charCodeAt(0)) >>> 0;
+	const random = () => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = state;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+	const out = [...items];
+	for (let i = out.length - 1; i > 0; i--) {
+		const j = Math.floor(random() * (i + 1));
+		[out[i], out[j]] = [out[j]!, out[i]!];
+	}
+	return out;
 }
 
 export function parseList(value: string | undefined): string[] | undefined {
