@@ -2,7 +2,7 @@
 
 pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
 
-单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
 - 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数与审查占用在 `busy.ts`（读者经 `watchBusy`、`busyView`），轮记录写入通知在 `round.ts`，子代理名册 `firecode:subagents`（给同进程其他扩展的对外接口）在 `master/roster.ts`；契约都在各自头注释。
 - Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
@@ -11,7 +11,6 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
-| `header.ts` | 会话启动横幅 | |
 | `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏；也接宿主改名键改会话名 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 经宿主 `registerToolRenderer` 只接管 read/bash/edit/write/grep/find/ls 的渲染（不重新注册工具）；思考与工具的过程组/过程列表、轮记录的宿主适配 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 预设、用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
@@ -22,19 +21,10 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
-| `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回） | |
-| `today.ts` | 系统提示的日期段 | |
+| `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环加整体超时 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
-| `evals/usage/` | 只读本机会话的速度指标统计 | |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
-| `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言、review 的修复反馈与总结提示共用） | |
-| `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道 | |
-| `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
-| `process-shared.ts` | 跨模块拷贝共享的进程唯一状态 | |
-| `model-route.ts` | 子会话模型链、进程级冷却与请求路由 | |
 | `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review、Watcher 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
-| `format.ts` | 共享的宽度/文本格式化 | |
-| `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置与 provider 共用的唯一对象判定） | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置（含 `openai` 节校验），并给出 review/master/watcher 每节能否启动的判定 | |
 | `config-file.ts` | 运行配置的路径、首次播种、原始读取；不含文案（被 `i18n.ts` 依赖） | |
@@ -86,16 +76,7 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 
 ## 文档
 
-README 只写给用户：卖点、两张对比表、一行功能清单与安装。开发者与 agent 才需要的事实（配置细节、测量口径、来源）写在这里、配置模板注释或对应头注释，不进 README。中英两份的标语（`<h3>` 紧跟简介 `<p>`）与“审查对比”“核心极轻”两张表是官网构建的解析契约，格式见 `site/AGENTS.md`；改表时中英两份一起改，表下只留一行日期说明。
-
-审查对比表各行按官方来源核对（上次 2026-10-12）：[Claude Code Code Review](https://code.claude.com/docs/en/code-review)（“Review a diff locally”）、[Codex 斜杠命令](https://developers.openai.com/codex/cli/slash-commands)与 [Codex review 任务](https://github.com/openai/codex/blob/27065a9/codex-rs/core/src/tasks/review.rs)、[Open Code Review README](https://github.com/alibaba/open-code-review/blob/357c3f0/README.md)、[Qodo 文档](https://docs.qodo.ai/code-review)、[PR-Agent README](https://github.com/The-PR-Agent/pr-agent)、[multi-model-review](https://github.com/Scott-Meyer/multi-model-review)（npm 0.2.2）。核不到来源的行删掉，不沿用旧说法。
-
-核心极轻表的口径：每个子代理/委派工具 `JSON.stringify({name, description, parameters}).length`，默认设置，表里写版本号；改了工具定义、默认角色或要更新竞品版本时重测。
-- FireCode：`subagents` 与 `subagents_list`，模板角色、英文界面（中文界面 1,031）。指挥官提示词另占英文 9,489、中文 2,980 字符（去除首尾空白后的 JS 字符串长度），加每角色一行，不计入。
-- pi-subagents 0.77.0（[5852aa0](https://github.com/nicobailon/pi-subagents/tree/5852aa08ccd55e8c64dd16e69d1b96a17e92b8aa)）：`subagent` 3,357、`bg_wait` 1,133、加载器 `subagents_enable` 428。低值是能中途加工具的模型上只有加载器与 `bg_wait` 常驻；启用委派后或其他模型上默认 4,490–4,918。复现：把它的 `index.ts` 加载到只记录 `registerTool` 的假 `ExtensionAPI` 上量。
-- omp（`@oh-my-pi/pi-coding-agent` 18.10.1，[5d0aaff](https://github.com/can1357/oh-my-pi/tree/5d0aaffaf1f987503ce129a642fb6e30339615af)）：`task` 2,856、`wait` 513；交互会话多出的提问工具 `ask` 不算委派，不计入。
-- Codex CLI 0.162.1（[092d3ac](https://github.com/openai/codex/tree/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d)）：默认 `multi_agent_v1` 五个共 9,641（`spawn_agent` 6,581、`send_input` 1,561、`wait_agent` 703、`close_agent` 515、`resume_agent` 281）；`features.multi_agent_v2 = true` 六个共 5,045。`spawn_agent` 的说明列出账号可用模型（这里是二进制内置的五个，占 837），数字随模型列表浮动。
-- omp 与 Codex 的复现：从 npm 装进临时目录，对一个只记录请求体、回一个词的本地 HTTP 服务用假密钥非交互跑一次（`omp -p`、`codex exec`；omp 在 `models.yml` 加供应商，Codex 加 `wire_api = "responses"` 的 `model_providers` 条目），取第一次请求的 `tools`。
+README 只写给用户：卖点、两张对比表、一行功能清单与安装。开发者与 agent 才需要的事实（配置细节、测量口径、来源）写在这里、配置模板注释或对应头注释，不进 README。中英两份的标语（`<h3>` 紧跟简介 `<p>`）与“审查对比”“核心极轻”两张表是官网构建的解析契约，格式、两张表的来源与测量口径见 `site/AGENTS.md`；改表时中英两份一起改，表下只留一行日期说明。
 
 ## 测试
 
@@ -107,5 +88,7 @@ bun run typecheck
 生产里没有只为测试开的注入口：测试里的子会话、模型解析走真实的池，供应商用 faux（`tests/faux-host.ts` 把它写进测试 Agent 目录的真实 models.json）；需要缩短等待的唯一入口是池的 `timing`（`timing.ts`）。
 
 开发环境一条命令搭好：`bun run setup` 把 pi 源码按 `scripts/pi-source.ts` 的 `PI_VERSION`（pi 版本的唯一事实源，CI 与发布流程也只调这条命令）克隆到仓库之外的缓存目录并装好依赖，已就绪则跳过。`tests/loader.ts` 与 `typecheck` 共用同一个定位（`scripts/pi-source.ts`），顺序是 `PI_PACKAGES_DIR` → setup 的缓存目录（`FIRECODE_PI_DIR` 可改位置）→ `PATH` 里的开发版 `pi`。loader 把当前仓库复制到临时目录并改写宿主包导入，供需要运行时值的用例使用（机制见其头注释）；`typecheck` 的做法见 `scripts/typecheck.ts` 头注释。`pi-smoke` 用例用 bun 跑同一份 pi 源码的 CLI，按 package.json 加载 `dist/`，先 `bun run build`。
+
+CI（`ci.yml`）约 1 分钟：推送后前台 `gh pr checks <编号> --watch --fail-fast` 一次阻塞到终态，不派盯守角色。
 
 发布：`.github/workflows/release.yml` 在 GitHub Release 发布时先复用 `ci.yml` 跑全部检查，再用 npm Trusted Publishing 发布，流程见 [CONTRIBUTING](.github/CONTRIBUTING.md)。

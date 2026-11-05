@@ -15,6 +15,15 @@ export interface Timing {
 	wakeQuietMs: number;
 	/** 事件投递失败后的首次重试间隔，之后逐次翻倍（上限见 outbox.ts）。 */
 	eventRetryMs: number;
+	/**
+	 * 在跑的回合连续这么久没有任何输出（模型 token 或工具事件）就算卡住：活动列表置顶标“N 分钟无输出”，
+	 * 同时给指挥官投一条停摆事件并唤醒（同一次运行只报一次，有输出后重新计时）。
+	 * 取 30 分钟：本机子代理会话里 2.3 万次构建/测试类工具调用，单次时长 p99 13 分钟、p99.5 18 分钟、p99.9 35 分钟，
+	 * 30 分钟以上 38 次（0.17%）；工具时长是无输出时长的上界（边跑边出输出的命令早已算“有输出”）。
+	 * 再短会把正常长构建、评测与哨兵盯守当成卡住去叫醒指挥官（按 20 分钟巡查“没动静”时多次误报正常长跑的评测）；
+	 * 真卡死的命令一卡就是数小时（ffmpeg 无限输入卡了 8.5 小时），晚报十几分钟代价很小。
+	 */
+	stallMs: number;
 }
 
 export const DEFAULT_TIMING: Timing = {
@@ -22,4 +31,5 @@ export const DEFAULT_TIMING: Timing = {
 	interruptResumeMs: 5 * 60_000,
 	wakeQuietMs: 1_500,
 	eventRetryMs: 5_000,
+	stallMs: 30 * 60_000,
 };

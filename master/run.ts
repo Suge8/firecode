@@ -8,6 +8,7 @@ import { modelAtomText, type ThinkingLevelValue } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { firstSentence, textOf, tildeHome } from "../format.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
+import { quietMinutes, workerPhase } from "./activity-list.js";
 import { masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
@@ -81,13 +82,47 @@ function reportExtensionError(active: MasterRuntime, worker: WorkerRef, error: E
 /** 投影当前动作、卡住判定与审查进度的唯一订阅。 */
 export function observeWorker(active: MasterRuntime, worker: WorkerRef, session: AgentSession): void {
 	active.observe(worker, session, (live, event) => {
-		if (OUTPUT_EVENTS.has(event.type)) live.lastOutputAt = Date.now();
+		if (OUTPUT_EVENTS.has(event.type)) {
+			live.lastOutputAt = Date.now();
+			if (live.stallReported) {
+				live.stallReported = undefined;
+				watchStall(active, worker);
+			}
+		}
 		if (event.type === "tool_execution_start")
 			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
 		if (event.type === "tool_execution_end") live.currentTools.delete(event.toolCallId);
 		if (event.type === "entry_appended") live.reviewProgress = reviewProgressOf(event.entry) ?? live.reviewProgress;
 		if (event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "entry_appended") active.schedulePublish();
 	});
+}
+
+/**
+ * 停摆唤醒：在跑的回合落入活动列表的“卡住”（同一个 workerPhase 判定、同一份 lastOutputAt）时给指挥官投一条事件。
+ * 计时器不另算无输出时长，只在判定可能成立的时刻去看一眼：还没到就按剩余时间重挂，不再 working 就停；
+ * 报过后停到下一次输出（observeWorker 清掉标记并重挂），所以同一段无输出只报一次。
+ */
+function watchStall(active: MasterRuntime, identity: WorkerRef): void {
+	const live = active.liveOf(identity.name);
+	const check = () => {
+		clearTimeout(live.stallTimer);
+		live.stallTimer = undefined;
+		if (active.closed || active.live.get(identity.name) !== live || live.stallReported) return;
+		const facts = active.activityFacts();
+		const index = facts.workers.findIndex((worker) => worker.sessionPath === identity.sessionPath);
+		if (index < 0) return;
+		const now = Date.now();
+		const { kind, action, startedAt, quietMs } = workerPhase(facts, index, now);
+		if (quietMs === undefined) return;
+		if (kind !== "stuck") {
+			live.stallTimer = setTimeout(check, facts.stallMs - quietMs);
+			live.stallTimer.unref?.();
+			return;
+		}
+		live.stallReported = true;
+		active.outbox.enqueue(masterEvent.stalled(identity.name, quietMinutes(quietMs), action, startedAt === undefined ? undefined : now - startedAt), identity.name);
+	};
+	check();
 }
 
 /**
@@ -101,6 +136,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 	const live = active.liveOf(worker.name);
 	const run = Symbol(worker.name);
 	live.run = run;
+	watchStall(active, worker);
 	const mine = () => !active.closed && active.live.get(worker.name) === live && live.run === run;
 	let terminal: WorkerTerminal | undefined;
 	const unsubscribeTerminal = session.subscribe((event) => {

@@ -261,7 +261,7 @@ function settleRound(state: ReviewState, results: ReviewerResult[], limits: Revi
 	// 通过要每个审查者都给出 PASS：缺席者（模型链用尽仍无结论）不能让别人的 PASS 代表整轮。
 	// 有 FAIL 时照常进修复（发现是真的，缺席者在失败卡里点名）；否则缺席即事故终态，执行模型修不了它，不烧修复与总结回合。
 	if (!failed && absent.length > 0) {
-		const error = `${msg.summary.noVerdict}\n\n${sections(absent)}`;
+		const error = `${msg.summary.reviewerBroken}\n\n${sections(absent)}`;
 		const closed = closeRound(state, now, { round, result: "error", reviewers: results, error });
 		return {
 			state: go(state, now, { phase: "settled", end: "error" }, { history: [...state.history, closed] }),

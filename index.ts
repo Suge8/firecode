@@ -22,6 +22,7 @@ import { registerMaster } from "./master/index.js";
 import { InProcessSessionPool, loadingSubsession } from "./spawn.js";
 import { registerWatcher } from "./watcher/index.js";
 import { registerRoundRecorder } from "./round.js";
+import { registerSleepGuard } from "./sleep-guard.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
 
@@ -57,6 +58,7 @@ export function registerFirecode(
 	registerRoundRecorder(pi);
 	if (!subsession) watchSessionMaintenance(pi);
 	registerTruncatedWriteGuard(pi);
+	registerSleepGuard(pi);
 	registerToday(pi);
 	// 关闭请求选项也不能让已有原生检查点静默丢失历史。
 	registerOpenAINative(pi, config.features.openaiNative !== false);
