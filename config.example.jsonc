@@ -38,6 +38,10 @@
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
+		// One line saying what each running sub-agent is doing, shown in the activity list and the sub-agent view (never sent to the Master).
+		// A small model writes it from the new output only: the first line after 30 seconds of running, then at most once every 2 minutes and only when there is new output.
+		// A call is about 4k tokens in, 30 out, 2 to 3 seconds; set false to turn it off.
+		"progress": ["gpt-6-luna/low", "claude-haiku-5-5/low"],
 		"roles": {
 			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Hard problems: cross-module invariants, concurrency, persistence, security, debugging with an unknown root cause, final integration; also audits that need deep code reading (read-only)" },
 			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Visual and frontend work" },

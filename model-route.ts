@@ -1,4 +1,4 @@
-import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Context, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ThinkingLevelValue } from "./config.js";
 import { matchModels } from "./model-match.js";
@@ -19,6 +19,13 @@ export function physicalModel(model: Model<Api> | undefined): Model<Api> | undef
 	return model?.api === "pi-virtual" ? routes.get(`${model.provider}/${model.id}`)?.current?.model : model;
 }
 const key = (model: Model<Api>) => `${model.provider}/${model.id}`;
+
+/** 模型失败后记一次冷却：连续第 n 次失败按阶梯或报错里的重置时刻决定何时再选它。 */
+function coolDown(model: Model<Api>, reason: string, ladder: readonly number[]): void {
+	const name = key(model);
+	const failures = (cooldowns.get(name)?.failures ?? 0) + 1;
+	cooldowns.set(name, { failures, reason, until: retryAt(reason, failures, ladder), transient: transientFailure(reason) });
+}
 
 /**
  * 宿主分类器之外的瞬时网络错误：Bun fetch 断网时报 “Unable to connect…” 与 ECONNRESET 一类系统错误码，宿主的模式表不认；
@@ -110,6 +117,65 @@ export async function candidates(runtime: ModelRuntime, chain: ModelChain): Prom
 	}));
 }
 
+/** 链上没有可选的模型：每个原子为什么不可用（没匹配、本任务已失败、冷却中）加最早恢复时间。 */
+function exhausted(chain: ModelChain, list: Candidate[], attempted: ReadonlyMap<string, string>): Error {
+	const reasons = chain.flatMap((atom) => {
+		const matches = matchModels(list.map((entry) => entry.model), atom.model);
+		if (!matches.length) return [msg.spawn.modelUnavailable(atom.model)];
+		return matches.map((model) => {
+			const name = key(model);
+			const failure = cooldowns.get(name);
+			const reason = attempted.get(name);
+			if (reason && failure?.reason !== reason) return msg.spawn.modelFailed(name, reason);
+			return failure ? msg.spawn.modelCooling(name, failure.reason, new Date(failure.until).toISOString()) : msg.spawn.modelUnavailable(name);
+		});
+	});
+	const times = list.flatMap(({ model }) => {
+		const failure = cooldowns.get(key(model));
+		return failure ? [failure.until] : [];
+	});
+	const earliest = times.length ? msg.spawn.earliestRecovery(new Date(Math.min(...times)).toISOString()) : "";
+	return new Error(msg.spawn.chainExhausted([reasons.join("; "), earliest].filter(Boolean).join("; ")));
+}
+
+export interface ChainCompletion {
+	message: AssistantMessage;
+	/** 实际用的物理模型 provider/id。 */
+	model: string;
+}
+
+/**
+ * 在链上做一次不开会话的单请求：选第一个不在冷却的候选，失败按同一张冷却表记冷却并抛出，不在这次调用里换模型重试——
+ * 调用方的下一次调用自然落到下一个候选；成功清掉该模型的冷却。signal 中止不算模型失败。
+ */
+export async function completeOnChain(
+	runtime: ModelRuntime,
+	chain: ModelChain,
+	ladder: readonly number[],
+	context: Context,
+	options: { maxTokens: number; signal: AbortSignal },
+): Promise<ChainCompletion> {
+	const list = await candidates(runtime, chain);
+	const selected = list.find(({ model }) => (cooldowns.get(key(model))?.until ?? 0) <= Date.now());
+	if (!selected) throw exhausted(chain, list, new Map());
+	const thinking = clampThinkingLevel(selected.model, selected.thinking);
+	const message = await runtime.completeSimple(selected.model, context, {
+		maxTokens: options.maxTokens,
+		signal: options.signal,
+		...(thinking === "off" ? {} : { reasoning: thinking }),
+	});
+	if (message.stopReason === "aborted") throw new DOMException("aborted", "AbortError");
+	// 输出被截断是这次请求的预算问题，不是模型故障：不冷却，免得连累同一模型上的 Worker。
+	if (message.stopReason === "length") throw new Error(msg.outputTruncated);
+	if (message.stopReason === "error") {
+		const reason = message.errorMessage ?? "model error";
+		coolDown(selected.model, reason, ladder);
+		throw new Error(reason);
+	}
+	cooldowns.delete(key(selected.model));
+	return { message, model: key(selected.model) };
+}
+
 export async function createModelRoute(
 	runtime: ModelRuntime,
 	initialChain: ModelChain,
@@ -136,9 +202,7 @@ export async function createModelRoute(
 		task.attempted.set(name, reason);
 		task.failure = reason;
 		state.failures = [...task.attempted.values()];
-		if (!cool) return;
-		const failures = (cooldowns.get(name)?.failures ?? 0) + 1;
-		cooldowns.set(name, { failures, reason, until: retryAt(reason, failures, ladder), transient: transientFailure(reason) });
+		if (cool) coolDown(model, reason, ladder);
 	};
 	const choose = async (restart: boolean) => {
 		const list = await candidates(runtime, chain);
@@ -147,25 +211,7 @@ export async function createModelRoute(
 		const failure = task.phase === "idle" ? undefined : task.failure;
 		const available = list.filter(({ model }) => !attempted.has(key(model)) && (cooldowns.get(key(model))?.until ?? 0) <= Date.now());
 		const selected = !restart && failure === undefined && state.current && list.find(({ model }) => key(model) === key(state.current!.model)) || available[0];
-		if (!selected) {
-			const reasons = chain.flatMap((atom) => {
-				const matches = matchModels(list.map((entry) => entry.model), atom.model);
-				if (!matches.length) return [msg.spawn.modelUnavailable(atom.model)];
-				return matches.map((model) => {
-					const name = key(model);
-					const failure = cooldowns.get(name);
-					const reason = attempted.get(name);
-					if (reason && failure?.reason !== reason) return msg.spawn.modelFailed(name, reason);
-					return failure ? msg.spawn.modelCooling(name, failure.reason, new Date(failure.until).toISOString()) : msg.spawn.modelUnavailable(name);
-				});
-			});
-			const times = list.flatMap(({ model }) => {
-				const failure = cooldowns.get(key(model));
-				return failure ? [failure.until] : [];
-			});
-			const earliest = times.length ? msg.spawn.earliestRecovery(new Date(Math.min(...times)).toISOString()) : "";
-			throw new Error(msg.spawn.chainExhausted([reasons.join("; "), earliest].filter(Boolean).join("; ")));
-		}
+		if (!selected) throw exhausted(chain, list, attempted);
 		const previous = state.current && { model: key(state.current.model), thinking: state.current.thinking };
 		const atom = { model: key(selected.model), thinking: clampThinkingLevel(selected.model, override ?? selected.thinking) };
 		state.current = { model: selected.model, thinking: atom.thinking };
