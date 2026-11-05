@@ -1,4 +1,4 @@
-/** 根目录模块的文案：配置问题、启动提示、子会话入口的报错、写入拦截、轮记录的终态字样，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
+/** 根目录模块的文案：配置问题、启动提示、子会话入口的报错、写入与长 sleep 拦截、轮记录的终态字样，以及机器消息（信封）里生产端与折叠界面共用的词汇。 */
 import { defineMessages } from "./i18n.js";
 
 export const msg = defineMessages({
@@ -51,6 +51,8 @@ export const msg = defineMessages({
 			extensionFailed: (event: string, reason: string) => `子会话里的扩展在 ${event} 出错：${reason}`,
 		},
 		truncatedWrite: "写入内容带 read 截断提示，说明拿的是截断后的半截文件：改文件用 edit，或分段读完整再写",
+		longSleep: (limit: number, step: number) =>
+			`已拦下：命令里有超过 ${limit} 秒（或算不出时长）的 sleep。这是盲等，状态早变了也看不到。改用短步长条件循环，状态一变就返回，并给整体超时：timeout <秒> bash -c 'until <条件>; do sleep ${step}; done'（或用 bash 工具的 timeout 参数）。等后台任务或进程就前台阻塞等它结束（wait、gh run watch 等）`,
 		outputTruncated: "模型输出达到上限，回复被截断，未正常完成",
 		outcome: { aborted: "已中断", error: "请求失败" },
 		earlier: {
@@ -115,6 +117,8 @@ export const msg = defineMessages({
 			extensionFailed: (event: string, reason: string) => `An extension in the sub-session failed on ${event}: ${reason}`,
 		},
 		truncatedWrite: "The content to write carries a read truncation notice, so it is a truncated half of the file: change the file with edit, or read it completely in chunks before writing",
+		longSleep: (limit: number, step: number) =>
+			`Blocked: the command has a sleep over ${limit} seconds (or of unknown length). It waits blind and misses the state change. Use a short-step condition loop that returns as soon as the state changes, with an overall timeout: timeout <seconds> bash -c 'until <condition>; do sleep ${step}; done' (or the bash tool's timeout parameter). To wait for a background job or process, block on it in the foreground (wait, gh run watch, and the like)`,
 		outputTruncated: "The model reached its output limit; the reply was truncated, not completed",
 		outcome: { aborted: "Interrupted", error: "Request failed" },
 		earlier: {
