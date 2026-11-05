@@ -7,10 +7,10 @@
 
 ## 前提
 
-- 真实调用模型，**花真钱**；t3 要联网。需要 `bun`、`git`。
+- 真实调用模型，**花真钱**；t3 要联网。需要 macOS（被测会话跑在 `sandbox-exec` 里，见“机制”）、`bun`、`git`。
 - `pi`：默认用 PATH 里的；设了 `PI_PACKAGES_DIR`（与 `tests/loader.ts` 同一个变量，指向 pi-mono 的 `packages/`）就改跑那份源码的 `coding-agent/src/cli.ts`。
 - 你自己的 Agent 目录（`PI_CODING_AGENT_DIR`，没设则 `~/.pi/agent`）里要有认证、设置、模型表，以及 `extensions/firecode/config.jsonc`（Master 激活、角色表）。变体的临时 Agent 目录只把这些**符号链接**回去，不复制凭据；默认模型、codemode only 等设置沿用你的（`--model` 时 settings 与 config.jsonc 改为各存一份，见下）。`worker.ts` 的 impl 验收还要能定位 pi-mono 源码（同 `tests/loader.ts`）。
-- 被测代码取**已提交**的内容（`git archive`）；未提交的提示词改动用 `--prompt-file`。评测任务是中文，变体替换的是 `master.zh.md`：配置的 `language` 须为 `zh`（或系统语言为中文），否则变体加载的是未被替换的英文提示词。
+- 被测代码取**已提交**的内容（`git archive`，不含 `evals/`）；未提交的提示词改动用 `--prompt-file`。评测任务是中文，变体替换的是 `master.zh.md`：配置的 `language` 须为 `zh`（或系统语言为中文），否则变体加载的是未被替换的英文提示词。
 - 工作目录 `$EVAL_DIR`，默认 `<系统临时目录>/firecode-delegation-eval`：变体、fixture、全部运行记录都在这里，仓库里不留任何产物。
 
 ## 怎么跑
@@ -45,6 +45,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 - **fixture** 按需生成在 `$EVAL_DIR/fixtures`，固定取提交 `b0fb416`（t7 缺陷清单与 T9 真值都绑定这份代码，不随 HEAD 漂移）。`base` 另加一个睡 15 分钟的 `scripts/e2e.sh`（t4 用）；`t9` 去掉全部测试、重建为单提交（无历史可查）、植入 14 处逻辑缺陷，真值与行号写到 `fixtures/t9-truth.json`。每次运行拿一份独立副本。
 - **decide** 用探针扩展 `probe.ts` 记录所有工具调用（含 codemode 脚本内的嵌套调用），`subagents start` 只记录、拦截不执行，所以不会真起 Worker，也不花 Worker 的钱。亲手的操作真实执行在副本里。
 - **run** 用 `pi --mode rpc` 发一条请求，等到主会话出现 `firecode-round`（主会话与全部 Worker 都歇下）。花费取主会话 + 全部 Worker 会话记录里的 usage。结束时按父子关系杀掉整棵进程树（pi 的 bash 工具把命令放进自己的进程组，只杀 pi 的组会留下孤儿）。
+- **隔离**：被测会话（主会话、Worker 及其全部子进程）跑在 `sandbox-exec` 里，整个 `$EVAL_DIR`、本仓库的全部 git 工作树与 `.git`、你 Agent 目录下的 `sessions/` 都不可读写，只放开本次运行目录、变体目录与 `host-modules`（`decide.ts` 另放开探针文件）。所以真值（`t9-truth.json`、`tasks.ts`、`fixtures.ts`、`accept.ts`）与其他运行的副本、报告、会话记录在运行期间都找不到；变体里的 firecode 副本也不带 `evals/`。起因是 grok 在实现题里跳出副本翻 `$EVAL_DIR`，读到了 t9 真值与别的运行结果。判分与汇总在沙箱外的评测脚本里做。
 - 子进程环境不继承任何 `PI_*` 与 `HERDR_*`：只给评测自己设的 `PI_CODING_AGENT_DIR`（变体目录）、`PI_OFFLINE`、`PI_TELEMETRY`，所以外层 pi 给工具设的会话变量和你的 `PI_CACHE_RETENTION` 等个人设置不会混进来，也不会回写你的 herdr pane；不加载 cuepad-bridge、herdr-agent-state。
 
 ## 任务
@@ -73,7 +74,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 - 每次运行独立的仓库副本、会话目录和 `TMPDIR`；但 `TMPDIR` 只是环境变量，**拦不住命令里写死的 `/tmp/xxx`**。t3/t7 的 Worker 爱写 `/tmp/mdeval`、`/tmp/fc-audit*.ts` 这类路径，同时跑会互相覆盖或误删，所以带 `serial` 的任务单独走一条串行通道（与其它任务并行，总并发 = `--concurrency` + 1）。t9 的任务文本要求临时文件只放 `TMPDIR`，仍可能违反。
 - 跑完用 `bun $D/check.ts iso` 扫一遍：被多个运行共用的写死路径要人工看是不是真有串扰。
 - 共享你的真实凭据与 settings（符号链接）；令牌刷新经 pi 自己的锁。并发太高会触发限流、拖慢墙钟，墙钟对比务必让各变体**同批交错**（`run.ts A,B,C`）。
-- 模型偶尔会跳出副本去 grep 整个 `~/Project`（冒烟里见过一次，拖满 300 秒超时）：这是噪声，不是脚本问题；`decide.ts` 里表现为 `亲手†`。
+- 模型偶尔会跳出副本去 grep 整个 `~/Project` 或 `find /`（见过拖满 300 秒超时，也见过一次审计卡 13 分钟）：沙箱只挡读写真值，挡不住这种耗时；这是模型的表现，计入墙钟，`decide.ts` 里表现为 `亲手†`。
 
 ## 盲评
 
@@ -100,6 +101,8 @@ bun $D/worker.ts report
 | audit | t9 fixture 的两块（master/+format.ts 8 处、session/statusbar/watcher 5 处植入缺陷） | 自动：指到植入行 ±5；漏指行号的人读 |
 | research | 同 t3 | 人读，版本日期用 `check.ts t3 <final.md…>` |
 | wait | 2 分半 e2e、后台部署盯到终态 | 自动：失败场景与原因原文 |
-| impl | formatDuration 进位到天；quota 8 秒超时 | 前者隐藏断言自动判，后者读 diff 与测试 |
+| impl | formatDuration 进位到天；quota 8 秒超时；/tokens 日期范围与按天分组（中等规模，带接口规格） | duration 与 stats 跑 `accept.ts` 的隐藏用例（通过数/总数，列出未过的），quota 读 diff 与测试 |
 
-结果在 `$EVAL_DIR/worker/<任务>__<原子>__<第几次>/`（`final.md`、`result.json`、`repo/`），已跑完的跳过。
+fixture 不含测试目录，impl 运行前把一份指向 pi 源码的 `node_modules`（`$EVAL_DIR/host-modules`，宿主包改指 `src`）链进副本，Worker 自己写的测试与隐藏验收才能导入被测模块。隐藏验收以 `TZ=Asia/Shanghai` 跑，按 UTC 解析日期的实现会挂。
+
+结果在 `$EVAL_DIR/worker/<任务>__<原子>__<第几次>/`（`final.md`、`result.json`、`repo/`），已跑完的跳过。`report` 每格依次是质量、墙钟、花费、回合数（模型回复条数）、工具调用数（顶层调用，codemode 脚本里的嵌套调用不计）、输出 token，过程量从会话记录现数。token/秒高不等于任务快：回合与工具调用多的模型墙钟照样长，按任务综合看。
