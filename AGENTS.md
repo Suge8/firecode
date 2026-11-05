@@ -25,6 +25,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回） | |
 | `today.ts` | 系统提示的日期段 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
+| `evals/usage/` | 只读本机会话的速度指标统计 | |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
 | `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言、review 的修复反馈与总结提示共用） | |
 | `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道 | |
