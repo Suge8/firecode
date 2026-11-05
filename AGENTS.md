@@ -89,4 +89,6 @@ bun run typecheck
 
 开发环境一条命令搭好：`bun run setup` 把 pi 源码按 `scripts/pi-source.ts` 的 `PI_VERSION`（pi 版本的唯一事实源，CI 与发布流程也只调这条命令）克隆到仓库之外的缓存目录并装好依赖，已就绪则跳过。`tests/loader.ts` 与 `typecheck` 共用同一个定位（`scripts/pi-source.ts`），顺序是 `PI_PACKAGES_DIR` → setup 的缓存目录（`FIRECODE_PI_DIR` 可改位置）→ `PATH` 里的开发版 `pi`。loader 把当前仓库复制到临时目录并改写宿主包导入，供需要运行时值的用例使用（机制见其头注释）；`typecheck` 的做法见 `scripts/typecheck.ts` 头注释。`pi-smoke` 用例用 bun 跑同一份 pi 源码的 CLI，按 package.json 加载 `dist/`，先 `bun run build`。
 
+CI（`ci.yml`）约 1 分钟：推送后前台 `gh pr checks <编号> --watch --fail-fast` 一次阻塞到终态，不派盯守角色。
+
 发布：`.github/workflows/release.yml` 在 GitHub Release 发布时先复用 `ci.yml` 跑全部检查，再用 npm Trusted Publishing 发布，流程见 [CONTRIBUTING](.github/CONTRIBUTING.md)。
