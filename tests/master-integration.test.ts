@@ -344,6 +344,28 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async
 	await harness.command("");
 });
 
+test("在跑的回合到卡住时限没有任何输出就唤醒指挥官：带命令与已用时长，同一段无输出只报一次，有输出后可再报", async () => {
+	const harness = await setup(true, { timing: { stallMs: 300 } });
+	harness.idle = true;
+	const command = "sleep 0.8; echo tick; sleep 0.8";
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("bash", { command }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("完成"),
+	]);
+	await harness.execute({ action: "start", worker: "quiet", prompt: "盯着跑", role: "工程师" });
+	await until(() => harness.turns.some((turn) => turn.includes("quiet 已返回")), 5_000);
+	const stalls = harness.turns.filter((turn) => turn.includes("无输出"));
+	// 两段无输出（echo 前后）各唤醒一次：每段远长于时限，仍只报一次。
+	expect(stalls).toHaveLength(2);
+	for (const stall of stalls) {
+		expect(stall).toMatch(/^<firecode_master_event>\nquiet 0 分钟无输出\n/u);
+		expect(stall).toContain(`正在跑：操作 $ ${command}`);
+		expect(stall).toMatch(/本次运行已跑 \d/u);
+	}
+
+	await harness.command("");
+});
+
 test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达", async () => {
 	// 窗口远大于用例超时：送达若等了窗口，用例会超时失败，不靠墙钟阈值判断。
 	const harness = await setup(true, { timing: { wakeQuietMs: 60_000 } });
@@ -782,7 +804,7 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 		ui: { setWidget() {}, setStatus() {}, notify() {} },
 		isIdle: () => true,
 	};
-	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined };
+	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined, timing: { stallMs: 30 * 60_000 } };
 	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {}, publishRoster() {} }, ctx);
 	active.store.upsert({
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,

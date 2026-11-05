@@ -94,7 +94,7 @@ async function open(options: {
 	const port = {
 		facts: () => ({
 			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), lastOutputAt: new Map(),
-			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled),
+			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled), stallMs: 30 * 60_000,
 		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),
 		session: (target: Worker) => options.sessions[target.name],

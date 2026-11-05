@@ -65,6 +65,10 @@ export interface WorkerLive {
 	origin: RunOrigin;
 	/** 最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
 	lastOutputAt?: number;
+	/** 停摆检查计时：只在“卡住”可能成立的时刻看一眼（run.ts 的 watchStall）。 */
+	stallTimer?: NodeJS.Timeout;
+	/** 这段无输出已报给指挥官：同一次运行不再报，有输出后清掉、可再报。 */
+	stallReported?: true;
 	currentTools: Map<string, CurrentTool>;
 	/** 已告知指挥官的子代理扩展错误（扩展 + 事件 + 原文）：同一处错误只报一次。 */
 	reportedErrors: Set<string>;
@@ -174,6 +178,7 @@ export class MasterRuntime {
 		const live = this.live.get(name);
 		if (live && live === expected) {
 			clearTimeout(live.interruptTimer);
+			clearTimeout(live.stallTimer);
 			if (live.observed) this.unobserve(live);
 			this.live.delete(name);
 		}
@@ -209,6 +214,9 @@ export class MasterRuntime {
 		const live = this.liveOf(worker.name);
 		live.idleAt = at;
 		live.outcome = outcome;
+		clearTimeout(live.stallTimer);
+		live.stallTimer = undefined;
+		live.stallReported = undefined;
 		live.currentTools.clear();
 		live.reviewProgress = undefined;
 		this.setup.pool.markIdle(worker.sessionPath);
@@ -255,6 +263,7 @@ export class MasterRuntime {
 		this.stopReleaseWatch();
 		for (const live of this.live.values()) {
 			clearTimeout(live.interruptTimer);
+			clearTimeout(live.stallTimer);
 			if (live.observed) this.unobserve(live);
 		}
 		this.live.clear();
@@ -284,6 +293,7 @@ export class MasterRuntime {
 			runStartedAt: byPath((live) => live.runStartedAt),
 			lastOutputAt: byPath((live) => live.lastOutputAt),
 			settled: byPath((live) => (live.outcome && live.idleAt !== undefined ? { ...live.outcome, at: live.idleAt } : undefined)),
+			stallMs: this.setup.pool.timing.stallMs,
 		};
 	}
 }
