@@ -1164,6 +1164,35 @@ describe("review cards and degraded paths", () => {
 		expect(card).toContain("two（备用）");
 	}, 20_000);
 
+	// 从上一轮的投票模型审起不能截掉链的前段：它此刻失效时，已经恢复的首选还要能兜底。
+	test("后续轮从投票模型起跑的链仍以首选兜底：投票模型额度用尽时由恢复的首选审完", async () => {
+		const calls: Record<string, number> = {};
+		const pass = "核对完毕。\n证据：文件=a.ts；命令=bun test";
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => {
+			calls[model] = (calls[model] ?? 0) + 1;
+			if (model === "p/one") return calls[model] === 1 ? undefined : pass;
+			return calls[model] === 1 ? FAIL_VERDICT : undefined;
+		}, [["p/one/low", "p/two/low"]]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		expect(readCheckpoint({ sessionManager })?.history[0].reviewers[0].model).toBe("p/two");
+		// 修复期间首选的额度恢复。
+		((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown>).clear();
+		await startTurn(registered, ctx);
+		await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+		await registered.fire("agent_settled", {}, ctx);
+		await until(() => ["summarizing", "settled"].includes(readCheckpoint({ sessionManager })?.phase ?? "") && readCheckpoint({ sessionManager })?.round === 2);
+		const state = readCheckpoint({ sessionManager });
+		expect(state?.phase).toBe("summarizing");
+		expect(state?.history[1].reviewers[0].model).toBe("p/one");
+		expect(calls).toEqual({ "p/one": 2, "p/two": 2 });
+	}, 20_000);
+
 	test("整条链都输出格式无效时，终态写明审查器失效与每个模型的格式问题", async () => {
 		const { registerReview, readCheckpoint, outcome } = await loadTwoReviewers(() => "结论如下\n随便写", [["p/one/low", "p/two/low"]]);
 		const sessionManager = makeSessionManager();
