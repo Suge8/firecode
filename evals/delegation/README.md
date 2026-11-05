@@ -99,6 +99,8 @@ bun $D/worker.ts report
 | audit | t9 fixture 的两块（master/+format.ts 8 处、session/statusbar/watcher 5 处植入缺陷） | 自动：指到植入行 ±5；漏指行号的人读 |
 | research | 同 t3 | 人读，版本日期用 `check.ts t3 <final.md…>` |
 | wait | 2 分半 e2e、后台部署盯到终态 | 自动：失败场景与原因原文 |
-| impl | formatDuration 进位到天；quota 8 秒超时 | 前者隐藏断言自动判，后者读 diff 与测试 |
+| impl | formatDuration 进位到天；quota 8 秒超时；/tokens 日期范围与按天分组（中等规模，带接口规格） | duration 与 stats 跑 `accept.ts` 的隐藏用例（通过数/总数，列出未过的），quota 读 diff 与测试 |
+
+fixture 不含测试目录，impl 运行前把一份指向 pi 源码的 `node_modules`（`$EVAL_DIR/host-modules`，宿主包改指 `src`）链进副本，Worker 自己写的测试与隐藏验收才能导入被测模块。隐藏验收以 `TZ=Asia/Shanghai` 跑，按 UTC 解析日期的实现会挂。
 
 结果在 `$EVAL_DIR/worker/<任务>__<原子>__<第几次>/`（`final.md`、`result.json`、`repo/`），已跑完的跳过。
