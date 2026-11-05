@@ -126,6 +126,10 @@ bun $D/worker.ts report
 | wait | 2 分半 e2e、后台部署盯到终态 | 自动：失败场景与原因原文 |
 | impl | formatDuration 进位到天；quota 8 秒超时；/tokens 日期范围与按天分组（中等规模，带接口规格） | duration 与 stats 跑 `accept.ts` 的隐藏用例（通过数/总数，列出未过的），quota 读 diff 与测试 |
 
+**工具形态**（only / on / off）：`worker.ts --forms only,on,off` 与 `variant.ts --form <形态>`（指挥官变体，配 `run.ts`；或 `--tools … --codemode-mode …` 自定）按 `lib.ts` 的 `TOOL_FORMS` 在变体自己的 settings 副本里覆盖 `defaultTools` 与 `codemode.mode`，不动你的文件。同一轮同一任务各形态各一次，组内顺序按 `--seed` 洗牌；`--budget` 是 `$EVAL_DIR` 下全部运行的累计上限；结果带回合、顶层与嵌套调用数、总 token、工具失败数（`worker.ts report --json`）。跑之前先 `tools-check.ts <原子>` 抓第一次请求的 tools 列表与 codemode 描述，核对各形态暴露的确是预期的（`--prefix cmd-` 查指挥官变体）。指挥官并行题 `t5-delegate3m`（含隐藏验收 `parallel3`）用 `run.ts`。`forms-report.ts` 出 模型 × 任务 × 形态 的表和按轮配对（以 only 为基线）的差值，差异不足 15% 或范围跨 0 记“无差异”。
+
+结论（2026-11-05/06，Opus 5.5 每格 4 次、Terra 每格 6 次）：on 对 only，Terra 的 /tokens 实现题墙钟 −43%、总 token −39%（6 对同向），Opus 全部无差异；通过率不受形态影响，本机改用 on。
+
 fixture 不含测试目录，impl 运行前把一份指向 pi 源码的 `node_modules`（`$EVAL_DIR/host-modules`，宿主包改指 `src`）链进副本，Worker 自己写的测试与隐藏验收才能导入被测模块。隐藏验收以 `TZ=Asia/Shanghai` 跑，按 UTC 解析日期的实现会挂。
 
-结果在 `$EVAL_DIR/worker/<任务>__<原子>__<第几次>/`（`final.md`、`result.json`、`repo/`），已跑完的跳过。`report` 每格依次是质量、墙钟、花费、回合数（模型回复条数）、工具调用数（顶层调用，codemode 脚本里的嵌套调用不计）、输出 token，过程量从会话记录现数。token/秒高不等于任务快：回合与工具调用多的模型墙钟照样长，按任务综合看。
+结果在 `$EVAL_DIR/worker/<任务>[__<形态>]__<原子>__<第几次>/`（`final.md`、`result.json`、`repo/`），已跑完的跳过。`report` 每格依次是质量、墙钟、花费、回合数（模型回复条数）、工具调用数（顶层调用，codemode 脚本里的嵌套调用不计）、输出 token，过程量从会话记录现数。token/秒高不等于任务快：回合与工具调用多的模型墙钟照样长，按任务综合看。

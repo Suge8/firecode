@@ -10,6 +10,8 @@ export interface Task {
 	fixture: FixtureKind;
 	ideal?: { mode: Mode; roles?: string[]; review?: boolean };
 	timeoutSec?: number;
+	/** 隐藏验收：accept.ts 里的用例集名。 */
+	accept?: string;
 	/** Worker 爱用写死的 /tmp 路径，这类任务只能一个接一个跑。 */
 	serial?: boolean;
 }
@@ -41,6 +43,15 @@ export const TASKS: Task[] = [
 		fixture: "base",
 		ideal: { mode: "hand" },
 		prompt: "三件互不相关的事，都要补测试并跑通对应测试文件：1）format.ts 的 formatDuration 超过 24 小时现在显示成 25h30m，改成 1d1h30m；2）/tokens 输出（session/stats.ts）的汇总里增加一行缓存命中率（cacheRead / (input + cacheRead)）；3）header.ts 的副标题在 git 仓库内追加当前分支名。",
+	},
+	{
+		id: "t5-delegate3m",
+		kind: "三件独立小工单，强制并行派 3 个工程师，要求合并",
+		fixture: "base",
+		timeoutSec: 25 * MINUTES,
+		accept: "parallel3",
+		// 工具形态评测的指挥官并行题：三件互不相关、带接口规格，隐藏验收直接调导出函数。须写明合并去向，否则指挥官会停下等确认，验收看主检出就误判。
+		prompt: "三件互不相关的事，都要补测试并跑通对应测试文件。请把三件事分别派给三个工程师并行去做，你自己不动手，三个都回来后汇总验收。\n1）format.ts 的 formatDuration 超过 24 小时现在显示成 25h30m，改成 1d1h30m（天以上照样省略为 0 的单位）。\n2）session/stats.ts 导出 `cacheHitRate(totals: Totals): number | undefined`，值为 cacheRead / (input + cacheRead)（0 到 1 的小数），分母为 0 时返回 undefined；/tokens 输出的汇总里增加一行“缓存命中率 xx.x%”（无值时不显示）。Totals 是 stats.ts 里已有的类型，需要就导出。\n3）新建根目录的 bytes.ts，导出 `formatBytes(bytes: number): string`：1024 进制，小于 1024 显示 `${n}B`，其后依次 KB、MB、GB（不再往上）；数值 ≥10 取整，<10 保留一位小数并去掉多余的 .0（与 format.ts 的 formatTokens 进位写法一致）；非有限数或负数返回 \"?\"。例：1023→\"1023B\"，1536→\"1.5KB\"，10240→\"10KB\"，1048576→\"1MB\"，0→\"0B\"。 三件的改动都要合并进当前仓库的当前分支，合并后再汇报，不要只留在分支或临时副本里。",
 	},
 	{
 		id: "t6-trivial3",

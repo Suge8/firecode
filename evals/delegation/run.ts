@@ -1,15 +1,17 @@
 #!/usr/bin/env bun
 // 跑到完成：pi --mode rpc 保持进程，发一条请求，等主会话与全部 Worker 都歇下（主会话出现 firecode-round）。
 //   bun run.ts <变体[,变体…]> [--tasks t3-research,t7-audit,t9-big] [--runs 3] [--concurrency 2]
-//                [--budget 30] [--force]
+//                [--budget 30] [--force] [--seed 种子]
+// 有 accept 的任务（如 t5-delegate3m）另记隐藏验收通过数与过程量（回合、调用、token、工具失败，含全部 Worker 会话）。
 // 作业按“第几次 → 任务 → 变体”交错排队，变体之间尽量同批。serial 任务（t3/t7）走单独一条串行通道，
 // 与其它任务并行，所以总并发 = --concurrency + 1。--budget 是本次调用的美元上限：超过即杀掉所有在跑的并停止排队，
 // 已完成的结果保留，重跑会续上。
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { fixtureDir } from "./fixtures.ts";
-import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, startPi, variantAgent, WORK } from "./lib.ts";
+import { killTree, onJsonLines, parseList, pool, prepareRun, readJsonl, runCost, seededShuffle, startPi, variantAgent, WORK } from "./lib.ts";
+import { accept, effort, hostModules } from "./worker-agent.ts";
 import { taskById, type Task } from "./tasks.ts";
 
 const POLL_MS = 1000;
@@ -20,7 +22,7 @@ const { values, positionals } = parseArgs({
 	allowPositionals: true,
 	options: {
 		tasks: { type: "string", default: "t3-research,t7-audit,t9-big" }, runs: { type: "string", default: "3" }, concurrency: { type: "string", default: "2" },
-		budget: { type: "string" }, force: { type: "boolean" },
+		budget: { type: "string" }, force: { type: "boolean" }, seed: { type: "string", default: "firecode-forms" },
 	},
 });
 const variants = parseList(positionals[0]);
@@ -41,10 +43,15 @@ function spent(): number {
 
 const hasRound = (sessionFile: string) => existsSync(sessionFile) && readJsonl(sessionFile).some((e) => e.customType === "firecode-round");
 
-async function runOne(task: Task, variant: string, run: number): Promise<void> {
+async function runOne(task: Task, variant: string, run: number, order: number): Promise<void> {
 	const id = `${variant}/${task.id}-${run}`;
 	const dir = join(WORK, "runs", variant, `${task.id}-${run}`);
 	const { repo, tmp } = prepareRun(dir, fixtureDir(task.fixture));
+	// 有隐藏验收的任务：铺好宿主包，Worker 自己写的测试与验收才能导入被测模块（同 worker.ts 的 impl）。
+	if (task.accept) {
+		symlinkSync(hostModules(), join(repo, "node_modules"));
+		appendFileSync(join(repo, ".git/info/exclude"), "node_modules\n");
+	}
 	const child = startPi(["--mode", "rpc", "--session-dir", join(dir, "sessions")], { agentDir: variantAgent(variant), cwd: repo, tmp, stdin: "pipe" });
 	child.stderr!.on("data", (chunk: Buffer) => appendFileSync(join(dir, "stderr.txt"), chunk));
 	let sessionFile = "";
@@ -92,7 +99,8 @@ async function runOne(task: Task, variant: string, run: number): Promise<void> {
 	finishedCost += cost;
 	spentCache.at = 0;
 	const sec = (t: number) => (t - tSend) / 1000;
-	const result = { variant, task: task.id, run, status, sessionFile, tSend, wallSec: sec(agentEnds.at(-1) ?? Date.now()), agentStartsSec: agentStarts.map(sec), agentEndsSec: agentEnds.map(sec), cost };
+	const q = task.accept ? accept(task.accept, repo) : undefined;
+	const result = { variant, task: task.id, run, order, status, sessionFile, tSend, wallSec: sec(agentEnds.at(-1) ?? Date.now()), agentStartsSec: agentStarts.map(sec), agentEndsSec: agentEnds.map(sec), cost, quality: q, ...effort(join(dir, "sessions")) };
 	writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2));
 	console.log(`${id} ${status} 墙钟 ${result.wallSec.toFixed(0)}s $${cost.toFixed(2)}（本次累计 $${(finishedCost).toFixed(2)}）`);
 }
@@ -107,10 +115,11 @@ const parallel: Array<() => Promise<void>> = [];
 for (let run = 1; run <= Number(values.runs); run++) {
 	for (const task of parseList(values.tasks)!.map(taskById)) {
 		if (!task.timeoutSec) throw new Error(`${task.id} 没有 timeoutSec，不能跑到完成`);
-		for (const variant of variants) {
+		// 同一轮同一任务各变体一次，顺序按 --seed 洗牌（消掉时间漂移与缓存先后）。
+		for (const [order, variant] of seededShuffle(variants, [values.seed, task.id, run].join("|")).entries()) {
 			if (!values.force && settledBefore(variant, task, run)) continue;
 			(task.serial ? serial : parallel).push(async () => {
-				if (!stopped) await runOne(task, variant, run);
+				if (!stopped) await runOne(task, variant, run, order);
 			});
 		}
 	}
