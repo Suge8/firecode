@@ -39,11 +39,11 @@
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
 		"roles": {
-			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Changes code: implementation, debugging; also for audits that need deep code reading to find defects (read-only)" },
+			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Hard problems: cross-module invariants, concurrency, persistence, security, debugging with an unknown root cause, final integration; also audits that need deep code reading (read-only)" },
 			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Visual and frontend work" },
-			"junior": { "model": ["claude-sonnet-5-5/medium", "gpt-6.1-terra/medium"], "use": "Code changes with ordinary quality requirements" },
-			"chores": { "model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"], "use": "Well-specified changes verifiable by tests or type checks: renames, pattern migrations, boilerplate and running commands" },
-			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Read-only: web search, docs and version lookups, reading logs, locating code from leads, checking references" },
+			"junior": { "model": ["claude-sonnet-5-5/medium", "gpt-6.1-terra/medium"], "use": "Ordinary implementation with clear requirements and acceptance, local fixes, and multi-file changes following existing patterns; escalates product or architecture trade-offs" },
+			"chores": { "model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"], "use": "Mechanical work with a clear spec, verifiable by tests or type checks: renames, pattern migrations, boilerplate, scripts and running commands; prefers a deterministic script and does one sample first" },
+			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Read-only research: web search, docs and version lookups, reading long logs and traces, locating code, organizing data; returns conclusions with sources" },
 			"sentinel": { "model": ["gpt-6-luna/high", "claude-haiku-5-5/medium"], "use": "Waiting on CI, deployments and long tests" }
 		}
 	},
