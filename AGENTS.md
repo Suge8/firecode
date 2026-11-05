@@ -11,7 +11,6 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 | 路径 | 职责 | 细则 |
 | --- | --- | --- |
-| `header.ts` | 会话启动横幅 | |
 | `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏；也接宿主改名键改会话名 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 经宿主 `registerToolRenderer` 只接管 read/bash/edit/write/grep/find/ls 的渲染（不重新注册工具）；思考与工具的过程组/过程列表、轮记录的宿主适配 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 预设、用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
@@ -22,19 +21,9 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
-| `truncated-write.ts` | 拦截带 read 截断提示的 write（把半截文件写回） | |
-| `today.ts` | 系统提示的日期段 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
-| `evals/usage/` | 只读本机会话的速度指标统计 | |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
-| `deliver.ts` | 信封格式与统一投递入口（Master 事件、观察员发言、review 的修复反馈与总结提示共用） | |
-| `busy.ts` | “会话进行中”与“歇下”边沿的唯一判定，及它的两个输入频道 | |
-| `status-keys.ts` | 宿主扩展状态（`setStatus`）的键，发布方与输入框外壳共用 | |
-| `process-shared.ts` | 跨模块拷贝共享的进程唯一状态 | |
-| `model-route.ts` | 子会话模型链、进程级冷却与请求路由 | |
 | `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review、Watcher 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
-| `format.ts` | 共享的宽度/文本格式化 | |
-| `flame.ts` | 全局动画时钟、火苗、落定标记与火焰色板；横幅、tools、statusbar 共用 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置与 provider 共用的唯一对象判定） | |
 | `config.ts` | 从 Pi Agent 目录解析唯一运行配置（含 `openai` 节校验），并给出 review/master/watcher 每节能否启动的判定 | |
 | `config-file.ts` | 运行配置的路径、首次播种、原始读取；不含文案（被 `i18n.ts` 依赖） | |
@@ -86,16 +75,7 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 
 ## 文档
 
-README 只写给用户：卖点、两张对比表、一行功能清单与安装。开发者与 agent 才需要的事实（配置细节、测量口径、来源）写在这里、配置模板注释或对应头注释，不进 README。中英两份的标语（`<h3>` 紧跟简介 `<p>`）与“审查对比”“核心极轻”两张表是官网构建的解析契约，格式见 `site/AGENTS.md`；改表时中英两份一起改，表下只留一行日期说明。
-
-审查对比表各行按官方来源核对（上次 2026-10-12）：[Claude Code Code Review](https://code.claude.com/docs/en/code-review)（“Review a diff locally”）、[Codex 斜杠命令](https://developers.openai.com/codex/cli/slash-commands)与 [Codex review 任务](https://github.com/openai/codex/blob/27065a9/codex-rs/core/src/tasks/review.rs)、[Open Code Review README](https://github.com/alibaba/open-code-review/blob/357c3f0/README.md)、[Qodo 文档](https://docs.qodo.ai/code-review)、[PR-Agent README](https://github.com/The-PR-Agent/pr-agent)、[multi-model-review](https://github.com/Scott-Meyer/multi-model-review)（npm 0.2.2）。核不到来源的行删掉，不沿用旧说法。
-
-核心极轻表的口径：每个子代理/委派工具 `JSON.stringify({name, description, parameters}).length`，默认设置，表里写版本号；改了工具定义、默认角色或要更新竞品版本时重测。
-- FireCode：`subagents` 与 `subagents_list`，模板角色、英文界面（中文界面 1,031）。指挥官提示词另占英文 9,489、中文 2,980 字符（去除首尾空白后的 JS 字符串长度），加每角色一行，不计入。
-- pi-subagents 0.77.0（[5852aa0](https://github.com/nicobailon/pi-subagents/tree/5852aa08ccd55e8c64dd16e69d1b96a17e92b8aa)）：`subagent` 3,357、`bg_wait` 1,133、加载器 `subagents_enable` 428。低值是能中途加工具的模型上只有加载器与 `bg_wait` 常驻；启用委派后或其他模型上默认 4,490–4,918。复现：把它的 `index.ts` 加载到只记录 `registerTool` 的假 `ExtensionAPI` 上量。
-- omp（`@oh-my-pi/pi-coding-agent` 18.10.1，[5d0aaff](https://github.com/can1357/oh-my-pi/tree/5d0aaffaf1f987503ce129a642fb6e30339615af)）：`task` 2,856、`wait` 513；交互会话多出的提问工具 `ask` 不算委派，不计入。
-- Codex CLI 0.162.1（[092d3ac](https://github.com/openai/codex/tree/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d)）：默认 `multi_agent_v1` 五个共 9,641（`spawn_agent` 6,581、`send_input` 1,561、`wait_agent` 703、`close_agent` 515、`resume_agent` 281）；`features.multi_agent_v2 = true` 六个共 5,045。`spawn_agent` 的说明列出账号可用模型（这里是二进制内置的五个，占 837），数字随模型列表浮动。
-- omp 与 Codex 的复现：从 npm 装进临时目录，对一个只记录请求体、回一个词的本地 HTTP 服务用假密钥非交互跑一次（`omp -p`、`codex exec`；omp 在 `models.yml` 加供应商，Codex 加 `wire_api = "responses"` 的 `model_providers` 条目），取第一次请求的 `tools`。
+README 只写给用户：卖点、两张对比表、一行功能清单与安装。开发者与 agent 才需要的事实（配置细节、测量口径、来源）写在这里、配置模板注释或对应头注释，不进 README。中英两份的标语（`<h3>` 紧跟简介 `<p>`）与“审查对比”“核心极轻”两张表是官网构建的解析契约，格式、两张表的来源与测量口径见 `site/AGENTS.md`；改表时中英两份一起改，表下只留一行日期说明。
 
 ## 测试
 
