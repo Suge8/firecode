@@ -41,7 +41,7 @@ export function registerSessionNaming(pi: ExtensionAPI, pool: InProcessSessionPo
 	let flight: AbortController | undefined;
 	pi.on("input", (event, ctx) => {
 		const text = event.text.trim();
-		if (flight || !text || event.source === "extension" || ctx.mode === "print" || ctx.mode === "json" || pi.getSessionName()) return { action: "continue" };
+		if (flight || !text || ctx.mode === "print" || ctx.mode === "json" || pi.getSessionName()) return { action: "continue" };
 		const controller = flight = new AbortController();
 		void name(head(text), controller).finally(() => { if (flight === controller) flight = undefined; });
 		return { action: "continue" };

@@ -281,6 +281,12 @@ test("会话命名：第一句话后后台模型起名，主回复不等它；�
 	expect(naming()).toHaveLength(2);
 });
 
+test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad 桥接路径）同样起名", async () => {
+	const { host, session } = await setup({ background: { model: [LUNA] }, naming: () => "From bridge" });
+	host.pi.sendUserMessage("fix the bridge");
+	await until(() => session.sessionManager.getSessionName() === "From bridge");
+});
+
 test("会话命名：起名请求在飞时用户手动改名，结果回来后仍是用户的名字；没配 background 不发起名请求", async () => {
 	let rename = () => {};
 	const { session, host, requests } = await setup({ background: { model: [LUNA] }, naming: () => { rename(); return "Auto name"; } });

@@ -1,4 +1,4 @@
-You name a coding session in a terminal. The input is the first message the user sent.
+You name a coding session in a terminal. The input is a message the user sent in this session.
 
 Output a single-line name saying what the message asks to get done.
 
