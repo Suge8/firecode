@@ -74,7 +74,7 @@ Built the Pi way: sub-agents add just two small tools, and review adds none. Her
 
 ## Also in the box
 
-`/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · Compaction summaries by a cheap background model, plus idle compaction before the prompt cache expires · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
+`/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · Compaction summaries by a cheap background model, plus idle compaction before the prompt cache expires · Sessions named in the background from your first message · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
 
 ## Install
 

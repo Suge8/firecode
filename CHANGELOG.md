@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Background session naming (`background.sessionNames`, on by default; older configs keep working): an unnamed session in the main interactive or RPC session is named in the background from your first message (about 1k bytes of text, no images) by the `background` chain, without delaying the reply. The name is one short line in your language. If the message holds no task (a greeting), no name is set and the next message tries again; a failed request is not retried on the main model. A name you set yourself (`/name`, the rename key, CuePad) always wins, and a session is named only once. With no `background` section nothing is named.
+
 ## [1.9.0] - 2026-11-06
 
 ### Removed

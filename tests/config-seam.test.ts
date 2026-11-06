@@ -63,7 +63,7 @@ test("Master 角色表按有序模型链解析", async () => {
 	expect(loaded.config.background).toBeUndefined();
 	const withBackground = await loadFrom(JSON.stringify({ features, master: { roles: { 哨兵: { model: "test/shared/low", use: "盯守" } } }, background: { model: ["test/a/low", "test/b/low"] } }));
 	expect(withBackground.problems).toEqual([]);
-	expect(withBackground.config.background).toEqual({ model: [{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }], idleCompaction: true });
+	expect(withBackground.config.background).toEqual({ model: [{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }], idleCompaction: true, sessionNames: true });
 });
 
 // 旧写法与手误一律报出并拒绝启动对应功能，不静默回退成默认值（回退会拿用户没选的模型真实发起调用）。

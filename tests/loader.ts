@@ -66,7 +66,8 @@ async function copyFirecodeSource(destination: string): Promise<void> {
 			if (NON_RUNTIME_ROOTS.has(root) || path.endsWith(".test.ts")) return false;
 			if (![".md", ".mdx"].includes(extname(path))) return true;
 			return path.startsWith(`master${sep}prompts${sep}`)
-				|| path.startsWith(`review${sep}prompts${sep}`);
+				|| path.startsWith(`review${sep}prompts${sep}`)
+				|| path.startsWith(`background${sep}prompts${sep}`);
 		},
 	});
 }

@@ -51,12 +51,14 @@ interface MasterConfig {
 
 /**
  * 后台活（子代理进展行、压缩摘要、闲置压缩）唯一的模型来源：一条便宜模型链，与角色、审查各自独立。
- * 省略整节即三项都关：进展行不出，压缩回到 pi 默认（会话模型写摘要）。
+ * 省略整节即四项都关：进展行不出，压缩回到 pi 默认（会话模型写摘要）。
  */
 export interface BackgroundConfig {
 	model: ModelChain;
 	/** 闲置到缓存过期前预先算好摘要，过期后的下一次请求从摘要开始。 */
 	idleCompaction: boolean;
+	/** 会话没有名字时，用第一条用户消息在后台起名（主会话）。 */
+	sessionNames: boolean;
 }
 
 const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
@@ -358,7 +360,7 @@ function masterRole(value: unknown, field: string, role: string, problems: strin
 
 // ---- background 节 ----
 
-const BACKGROUND_KEYS = ["model", "idleCompaction"] as const;
+const BACKGROUND_KEYS = ["model", "idleCompaction", "sessionNames"] as const;
 
 /** 写了就必须完整：有问题时整节不生效（问题进全局警告），省略整节即关闭。 */
 function parseBackground(value: unknown, problems: string[]): BackgroundConfig | undefined {
@@ -371,8 +373,9 @@ function parseBackground(value: unknown, problems: string[]): BackgroundConfig |
 	rejectUnknownKeys(value, BACKGROUND_KEYS, "background", own);
 	const model = parseModelChain(value.model, "background.model", own);
 	const idleCompaction = booleanValue(value.idleCompaction, "background.idleCompaction", true, own);
+	const sessionNames = booleanValue(value.sessionNames, "background.sessionNames", true, own);
 	problems.push(...own);
-	return own.length ? undefined : { model, idleCompaction };
+	return own.length ? undefined : { model, idleCompaction, sessionNames };
 }
 
 // ---- openai 节 ----
