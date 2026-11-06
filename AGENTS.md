@@ -1,8 +1,8 @@
 # FireCode
 
-pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官。
+pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、Claude 订阅适配、后台小模型（压缩摘要与闲置压缩）、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官。
 
-单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker）只注册与界面无关的部分：横幅、工具渲染、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
 - 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数与审查占用在 `busy.ts`（读者经 `watchBusy`、`busyView`），轮记录写入通知在 `round.ts`，子代理名册 `firecode:subagents`（给同进程其他扩展的对外接口）在 `master/roster.ts`；契约都在各自头注释。
 - Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
@@ -13,9 +13,10 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | --- | --- | --- |
 | `statusbar/` | 输入框外壳：状态嵌进编辑器上下边框，无独立底栏；也接宿主改名键改会话名 | [statusbar/AGENTS.md](statusbar/AGENTS.md) |
 | `tools/` | 经宿主 `registerToolRenderer` 只接管 read/bash/edit/write/grep/find/ls 的渲染（不重新注册工具）；思考与工具的过程组/过程列表、轮记录的宿主适配 | [tools/AGENTS.md](tools/AGENTS.md) |
-| `session/` | 预设、用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
+| `session/` | 用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
+| `background/` | 后台小模型：`background.model` 是进展行、压缩摘要与闲置压缩唯一的模型来源；压缩摘要沿用 pi 的 preparation 与提示词只换模型（主会话与子会话），闲置压缩在缓存过期后的下一次请求前应用预先算好的摘要（只在主会话）；与原生压缩的先后在 `registerOpenAINative`，约定见各文件头注释 | |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
@@ -43,6 +44,8 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 
 原生检查点只压缩宿主 `preparation` 已投影的待摘要消息，保留段仍归宿主管理。服务端压缩项是唯一历史窗口，不另保留用户消息；重放只替换检查点摘要。已有窗口不可用或再次压缩失败时停止，不将占位摘要交给普通压缩；关闭功能也保留完整性守卫。窗口格式版本不匹配时拒绝使用，不猜测或迁移旧格式。恢复前先 `/export <备份路径.jsonl>` 保全当前分支；`/tree` 回到最早原生检查点前并选 `No summary` 只恢复此前上下文，检查点后消息仍在旧分支/备份中，需补回后续需求与结果，不会自动合并。摘要带唯一标记，因为宿主按摘要查找 `session_compact` 的条目。
 
+`session_before_compact` 全插件只注册一个处理器（`registerOpenAINative`）：宿主按注册顺序跑处理器、后返回的结果覆盖先返回的，分开注册时后台摘要会盖掉原生窗口。原生先决定，它不接才交给后台链，都不接是 pi 默认压缩。
+
 宿主私有细节只在 `tools/host.ts`；改过程分组或升级 pi 时先读 `tools/AGENTS.md`，核对原生展开与鼠标命中契约。
 
 ## 文案
@@ -69,6 +72,7 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 撞上任何一个都在启动时弹 “Extension issues”；撞到编辑器全局保留键则扩展直接被跳过，其余则扩展先于内置处理。
 所以默认键必须避开宿主全部默认键位（`tests/config-seam.test.ts` 守），改名这类宿主已有键位的动作不注册快捷键，
 而是挂宿主的编辑器动作（见 `statusbar/index.ts` 的 `ShellEditor`）。
+`background` 节写了就必须完整，有问题时整节不生效（三项后台活都关、问题进全局警告），省略整节同样全关：后台活都是真实调用，不替用户补模型。
 `review` 与 `master` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
 真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定（文件级与 features 问题阻断三节），消费端不再自己筛
 问题；关闭的功能那一节的问题不进 session_start 全局警告。

@@ -65,7 +65,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		pi,
 		pool,
 		roster,
-		progress: "error" in loaded ? false : loaded.config.progress,
+		progress: all.config.background?.model ?? false,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
 		workerPrompt: WORKER_PROMPT,
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,

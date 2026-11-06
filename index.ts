@@ -11,6 +11,7 @@ import { msg } from "./messages.js";
 import { registerClaudeFiles } from "./provider/claude-files.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
+import { registerBackground } from "./background/index.js";
 import { registerHerdrProjection } from "./session/herdr-projection.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
@@ -57,8 +58,8 @@ export function registerFirecode(
 	registerTruncatedWriteGuard(pi);
 	registerSleepGuard(pi);
 	registerToday(pi);
-	// 关闭请求选项也不能让已有原生检查点静默丢失历史。
-	registerOpenAINative(pi, config.features.openaiNative !== false);
+	// 关闭请求选项也不能让已有原生检查点静默丢失历史。压缩钩子只有一个：原生先决定，不接时交给后台模型链。
+	registerOpenAINative(pi, config.features.openaiNative !== false, registerBackground(pi, pool, subsession));
 	for (const [feature, register] of Object.entries(REGISTRARS) as [SimpleFeature, (pi: ExtensionAPI) => void][]) {
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);

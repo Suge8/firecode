@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { CompactionResult, ExtensionContext, SessionBeforeCompactEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { msg, type WindowLoss } from "../../messages.js";
 import { physicalModel } from "../../../model-route.js";
 import { executeNativeCompaction } from "./compact-client.js";
@@ -13,7 +14,7 @@ import {
 	nativeWindowLoss,
 } from "./native-details.js";
 
-type NativeCompactionHookResult = { cancel?: boolean; compaction?: CompactionResult };
+export type CompactionHookResult = { cancel?: boolean; compaction?: CompactionResult };
 
 /** 没有界面（print、rpc）时提示写到 stderr，不能无声。 */
 export function notify(ctx: ExtensionContext, message: string, level: "warning" | "error"): void {
@@ -28,11 +29,20 @@ function buildInstructions(systemPrompt: string, customInstructions?: string): s
 		: systemPrompt;
 }
 
+/**
+ * 这次压缩归不归原生：已有原生窗口的会话始终归它（续压或拒绝，不交给普通摘要）；否则功能开着、模型是原生身份、
+ * 分支上还没有普通压缩时由它先试。归它时其它摘要方式不碰这个会话（闲置压缩也不预算）。
+ */
+export function nativeTakesOver(entries: readonly SessionEntry[], model: Model<Api> | undefined, enabled: boolean): boolean {
+	const latest = latestCompaction(entries);
+	return !!latest?.native || (enabled && !!nativeIdentity(model) && !latest);
+}
+
 export async function compactWithOpenAINative(
 	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
 	enabled: boolean,
-): Promise<NativeCompactionHookResult | undefined> {
+): Promise<CompactionHookResult | undefined> {
 	if (event.signal.aborted) return { cancel: true };
 	const model = physicalModel(ctx.model);
 	const identity = nativeIdentity(model);
@@ -43,7 +53,7 @@ export async function compactWithOpenAINative(
 		notify(ctx, msg.compaction.replayDeclined(loss), "error");
 		return { cancel: true };
 	}
-	if (!enabled || !model || !identity || (latest && !prior)) return undefined;
+	if (!nativeTakesOver(event.branchEntries, model, enabled) || !model || !identity) return undefined;
 
 	const system: AgentMessage = {
 		role: "system",

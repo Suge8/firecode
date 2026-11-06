@@ -74,7 +74,7 @@
 
 ## 还有这些
 
-`/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档 · OpenAI 原生压缩 · 适配 Claude 订阅登录 · Claude 截图只传一次，不再每轮重传
+`/quota`、`/tokens` 看用量 · `Ctrl+R` 改会话名 · `Ctrl+Shift+S` 开关 OpenAI 加速档 · 压缩摘要改由便宜的后台模型写，闲置到缓存过期前预先压缩 · OpenAI 原生压缩 · 适配 Claude 订阅登录 · Claude 截图只传一次，不再每轮重传
 
 ## 安装
 

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { clampThinkingLevel, type Context } from "@earendil-works/pi-ai";
+import { type Api, clampThinkingLevel, type Context, type Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
 	createCodemodeExtension,
@@ -18,7 +18,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
-import { candidates, type ChainCompletion, completeOnChain, createModelRoute } from "./model-route.js";
+import { type Candidate, candidates, type ChainCompletion, completeOnChain, createModelRoute, tryOnChain } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -129,6 +129,17 @@ export class InProcessSessionPool {
 	/** 在链上做一次不开会话的单请求（选择、冷却与失败记账同 model-route.ts 的 completeOnChain）。 */
 	async complete(chain: ModelChain, context: Context, options: { maxTokens: number; signal: AbortSignal }): Promise<ChainCompletion> {
 		return completeOnChain(await this.modelRuntime(), chain, this.timing.cooldownMs, context, options);
+	}
+
+	/** 在链上逐个候选做一件活直到成功（选择、冷却与失败记账同 model-route.ts 的 tryOnChain）；attempt 拿到池的模型运行时发请求。 */
+	async tryOnChain<T>(
+		chain: ModelChain,
+		signal: AbortSignal,
+		unfit: (model: Model<Api>) => string | undefined,
+		attempt: (candidate: Candidate, runtime: ModelRuntime) => Promise<T>,
+	): Promise<{ value: T; model: string }> {
+		const runtime = await this.modelRuntime();
+		return tryOnChain(runtime, chain, this.timing.cooldownMs, signal, unfit, (candidate) => attempt(candidate, runtime));
 	}
 
 	configureRoute(sessionPath: string, chain: ModelChain, override?: ThinkingLevelValue): void {
