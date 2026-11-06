@@ -7,7 +7,6 @@
 		"header": true,
 		"statusbar": true,
 		"tools": true,
-		"presets": true,
 		"stats": true,
 		"claudeSub": true,
 		"claudeFiles": true,
@@ -48,15 +47,6 @@
 			"researcher": { "model": ["gpt-6.1-terra/high", "claude-sonnet-5-5/medium"], "use": "Read-only research: web search, docs and version lookups, reading long logs and traces, locating code, organizing data; returns conclusions with sources" },
 			"sentinel": { "model": ["gpt-6-luna/high", "claude-haiku-5-5/medium"], "use": "Waiting on CI, deployments and long tests" }
 		}
-	},
-
-	"presets": {
-		"sonnet": { "model": "claude-sonnet-5-5/high", "key": "alt+1" },
-		"opus": { "model": "claude-opus-5-5/high", "key": "alt+2" },
-		"fable": { "model": "claude-fable-5-1/medium", "key": "alt+3" },
-		"astra": { "model": "gpt-6-astra/medium", "key": "alt+4" },
-		"sol": { "model": "gpt-6.1-sol/medium", "key": "alt+5" },
-		"ds": { "model": "deepseek-flash/high", "key": "alt+6" }
 	},
 
 	// Review only calls models when the user or the Master starts it.

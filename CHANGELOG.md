@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Removed
 
 - **Breaking:** the watcher (`/fire-watch`) is removed. In `config.jsonc`, delete `features.watcher` and the top-level `watcher` section. If `features.watcher` stays, it is an unknown feature switch and blocks both `/fire-review` and `/fire-master` from starting until it is deleted. A leftover `watcher` section only shows an "unknown section" warning at session start.
+- **Breaking:** presets (`/preset`, `--preset` and per-preset shortcuts) are removed. In `config.jsonc`, delete `features.presets` and the top-level `presets` section. If `features.presets` stays, it is an unknown feature switch and blocks both `/fire-review` and `/fire-master` from starting until it is deleted. A leftover `presets` section only shows an "unknown section" warning at session start. The `keys.fast` shortcut is unchanged.
 
 ### Changed
 

@@ -117,7 +117,6 @@ class Shell {
 		const percent = usage?.percent;
 		return {
 			title: fg("muted", this.title),
-			preset: this.statuses().get(STATUS_KEYS.preset) ?? "",
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(THINKING_COLORS[thinking], `/${thinking}`) : "",
 			fast: this.statuses().has(STATUS_KEYS.fast) ? fg("warning", "Fast") : "",

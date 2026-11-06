@@ -83,8 +83,6 @@ test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动",
 		["review.tools 不是数组", { review: { tools: "read" } }, "review.tools 必须是非空字符串数组"],
 		["review.tools 为空", { review: { tools: [] } }, "review.tools 必须是非空字符串数组"],
 		["review.tools 含写入工具", { review: { tools: ["read", "edit"] } }, "review.tools 不能包含 write 或 edit：审查者只读"],
-		["preset 旧三字段", { presets: { old: { provider: "test", model: "model", thinkingLevel: "high" } } }, "未知字段 presets.old.thinkingLevel"],
-		["已删除的 keys.cyclePreset", { keys: { cyclePreset: "ctrl+shift+u" } }, "未知字段 keys.cyclePreset"],
 		["已删除的 tools 节", { tools: { replyLines: 3 } }, "未知配置节 tools"],
 		["已删除的 features.rename", { features: { rename: true } }, "未知开关 features.rename，可用："],
 	];

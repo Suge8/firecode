@@ -21,14 +21,6 @@ export function modelAtomText(atom: ModelAtom): string {
 	return `${atom.model}/${atom.thinking}`;
 }
 
-export interface Preset {
-	model?: ModelAtom;
-	tools?: string[];
-	instructions?: string;
-	/** 一键切换，如 alt+1；不填则无快捷键 */
-	key?: string;
-}
-
 /** /fire-review 配置：审查者 / 顾问模型 + 循环限制。见 config.jsonc 的 review 节注释。 */
 export interface ReviewConfig {
 	advisor: ModelChain;
@@ -82,7 +74,6 @@ export const FEATURES = [
 	"header",
 	"statusbar",
 	"tools",
-	"presets",
 	"stats",
 	"claudeSub",
 	"claudeFiles",
@@ -93,7 +84,7 @@ export const FEATURES = [
 
 export type Feature = (typeof FEATURES)[number];
 
-const SECTIONS = ["language", "features", "keys", "openai", "presets", "review", "master"];
+const SECTIONS = ["language", "features", "keys", "openai", "review", "master"];
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
@@ -109,7 +100,6 @@ type LoadedConfig = {
 		features: Partial<Record<Feature, boolean>>;
 		keys: { fast: string };
 		openai: OpenAISettings;
-		presets: Record<string, Preset>;
 	};
 	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
 	problems: string[];
@@ -186,16 +176,6 @@ function checkFeatures(features: Record<string, unknown>, problems: string[]): v
 	}
 }
 
-function checkKeys(fastKey: string, presets: Record<string, Preset>, problems: string[]): void {
-	const owners = new Map<string, string>([[fastKey, "keys.fast"]]);
-	for (const [name, preset] of Object.entries(presets)) {
-		if (!preset?.key) continue;
-		const owner = owners.get(preset.key);
-		if (owner) problems.push(msg.config.keyConflict(preset.key, owner, name));
-		else owners.set(preset.key, msg.config.presetOwner(name));
-	}
-}
-
 let cached: LoadedConfig | undefined;
 
 export function loadConfig(): LoadedConfig {
@@ -218,9 +198,7 @@ export function loadConfig(): LoadedConfig {
 	for (const key of Object.keys(raw)) if (!SECTIONS.includes(key)) problems.push(msg.config.unknownSection(key));
 	const rawKeys = asRecord(raw.keys);
 	rejectUnknownKeys(rawKeys, ["fast"], "keys", problems);
-	const presets = parsePresets(raw.presets, problems);
 	const keys = { fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_FAST_KEY };
-	checkKeys(keys.fast, presets, problems);
 	const openai = parseOpenAI(raw.openai, features.openaiNative !== false ? problems : []);
 	if (raw.language !== undefined && !parseLanguage(raw.language)) problems.push(msg.config.language);
 
@@ -247,7 +225,7 @@ export function loadConfig(): LoadedConfig {
 		config.roles.length ? undefined : msg.config.masterIncomplete);
 
 	cached = {
-		config: { features, keys, openai, presets },
+		config: { features, keys, openai },
 		problems,
 		review,
 		master,
@@ -282,40 +260,6 @@ function parseModelAtom(value: unknown, field: string, problems: string[]): Mode
 	if (!valid) faults.push(msg.config.thinkingLevel(thinking));
 	if (faults.length) problems.push(msg.config.modelAtomFaults(shape, faults));
 	return { model, thinking: valid ? (thinking as ThinkingLevelValue) : FALLBACK_THINKING };
-}
-
-// ---- presets 节 ----
-
-const PRESET_KEYS = ["model", "tools", "instructions", "key"] as const;
-
-function parsePresets(value: unknown, problems: string[]): Record<string, Preset> {
-	if (value === undefined) return {};
-	if (!isRecord(value)) {
-		problems.push(msg.config.mustBeObject("presets"));
-		return {};
-	}
-	return Object.fromEntries(
-		Object.entries(value).map(([name, raw]) => [name, parsePreset(raw, `presets.${name}`, problems)]),
-	);
-}
-
-/** preset 只在写了 model 时切模型；其余字段与模型原子互不依赖。 */
-function parsePreset(value: unknown, field: string, problems: string[]): Preset {
-	if (!isRecord(value)) {
-		problems.push(msg.config.mustBeObject(field));
-		return {};
-	}
-	rejectUnknownKeys(value, PRESET_KEYS, field, problems);
-	return {
-		...(value.model === undefined
-			? {}
-			: { model: parseModelAtom(value.model, `${field}.model`, problems) }),
-		...(value.tools === undefined ? {} : { tools: stringArray(value.tools, `${field}.tools`, problems) }),
-		...(value.instructions === undefined
-			? {}
-			: { instructions: stringValue(value.instructions, `${field}.instructions`, problems) }),
-		...(value.key === undefined ? {} : { key: stringValue(value.key, `${field}.key`, problems) }),
-	};
 }
 
 // ---- review 节 ----

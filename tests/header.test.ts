@@ -13,7 +13,6 @@ const configJsonc = JSON.stringify({
 		header: true,
 		statusbar: false,
 		tools: false,
-		presets: false,
 		stats: false,
 		claudeSub: false,
 		claudeFiles: false,
