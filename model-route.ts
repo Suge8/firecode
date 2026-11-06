@@ -7,7 +7,7 @@ import { processShared } from "./process-shared.js";
 
 /** transient：失败会自己过去（网络、过载、限流、写明重置时刻的额度窗口）；否则是鉴权、参数、模型不存在这类要人处理的。 */
 interface Cooldown { failures: number; until: number; reason: string; transient: boolean }
-interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue }
+export interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue }
 /**
  * candidates 是最近一次选模型时的候选表：链暂停判定按它查冷却表，不再异步取可用模型。
  * failures 是最近一个任务里各模型最终失败的原文：新任务开始时清空，落定后留给读取方判断这次失败本身是否瞬时。
@@ -174,6 +174,55 @@ export async function completeOnChain(
 	}
 	cooldowns.delete(key(selected.model));
 	return { message, model: key(selected.model) };
+}
+
+/** tryOnChain 的一次尝试里模型自己报了错：cools 为 true 时记冷却（截断这类预算问题不算模型故障）。 */
+export class ModelFailure extends Error {
+	constructor(message: string, readonly cools: boolean) {
+		super(message);
+	}
+}
+
+/**
+ * 在链上依次尝试一件不开会话的活，直到有一个候选成功：跳过冷却中的与 unfit 给出原因的候选，失败就换下一个。
+ * 与 completeOnChain 共用同一张冷却表；它一次只试一个候选，是因为进展行下一句自然会换，而压缩这类活必须当次有结果。
+ * signal 中止直接抛出，不算模型失败；整条链都不行时抛出逐个原因。
+ */
+export async function tryOnChain<T>(
+	runtime: ModelRuntime,
+	chain: ModelChain,
+	ladder: readonly number[],
+	signal: AbortSignal,
+	unfit: (model: Model<Api>) => string | undefined,
+	attempt: (candidate: Candidate) => Promise<T>,
+): Promise<{ value: T; model: string }> {
+	const list = await candidates(runtime, chain);
+	const reasons = chain.flatMap((atom) => matchModels(list.map((entry) => entry.model), atom.model).length ? [] : [msg.spawn.modelUnavailable(atom.model)]);
+	for (const candidate of list) {
+		signal.throwIfAborted();
+		const name = key(candidate.model);
+		const cooling = cooldowns.get(name);
+		if (cooling && cooling.until > Date.now()) {
+			reasons.push(msg.spawn.modelCooling(name, cooling.reason, new Date(cooling.until).toISOString()));
+			continue;
+		}
+		const misfit = unfit(candidate.model);
+		if (misfit) {
+			reasons.push(msg.spawn.modelFailed(name, misfit));
+			continue;
+		}
+		try {
+			const value = await attempt({ model: candidate.model, thinking: clampThinkingLevel(candidate.model, candidate.thinking) });
+			cooldowns.delete(name);
+			return { value, model: name };
+		} catch (error) {
+			signal.throwIfAborted();
+			const reason = error instanceof Error ? error.message : String(error);
+			if (error instanceof ModelFailure && error.cools) coolDown(candidate.model, reason, ladder);
+			reasons.push(msg.spawn.modelFailed(name, reason));
+		}
+	}
+	throw new Error(msg.spawn.chainExhausted(reasons.join("; ")));
 }
 
 export async function createModelRoute(

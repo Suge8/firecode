@@ -37,6 +37,17 @@ export interface Timing {
 	progressFirstMs: number;
 	/** 进展行两次生成之间至少隔这么久（只在有新输出时才生成）：每个子代理每小时最多 30 次小模型调用。 */
 	progressEveryMs: number;
+	/**
+	 * 闲置压缩的缓存过期线：会话闲置超过它，下一次请求按缓存已失效处理，改从预先算好的摘要开始。
+	 * 按 Claude 的 1 小时缓存档定（Claude Code 同样在闲置约 54 分钟、过期前压缩；本机经 magpie 闲置 30 分钟仍完整命中），
+	 * 取 55 分钟留 5 分钟余量：过期线之前的请求仍读缓存，此时压缩反而要重写整段前缀。不做保温续期：闲置会话靠这条线压缩。
+	 */
+	cacheTtlMs: number;
+	/**
+	 * 闲置压缩的提前量：闲置到“过期线减它”时开始预算摘要。序列化后输入最大约 9.7 万 token，小模型一次要数十秒，
+	 * 10 分钟足够算完；提前越多，用户在过期前回来、摘要白算的机会越大（每次约 $0.005）。
+	 */
+	idleCompactionLeadMs: number;
 }
 
 export const DEFAULT_TIMING: Timing = {
@@ -48,4 +59,6 @@ export const DEFAULT_TIMING: Timing = {
 	cooldownMs: [1, 5, 15].map((minutes) => minutes * 60_000),
 	progressFirstMs: 30_000,
 	progressEveryMs: 2 * 60_000,
+	cacheTtlMs: 55 * 60_000,
+	idleCompactionLeadMs: 10 * 60_000,
 };

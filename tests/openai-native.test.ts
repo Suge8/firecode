@@ -75,9 +75,14 @@ async function fixture(provider = "openai", model = "gpt-6.1-terra") {
 	return { directory, agentDir, provider, model };
 }
 
-async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, options: { native?: boolean; enabled?: boolean } = {}) {
+async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, options: { native?: boolean; enabled?: boolean; background?: string[] } = {}) {
+	process.env.PI_CODING_AGENT_DIR = f.agentDir;
 	const { registerFirecode } = await loadFirecodeModule("index.ts", {
-		configJsonc: JSON.stringify({ features: await featuresOnly(...(options.enabled === false ? [] : ["openaiNative"])), openai: { nativeCompaction: options.native !== false, providers: { [f.provider]: { textVerbosity: "low", priority: true } } } }),
+		configJsonc: JSON.stringify({
+			features: await featuresOnly(...(options.enabled === false ? [] : ["openaiNative"])),
+			openai: { nativeCompaction: options.native !== false, providers: { [f.provider]: { textVerbosity: "low", priority: true } } },
+			...(options.background ? { background: { model: options.background, idleCompaction: false } } : {}),
+		}),
 	}) as any;
 	const settingsManager = SettingsManager.create(f.directory, f.agentDir, { projectTrusted: false });
 	const compactEvents: any[] = [];
@@ -209,6 +214,27 @@ test("a truncated native summary is rejected; a first automatic failure can stil
 	expect(wire(ordinary)).toContain("LANTERN-5849");
 	expect(wire(ordinary)).not.toContain("checkpoint");
 	expect(session.sessionManager.getBranch().find((entry: any) => entry.type === "compaction")?.details?.strategy).not.toBe("openai-native-compact");
+}, 20_000);
+
+// 压缩钩子只有一个：原生压缩先决定，它接管的会话后台模型链不碰；原生只在首次自动压缩失败时退回普通摘要，那份摘要由后台链写。
+test("background configured: native compaction keeps its sessions, and its first automatic failure falls back to the background chain", async () => {
+	const f = await fixture();
+	const { session } = await open(f, undefined, { background: ["openai/gpt-5-mini/low"] });
+	seed(session);
+	incompleteHelper = true;
+	await expect(session.compact()).rejects.toThrow("cancelled");
+	expect(requests.some((request) => request.model === "gpt-5-mini")).toBe(false);
+	session.settingsManager.applyOverrides({ compaction: { enabled: true, keepRecentTokens: 32, reserveTokens: session.model.contextWindow - 64 } });
+	await session.prompt("Trigger compaction.");
+	const ordinary = requests.filter((request) => !request.context_management && wire(request).includes("LANTERN-5849") && wire(request).includes("<conversation>"));
+	expect(ordinary.map((request) => request.model)).toEqual(["gpt-5-mini"]);
+	incompleteHelper = false;
+	requests.length = 0;
+	const { session: fresh } = await open(await fixture(), undefined, { background: ["openai/gpt-5-mini/low"] });
+	seed(fresh);
+	const native = await fresh.compact();
+	expect(native.details.compactedWindow.map((item: any) => item.type)).toEqual(["compaction"]);
+	expect(requests.some((request) => request.model === "gpt-5-mini")).toBe(false);
 }, 20_000);
 
 test.each(["model", "native", "feature"])("%s cannot silently replace a native window with placeholder history", async (mode) => {

@@ -21,7 +21,7 @@ export interface MasterSetup {
 	pi: ExtensionAPI;
 	pool: InProcessSessionPool;
 	roster: MasterRole[];
-	/** 在跑子代理进展行的小模型链；false 不生成。 */
+	/** 在跑子代理进展行的模型链（配置 background.model）；false 不生成。 */
 	progress: ModelChain | false;
 	exclusions: string[];
 	workerPrompt: string;

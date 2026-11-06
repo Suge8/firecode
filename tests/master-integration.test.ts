@@ -2176,7 +2176,7 @@ async function setup(activate = true, options: {
 	autoActivate?: boolean;
 	/** 子会话加载扩展时卡在 globalThis.__loadGate 上：复现 start 准备期间被 kill 的现场。 */
 	loadGate?: boolean;
-	/** 进展行的小模型链（master.progress）；省略即关闭。 */
+	/** 后台模型链（background.model），进展行用它；省略即关闭。 */
 	progress?: string[];
 	/** 有界面：/fire-master 关闭时会弹确认，返回值由 confirmAnswer 决定。 */
 	confirmAnswer?: boolean;
@@ -2244,9 +2244,9 @@ async function setup(activate = true, options: {
 			master: {
 				roles: options.roles ?? TEST_ROLES,
 				workerExcludeExtensions: [],
-				...(options.progress ? { progress: options.progress } : {}),
 				...(options.autoActivate === undefined ? {} : { autoActivate: options.autoActivate }),
 			},
+			...(options.progress ? { background: { model: options.progress, idleCompaction: false } } : {}),
 		}),
 	};
 	const module = await loadFirecodeModule("master/index.js", moduleOptions) as any;

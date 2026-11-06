@@ -43,7 +43,7 @@
 - **过程列表**（Process List）：一轮展开后的列表；避免：完整展开、第三档
 - **中间回复**（Interim Reply）→ `tools/group-view.ts` 的 `REPLY_LINES`；避免：中途正文
 - **活动列表**（Activity List）→ `master/activity-list.ts`；避免：任务面板、状态栏
-- **进展行**（Progress Line）→ `master/progress.ts`；小模型据新输出写的一句“在做什么”，只给人看；避免：摘要、状态播报
+- **进展行**（Progress Line）→ `master/progress.ts`；后台模型据新输出写的一句“在做什么”，只给人看；避免：摘要、状态播报
 - **卡住**（Stalled）→ 活动列表的展示信号，不改子代理状态；避免：超时、挂起、失败
 - **展示标题**（Display Title）→ `statusbar/`；不等于用户设置的会话名；避免：自动重命名、会话名
 
@@ -51,5 +51,7 @@
 
 - **运行配置**（Runtime Configuration）→ Pi Agent 目录下 `extensions/firecode/config.jsonc`；避免：源码配置、默认配置
 - **配置模板**（Configuration Template）→ `config.example.jsonc`；避免：运行配置、默认配置
+- **后台模型**（Background Model）→ 配置 `background.model`；进展行、压缩摘要与闲置压缩共用的便宜模型链，与角色、审查独立；避免：小模型配置、辅助模型、side model
+- **闲置压缩**（Idle Compaction）→ `background/idle.ts`；闲置到缓存过期前预算摘要，过期后的下一次请求前应用；避免：保温、续期、定时压缩
 - **模型原子**（Model Atom）→ `config.ts` 的 `parseModelAtom`；避免：模型 ID、模型对、`{ model, thinking }`
 - **角色表**（Role Roster）→ `master.roles`；避免：选型表、花名册、模型清单

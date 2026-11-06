@@ -47,8 +47,16 @@ interface MasterConfig {
 	roles: MasterRole[];
 	workerExcludeExtensions: string[];
 	autoActivate: boolean;
-	/** 在跑子代理进展行用的小模型链；false（省略时同）不生成进展行。 */
-	progress: ModelChain | false;
+}
+
+/**
+ * 后台活（子代理进展行、压缩摘要、闲置压缩）唯一的模型来源：一条便宜模型链，与角色、审查各自独立。
+ * 省略整节即三项都关：进展行不出，压缩回到 pi 默认（会话模型写摘要）。
+ */
+export interface BackgroundConfig {
+	model: ModelChain;
+	/** 闲置到缓存过期前预先算好摘要，过期后的下一次请求从摘要开始。 */
+	idleCompaction: boolean;
 }
 
 const TEXT_VERBOSITIES = ["low", "medium", "high"] as const;
@@ -84,7 +92,7 @@ export const FEATURES = [
 
 export type Feature = (typeof FEATURES)[number];
 
-const SECTIONS = ["language", "features", "keys", "openai", "review", "master"];
+const SECTIONS = ["language", "features", "keys", "openai", "background", "review", "master"];
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
@@ -100,6 +108,8 @@ type LoadedConfig = {
 		features: Partial<Record<Feature, boolean>>;
 		keys: { fast: string };
 		openai: OpenAISettings;
+		/** 节有问题时为 undefined（问题已进 problems）：后台活都是真实调用，不替用户补模型。 */
+		background?: BackgroundConfig;
 	};
 	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
 	problems: string[];
@@ -201,6 +211,7 @@ export function loadConfig(): LoadedConfig {
 	const keys = { fast: typeof rawKeys.fast === "string" ? rawKeys.fast : DEFAULT_FAST_KEY };
 	const openai = parseOpenAI(raw.openai, features.openaiNative !== false ? problems : []);
 	if (raw.language !== undefined && !parseLanguage(raw.language)) problems.push(msg.config.language);
+	const background = parseBackground(raw.background, problems);
 
 	// review / master 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
 	// 节内问题只在功能开启时进全局警告；文件读不出来时节是空的，节内问题全是读不出来的派生，只留文件级那一条。
@@ -225,7 +236,7 @@ export function loadConfig(): LoadedConfig {
 		config.roles.length ? undefined : msg.config.masterIncomplete);
 
 	cached = {
-		config: { features, keys, openai },
+		config: { features, keys, openai, ...(background ? { background } : {}) },
 		problems,
 		review,
 		master,
@@ -322,7 +333,7 @@ function reviewTools(value: unknown, problems: string[]): string[] {
 
 // ---- master 节 ----
 
-const MASTER_KEYS = ["roles", "workerExcludeExtensions", "autoActivate", "progress"] as const;
+const MASTER_KEYS = ["roles", "workerExcludeExtensions", "autoActivate"] as const;
 
 /** 与 review 节同样严格拒绝未知字段，类型错误记录而非静默回退。 */
 function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): MasterConfig {
@@ -334,9 +345,7 @@ function parseMasterConfig(raw: Record<string, unknown>, problems: string[]): Ma
 	const roles = isRecord(table)
 		? Object.entries(table).map(([role, value]) => masterRole(value, `master.roles.${role}`, role, problems))
 		: [];
-	// 省略即关闭：进展行每次生成都是真实的模型调用，不替用户选模型。
-	const progress = raw.progress === undefined || raw.progress === false ? false : parseModelChain(raw.progress, "master.progress", problems);
-	return { roles, workerExcludeExtensions: exclusions, autoActivate, progress };
+	return { roles, workerExcludeExtensions: exclusions, autoActivate };
 }
 
 function masterRole(value: unknown, field: string, role: string, problems: string[]): MasterRole {
@@ -345,6 +354,25 @@ function masterRole(value: unknown, field: string, role: string, problems: strin
 	const models = parseModelChain(record.model, `${field}.model`, problems);
 	const use = stringValue(record.use, `${field}.use`, problems) ?? "";
 	return { role, models, use };
+}
+
+// ---- background 节 ----
+
+const BACKGROUND_KEYS = ["model", "idleCompaction"] as const;
+
+/** 写了就必须完整：有问题时整节不生效（问题进全局警告），省略整节即关闭。 */
+function parseBackground(value: unknown, problems: string[]): BackgroundConfig | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		problems.push(msg.config.mustBeObject("background"));
+		return undefined;
+	}
+	const own: string[] = [];
+	rejectUnknownKeys(value, BACKGROUND_KEYS, "background", own);
+	const model = parseModelChain(value.model, "background.model", own);
+	const idleCompaction = booleanValue(value.idleCompaction, "background.idleCompaction", true, own);
+	problems.push(...own);
+	return own.length ? undefined : { model, idleCompaction };
 }
 
 // ---- openai 节 ----

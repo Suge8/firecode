@@ -6,6 +6,8 @@
  * 例外是手动 /compact 与带摘要的 /tree 切换：它们不在回合里，宿主 isIdle 为 false、isStreaming 为 false，此时 steer 只会被当场
  * 追加、没人被唤起，triggerTurn 则会在压缩还没落定时开一个回合；/tree 还会把消息挂到被丢下的旧分支。所以发送前先等它们落定。
  * 自动压缩在回合内部，宿主压缩后按队列续跑，不受影响。
+ *
+ * 歇透时要开回合的投递先过唤醒前钩子（beforeWake，闲置压缩用它在请求发出前把过期的上下文换成摘要），再按上面的规则等维护落定。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -57,6 +59,12 @@ interface MaintenanceState {
 }
 
 const maintenance = new WeakMap<ExtensionAPI, MaintenanceState>();
+const wakeHooks = new WeakMap<ExtensionAPI, (ctx: ExtensionContext) => Promise<void>>();
+
+/** 登记歇透时开回合前要先做完的事（每个会话一个）：它可以发起手动压缩，deliver 之后照常等压缩落定。 */
+export function beforeWake(pi: ExtensionAPI, hook: (ctx: ExtensionContext) => Promise<void>): void {
+	wakeHooks.set(pi, hook);
+}
 
 const COMPACTION_TICK_MS = 5;
 const SUMMARY_TICK_MS = 50;
@@ -121,6 +129,8 @@ export async function deliver(
 	envelope: Delivery,
 	signal?: AbortSignal,
 ): Promise<void> {
+	const hook = wakeHooks.get(pi);
+	if (hook && ctx.isIdle()) await abortable(hook(ctx), signal);
 	const state = maintenance.get(pi);
 	while (state?.pending) await abortable(state.pending.promise, signal);
 	while (state?.settling && !ctx.isIdle()) {

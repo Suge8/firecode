@@ -59,10 +59,11 @@ test("Master 角色表按有序模型链解析", async () => {
 		{ role: "工程师", models: [{ model: "test/shared", thinking: "medium" }, { model: "test/backup", thinking: "high" }], use: "实现" },
 		{ role: "哨兵", models: [{ model: "test/shared", thinking: "low" }], use: "盯守" },
 	]);
-	// 进展行省略即关闭（每次生成都是真实调用）；写成模型链才开启。
-	expect(loaded.master.config.progress).toBe(false);
-	const withProgress = await loadFrom(JSON.stringify({ features, master: { roles: { 哨兵: { model: "test/shared/low", use: "盯守" } }, progress: ["test/a/low", "test/b/low"] } }));
-	expect(withProgress.master.config.progress).toEqual([{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }]);
+	// 后台模型省略即关闭（每次都是真实调用）；写成模型链才开启，闲置压缩默认开。
+	expect(loaded.config.background).toBeUndefined();
+	const withBackground = await loadFrom(JSON.stringify({ features, master: { roles: { 哨兵: { model: "test/shared/low", use: "盯守" } } }, background: { model: ["test/a/low", "test/b/low"] } }));
+	expect(withBackground.problems).toEqual([]);
+	expect(withBackground.config.background).toEqual({ model: [{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }], idleCompaction: true });
 });
 
 // 旧写法与手误一律报出并拒绝启动对应功能，不静默回退成默认值（回退会拿用户没选的模型真实发起调用）。
@@ -74,7 +75,10 @@ test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动",
 		["master 已删除的 fallback 字段", { master: { roles: { 工程师: { model: "p/m/low", use: "x", fallback: ["p/a/low", "p/b/low", "p/c/low"] } } } }, "未知字段 master.roles.工程师.fallback"],
 		["master 空角色表", { master: { roles: {} } }, "master.roles 必须是至少包含一个角色的对象"],
 		["master 旧数组写法", { master: { models: [] } }, "未知字段 master.models"],
-		["master.progress 不是模型原子", { master: { progress: true } }, "master.progress 必须是“模型/thinking”字符串"],
+		["已移到 background 的 master.progress", { master: { progress: ["p/m/low"] } }, "未知字段 master.progress"],
+		["background 缺模型链", { background: { idleCompaction: true } }, "background.model 必须是“模型/thinking”字符串"],
+		["background 未知键", { background: { model: "p/m/low", progress: false } }, "未知字段 background.progress"],
+		["background.idleCompaction 不是布尔", { background: { model: "p/m/low", idleCompaction: "yes" } }, "background.idleCompaction 必须是 true 或 false"],
 		["review 旧的 { model, thinking } 对象", { review: { advisor: { model: "p/m", thinking: "max" } } }, "review.advisor 必须是“模型/thinking”字符串"],
 		["review 已删除的审查者对象", { review: { reviewers: [{ model: "p/m/low", fallback: ["p/a/low", "p/b/low", "p/c/low"] }] } }, "review.reviewers[0] 必须是“模型/thinking”字符串"],
 		["review 未知键", { review: { background: { cmd: "pi" } } }, "未知字段 review.background"],
@@ -90,6 +94,8 @@ test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动",
 		const loaded = await loadFrom(JSON.stringify({ features, ...(section as object) }));
 		expect(`${name}: ${loaded.problems.some((problem: string) => problem.startsWith(expected))}`).toBe(`${name}: true`);
 	}
+	// 有问题的 background 整节不生效：后台活都是真实调用，不替用户补模型。
+	expect((await loadFrom(JSON.stringify({ features, background: { model: "bad" } }))).config.background).toBeUndefined();
 	const broken = await loadFrom(JSON.stringify({ features, master: { roles: { 工程师: { model: "bad", use: "x" } } } }));
 	expect(broken.master.error).toContain("Master 配置有问题");
 	const bareReview = await loadFrom(JSON.stringify({ features, review: { advisor: "p/a/max", reviewers: ["p/r/high"] } }));
@@ -155,7 +161,8 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	for (const feature of ["claudeSub", "claudeFiles", "openaiNative", "review", "master"])
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.master.config.autoActivate).toBeTrue();
-	expect(loaded.master.config.progress.length).toBeGreaterThan(0);
+	expect(loaded.config.background.model.length).toBeGreaterThan(0);
+	expect(loaded.config.background.idleCompaction).toBeTrue();
 });
 
 test("功能关闭时它那一节的配置错误不全局警告；开启时照常警告", async () => {

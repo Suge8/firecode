@@ -30,15 +30,24 @@
 		}
 	},
 
+	// One cheap model chain for background work, separate from roles and review. It is the only model used for:
+	// - the one line saying what each running sub-agent is doing (activity list and sub-agent view, never sent to the Master):
+	//   first after 30 seconds of running, then at most every 2 minutes and only with new output; about 4k tokens in, 30 out;
+	// - every compaction summary, automatic or /compact, in the main session and in sub-agents (instead of the session model).
+	//   A candidate whose context window cannot hold the conversation is skipped; if the whole chain fails, Pi's default compaction runs;
+	// - idleCompaction: when a session sits idle past the 1-hour prompt cache, the next request starts from a summary prepared in advance
+	//   instead of re-sending 150k+ tokens uncached.
+	// GPT-only: ["gpt-6-luna/low"]. Claude-only: ["claude-haiku-5-5/low"]. Remove the whole section to turn all three off.
+	"background": {
+		"model": ["gpt-6-luna/low", "claude-haiku-5-5/low"],
+		"idleCompaction": true
+	},
+
 	// New sessions activate the Master by default. Role names are yours to choose; the Master picks a role by its "use".
 	// Sub-agents and reviewers only find models from Pi's built-in providers or models.json, not from other extensions' providers.
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
-		// One line saying what each running sub-agent is doing, shown in the activity list and the sub-agent view (never sent to the Master).
-		// A small model writes it from the new output only: the first line after 30 seconds of running, then at most once every 2 minutes and only when there is new output.
-		// A call is about 4k tokens in, 30 out, 2 to 3 seconds; set false to turn it off.
-		"progress": ["gpt-6-luna/low", "claude-haiku-5-5/low"],
 		"roles": {
 			"engineer": { "model": ["claude-opus-5-5/medium", "gpt-6-astra/medium"], "use": "Hard problems: cross-module invariants, concurrency, persistence, security, debugging with an unknown root cause, final integration; also audits that need deep code reading (read-only)" },
 			"designer": { "model": ["claude-opus-5-5/high", "gpt-6-astra/high"], "use": "Visual and frontend work" },
