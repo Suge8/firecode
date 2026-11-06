@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-06
+
 ### Removed
 
 - **Breaking:** the watcher (`/fire-watch`) is removed. In `config.jsonc`, delete `features.watcher` and the top-level `watcher` section. If `features.watcher` stays, it is an unknown feature switch and blocks both `/fire-review` and `/fire-master` from starting until it is deleted. A leftover `watcher` section only shows an "unknown section" warning at session start.
@@ -312,7 +314,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/Suge8/firecode/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Suge8/firecode/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/Suge8/firecode/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/Suge8/firecode/compare/v1.5.0...v1.6.0
