@@ -32,6 +32,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Workers now compact at the threshold Pi's settings give the model they are actually running on. A Worker's session model is FireCode's routing model, so a `compaction.modelOverrides` entry for, say, `anthropic/claude-opus-5-5` never matched and Workers fell back to the default reserve: a Claude Worker with a 1M window and a 650k reserve compacted near 950k instead of 350k. Reserve and keep-recent tokens now follow the routed model, also after the chain switches models, for automatic compaction, `/compact` and idle compaction. Settings still live only in Pi's `settings.json`.
 
+- A review no longer settles on someone else's turn. When another extension sent a message while a turn was wrapping up, Pi ran that extension's turn first, and the review took it for its own repair or summary turn: the summary was skipped and the review settled early, or the next review round started before the repair feedback had been delivered. A plugin message now counts as delivered only when that exact message enters a turn.
+- If writing a review round failed, the review was cancelled but its saved state still counted the unwritten round, so reopening the session reported the review record as corrupt. The saved state now counts only the rounds actually written.
+
 ## [1.8.0] - 2026-11-05
 
 ### Changed
