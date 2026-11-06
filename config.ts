@@ -77,16 +77,6 @@ export interface OpenAISettings {
 	providers: Record<string, OpenAIProviderSettings>;
 }
 
-/** 观察员喂给观察会话的增量粒度：minimal 省略 reasoning 与 diff 正文。 */
-export type WatcherContext = "minimal" | "full";
-
-/** Watcher 观察员配置：模型原子必须显式配置，绝不回退默认模型。 */
-interface WatcherConfig {
-	models: ModelChain;
-	enabled: boolean;
-	context: WatcherContext;
-}
-
 
 export const FEATURES = [
 	"header",
@@ -99,12 +89,11 @@ export const FEATURES = [
 	"openaiNative",
 	"review",
 	"master",
-	"watcher",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
 
-const SECTIONS = ["language", "features", "keys", "openai", "presets", "review", "master", "watcher"];
+const SECTIONS = ["language", "features", "keys", "openai", "presets", "review", "master"];
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
@@ -126,7 +115,6 @@ type LoadedConfig = {
 	problems: string[];
 	review: Section<ReviewConfig>;
 	master: Section<MasterConfig>;
-	watcher: Section<WatcherConfig>;
 	/** features 整节类型错误：已安全回退成全关，但那是配置坏而非用户关闭。 */
 	featuresBroken: boolean;
 };
@@ -236,10 +224,10 @@ export function loadConfig(): LoadedConfig {
 	const openai = parseOpenAI(raw.openai, features.openaiNative !== false ? problems : []);
 	if (raw.language !== undefined && !parseLanguage(raw.language)) problems.push(msg.config.language);
 
-	// review / master / watcher 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
+	// review / master 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
 	// 节内问题只在功能开启时进全局警告；文件读不出来时节是空的，节内问题全是读不出来的派生，只留文件级那一条。
 	const section = <T>(
-		name: "review" | "master" | "watcher",
+		name: "review" | "master",
 		refused: (reasons: string[]) => string,
 		parse: (record: Record<string, unknown>, problems: string[]) => T,
 		incomplete: (config: T) => string | undefined,
@@ -257,14 +245,12 @@ export function loadConfig(): LoadedConfig {
 		config.advisor.length && config.reviewers.length ? undefined : msg.config.reviewIncomplete);
 	const master = section("master", msg.config.refusedMaster, parseMasterConfig, (config) =>
 		config.roles.length ? undefined : msg.config.masterIncomplete);
-	const watcher = section("watcher", msg.config.refusedWatcher, parseWatcherConfig, () => undefined);
 
 	cached = {
 		config: { features, keys, openai, presets },
 		problems,
 		review,
 		master,
-		watcher,
 		featuresBroken,
 	};
 	return cached;
@@ -415,25 +401,6 @@ function masterRole(value: unknown, field: string, role: string, problems: strin
 	const models = parseModelChain(record.model, `${field}.model`, problems);
 	const use = stringValue(record.use, `${field}.use`, problems) ?? "";
 	return { role, models, use };
-}
-
-// ---- watcher 节 ----
-
-const WATCHER_KEYS = ["enabled", "model", "context"] as const;
-const WATCHER_CONTEXTS: readonly WatcherContext[] = ["minimal", "full"];
-
-/** model 必填（含思考档），enabled 默认 true、context 默认 minimal。 */
-function parseWatcherConfig(raw: Record<string, unknown>, problems: string[]): WatcherConfig {
-	rejectUnknownKeys(raw, WATCHER_KEYS, "watcher", problems);
-	const enabled = booleanValue(raw.enabled, "watcher.enabled", true, problems);
-	// 模型原子必填：缺失或写错时留空模型并记录问题，观察员据此拒绝启动。
-	const models = parseModelChain(raw.model, "watcher.model", problems);
-	let context: WatcherContext = "minimal";
-	if (raw.context !== undefined) {
-		if (WATCHER_CONTEXTS.includes(raw.context as WatcherContext)) context = raw.context as WatcherContext;
-		else problems.push(msg.config.mustBeOneOf("watcher.context", WATCHER_CONTEXTS));
-	}
-	return { enabled, models, context };
 }
 
 // ---- openai 节 ----

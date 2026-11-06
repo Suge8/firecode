@@ -2,7 +2,7 @@
 // 建一个变体：被测的 firecode 副本 + 临时 Agent 目录。
 //   bun variant.ts <名> [--code-ref 提交=HEAD] [--prompt-ref 提交 | --prompt-file 文件] [--cut 文本] [--model 原子] [--form only|on|off] [--tools 工具,…] [--codemode-mode only|on|off]
 // 提示词默认取代码副本自带的 master.zh.md；--prompt-ref/--prompt-file 整份替换，--cut 再从中删掉一段原文（须恰好出现一次）。
-// --model "provider/model/thinking"：主会话与角色表、审查、观察员的全部模型都换成它（角色去掉 fallback，审查只留一个审查者），
+// --model "provider/model/thinking"：主会话与角色表、审查的全部模型都换成它（角色去掉 fallback，审查只留一个审查者），
 // 用来便宜地验证脚本能跑通；不给则沿用你的 settings 与 config.jsonc。
 // --form：lib.ts 的 TOOL_FORMS 预设。
 // --tools / --codemode-mode（须同时给）：只在变体自己的 settings 里覆盖 defaultTools（逗号分隔，写法同 settings，如 read,edit,+codemode）与 codemode.mode（off = 不开 codemode）。
@@ -44,7 +44,6 @@ function writeModelOverride(atom: string): void {
 	const config: any = parseJsonc(readFileSync(join(USER_AGENT_DIR, CONFIG), "utf8"));
 	for (const role of Object.values<any>(config.master?.roles ?? {})) Object.assign(role, { model: atom, fallback: undefined });
 	if (config.review) Object.assign(config.review, { advisor: atom, reviewers: [atom] });
-	if (config.watcher) config.watcher.model = atom;
 	writeFileSync(join(agent, CONFIG), JSON.stringify(config, null, 1));
 }
 

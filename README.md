@@ -61,7 +61,7 @@ Every sub-agent sits above the input box. Click one to read its whole run and ta
 
 ## An ultra-light core
 
-Built the Pi way: sub-agents add just two small tools, and review and the watcher add none. Here is what sub-agent tools cost on every request:
+Built the Pi way: sub-agents add just two small tools, and review adds none. Here is what sub-agent tools cost on every request:
 
 | | Sub-agent tools | Characters |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ Built the Pi way: sub-agents add just two small tools, and review and the watche
 
 ## Also in the box
 
-`/fire-watch` a cheap model that speaks up only when work drifts · `/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
+`/preset` switch model, thinking and tools in one go · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` OpenAI fast mode · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
 
 ## Install
 

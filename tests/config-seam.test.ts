@@ -108,7 +108,7 @@ test("features 不是对象时报出并全部关闭；开关不是布尔时报�
 });
 
 test("配置文件读不出来时只报文件级那一条：尾逗号与 BOM 照常读，真有语法错不刷各节的派生问题", async () => {
-	const features = await featuresOnly("review", "master", "watcher");
+	const features = await featuresOnly("review", "master");
 	const lenient = await loadFrom("\uFEFF" + `{ "features": ${JSON.stringify(features)}, "keys": { "fast": "alt+f", }, // note
 	}`);
 	expect(lenient.problems.filter((problem: string) => problem.includes("解析失败"))).toEqual([]);
@@ -117,7 +117,7 @@ test("配置文件读不出来时只报文件级那一条：尾逗号与 BOM 照
 	const broken = await loadFrom(`{ "features": { "review": true }, "master" `);
 	expect(broken.problems).toHaveLength(1);
 	expect(broken.problems[0]).toContain("config.jsonc 解析失败");
-	for (const section of [broken.review, broken.master, broken.watcher]) {
+	for (const section of [broken.review, broken.master]) {
 		expect(section.error).toContain("解析失败");
 		expect(section.error).not.toContain("必须");
 	}
@@ -154,11 +154,10 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	const loaded = (loadConfig as () => any)();
 
 	expect(loaded.problems).toEqual([]);
-	for (const feature of ["claudeSub", "claudeFiles", "openaiNative", "review", "master", "watcher"])
+	for (const feature of ["claudeSub", "claudeFiles", "openaiNative", "review", "master"])
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.master.config.autoActivate).toBeTrue();
 	expect(loaded.master.config.progress.length).toBeGreaterThan(0);
-	expect(loaded.watcher.config.enabled).toBeFalse();
 });
 
 test("功能关闭时它那一节的配置错误不全局警告；开启时照常警告", async () => {

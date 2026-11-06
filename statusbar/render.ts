@@ -51,13 +51,12 @@ export interface TopParts {
 	elapsed: string;
 	/** 审查进度由长到短的退让档（已着色）；空数组表示没有审查。 */
 	review: readonly string[];
-	watcher: string;
 	master: string;
 	/** 0–1：回合进行时边框左端的暖光强度。 */
 	glow: number;
 }
 
-/** 退让顺序：观察员 → 审查进度逐档缩短 → “处理中” → 审查进度最短档 → 指挥官。 */
+/** 退让顺序：审查进度逐档缩短 → “处理中” → 审查进度最短档 → 指挥官。 */
 export function topBorder(width: number, parts: TopParts, line: Line): string {
 	const left = (word: boolean, review: string) => {
 		const head = [parts.mark, word ? parts.word : "", parts.elapsed].filter(Boolean).join(" ");
@@ -67,7 +66,6 @@ export function topBorder(width: number, parts: TopParts, line: Line): string {
 	const at = (word: boolean, review: string, ...items: string[]): BorderParts => [left(word, review), right(...items)];
 	const [full = "", ...shorter] = parts.review;
 	return fitBorder(width, line, parts.glow, [
-		at(true, full, parts.watcher, parts.master),
 		...[full, ...shorter].map((review) => at(true, review, parts.master)),
 		at(false, parts.review.at(-1) ?? "", parts.master),
 		at(false, "", parts.master),

@@ -19,7 +19,7 @@ export function citedTruth<T extends { file: string; line: number }>(truth: T[],
 
 /** 假的端到端套件：12 个场景串行，每个睡 secondsPerCase 秒；review-fail 与 compaction 两个失败。 */
 export const e2eScript = (secondsPerCase: number) => `#!/bin/bash
-cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill watcher-quiet quota-query herdr-label compaction)
+cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill statusbar-idle quota-query herdr-label compaction)
 failed=()
 for c in \${cases[@]}; do
 	echo "[e2e] $c ..."
@@ -56,7 +56,6 @@ const SEEDS: Seed[] = [
 	{ id: "S2", file: "session/quota.ts", from: "seconds % DAY_SECONDS === 0", to: "seconds % HOUR_SECONDS === 0", desc: "窗口标签：5 小时窗口被标成 0.2083…天" },
 	{ id: "S3", file: "session/stats.ts", from: "attributed.timestamp < from) continue", to: "attributed.timestamp > from) continue", desc: "/tokens N 天过滤反了：只统计窗口之外的旧记录" },
 	{ id: "SB1", file: "statusbar/render.ts", from: "n >= Math.min(titleWidth, TITLE_MIN); n--) yield at(clip(parts.title, n)", to: "n > Math.min(titleWidth, TITLE_MIN); n--) yield at(clip(parts.title, n)", desc: "标题从不裁到 TITLE_MIN 宽（文档：标题裁到 TITLE_MIN）" },
-	{ id: "W1", file: "watcher/index.ts", from: "(observer.contextPercent() ?? 0) >= CONTEXT_RESET_PERCENT", to: "(observer.contextPercent() ?? 100) >= CONTEXT_RESET_PERCENT", desc: "上下文占比未知时每次都重建观察会话" },
 ];
 
 function removeTests(dir: string): void {
