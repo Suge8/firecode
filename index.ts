@@ -11,7 +11,6 @@ import { msg } from "./messages.js";
 import { registerClaudeFiles } from "./provider/claude-files.js";
 import { registerClaudeSub } from "./provider/claude-sub.js";
 import { registerOpenAINative } from "./provider/openai-native/index.js";
-import { registerPresets } from "./session/presets.js";
 import { registerHerdrProjection } from "./session/herdr-projection.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
@@ -30,7 +29,6 @@ type SimpleFeature = Exclude<Feature, "review" | "master" | "openaiNative">;
 const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
 	tools: registerToolRendering,
-	presets: registerPresets,
 	stats: registerStats,
 	claudeSub: registerClaudeSub,
 	claudeFiles: registerClaudeFiles,
@@ -38,7 +36,7 @@ const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 };
 
 /** 只属于交互主会话的功能：子会话（Worker）没有界面与命令入口，注册了只会白占资源。 */
-const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats", "statusbar"]);
+const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "stats", "statusbar"]);
 
 /**
  * subsession：Worker 子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。

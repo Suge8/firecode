@@ -17,9 +17,9 @@ export function citedTruth<T extends { file: string; line: number }>(truth: T[],
 	return truth.filter((t) => cites.some((c) => (t.file.endsWith(c.file) || c.file.endsWith(t.file)) && c.lines.some((l) => Math.abs(l - t.line) <= LINE_SLACK)));
 }
 
-/** 假的端到端套件：12 个场景串行，每个睡 secondsPerCase 秒；review-fail 与 compaction 两个失败。 */
+/** 假的端到端套件：11 个场景串行，每个睡 secondsPerCase 秒；review-fail 与 compaction 两个失败。 */
 export const e2eScript = (secondsPerCase: number) => `#!/bin/bash
-cases=(boot preset-switch rename review-pass review-fail master-start master-steer master-kill statusbar-idle quota-query herdr-label compaction)
+cases=(boot rename review-pass review-fail master-start master-steer master-kill statusbar-idle quota-query herdr-label compaction)
 failed=()
 for c in \${cases[@]}; do
 	echo "[e2e] $c ..."

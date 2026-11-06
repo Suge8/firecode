@@ -1698,7 +1698,7 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {
 	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
-			features: await featuresOnly("header", "tools", "presets", "stats"),
+			features: await featuresOnly("header", "tools", "stats"),
 		}),
 	}) as { registerFirecode(pi: unknown, subsession: boolean): void };
 	const fake = fakePi();

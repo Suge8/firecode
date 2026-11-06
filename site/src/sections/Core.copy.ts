@@ -8,7 +8,7 @@ type Copy = {
 	/** 结论句按短语给出，方括号内为强调部分，{name} 处填最重的那个、{n} 处填倍数；中文每个短语占一行 */
 	punch: string[];
 	alsoTitle: string;
-	also: { preset: string; usage: string; rename: string; fast: string; login: string };
+	also: { usage: string; rename: string; fast: string; login: string };
 };
 
 export const copy = {
@@ -20,7 +20,6 @@ export const copy = {
 		punch: ["At its heaviest,", "{name} costs [{n}×]", "what FireCode does,", "on every request"],
 		alsoTitle: "Also in the box",
 		also: {
-			preset: "Switch model, thinking and tools in one go",
 			usage: "Usage at a glance",
 			rename: "Rename the session",
 			fast: "Toggle OpenAI Fast mode",
@@ -35,7 +34,6 @@ export const copy = {
 		punch: ["最重的时候", "{name} 每次请求的开销", "是 FireCode 的 [{n} 倍]"],
 		alsoTitle: "还有这些",
 		also: {
-			preset: "一键切换模型、思考档和工具",
 			usage: "随时看用量",
 			rename: "改会话名",
 			fast: "开关 OpenAI 加速档",

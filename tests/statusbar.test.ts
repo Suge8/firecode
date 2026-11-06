@@ -116,10 +116,6 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	fake.fire("agent_settled", {}, ctx);
 	expect(top()).not.toContain("处理中");
 
-	// 预设名由预设模块发布，外壳原样显示在标题之后、模型之前。
-	statuses.set("preset", "Deep");
-	expect(bottom()).toContain("Deep · test-model/medium Fast");
-
 	fake.fire("session_shutdown", {}, ctx);
 	expect(host.footer()).toBeUndefined();
 	expect(host.editor()).toBeUndefined();
@@ -146,17 +142,14 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
 });
 
-test("输入框边框按宽度退让：下边框先省容量、再让预设名、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
+test("输入框边框按宽度退让：下边框先省容量、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
 	const { bottomBorder } = await loadFirecodeModule("statusbar/render.js") as any;
 	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	const parts = { title: "修复登录态偶发失效", preset: "", model: "opus-4.7", think: "/high", fast: "", percent: "23%", capacity: "/1M" };
+	const parts = { title: "修复登录态偶发失效", model: "opus-4.7", think: "/high", fast: "", percent: "23%", capacity: "/1M" };
 	const line = (text: string) => text;
 	const draw = (width: number, over = {}) => stripVTControlCharacters(bottomBorder(width, { ...parts, ...over }, line));
 
 	for (const width of [110, 72]) expect(draw(width)).toMatch(/^─ 修复登录态偶发失效 ─{2,} opus-4\.7\/high · 23%\/1M ─$/u);
-	expect(draw(110, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} Deep · opus-4\.7\/high · 23%\/1M ─$/u);
-	expect(draw(52, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} Deep · opus-4\.7\/high · 23% ─$/u);
-	expect(draw(45, { preset: "Deep" })).toMatch(/^─ 修复登录态偶发失效 ─{2,} opus-4\.7\/high · 23% ─$/u);
 	expect(draw(40)).toMatch(/^─ 修复登录态偶… ─{2,} opus-4\.7\/high · 23% ─$/u);
 	expect(draw(26)).toMatch(/^─{3,} opus-4\.7\/high · 23% ─$/u);
 	expect(draw(26, { fast: "Fast" })).toMatch(/Fast · 23% ─$/u);

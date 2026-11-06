@@ -47,7 +47,6 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 		header: true,
 		statusbar: true,
 		tools: true,
-		presets: true,
 		stats: true,
 		claudeSub: false,
 		openaiNative: false,
@@ -55,7 +54,6 @@ const TEST_CONFIG_JSONC = JSON.stringify({
 		master: false,
 	},
 	keys: { fast: "ctrl+shift+s" },
-	presets: { deep: { model: "test/deep/high", key: "alt+1" } },
 	review: TEST_REVIEW_CONFIG,
 });
 
@@ -130,7 +128,7 @@ export async function firecodeModulePath(entry: string, options: LoadOptions = {
 }
 
 /**
- * 加载插件内某个模块，例如 `tools/index.ts`、`session/presets.ts`。
+ * 加载插件内某个模块，例如 `tools/index.ts`、`session/quota.ts`。
  * `configJsonc` 可覆写或移除测试 Agent 目录里的运行配置，用于验证配置边界。
  */
 export async function loadFirecodeModule(entry: string, options: LoadOptions = {}): Promise<Record<string, unknown>> {
