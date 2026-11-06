@@ -294,3 +294,128 @@ test("带摘要的 /tree 切换被取消后 deliver 不悬挂：照常唤起一�
 		session.dispose();
 	}
 }, 15_000);
+
+// 指挥官在回合里被中止（Esc、流式中断、/compact 开头的中止）后，在途的投递不能丢、不能重、也不能卡到用户下次输入。
+const STALLED_EVENT = "<firecode_master_event>\nworker done\n</firecode_master_event>";
+const messageText = (message: any) => typeof message.content === "string"
+	? message.content
+	: message.content?.map((part: any) => part.text ?? "").join("") ?? "";
+const eventCount = (messages: string[]) => messages.filter((text) => text === STALLED_EVENT).length;
+
+/** 工具卡在闸门上：测试在工具执行中放闸；`__deliverNow` 由测试或首个工具开始时调用，只投一次。 */
+const gatedExtension = (armOnTool: boolean) => `
+import { deliver, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+export default function (pi) {
+	let sent = false;
+	pi.on("session_start", (_event, ctx) => {
+		globalThis.__deliverNow = () => {
+			if (sent) return;
+			sent = true;
+			globalThis.__sent = true;
+			void deliver(pi, ctx, { customType: "firecode-master-event", content: wrapEnvelope("firecode_master_event", "worker done") });
+		};
+	});
+	${armOnTool ? 'pi.on("tool_execution_start", () => globalThis.__deliverNow());' : ""}
+}`;
+
+function stalledSession(source: string, responses: unknown[], settings?: unknown) {
+	const gate = Promise.withResolvers<void>();
+	const requests: string[][] = [];
+	const gatedTool = {
+		...waitTool,
+		execute: async () => { await gate.promise; return { content: [{ type: "text", text: "tool completed" }], details: {} }; },
+	};
+	const record = (reply: unknown) => async (context: any) => {
+		requests.push(context.messages.map(messageText));
+		return typeof reply === "function" ? (reply as () => unknown)() : reply;
+	};
+	return hostSession(source, responses.map(record), { tools: ["contract_wait"], customTools: [gatedTool] }, settings)
+		.then((session) => ({ session, requests, gate }));
+}
+
+/** 事件没等用户输入就到达模型，最后一次请求里恰好一份；用户随后再发话也不重复。 */
+async function expectDeliveredOnce(session: any, requests: string[][]) {
+	await until(() => requests.some((request) => request.includes(STALLED_EVENT)));
+	await session.waitForIdle();
+	expect(eventCount(requests.at(-1)!)).toBe(1);
+	await session.prompt("user follows up");
+	expect(eventCount(requests.at(-1)!)).toBe(1);
+}
+
+const idle = (text: string) => fauxAssistantMessage(text);
+
+test("指挥官在跑工具时有投递到达，随即清队列并中止（Esc）：事件自动开回合送达，恰好一次", async () => {
+	const { session, requests, gate } = await stalledSession(gatedExtension(true), [toolCallResponse, idle("a"), idle("b"), idle("c")]);
+	try {
+		await session.bindExtensions({ mode: "print" });
+		const run = session.prompt("go");
+		await until(() => (globalThis as any).__sent);
+		session.clearQueue();
+		const aborting = session.abort();
+		gate.resolve();
+		await aborting;
+		await run.catch(() => {});
+		await expectDeliveredOnce(session, requests);
+	} finally {
+		delete (globalThis as any).__deliverNow;
+		delete (globalThis as any).__sent;
+		session.dispose();
+	}
+}, 10_000);
+
+test.each(["工具执行中", "模型流式输出中"])("回合被中止而队列没清（%s）：不等用户输入自动唤醒，恰好一次", async (phase) => {
+	const streaming = phase === "模型流式输出中";
+	const stream = Promise.withResolvers<void>();
+	const { session, requests, gate } = await stalledSession(gatedExtension(!streaming), [
+		toolCallResponse,
+		streaming ? async () => { await stream.promise; return idle("late"); } : idle("a"),
+		idle("b"), idle("c"), idle("d"),
+	]);
+	try {
+		await session.bindExtensions({ mode: "print" });
+		if (streaming) gate.resolve();
+		const run = session.prompt("go");
+		if (streaming) {
+			await until(() => requests.length === 2);
+			(globalThis as any).__deliverNow();
+		} else {
+			await until(() => (globalThis as any).__sent);
+		}
+		const aborting = session.abort();
+		gate.resolve();
+		stream.resolve();
+		await aborting;
+		await run.catch(() => {});
+		await expectDeliveredOnce(session, requests);
+	} finally {
+		delete (globalThis as any).__deliverNow;
+		delete (globalThis as any).__sent;
+		session.dispose();
+	}
+}, 10_000);
+
+test("回合中执行 /compact：压缩落定后才唤醒，事件在压缩后的上下文里恰好一次", async () => {
+	const { session, requests, gate } = await stalledSession(gatedExtension(true), [
+		idle("ok 1"), idle("ok 2"), toolCallResponse, () => idle("SUMMARY"), () => idle("SUMMARY 2"), idle("handled"), idle("after"),
+	], { compaction: { enabled: false, keepRecentTokens: 5 } });
+	try {
+		await session.bindExtensions({ mode: "print" });
+		const armed = (globalThis as any).__deliverNow;
+		(globalThis as any).__deliverNow = () => {};
+		for (let turn = 1; turn <= 2; turn++) await session.prompt(`message ${turn} ${"word ".repeat(200)}`);
+		(globalThis as any).__deliverNow = armed;
+		const run = session.prompt("go");
+		await until(() => (globalThis as any).__sent);
+		const compacting = session.compact();
+		gate.resolve();
+		await compacting;
+		await run.catch(() => {});
+		requests.length = 0;
+		await expectDeliveredOnce(session, requests);
+		expect(session.sessionManager.getBranch().some((entry: any) => entry.type === "compaction")).toBe(true);
+	} finally {
+		delete (globalThis as any).__deliverNow;
+		delete (globalThis as any).__sent;
+		session.dispose();
+	}
+}, 15_000);
