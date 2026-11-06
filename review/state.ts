@@ -8,7 +8,7 @@
  * 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 summarizing：投递一个总结回合
  * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合；事故发生在 summarizing 时只跳过总结，保留质量裁决
- *（checkpoint 封存同一规则，见 sealedEnd）。
+ *（checkpoint 封存同一规则，见 sealed）。
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
@@ -398,11 +398,18 @@ function skipSummary(state: ReviewState, now: number, effects: ReviewEffect[]): 
 }
 
 /**
- * 不经事件直接封存（关闭 review 后遗留的活动存档、持久化失败后的补写）时的结局：已落定的保留，
- * 总结相保留质量裁决（与总结相收到取消同一规则），其余按取消。
+ * 不经事件直接封存（关闭 review 后遗留的活动存档、持久化失败后的补写）成的终态，history 截到已落盘的 persisted 轮：
+ * 已落定的保留，总结相保留质量裁决（与总结相收到取消同一规则），其余按取消；
+ * 有轮没落盘时一律取消——结局所依的那轮随审查放弃，它的结果卡也没发出（效果在落盘成功后才执行）。
  */
-export function sealedEnd(state: ReviewState): SettledEnd {
-	return state.phase === "settled" ? state.end : state.phase === "summarizing" ? summaryEnd(state) : "cancelled";
+export function sealed(state: ReviewState, persisted: number, now: number): ReviewState {
+	const history = state.history.slice(0, persisted);
+	if (history.length < state.history.length) return go(state, now, { phase: "settled", end: "cancelled" }, { history });
+	if (state.phase === "settled") {
+		const { end, error, retry } = state;
+		return go(state, now, { phase: "settled", end, ...(error === undefined ? {} : { error }), ...(retry ? { retry } : {}) });
+	}
+	return go(state, now, { phase: "settled", end: state.phase === "summarizing" ? summaryEnd(state) : "cancelled" });
 }
 
 function elapsedSince(state: ReviewState, now: number): number {
