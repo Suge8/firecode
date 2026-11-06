@@ -6,6 +6,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";
 import { retryAt, transientFailure } from "../model-route.js";
+import { delayUntil } from "../timing.js";
 import { roundFromEntry } from "../round.js";
 import { MASTER_EVENT_TYPE, masterEvent, withElapsed, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
@@ -98,19 +99,25 @@ export class Outbox {
 			return;
 		}
 		this.resumeFailures++;
-		const delay = retryAt(reason, this.resumeFailures, this.active.setup.pool.timing.cooldownMs) - Date.now();
+		this.wakeAt(retryAt(reason, this.resumeFailures, this.active.setup.pool.timing.cooldownMs), reason);
+	}
+
+	/** 到 at 补唤醒：at 可能远超计时上限，提前触发就按同一个 at 重挂（不重算 retryAt，“N 分钟后重置”会随之后移）。 */
+	private wakeAt(at: number, reason: string): void {
 		this.resumeTimer = setTimeout(() => {
 			this.resumeTimer = undefined;
 			const { active } = this;
+			if (active.closed) return;
+			if (Date.now() < at) return this.wakeAt(at, reason);
 			// 忙着就不补：那个回合落定时会再判一次。
-			if (active.closed || !active.ctx.isIdle() || strandedFailure(active.ctx) === undefined) return;
+			if (!active.ctx.isIdle() || strandedFailure(active.ctx) === undefined) return;
 			const content = wrapEnvelope("firecode_master_event", masterEvent.masterResume(reason).body);
 			deliver(active.setup.pi, active.ctx, { customType: MASTER_EVENT_TYPE, content }, this.closing.signal).catch((error) => {
 				if (active.closed) return;
 				active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
 				this.resumeIfStranded();
 			});
-		}, Math.max(0, delay));
+		}, delayUntil(at));
 		this.resumeTimer.unref?.();
 	}
 
