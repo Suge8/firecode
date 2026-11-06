@@ -4,6 +4,8 @@
  * 闲置已超过缓存过期线且会话末端没变，就经宿主 ctx.compact 把它作为一次压缩应用（压缩钩子交出这份摘要，持久化与事件仍是宿主的），
  * 再发请求；否则丢弃。指挥官给暂停的子代理续跑时直接投自定义消息、不经这两处，那次请求开回合时预算作废、照常发出。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
  *
+ * 宿主设置 compaction.enabled=false 的会话不碰（预算与应用都不做）：用户关掉压缩就是要保留原文。
+ *
  * 不当场算：进程重启后没有预算好的摘要就照常走；请求到达时预算还在飞，作废预算。上下文不到 MIN_CONTEXT_TOKENS 不预算。
  * 原生压缩接管的会话不碰（见 openai-native 的 nativeTakesOver）。
  *
@@ -89,7 +91,9 @@ export class IdleCompaction {
 		const tokensBefore = ctx.getContextUsage()?.tokens ?? (lastUsage ? calculateContextTokens(lastUsage) : 0);
 		if (idleSince === undefined || !ctx.isIdle() || tokensBefore < MIN_CONTEXT_TOKENS) return;
 		if (nativeTakesOver(branch, physicalModel(ctx.model), nativeCompactionEnabled())) return;
-		const preparation = idlePreparation(branch, this.settings(ctx), tokensBefore);
+		const settings = this.settings(ctx);
+		if (!settings.enabled) return;
+		const preparation = idlePreparation(branch, settings, tokensBefore);
 		if (!preparation) return;
 		const leafId = ctx.sessionManager.getLeafId();
 		const controller = this.computing = new AbortController();
@@ -108,7 +112,7 @@ export class IdleCompaction {
 		if (!ctx.isIdle()) return;
 		const ready = this.ready;
 		this.reset();
-		if (!ready || Date.now() - ready.idleSince < this.pool.timing.cacheTtlMs || ctx.sessionManager.getLeafId() !== ready.leafId) return;
+		if (!ready || !this.settings(ctx).enabled || Date.now() - ready.idleSince < this.pool.timing.cacheTtlMs || ctx.sessionManager.getLeafId() !== ready.leafId) return;
 		this.current = ready;
 		try {
 			const result = await new Promise<CompactionResult>((resolve, reject) => ctx.compact({ onComplete: resolve, onError: reject }));

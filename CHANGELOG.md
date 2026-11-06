@@ -31,11 +31,16 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - Workers now compact at the threshold Pi's settings give the model they are actually running on. A Worker's session model is FireCode's routing model, so a `compaction.modelOverrides` entry for, say, `anthropic/claude-opus-5-5` never matched and Workers fell back to the default reserve: a Claude Worker with a 1M window and a 650k reserve compacted near 950k instead of 350k. Reserve and keep-recent tokens now follow the routed model, also after the chain switches models, for automatic compaction, `/compact` and idle compaction. Settings still live only in Pi's `settings.json`.
-
 - A review no longer settles on someone else's turn. When another extension sent a message while a turn was wrapping up, Pi ran that extension's turn first, and the review took it for its own repair or summary turn: the summary was skipped and the review settled early, or the next review round started before the repair feedback had been delivered. A plugin message now counts as delivered only when that exact message enters a turn.
 - If writing a review round failed, the review was cancelled but its saved state still counted the unwritten round, so reopening the session reported the review record as corrupt. The saved state now counts only the rounds actually written.
 - A review that had already passed, been stopped by the advisor or run out of rounds is no longer recorded as cancelled when its saved state is closed without it: after you turn `/fire-review` off and restart, or after a failed write. Before, the Master read such a review as cancelled; it now keeps the verdict, as cancelling during the summary already did.
 - `/fire-review --cancel` during the review's wrap-up summary used to do nothing visible. It now says that the review stopped waiting for the summary and that its verdict stands; the verdict is not changed to cancelled.
+- A Worker's automatic resume after a pause now holds in three more cases: an `ack` sent while the resume is being prepared cancels it instead of the resume starting anyway; the Master is told "paused" once per run, also across reloads; and a reset time more than about 24.8 days away no longer makes the resume fire at once and loop. The Master's own wake-up after a transient failure had the same timer overflow and is fixed too.
+- A Worker that resumes after a pause longer than the stall limit (30 minutes by default) is no longer reported as stalled the moment it resumes; silence is counted from the start of the resumed turn.
+- Review: when a reviewer seat had no usable verdict in an intermediate round, the next round now still starts from the model that last gave it a verdict, instead of retrying an invalid-format first choice again.
+- Claude image uploads: when Anthropic keeps reporting an uploaded file as missing, FireCode now re-uploads and retries at most once per turn instead of looping.
+- Idle compaction now respects Pi's `compaction.enabled` setting: with compaction turned off, FireCode no longer prepares or applies an idle summary, so your full context is kept.
+- A retry after "model chain exhausted" no longer hands the request back to a model that is still cooling down; the turn ends as paused until a model recovers.
 
 ## [1.8.0] - 2026-11-05
 

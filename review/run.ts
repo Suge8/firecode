@@ -299,9 +299,10 @@ export class Run {
 		await Promise.all(state.slots.map((slot, index) => (slot.result ? undefined : this.review(index, slot, prompt, signal))));
 	}
 
-	/** history 只含本场审查的轮（新一场从空开始，reload 从轮记录补回），末轮就是本场的上一轮。 */
+	/** history 只含本场审查的轮（新一场从空开始，reload 从轮记录补回）；偏好取该席位最近一次给出结论的模型，中间轮缺席不丢。 */
 	private async review(index: number, _slot: ReviewerSlot, prompt: PromptLayers, signal: AbortSignal): Promise<void> {
-		const lastVoter = this.state.history.at(-1)?.reviewers.find((item) => item.index === index && item.status !== "error")?.model;
+		const lastVoter = this.state.history.findLast((round) => round.reviewers.some((item) => item.index === index && item.status !== "error"))
+			?.reviewers.find((item) => item.index === index)?.model;
 		const result = await runReviewer({ index, config: this.modelConfig(this.config.reviewers[index]), prompt, cwd: this.ctx.cwd, signal, pool: this.host.pool, lastVoter });
 		if (!signal.aborted) this.dispatch({ type: "REVIEWER_SETTLED", index, result });
 	}

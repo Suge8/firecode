@@ -286,13 +286,14 @@ export async function createModelRoute(
 	};
 	runtime.registerVirtualModel({ provider, id, name: "FireCode", thinkingLevels: THINKING_LEVELS,
 		route: async (request) => {
-			// 宿主重试的是路由自己抛的“链已用尽”时没有 failed：重新选（冷却期内照旧抛），不把刚冷却的模型再交出去——
-			// 否则报错文本命中宿主的可重试模式时，重试与续跑交替，整条链冷却期间也在同一回合里无限循环。
+			// 带 failed 的重试是真实请求失败后的宿主短重试，留在原模型。没有 failed 的重试只可能是路由自己抛的“链已用尽”：
+			// 一律从链首重选（冷却期内照旧抛），不能沿用 state.current——它多半正是刚冷却的那个，
+			// 交出去既必败又让冷却阶梯多升一级，报错文本命中宿主可重试模式时还会在同一回合里反复循环。
 			if (request.reason === "retry" && request.failed && state.current) {
 				if (task.phase === "pending") task = { ...task, phase: "running" };
 				return { model: state.current.model, thinkingLevel: state.current.thinking };
 			}
-			return choose(request.reason === "direct" ? task.phase === "idle" : task.phase === "pending" && request.reason !== "retry");
+			return choose(request.reason === "direct" ? task.phase === "idle" : request.reason === "retry" || task.phase === "pending");
 		},
 	});
 	const model = runtime.getModel(provider, id);

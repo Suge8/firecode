@@ -187,12 +187,14 @@ test.each([
 	expect(sessionRequests(requests).at(-1)!.model).toBe(chain.at(-1)!.slice("test/".length));
 });
 
+/** 闲置压缩只对未关闭压缩的会话生效，setup 默认关着。 */
+const ENABLED = { compaction: { enabled: true, keepRecentTokens: 200 } };
 const IDLE = { cacheTtlMs: 900, idleCompactionLeadMs: 700 };
 const sessionRequests = (requests: Request[]) => requests.filter((request) => !request.summary);
 
 /** 一大轮加一小轮对话后歇下（保留段之前要有可摘要的内容），等预算摘要的请求发出并落定。 */
 async function idleSession(timing = IDLE) {
-	const harness = await setup({ background: { model: [LUNA] }, timing });
+	const harness = await setup({ background: { model: [LUNA] }, timing, settings: ENABLED });
 	await harness.session.prompt(`big ${HUGE}`);
 	await harness.session.prompt(`follow-up ${"word ".repeat(400)}`);
 	await until(() => summaries(harness.requests).length === 1);
@@ -235,7 +237,7 @@ test("闲置期间会话末端变了：过期后也不应用，请求带完整�
 });
 
 test("子会话闲置超过缓存过期线：下一次请求同样从预算好的摘要开始", async () => {
-	const { pool, requests, cwd } = await setup({ background: { model: [LUNA] }, timing: IDLE });
+	const { pool, requests, cwd } = await setup({ background: { model: [LUNA] }, timing: IDLE, settings: ENABLED });
 	const spawned = await pool.spawn({
 		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
 		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },

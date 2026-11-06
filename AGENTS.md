@@ -18,7 +18,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `background/` | 后台小模型：`background.model` 是进展行、压缩摘要与闲置压缩唯一的模型来源；压缩摘要沿用 pi 的 preparation 与提示词只换模型（主会话与子会话），闲置压缩在缓存过期后的下一次请求前应用预先算好的摘要（主会话与子会话）；与原生压缩的先后在 `registerOpenAINative`，约定见各文件头注释 | |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
-| `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
+| `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并续跑（同一轮最多一次），历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
 | `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环加整体超时 | |
