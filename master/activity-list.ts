@@ -95,7 +95,7 @@ interface WorkerPhase {
 	startedAt?: number;
 	settledAt?: number;
 	quietMs?: number;
-	/** working 且没卡住时的进展行；名册与停摆事件只读 action，不受它影响。 */
+	/** working 且没卡住时的进展行（已替进 action）；全过程视图头部另外单独显示它。 */
 	summary?: string;
 }
 
@@ -110,9 +110,11 @@ export function workerPhase(facts: ActivityFacts, index: number, now: number): W
 		const quietMs = now - Math.max(startedAt ?? now, facts.quietSince.get(path) ?? 0);
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
-		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
+		// 进展行有就替代工具动作，活动列表与名册同一条规则。卡住时照常显示工具（用户要知道卡在哪条命令上），只追加提醒；
+		// 停摆事件只在卡住时发，读到的总是工具动作。前台长命令同样按无输出计时。
 		const stuck = quietMs >= facts.stallMs;
-		return { kind: stuck ? "stuck" : "running", action, startedAt, quietMs, ...(stuck ? {} : { summary: facts.progress.get(path) }) };
+		const summary = stuck ? undefined : facts.progress.get(path);
+		return { kind: stuck ? "stuck" : "running", action: summary ?? action, startedAt, quietMs, ...(summary === undefined ? {} : { summary }) };
 	}
 	if (worker.status === "reviewing") {
 		const progress = facts.reviewProgress.get(path);
@@ -137,7 +139,7 @@ export function rowState(facts: ActivityFacts, index: number, now: number, theme
 	switch (kind) {
 		// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
 		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(quietMinutes(quietMs!)) } };
-		case "running": return { kind, summary, row: { ...base, action: summary ?? action, mark: flame(1, phase) } };
+		case "running": return { kind, summary, row: { ...base, mark: flame(1, phase) } };
 		case "review": return { kind, row: { ...base, mark: reviewMark(phase), tone: "review" } };
 		// 静止的一行：没有在跑的耗时，等的是续跑时刻。
 		case "paused": return { kind, row: { ...base, elapsed: "", mark: theme.fg("dim", PAUSED_GLYPH), settled: true } };

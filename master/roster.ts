@@ -21,7 +21,7 @@ export interface SubagentInfo {
 	model: string;
 	thinking: string;
 	state: SubagentState;
-	/** 在做什么的一句话（界面语言）：当前工具、审查进度，落定后是结果首句或失败原因；空闲为空串。 */
+	/** 在做什么的一句话（界面语言）：在跑时是进展行，没有就是当前工具（与活动列表的在跑行同一条规则）；审查进度；落定后是结果首句或失败原因；空闲为空串。 */
 	action: string;
 	/** 本次运行开始（Date.now 毫秒）；空闲且没有运行过时没有。 */
 	startedAt?: number;
