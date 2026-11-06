@@ -43,7 +43,7 @@
 - **过程列表**（Process List）：一轮展开后的列表；避免：完整展开、第三档
 - **中间回复**（Interim Reply）→ `tools/group-view.ts` 的 `REPLY_LINES`；避免：中途正文
 - **活动列表**（Activity List）→ `master/activity-list.ts`；避免：任务面板、状态栏
-- **进展行**（Progress Line）→ `master/progress.ts`；后台模型据新输出写的一句“在做什么”，只给人看；避免：摘要、状态播报
+- **进展行**（Progress Line）→ `master/progress.ts`；后台模型据新输出写的一句“在做什么”，只给人看（终端与经名册的 CuePad）；避免：摘要、状态播报
 - **卡住**（Stalled）→ 活动列表的展示信号，不改子代理状态；避免：超时、挂起、失败
 - **展示标题**（Display Title）→ `statusbar/`；不等于用户设置的会话名；避免：自动重命名、会话名
 

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Sub-agent progress lines now reach the `firecode:subagents` roster as well, so other extensions such as CuePad show the same "what it is doing" line as the terminal activity list instead of the raw tool command. A stuck sub-agent still shows the command it is stuck on.
+
 ## [1.10.0] - 2026-11-06
 
 ### Added

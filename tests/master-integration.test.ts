@@ -399,6 +399,8 @@ test("进展行：运行满时限出第一句（只取首行），没有新输�
 	await harness.execute({ action: "start", worker: "builder", prompt: "修复构建", role: "工程师" });
 	await until(() => harness.activity().some((line) => line.includes("正在跑构建，确认改动能编译")), 3_000);
 	expect(harness.activity().join("\n")).not.toMatch(/多余的一行|「/u);
+	// 名册（CuePad 等扩展读的）与活动列表同一句。
+	await until(() => harness.emitted.some(([channel, payload]) => channel === "firecode:subagents" && payload.workers[0]?.action === "正在跑构建，确认改动能编译"), 1_000);
 	// 第一条命令还在跑、没有任何新输出：过了一个间隔也不再调用。
 	await Bun.sleep(800);
 	expect(calls()).toBe(1);
