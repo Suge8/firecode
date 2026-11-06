@@ -63,8 +63,6 @@ export interface WorkerLive {
 	interruptTimer?: NodeJS.Timeout;
 	/** 暂停后的自动续跑计时（档案里的 resume.at）：run.ts 的 armResume。 */
 	resumeTimer?: NodeJS.Timeout;
-	/** 这次运行的暂停已告知指挥官：续跑后再次暂停不重复告知，指挥官起新运行时清掉。 */
-	pauseNotified?: true;
 	/** 本次运行（start/send/review 投递）的起点：活动列表的实时耗时，以及从子代理会话里挑出属于这次运行的轮记录。 */
 	runStartedAt?: number;
 	/** 这次运行里用户在子代理全过程视图直接说的话；落定事件据此注明来源。 */
@@ -246,7 +244,6 @@ export class MasterRuntime {
 	beginRun(name: string, origin: RunOrigin = "master", prompt?: string): void {
 		const live = this.liveOf(name);
 		this.cancelTimers(live);
-		live.pauseNotified = undefined;
 		live.runStartedAt = Date.now();
 		live.interruptedReview = undefined;
 		live.viewPrompts = [];

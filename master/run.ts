@@ -12,6 +12,7 @@ import { modelAtomText, type ThinkingLevelValue } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, oneLine, textOf, tildeHome } from "../format.js";
 import { routePause, type ChainPause } from "../model-route.js";
+import { delayUntil } from "../timing.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { quietMinutes, workerPhase } from "./activity-list.js";
 import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
@@ -219,16 +220,18 @@ function landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
 	return { ...worker, status: "idle" };
 }
 
-/** 瞬时故障暂停：回到 idle 并记下续跑时刻；这次运行第一次暂停时告知指挥官（不唤醒），到时 armResume 自动续跑。 */
+/**
+ * 瞬时故障暂停：回到 idle 并记下续跑时刻；这次运行第一次暂停时告知指挥官（不唤醒），到时 armResume 自动续跑。
+ * “已告知过”只读档案：resume 从第一次暂停起留到这次运行落定（自动续跑不清、reload 不丢，指挥官接手才清），
+ * 所以暂停前档案已带 resume 就是同一次运行里的再次暂停。
+ */
 function pauseWorker(active: MasterRuntime, identity: WorkerRef, pause: ChainPause, review = false): void {
 	const current = active.find(identity);
 	if (!current) return;
 	const paused: WorkerRef = { ...current, status: "idle", resume: { at: pause.until, reason: pause.reason, ...(review ? { review: true as const } : {}) } };
 	active.store.upsert(paused);
 	active.markIdle(paused, undefined);
-	const live = active.liveOf(identity.name);
-	if (!live.pauseNotified) {
-		live.pauseNotified = true;
+	if (!current.resume) {
 		active.outbox.enqueue(masterEvent.paused(identity.name, pause.until, pause.reason, review), identity.name, true);
 	}
 	armResume(active, paused);
@@ -242,8 +245,10 @@ export function armResume(active: MasterRuntime, worker: WorkerRef): void {
 	clearTimeout(live.resumeTimer);
 	live.resumeTimer = setTimeout(() => {
 		live.resumeTimer = undefined;
-		if (!active.closed && active.live.get(worker.name) === live) void resumeWorker(active, worker, resume);
-	}, Math.max(0, resume.at - Date.now()));
+		if (active.closed || active.live.get(worker.name) !== live) return;
+		if (Date.now() < resume.at) armResume(active, worker);
+		else void resumeWorker(active, worker, resume);
+	}, delayUntil(resume.at));
 	live.resumeTimer.unref?.();
 }
 
@@ -265,6 +270,7 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 		const session = await openWorkerSession(active, current);
 		await session.waitForIdle();
 		active.assertOpen();
+		if (resumeSuperseded(active, current, resume)) return;
 		// resume 留到落定：续跑中被 reload 打断时载入收敛回暂停再续（state.ts）。
 		const working = active.commit(current, (latest) => ({ ...latest, status: "working" }));
 		live.runStartedAt ??= Date.now();
@@ -285,6 +291,17 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 }
 
 /**
+ * 续跑准备越过 await 后的核对：档案已不是这次暂停（准备期间指挥官 ack 清掉了 resume）就放弃续跑，
+ * 补回 openWorkerSession 取消的释放计时。ack 不等准备结束、也不拒绝：取消还没开跑的续跑正是它的承诺，写回方让路。
+ * 票被 kill 时 current 抛错，由调用方的失败路径放弃。
+ */
+function resumeSuperseded(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): boolean {
+	if (active.current(identity).resume?.at === resume.at) return false;
+	active.setup.pool.markIdle(identity.sessionPath);
+	return true;
+}
+
+/**
  * 在原 Worker 会话里发起 fire-review（review 动作与暂停后的续审共用）。续审沿用暂停前的运行起点与来源。
  * 先写档案再挂订阅：kill 或会话关闭时 commit 抛错，不会给已删的票留下订阅。
  */
@@ -292,6 +309,7 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	const session = await openWorkerSession(active, target);
 	await session.waitForIdle();
 	active.assertOpen();
+	if (resumed && resumeSuperseded(active, target, target.resume!)) return;
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 	// 指挥官发起的审查接手了这票，清掉续跑意图；自动续审保留到落定（同 resumeWorker）。
 	active.commit(target, ({ interruptedAt: _interruptedAt, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
