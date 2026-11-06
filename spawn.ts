@@ -108,6 +108,8 @@ interface PoolEnvironment {
 /** 全插件唯一的进程内子会话入口：模型解析、单写者登记与热会话生命周期都在这里。 */
 export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
+	/** 已摘出 held、session_shutdown 还在收口的落盘会话：同一路径的 spawn 等它落定（单写者登记此时才放开）。 */
+	private readonly releasing = new Map<string, Promise<void>>();
 	private runtime?: Promise<ModelRuntime>;
 	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
 	readonly timing: Timing;
@@ -148,6 +150,10 @@ export class InProcessSessionPool {
 
 	async spawn(options: SpawnSessionOptions): Promise<SpawnedSession> {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
+		// 空闲释放收口期间重开同一会话（send、自动续跑）是正当的接续：等那次释放落定（成败都行，登记在 finally 里放开），
+		// 而不是撞上还没放开的单写者登记报“已持有”。落定后的登记检查与占位仍在同一同步段，并发 spawn 照样只放行一个。
+		const releasing = sessionPath && this.releasing.get(sessionPath);
+		if (releasing) await releasing.then(() => undefined, () => undefined);
 		if (sessionPath && SESSION_WRITERS.has(sessionPath))
 			throw new Error(msg.spawn.held(sessionPath));
 		if (options.persistence.type === "file" && options.persistence.resume && !existsSync(sessionPath!))
@@ -273,7 +279,8 @@ export class InProcessSessionPool {
 
 	/** 镜像宿主替换会话的顺序：先 session_shutdown 让扩展收口，再 dispose 作废上下文。 */
 	private release(held: HeldSession): Promise<void> {
-		held.releasing ??= (async () => {
+		if (held.releasing) return held.releasing;
+		held.releasing = (async () => {
 			this.clearTimer(held);
 			if (this.held.get(held.key) === held) this.held.delete(held.key);
 			try {
@@ -289,7 +296,15 @@ export class InProcessSessionPool {
 				}
 			}
 		})();
-		return held.releasing;
+		const { sessionPath, releasing } = held;
+		if (sessionPath) {
+			this.releasing.set(sessionPath, releasing);
+			const settled = () => {
+				if (this.releasing.get(sessionPath) === releasing) this.releasing.delete(sessionPath);
+			};
+			void releasing.then(settled, settled);
+		}
+		return releasing;
 	}
 
 	private clearTimer(held: HeldSession): void {

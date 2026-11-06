@@ -82,7 +82,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		pi.setActiveTools(active ? [...tools, ...MASTER_TOOLS] : tools);
 	};
 	/**
-	 * 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt，这里补挂续跑提醒、按档案重挂暂停的自动续跑，
+	 * 激活（含 reload 恢复）：载入档案时在飞状态已收敛为 idle + interruptedAt + reloadInterrupted，这里按标记补挂续跑提醒、按档案重挂暂停的自动续跑，
 	 * 重投未确认事件，并重判上一回合是否因瞬时故障留下没处理的事件。
 	 */
 	const activate = async (ctx: ExtensionContext): Promise<void> => {
@@ -93,9 +93,11 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		if (active.store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(msg.command.legacyPool(active.store.discardedLegacyVersion), "warning");
 		active.render();
-		// 只有本次载入收敛的子代理是被重载打断的；指挥官自己 interrupt 的、早已提醒过的不再提醒。
-		for (const name of active.store.recovered) armInterruptReminder(active, active.store.require(name));
-		for (const worker of active.store.workers) armResume(active, worker);
+		// 只有带 reloadInterrupted 的票是被重载打断、还没提醒的；指挥官自己 interrupt 的、早已提醒过的不再提醒。
+		for (const worker of active.store.workers) {
+			armInterruptReminder(active, worker);
+			armResume(active, worker);
+		}
 		active.outbox.replayUnacked(ctx);
 		active.outbox.resumeIfStranded();
 	};

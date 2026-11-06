@@ -126,6 +126,7 @@ export const msg = defineMessages({
 		runtime: {
 			replaced: "Master 会话已替换，取消旧会话动作",
 			killed: (name: string) => `${name} 已被 kill，取消本次动作`,
+			detachedFailed: (name: string, error: string) => `${name} 的状态没能更新：${error}`,
 		},
 		guard: (path: string) => `子代理只能修改当前 checkout 或系统临时目录：${path}`,
 		state: {
@@ -307,6 +308,7 @@ export const msg = defineMessages({
 		runtime: {
 			replaced: "The Master session has been replaced; cancelling the old session's action",
 			killed: (name: string) => `${name} was killed; cancelling this action`,
+			detachedFailed: (name: string, error: string) => `Couldn't update the state of ${name}: ${error}`,
 		},
 		guard: (path: string) => `Workers may only modify the current checkout or the system temp directory: ${path}`,
 		state: {
