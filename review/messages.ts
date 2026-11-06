@@ -99,6 +99,7 @@ export const msg = defineMessages({
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint 写入失败，已停止审查：${reason}`,
 			cannotSeal: "fire-review 无法写入终态，重启后可能恢复这场审查，到时按 esc 取消。",
 			cancelled: "审查已取消\n已按你的操作停止",
+			summarySkipped: "已停止等待总结\n审查结论保留，不记为取消",
 		},
 		failure: {
 			reviewerSession: (reason: string) => `${zhReviewerBroken}\n\n审查会话异常：${reason}`,
@@ -228,6 +229,7 @@ export const msg = defineMessages({
 			checkpointWriteFailed: (reason: string) => `fire-review checkpoint write failed; review stopped: ${reason}`,
 			cannotSeal: "fire-review could not seal the checkpoint; a restart may resume this review — cancel it with esc.",
 			cancelled: "Review cancelled\nStopped by user",
+			summarySkipped: "Stopped waiting for the summary\nThe review verdict stands and is not recorded as cancelled",
 		},
 		failure: {
 			reviewerSession: (reason: string) => `${enReviewerBroken}\n\nreviewer session error: ${reason}`,

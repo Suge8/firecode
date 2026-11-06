@@ -13,7 +13,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isRecord } from "../jsonc.js";
-import { PHASES, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
+import { PHASES, sealed, SETTLED_ENDS, TURN_STATUSES, type ReviewRound, type ReviewState } from "./state.js";
 
 const CHECKPOINT_TYPE = "firecode-review-checkpoint";
 const ROUND_TYPE = "firecode-review-round";
@@ -53,9 +53,9 @@ export class CheckpointWriter {
 		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state) });
 	}
 
-	/** 终态封存（按取消收尾）：只追加一条快照，历史截到已落盘的轮；写不进去时抛错，调用方处理。 */
+	/** 终态封存：只追加一条快照，终态与历史截断规则见 state.ts 的 sealed；写不进去时抛错，调用方处理。 */
 	seal(state: ReviewState): void {
-		this.write({ ...state, phase: "settled", end: "cancelled", history: state.history.slice(0, this.written), updatedAt: Date.now() } as ReviewState);
+		this.write(sealed(state, this.written, Date.now()));
 	}
 }
 

@@ -6,7 +6,8 @@ import { reviewerName, roundText } from "./state.js";
 
 /**
  * 对外中止一场进行中的审查：在审查所在的会话里执行这条命令（`session.prompt`）。走用户取消的同一条路径——
- * 结局记为取消、终态 checkpoint 照写、在途审查会话与投递中止；该会话没有进行中的审查时只提示，不留拒绝记录。
+ * 结局记为取消、终态 checkpoint 照写、在途审查会话与投递中止；已到总结相（已有质量裁决）时只跳过总结，
+ * 结局保留通过/顾问叫停/轮数用尽并提示用户；该会话没有进行中的审查时只提示，不留拒绝记录。
  * Master 的 interrupt 对审查中的子代理用它。
  */
 export const CANCEL_REVIEW_ARG = "--cancel";

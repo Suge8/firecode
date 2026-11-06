@@ -145,6 +145,7 @@ export class Run {
 	private execute(effect: ReviewEffect): void {
 		if (effect.kind === "advance") return this.advance(this.ctx);
 		if (effect.kind === "notify_cancelled") return this.notify(msg.notify.cancelled, "info");
+		if (effect.kind === "notify_summary_skipped") return this.notify(msg.notify.summarySkipped, "info");
 		// 发卡只是展示，失败不能吞掉同一迁移里的推进请求。
 		try {
 			this.sendCard(effect.card);
