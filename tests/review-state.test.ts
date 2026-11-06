@@ -180,15 +180,15 @@ describe("fire-review reducer", () => {
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "max_rounds", round: 1 } }, { kind: "advance" }]);
 	});
 
-	test("an interrupted summary turn is re-armed on recovery and a cancel during it settles quietly", async () => {
+	test("an interrupted summary turn is re-armed on recovery and a cancel during it keeps the verdict and says so", async () => {
 		await loadState();
 		let state = settle(settle(begin(), 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state, 1, "passed", "PASS\n证据：文件=b.ts；命令=ls").state;
 		state = step(state, { type: "TURN_STARTED" }, LIMITS, 5000).state;
 		const recovered = step(state, { type: "RECOVER" }, LIMITS, 6000).state;
 		expect(recovered).toMatchObject({ phase: "summarizing", turn: "pending" });
 		const cancelled = step(recovered, { type: "CANCEL", reason: "user" }, LIMITS, 7000);
-		expect(cancelled.state.phase).toBe("settled");
+		expect(cancelled.state).toMatchObject({ phase: "settled", end: "passed" });
 		expect(cancelled.state.history.map((round) => round.result)).toEqual(["passed"]);
-		expect(cancelled.effects).toEqual([]);
+		expect(cancelled.effects).toEqual([{ kind: "notify_summary_skipped" }]);
 	});
 });

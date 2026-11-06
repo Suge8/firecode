@@ -34,6 +34,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - A review no longer settles on someone else's turn. When another extension sent a message while a turn was wrapping up, Pi ran that extension's turn first, and the review took it for its own repair or summary turn: the summary was skipped and the review settled early, or the next review round started before the repair feedback had been delivered. A plugin message now counts as delivered only when that exact message enters a turn.
 - If writing a review round failed, the review was cancelled but its saved state still counted the unwritten round, so reopening the session reported the review record as corrupt. The saved state now counts only the rounds actually written.
+- A review that had already passed, been stopped by the advisor or run out of rounds is no longer recorded as cancelled when its saved state is closed without it: after you turn `/fire-review` off and restart, or after a failed write. Before, the Master read such a review as cancelled; it now keeps the verdict, as cancelling during the summary already did.
+- `/fire-review --cancel` during the review's wrap-up summary used to do nothing visible. It now says that the review stopped waiting for the summary and that its verdict stands; the verdict is not changed to cancelled.
 
 ## [1.8.0] - 2026-11-05
 

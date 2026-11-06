@@ -7,7 +7,8 @@
  * 相：idle → queued → reviewing → needs_fix → awaiting_fix → reviewing，终态 settled；
  * 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 summarizing：投递一个总结回合
  * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
- * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合。
+ * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合；事故发生在 summarizing 时只跳过总结，保留质量裁决
+ *（checkpoint 封存同一规则，见 sealedEnd）。
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
  * 不变量：同一时刻至多一个活动轮；round 单调递增；history 只追加不改写。
  */
@@ -139,7 +140,9 @@ export type CardData =
 export type ReviewEffect =
 	| { kind: "advance" }
 	| { kind: "send_card"; card: CardData }
-	| { kind: "notify_cancelled" };
+	| { kind: "notify_cancelled" }
+	/** 总结相里用户取消：只跳过总结，结论不变；不发提示的话取消命令看起来毫无反应。 */
+	| { kind: "notify_summary_skipped" };
 
 export interface ReduceResult {
 	state: ReviewState;
@@ -207,6 +210,7 @@ export function reduce(state: ReviewState, event: ReviewEvent, limits: ReviewLim
 		case "TURN_ENDED":
 			return onTurnEnded(state, event.aborted, now);
 		case "CANCEL":
+			if (state.phase === "summarizing") return skipSummary(state, now, event.reason === "user" ? [{ kind: "notify_summary_skipped" }] : []);
 			return interrupt(state, now, "cancelled", event.reason, event.reason === "user" ? [{ kind: "notify_cancelled" }] : []);
 		case "TIMEOUT":
 			return interrupt(state, now, "timed_out", "timeout", [{ kind: "send_card", card: { kind: "timeout" } }]);
@@ -382,11 +386,23 @@ function interrupt(
 	return abort(state, now, result, round, effects);
 }
 
-/** 事故终态的统一出口：总结相已有质量裁决，静默收尾；其余相追加在途轮记录后直接 settled。 */
+/** 事故终态的统一出口：总结相已有质量裁决，跳过总结静默收尾；其余相追加在途轮记录后直接 settled。 */
 function abort(state: ReviewState, now: number, end: "error" | "cancelled" | "timed_out", round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled") return NOTHING(state);
-	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
+	if (state.phase === "summarizing") return skipSummary(state, now, []);
 	return { state: go(state, now, { phase: "settled", end }, round ? { history: [...state.history, round] } : {}), effects };
+}
+
+function skipSummary(state: ReviewState, now: number, effects: ReviewEffect[]): ReduceResult {
+	return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects };
+}
+
+/**
+ * 不经事件直接封存（关闭 review 后遗留的活动存档、持久化失败后的补写）时的结局：已落定的保留，
+ * 总结相保留质量裁决（与总结相收到取消同一规则），其余按取消。
+ */
+export function sealedEnd(state: ReviewState): SettledEnd {
+	return state.phase === "settled" ? state.end : state.phase === "summarizing" ? summaryEnd(state) : "cancelled";
 }
 
 function elapsedSince(state: ReviewState, now: number): number {
