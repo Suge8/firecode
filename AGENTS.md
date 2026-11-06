@@ -36,7 +36,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断外层背景色（[earendil-works/pi#4894](https://github.com/earendil-works/pi/issues/4894) 已报，被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。插件发给模型的消息（Master 事件、审查反馈与提示、续跑提示）一律是自定义消息，唤醒用 `triggerTurn: true`，不用 `sendUserMessage`：用户消息只表示人类输入（Worker 会话里是 Master 派的活），轮界、`tail` 与审查证据都按消息角色区分。这依赖 pi 1.2.0 起 triggerTurn 开的回合也经过 `before_agent_start`（[pi#10739](https://github.com/earendil-works/pi/pull/10739)）；更早的宿主会在第一次工具调用后撤下扩展注入的系统提示段，整段缓存重写（[#33](https://github.com/Suge8/firecode/issues/33)）。手动 `/compact` 与带摘要的 `/tree` 切换期间宿主 `isIdle()` 为 false 却没有回合：steer 只会被当场追加、无人唤起，triggerTurn 会在压缩落定前开回合，`/tree` 还会把消息挂在被丢下的旧分支上，所以 `deliver` 等它们落定再投，调用方不处理。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。插件发给模型的消息（Master 事件、审查反馈与提示、续跑提示）一律是自定义消息，唤醒用 `triggerTurn: true`，不用 `sendUserMessage`：用户消息只表示人类输入（Worker 会话里是 Master 派的活），轮界、`tail` 与审查证据都按消息角色区分。这依赖 pi 1.2.0 起 triggerTurn 开的回合也经过 `before_agent_start`（[pi#10739](https://github.com/earendil-works/pi/pull/10739)）；更早的宿主会在第一次工具调用后撤下扩展注入的系统提示段，整段缓存重写（[#33](https://github.com/Suge8/firecode/issues/33)）。手动 `/compact` 与带摘要的 `/tree` 切换期间宿主 `isIdle()` 为 false 却没有回合：steer 只会被当场追加、无人唤起，triggerTurn 会在压缩落定前开回合，`/tree` 还会把消息挂在被丢下的旧分支上，所以 `deliver` 等它们落定再投，调用方不处理。送达只认这条消息进入回合（宿主为它发的 `message_start`，歇透与回合进行中同一份投递 id 回执），入队不算：回合进行中的消息只在宿主马上取 steer 队列的句缝交给它，否则会被 Esc/出队键无声清掉，或随回合中止（含 `/compact` 开头的中止）滞留到用户下次输入；回合落定仍没进入的，等歇透后由 `deliver` 自己唤醒。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 
