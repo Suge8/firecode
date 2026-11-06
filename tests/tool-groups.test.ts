@@ -770,11 +770,10 @@ test("摘要行从开始到歇下一直在原位：思考中 → 读取 → 思�
 	expect(settled.findIndex((line) => line.includes("你好，有什么要做的？"))).toBe(replyAt);
 });
 
-test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预览取首条发现或原因，观察员只写建议原文", async () => {
+test("审查卡的 ↳ 行：成败色由卡片 details 决定，预览取首条发现或原因", async () => {
 	const s = await scene();
 	const { buildCard } = await loadFirecodeModule("review/card.ts");
 	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
-	const { adviceMessage } = await loadFirecodeModule("watcher/card.ts");
 	// 与 review 生产端发卡一致：信封正文加卡片 details。
 	const reviewCard = (card: unknown) => {
 		const built = buildCard(card);
@@ -787,10 +786,6 @@ test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预
 	reviewCard({ kind: "fail", round: 1, details: "模型 1 · gpt-5.5\nFAIL\n## 发现 1：刷新竞态未修\n- **严重程度**: 高", advisor: null });
 	reviewCard({ kind: "error", message: "所有审查者均未给出有效结论" });
 	reviewCard({ kind: "pass", round: 2, summary: "模型 1 · gpt-5.5\nPASS\n验证命令 exit 0，核心逻辑已核对。\n证据：文件=a.ts；命令=bun test", details: "", elapsedMs: 95_000 });
-	s.chat.addChild(new s.host.CustomMessageComponent({
-		role: "custom", customType: "firecode-watcher-note", display: true, timestamp: 0,
-		content: adviceMessage({ note: "指挥官在没有跑测试的情况下宣布完成，建议先跑 bun test。", turnIndex: 12 }),
-	}));
 	s.ui.setToolsExpanded(true);
 
 	const raw = s.chat.render(120);
@@ -799,12 +794,11 @@ test("审查卡与观察员的 ↳ 行：成败色由卡片 details 决定，预
 		"↳ 审查未通过 刷新竞态未修",
 		"↳ 审查未完成 所有审查者均未给出有效结论",
 		"↳ 第 2 轮审查通过 验证命令 exit 0，核心逻辑已核对。",
-		"↳ 观察员 指挥官在没有跑测试的情况下宣布完成，建议先跑 bun test。",
 	]);
 	const red = s.ui.theme.fg("error", "↳");
 	const toneOf = (needle: string) => raw.find((line: string) => line.includes(needle))!.includes(red);
 	expect(["审查未通过", "审查未完成"].filter(toneOf)).toEqual(["审查未通过", "审查未完成"]);
-	expect(["第 2 轮审查通过", "观察员"].filter(toneOf)).toEqual([]);
+	expect(["第 2 轮审查通过"].filter(toneOf)).toEqual([]);
 });
 
 test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失败”，与提示原文同一退让，窄屏先裁提示原文", async () => {

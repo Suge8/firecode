@@ -115,23 +115,3 @@ test("session：en 下 /quota 输出英文", async () => {
 	expect(notices.at(-1)).toContain("Claude: 5h 100% left | Weekly 63% left");
 	expect(notices.join("\n")).not.toMatch(CJK);
 });
-
-test("观察员：en 时建议信封与系统提示都是英文，zh 时是中文", async () => {
-	const configJsonc = JSON.stringify({ language: "en" });
-	const { adviceMessage } = await loadFirecodeModule("watcher/card.js", { configJsonc }) as any;
-	const message = adviceMessage({ note: "The rollback path is missing", turnIndex: 7 });
-	expect(message).toStartWith("<firecode_watcher>\n");
-	expect(message).toContain("turn 7");
-	expect(message).not.toMatch(CJK);
-
-	const { createObserver } = await loadFirecodeModule("watcher/observer.js", { configJsonc }) as any;
-	let spawned: any;
-	const pool = { spawn: async (options: unknown) => (spawned = options, { prompt: async () => {}, session: {}, dispose: async () => {} }) };
-	await createObserver({ cwd: "/", model: {}, thinking: "low", pool });
-	expect(spawned.systemPrompt.text).not.toMatch(CJK);
-	expect(spawned.customTools[0].description).not.toMatch(CJK);
-
-	const zh = await loadFirecodeModule("watcher/observer.js") as any;
-	await zh.createObserver({ cwd: "/", model: {}, thinking: "low", pool });
-	expect(spawned.systemPrompt.text).toMatch(CJK);
-});

@@ -32,7 +32,6 @@ export const msg = defineMessages({
 			mustBeOneOf: (field: string, options: readonly string[]) => `${field} 必须是 ${options.join(" 或 ")}`,
 			refusedReview: (reasons: string[]) => `fire-review 配置有问题，已停止：${reasons.join("；")}`,
 			refusedMaster: (reasons: string[]) => `Master 配置有问题，已停止：${reasons.join("；")}`,
-			refusedWatcher: (reasons: string[]) => `观察员配置有问题，已停止：${reasons.join("；")}`,
 		},
 		startup: {
 			problems: (problems: string[]) => `FireCode 配置有问题：${problems.join("；")}`,
@@ -61,7 +60,6 @@ export const msg = defineMessages({
 		},
 		today: (date: string) => `今天是 ${date}。`,
 		envelope: {
-			watcher: "观察员",
 			sections: { reply: "回复：", error: "错误：", finalReply: "最终回复：", advice: "顾问意见：" },
 			elapsed: "耗时：",
 			thisRun: "本次运行",
@@ -98,7 +96,6 @@ export const msg = defineMessages({
 			mustBeOneOf: (field: string, options: readonly string[]) => `${field} must be ${options.join(" or ")}`,
 			refusedReview: (reasons: string[]) => `fire-review config has problems; stopped: ${reasons.join("; ")}`,
 			refusedMaster: (reasons: string[]) => `Master config has problems; stopped: ${reasons.join("; ")}`,
-			refusedWatcher: (reasons: string[]) => `Watcher config has problems; stopped: ${reasons.join("; ")}`,
 		},
 		startup: {
 			problems: (problems: string[]) => `FireCode config has problems: ${problems.join("; ")}`,
@@ -127,7 +124,6 @@ export const msg = defineMessages({
 		},
 		today: (date: string) => `Today is ${date}.`,
 		envelope: {
-			watcher: "Watcher",
 			sections: { reply: "Reply:", error: "Error:", finalReply: "Final reply:", advice: "Advisor advice:" },
 			elapsed: "Elapsed: ",
 			thisRun: "This run",

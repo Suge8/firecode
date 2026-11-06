@@ -1,6 +1,6 @@
 /**
  * 进程内全部“等多久”的业务时限，以及它们唯一的注入点：生产用 DEFAULT_TIMING，
- * 端到端测试经池的构造参数缩短（池由入口建一次并传给 Master、观察员与审查，读者都从 `pool.timing` 取）。
+ * 端到端测试经池的构造参数缩短（池由入口建一次并传给 Master 与审查，读者都从 `pool.timing` 取）。
  */
 export interface Timing {
 	/** 热会话空闲这么久后释放（档案与 JSONL 保留）。 */

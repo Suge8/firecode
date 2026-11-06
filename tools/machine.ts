@@ -1,4 +1,4 @@
-/** 机器消息（指挥官事件、观察员发言、审查卡）的一行投影：卡片与折叠展开态共用，数据只来自信封正文。 */
+/** 机器消息（指挥官事件、审查卡）的一行投影：卡片与折叠展开态共用，数据只来自信封正文。 */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type EnvelopeTag, parseEnvelopes } from "../deliver.js";
 import { clip, firstSentence } from "../format.js";
@@ -7,7 +7,7 @@ import { termPattern } from "../review/messages.js";
 import { CHAT_GUTTER } from "./line.js";
 
 export interface MachineEntry {
-	/** 一行标题：Master 事件与审查卡是信封正文第一行原样，观察员固定为“观察员”。 */
+	/** 一行标题：信封正文第一行原样。 */
 	title: string;
 	/** 正文首句，没有则为空。 */
 	preview: string;
@@ -50,7 +50,6 @@ export function machineEntries(text: string, details?: unknown): MachineEntry[] 
 
 function entryOf(tag: EnvelopeTag, body: string, details: unknown): MachineEntry {
 	const [heading = "", ...rest] = body.split("\n");
-	if (tag === "firecode_watcher") return { title: msg.envelope.watcher, preview: firstSentence(rest.join("\n")), alarm: false };
 	if (tag === "firecode_review")
 		return { title: heading, preview: reviewPreview(rest), alarm: ALARM_TONES.has((details as { tone?: string } | undefined)?.tone ?? "") };
 	// 失败只看是否有独占一行的“错误：”，不论它是第几个分节；失败时预览从错误分节取。

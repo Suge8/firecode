@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the watcher (`/fire-watch`) is removed. In `config.jsonc`, delete `features.watcher` and the top-level `watcher` section. If `features.watcher` stays, it is an unknown feature switch and blocks both `/fire-review` and `/fire-master` from starting until it is deleted. A leftover `watcher` section only shows an "unknown section" warning at session start.
+
 ### Changed
 
 - While a Worker runs, its row in the activity list and the sub-agent view show one line saying what it is doing and why, written by a small model from the Worker's new output only: the first line after 30 seconds, then at most once every 2 minutes and only when there is new output. It is never sent to the Master. Set the model chain with `master.progress`; leave it out or set `false` to turn it off.

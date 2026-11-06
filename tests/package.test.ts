@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { FIRECODE_DIR } from "./loader.ts";
 
-const PROMPT_DIRS = ["master/prompts", "review/prompts", "watcher/prompts"];
+const PROMPT_DIRS = ["master/prompts", "review/prompts"];
 const transpiler = new Bun.Transpiler({ loader: "js" });
 
 function run(command: string[]): string {

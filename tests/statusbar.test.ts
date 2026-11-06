@@ -110,9 +110,8 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	expect(top()).not.toContain("处理中");
 	fake.fire("agent_start", {}, ctx);
 	expect(top()).toMatch(/处理中 \d/u);
-	statuses.set("watcher", "观察员");
 	statuses.set("master", "指挥官");
-	expect(top()).toEndWith(" 观察员 指挥官 ─");
+	expect(top()).toEndWith(" 指挥官 ─");
 	fake.fire("agent_end", { messages: [] }, ctx);
 	fake.fire("agent_settled", {}, ctx);
 	expect(top()).not.toContain("处理中");

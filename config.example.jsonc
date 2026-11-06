@@ -1,6 +1,5 @@
 {
 	// Recommended config: every feature on. It is written here on first launch; swap in the models you are logged in to, then restart Pi.
-	// The watcher does not activate itself in a new session; run /fire-watch to toggle it for the current session.
 	// Everywhere a model is named, use a model atom "model/thinking"; the provider is optional. An ordered array chooses alternatives.
 	// Language of the UI and of the text shown to models: follows the system locale by default (zh* → Chinese, otherwise English); uncomment the next line to pin it, "zh" | "en".
 	// "language": "en",
@@ -14,8 +13,7 @@
 		"claudeFiles": true,
 		"openaiNative": true,
 		"review": true,
-		"master": true,
-		"watcher": true
+		"master": true
 	},
 
 	"keys": {
@@ -34,7 +32,7 @@
 	},
 
 	// New sessions activate the Master by default. Role names are yours to choose; the Master picks a role by its "use".
-	// Sub-agents, reviewers and the watcher only find models from Pi's built-in providers or models.json, not from other extensions' providers.
+	// Sub-agents and reviewers only find models from Pi's built-in providers or models.json, not from other extensions' providers.
 	"master": {
 		"autoActivate": true,
 		"workerExcludeExtensions": [],
@@ -72,12 +70,5 @@
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
 		"tools": ["read", "grep", "find", "ls", "bash"]
-	},
-
-	// Once active, it evaluates what each main-session turn added, which costs extra model calls; it speaks up on the spot when needed.
-	"watcher": {
-		"enabled": false,
-		"model": ["gpt-6.1-terra/medium", "claude-haiku-5-5/medium"],
-		"context": "minimal"
 	}
 }

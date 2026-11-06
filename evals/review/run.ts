@@ -102,7 +102,7 @@ function writeAgent(agent: string, run: string, reviewer: string): Record<string
 	const target = physical(reviewer);
 	const config = {
 		language: "zh",
-		features: Object.fromEntries(["header", "statusbar", "tools", "presets", "stats", "claudeSub", "claudeFiles", "openaiNative", "master", "watcher"].map((key) => [key, false]).concat([["review", true]])),
+		features: Object.fromEntries(["header", "statusbar", "tools", "presets", "stats", "claudeSub", "claudeFiles", "openaiNative", "master"].map((key) => [key, false]).concat([["review", true]])),
 		review: { ...baseReview, reviewers: [[`${target.provider}/${target.model}/${target.thinking}`]], advisor: [values.advisor], maxRounds: mode === "loop" ? 5 : 1, timeoutMinutes: 30 },
 	};
 	writeFileSync(join(agent, "extensions/firecode/config.jsonc"), JSON.stringify(config, null, 1));

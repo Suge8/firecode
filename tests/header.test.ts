@@ -20,7 +20,6 @@ const configJsonc = JSON.stringify({
 		openaiNative: false,
 		review: false,
 		master: false,
-		watcher: false,
 	},
 });
 const mounted: Header[] = [];

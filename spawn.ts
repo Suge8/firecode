@@ -16,7 +16,6 @@ import {
 	type ExtensionError,
 	type ExtensionFactory,
 	type InlineExtension,
-	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
 import { candidates, type ChainCompletion, completeOnChain, createModelRoute } from "./model-route.js";
@@ -34,8 +33,6 @@ interface SpawnSessionOptions {
 	thinkingOverride?: ThinkingLevelValue;
 	onModelChange?: (atom: ModelAtom, previous?: ModelAtom, reason?: string) => void;
 	tools: string[];
-	/** 只属于本子会话的工具（如观察员的 advise）；名字仍要出现在 tools 里才激活。 */
-	customTools?: ToolDefinition[];
 	excludeExtensions?: string[];
 	systemPrompt: { mode: "append" | "replace"; text: string };
 	contextFiles: boolean;
@@ -189,7 +186,6 @@ export class InProcessSessionPool {
 				modelRuntime: runtime,
 				model: route.model,
 				tools: options.tools,
-				...(options.customTools ? { customTools: options.customTools } : {}),
 				resourceLoader: loader,
 				settingsManager,
 				sessionManager,
@@ -257,8 +253,8 @@ export class InProcessSessionPool {
 	}
 
 	/**
-	 * 释放全部落盘的（Worker）会话。内存会话归创建它的一方（观察员自己 dispose），不在此列：
-	 * 池由 Master 与观察员共用，Master 关闭时不能顺手掐掉观察员正在评估的会话。
+	 * 释放全部落盘的（Worker）会话。内存会话（审查）归创建它的一方 dispose，不在此列：
+	 * 池由 Master 与审查共用，Master 关闭时不能顺手掐掉审查会话。
 	 */
 	async disposeWorkers(): Promise<void> {
 		await Promise.all([...this.held.values()].filter((held) => held.sessionPath).map((held) => this.release(held)));

@@ -1,5 +1,5 @@
 /**
- * 统一投递入口（Master 事件、观察员发言与 review 的修复反馈/总结提示共用）：一律以自定义消息 + triggerTurn 交给宿主，
+ * 统一投递入口（Master 事件与 review 的修复反馈/总结提示共用）：一律以自定义消息 + triggerTurn 交给宿主，
  * 宿主在回合进行中（含开回合的准备阶段）把它放进 steer 队列句缝送达，歇透时由它开一个回合，回合照常经过
  * before_agent_start（pi 1.2.0 起），扩展注入的系统提示段不被撤下。只告知不唤醒的结果走 inform。
  *
@@ -13,7 +13,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
  * 机器消息的信封是唯一事实源：模型上下文里的来源标记、卡片与折叠界面的识别都从这里来。
  * 一条消息可含多个信封（并发落定的事件各占一个）；整条文本恰好由信封构成才算机器消息。
  */
-const ENVELOPE_TAGS = ["firecode_master_event", "firecode_watcher", "firecode_review"] as const;
+const ENVELOPE_TAGS = ["firecode_master_event", "firecode_review"] as const;
 export type EnvelopeTag = (typeof ENVELOPE_TAGS)[number];
 
 interface ParsedEnvelope {

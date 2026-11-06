@@ -7,7 +7,6 @@
 - **指挥官**（Master）→ `master/`；避免：主控、Supervisor、Team Lead
 - **子代理**（Worker）→ `master/`；避免：工作者、任务、工人
 - **子代理池**（Worker Pool）→ `master/runtime.ts`；避免：团队、任务板、任务队列
-- **观察员**（Watcher）→ `watcher/`；避免：审查者、子代理、Supervisor
 - **工作说明**（Delegation）→ `subagents` 的 `prompt`；避免：任务、工单、Assignment Record
 - **子代理结果**（Worker Result）→ `master/event-format.ts`；是证据输入，不代表指挥官已验收；避免：Task Done、Review Passed
 - **近况**（Trace）→ `subagents` 的 `tail`；避免：日志、历史、进度

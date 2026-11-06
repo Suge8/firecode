@@ -21,7 +21,7 @@
 bun $D/variant.ts A                                     # 变体 A：当前 HEAD 的代码与提示词
 bun $D/variant.ts B --prompt-ref 74d9c01                # 同一份代码，只换提示词（取某个提交里的 master.zh.md）
 bun $D/variant.ts C --prompt-file /path/to/master.md    # 或取文件；--cut '原文' 再删掉其中一段（须恰好出现一次）
-bun $D/variant.ts H --model anthropic/claude-haiku-5-5/low   # 主会话与全部角色、审查、观察员都换成这个原子（冒烟用，见下）
+bun $D/variant.ts H --model anthropic/claude-haiku-5-5/low   # 主会话与全部角色、审查都换成这个原子（冒烟用，见下）
 
 bun $D/decide.ts A                                      # 首步决策（一次一个变体）：t1–t8、t11 各 2 次，到决策即止
 bun $D/decide.ts A --tasks t4-longwait --runs 1         # 只跑某几条
@@ -34,7 +34,7 @@ bun $D/blind.ts                                         # 盲评导出，见下
 bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 ```
 
-`variant.ts --code-ref <提交>` 指定被测的 firecode 代码（默认 HEAD）。`--model` 把变体的 settings（默认模型，并去掉 `enabledModels`：默认模型不在范围里时宿主会改用范围里的第一个）和 config.jsonc（角色表去 fallback、审查只留一个审查者、观察员）里的模型全部换成给定原子，其余沿用你的。两个变体只差一处提示词时，用 `diff` 比较各自 `$EVAL_DIR/variants/<名>/firecode/master/prompts/master.zh.md` 确认。
+`variant.ts --code-ref <提交>` 指定被测的 firecode 代码（默认 HEAD）。`--model` 把变体的 settings（默认模型，并去掉 `enabledModels`：默认模型不在范围里时宿主会改用范围里的第一个）和 config.jsonc（角色表去 fallback、审查只留一个审查者）里的模型全部换成给定原子，其余沿用你的。两个变体只差一处提示词时，用 `diff` 比较各自 `$EVAL_DIR/variants/<名>/firecode/master/prompts/master.zh.md` 确认。
 
 **便宜地验证脚本能跑通**（不测质量）：用上面的 `--model` 变体跑 `decide.ts H --runs 1`、`run.ts H --tasks t3-research --runs 1 --budget 3`、`worker.ts <同一个原子> --runs 1`，再依次 `summary.ts`、`blind.ts`、`check.ts`。Haiku low 这一套约 $0.6。要走到“指挥官派 Worker”的路径，用 `--prompt-file` 在提示词末尾加一句“调研一律派调研员”。
 
@@ -121,7 +121,7 @@ bun $D/worker.ts report
 
 | 组 | 任务 | 判分 |
 | --- | --- | --- |
-| audit | t9 fixture 的两块（master/+format.ts 8 处、session/statusbar/watcher 5 处植入缺陷） | 自动：指到植入行 ±5；漏指行号的人读 |
+| audit | t9 fixture 的两块（master/+format.ts 8 处、session/statusbar 4 处植入缺陷） | 自动：指到植入行 ±5；漏指行号的人读 |
 | research | 同 t3 | 人读，版本日期用 `check.ts t3 <final.md…>` |
 | wait | 2 分半 e2e、后台部署盯到终态 | 自动：失败场景与原因原文 |
 | impl | formatDuration 进位到天；quota 8 秒超时；/tokens 日期范围与按天分组（中等规模，带接口规格） | duration 与 stats 跑 `accept.ts` 的隐藏用例（通过数/总数，列出未过的），quota 读 diff 与测试 |

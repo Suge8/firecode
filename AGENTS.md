@@ -1,8 +1,8 @@
 # FireCode
 
-pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官与 `/fire-watch` 观察员。
+pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行渲染、预设、Claude 订阅适配、Claude 图片走 Files API、`/fire-review` 对抗性审查、默认激活的 `/fire-master` 多 Agent 指挥官。
 
-单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker、观察员）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
+单一入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`。功能开关只管可关的部分；轮记录器、截断写入拦截、长 sleep 拦截、日期段、herdr 投影、审查卡渲染与原生检查点完整性守卫始终注册。每个可关的 register 封闭自己的运行状态，关掉任何一个不影响其余。子会话（Worker）只注册与界面无关的部分：横幅、工具渲染、预设、用量命令与输入框外壳只属于交互主会话。模块之间谁依赖谁看 import；下面只记 import 看不出的约定：
 
 - 进程内事件频道各有唯一定义处与唯一发布者，读者不自己订阅：在飞子代理数与审查占用在 `busy.ts`（读者经 `watchBusy`、`busyView`），轮记录写入通知在 `round.ts`，子代理名册 `firecode:subagents`（给同进程其他扩展的对外接口）在 `master/roster.ts`；契约都在各自头注释。
 - Master 读审查结果只经 `review/outcome.ts`；输入框外壳的落定态与摘要行读同一份轮记录、同一条合成规则（`round.ts`）。
@@ -16,7 +16,6 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `session/` | 预设、用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
-| `watcher/` | `/fire-watch` 观察员：turn 增量评估与单通道发言 | [watcher/AGENTS.md](watcher/AGENTS.md) |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并重试本轮，历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
@@ -24,9 +23,9 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环加整体超时 | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
-| `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review、Watcher 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
+| `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |
 | `jsonc.ts` | JSONC 解析与 `isRecord`（配置与 provider 共用的唯一对象判定） | |
-| `config.ts` | 从 Pi Agent 目录解析唯一运行配置（含 `openai` 节校验），并给出 review/master/watcher 每节能否启动的判定 | |
+| `config.ts` | 从 Pi Agent 目录解析唯一运行配置（含 `openai` 节校验），并给出 review/master 每节能否启动的判定 | |
 | `config-file.ts` | 运行配置的路径、首次播种、原始读取；不含文案（被 `i18n.ts` 依赖） | |
 | `i18n.ts` `*/messages.ts` | 双语文案机制与各目录文案表，见下「文案」 | |
 
@@ -36,7 +35,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 
 带背景的卡片里禁用 pi-tui `TruncatedText`/`truncateToWidth`：其省略号带 `\x1b[0m` 全量重置，会在截断点掐断外层背景色（[earendil-works/pi#4894](https://github.com/earendil-works/pi/issues/4894) 已报，被拒修）；单行截断一律用 `format.ts` 的 `clip`。
 
-投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。插件发给模型的消息（Master 事件、观察员发言、审查反馈与提示、续跑提示）一律是自定义消息，唤醒用 `triggerTurn: true`，不用 `sendUserMessage`：用户消息只表示人类输入（Worker 会话里是 Master 派的活），轮界、`tail` 与审查证据都按消息角色区分。这依赖 pi 1.2.0 起 triggerTurn 开的回合也经过 `before_agent_start`（[pi#10739](https://github.com/earendil-works/pi/pull/10739)）；更早的宿主会在第一次工具调用后撤下扩展注入的系统提示段，整段缓存重写（[#33](https://github.com/Suge8/firecode/issues/33)）。手动 `/compact` 与带摘要的 `/tree` 切换期间宿主 `isIdle()` 为 false 却没有回合：steer 只会被当场追加、无人唤起，triggerTurn 会在压缩落定前开回合，`/tree` 还会把消息挂在被丢下的旧分支上，所以 `deliver` 等它们落定再投，调用方不处理。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
+投递统一经根级 `deliver.ts`（机制见其头注释），没有例外。插件发给模型的消息（Master 事件、审查反馈与提示、续跑提示）一律是自定义消息，唤醒用 `triggerTurn: true`，不用 `sendUserMessage`：用户消息只表示人类输入（Worker 会话里是 Master 派的活），轮界、`tail` 与审查证据都按消息角色区分。这依赖 pi 1.2.0 起 triggerTurn 开的回合也经过 `before_agent_start`（[pi#10739](https://github.com/earendil-works/pi/pull/10739)）；更早的宿主会在第一次工具调用后撤下扩展注入的系统提示段，整段缓存重写（[#33](https://github.com/Suge8/firecode/issues/33)）。手动 `/compact` 与带摘要的 `/tree` 切换期间宿主 `isIdle()` 为 false 却没有回合：steer 只会被当场追加、无人唤起，triggerTurn 会在压缩落定前开回合，`/tree` 还会把消息挂在被丢下的旧分支上，所以 `deliver` 等它们落定再投，调用方不处理。纯展示记录（轮记录）使用官方 CustomEntry，不走模型消息投递。
 
 系统提示注入一律写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示并丢掉段更新，任何一段变化（日期、技能表、MCP 摘要）都会重写整个已缓存前缀。
 
@@ -63,14 +62,14 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 
 顶层 `language` 是唯一语言设置，不再有 `review.language`（旧写法按未知字段报错）。
 
-配置里的模型原子写作 `"<模型>/<thinking>"`，模型可带供应商；角色、审查席位、顾问与观察员可以写非空有序数组。旧 `fallback` 字段与审查者对象不再支持。
+配置里的模型原子写作 `"<模型>/<thinking>"`，模型可带供应商；角色、审查席位与顾问可以写非空有序数组。旧 `fallback` 字段与审查者对象不再支持。
 
 不要新建 keys.json，也不要读项目级配置。快捷键启动时绑定，改完需重启。加速档开关键（`keys.fast`）只替换文件里顶层的 `openai` 键（关闭写 `false`），其它注释保留；注释里出现的 `"openai": {` 不会被误改。
 快捷键冲突：宿主对扩展用 `registerShortcut` 注册的键，与*全部*内置键位（含只在会话列表等选择器里生效的）逐键比对，不分上下文，
 撞上任何一个都在启动时弹 “Extension issues”；撞到编辑器全局保留键则扩展直接被跳过，其余则扩展先于内置处理。
 所以默认键必须避开宿主全部默认键位（`tests/config-seam.test.ts` 守），改名这类宿主已有键位的动作不注册快捷键，
 而是挂宿主的编辑器动作（见 `statusbar/index.ts` 的 `ShellEditor`）。
-`review`、`master` 与 `watcher` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
+`review` 与 `master` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
 真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定（文件级与 features 问题阻断三节），消费端不再自己筛
 问题；关闭的功能那一节的问题不进 session_start 全局警告。
 

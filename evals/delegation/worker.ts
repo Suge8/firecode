@@ -42,7 +42,7 @@ interface Task {
 
 const TASKS: Record<string, Task> = {
 	"audit-master": { group: "audit", fixture: "t9", prompt: auditPrompt("master/ 目录和根目录的 format.ts"), timeoutMin: 40, scope: (f) => f.startsWith("master/") || f === "format.ts" },
-	"audit-misc": { group: "audit", fixture: "t9", prompt: auditPrompt("session/、statusbar/、watcher/ 三个目录"), timeoutMin: 40, scope: (f) => /^(session|statusbar|watcher)\//.test(f) },
+	"audit-misc": { group: "audit", fixture: "t9", prompt: auditPrompt("session/、statusbar/ 两个目录"), timeoutMin: 40, scope: (f) => /^(session|statusbar)\//.test(f) },
 	research: { group: "research", fixture: "base", timeoutMin: 30, prompt: `${taskById("t3-research").prompt} ${TMP_NOTE}` },
 	"wait-e2e": { group: "wait", fixture: "base", timeoutMin: 15, setup: { "scripts/e2e.sh": e2eScript(12) }, prompt: "把 scripts/e2e.sh 完整跑一遍（全套大约 2 分半），告诉我哪些场景挂了、各自的失败输出。", verdict: (f) => /review-fail/.test(f) && /compaction/.test(f) },
 	"wait-deploy": { group: "wait", fixture: "base", timeoutMin: 15, setup: { "scripts/deploy.sh": DEPLOY }, prompt: "跑 scripts/deploy.sh 发起部署（它在后台跑、立即返回，日志写到仓库根的 deploy.log，大约 2 分钟后出现 DEPLOY OK 或 DEPLOY FAILED 终态行）。等到终态后告诉我结果；失败就给出失败原因原文。不要尝试修复。", verdict: (f) => /0042_add_index/.test(f) && /8812/.test(f) },

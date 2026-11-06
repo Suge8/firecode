@@ -20,13 +20,12 @@ import { registerReview } from "./review/index.js";
 import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
 import { InProcessSessionPool, loadingSubsession } from "./spawn.js";
-import { registerWatcher } from "./watcher/index.js";
 import { registerRoundRecorder } from "./round.js";
 import { registerSleepGuard } from "./sleep-guard.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
 
-type SimpleFeature = Exclude<Feature, "review" | "master" | "watcher" | "openaiNative">;
+type SimpleFeature = Exclude<Feature, "review" | "master" | "openaiNative">;
 
 const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
@@ -43,7 +42,7 @@ const MAIN_ONLY = new Set<SimpleFeature>(["header", "tools", "presets", "stats",
 
 /**
  * subsession：Worker 子会话，由池把主会话这一份注册进去（见 spawn.ts 的 firecode）。
- * pool 是进程里唯一的子会话池：主会话建一个，Master、观察员与审查（含 Worker 会话里的审查）共用它——
+ * pool 是进程里唯一的子会话池：主会话建一个，Master 与审查（含 Worker 会话里的审查）共用它——
  * 模型运行时只读一次，也只有一处登记谁持有哪个会话文件；子会话注册时由池把自己传回来。
  */
 export function registerFirecode(
@@ -66,11 +65,10 @@ export function registerFirecode(
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);
 	}
-	// 子会话不带观察员、也不带 Master 本体（只注册 checkout 守卫）：级联抑制是代码规则，不靠进程环境。
+	// 子会话不带 Master 本体（只注册 checkout 守卫）：级联抑制是代码规则，不靠进程环境。
 	if (subsession) {
 		if (config.features.master !== false) registerWorkerGuard(pi);
 	} else {
-		if (config.features.watcher !== false) registerWatcher(pi, pool);
 		if (config.features.master !== false) registerMaster(pi, pool);
 	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
