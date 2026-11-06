@@ -14,6 +14,8 @@ export interface Task {
 	accept?: string;
 	/** Worker 爱用写死的 /tmp 路径，这类任务只能一个接一个跑。 */
 	serial?: boolean;
+	/** 多轮任务：上一条歇下后依次发出的后续指令（run.ts）。 */
+	followUps?: string[];
 }
 
 /** Worker 爱用写死的 /tmp 路径，要求它只用 TMPDIR。 */
@@ -23,6 +25,11 @@ export const auditPrompt = (scope: string) =>
 const T9_AUDIT = auditPrompt("master/、tools/、review/、session/、statusbar/ 五个目录和根目录的 format.ts");
 
 const MINUTES = 60;
+/** t9 按目录逐条下发（三批加汇总）：多轮长会话，上下文逐批长到 30 万以上，测影响整单上下文的改动。可判分的植入缺陷是 M1–M4、T1–T5。 */
+const T9_PARTS = ["master/", "tools/ 和根目录的 format.ts", "review/"];
+const T9_BATCH = (scope: string) =>
+	`这是分批审计的一批，本批只看 ${scope}：找真实缺陷——代码行为与各目录 AGENTS.md、代码注释和命名所表达的契约不符，或会导致错误结果、状态错乱、数据丢失的逻辑错误。完全亲手完成，不要使用 subagents，不要改任何代码。先给本批清单（文件:行号、触发条件），最后我会让你汇总。${TMP_NOTE}`;
+const T9_SUMMARY = "把前面各批的发现汇总成一份最终清单：每条带文件:行号和触发条件，按严重度排序，不要遗漏任何一批，不要改代码。";
 
 export const TASKS: Task[] = [
 	{ id: "t1-oneline", kind: "一行小改动", fixture: "base", ideal: { mode: "hand" }, prompt: "把指挥官空闲时合并唤醒的安静窗口从 1.5 秒改成 2 秒。" },
@@ -79,6 +86,14 @@ export const TASKS: Task[] = [
 	},
 	{ id: "t9-big", kind: "大任务：六目录审计（植入缺陷）", fixture: "t9", timeoutSec: 50 * MINUTES, prompt: T9_AUDIT },
 	{ id: "t9-hand", kind: "t9 强制亲手基线", fixture: "t9", timeoutSec: 60 * MINUTES, prompt: T9_AUDIT + " 本次请完全亲手完成，不要使用 subagents。" },
+	{
+		id: "t9-rounds",
+		kind: "t9 按目录分批逐条下发、亲手、最后汇总（多轮长会话）",
+		fixture: "t9",
+		timeoutSec: 70 * MINUTES,
+		prompt: T9_BATCH(T9_PARTS[0]!),
+		followUps: [...T9_PARTS.slice(1).map(T9_BATCH), T9_SUMMARY],
+	},
 ];
 
 export const taskById = (id: string): Task => {

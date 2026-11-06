@@ -13,6 +13,36 @@
 - 被测代码取**已提交**的内容（`git archive`，不含 `evals/`）；未提交的提示词改动用 `--prompt-file`。评测任务是中文，变体替换的是 `master.zh.md`：配置的 `language` 须为 `zh`（或系统语言为中文），否则变体加载的是未被替换的英文提示词。
 - 工作目录 `$EVAL_DIR`，默认 `<系统临时目录>/firecode-delegation-eval`：变体、fixture、全部运行记录都在这里，仓库里不留任何产物。
 
+## 判新旧：改了什么 → 跑哪条命令
+
+先 `D=evals/delegation`。每一行：候选和对照用同一条命令各跑一遍，再按判定规则比。噪声底是**同一配置自己重复跑**出的区间，差异落在区间里就是没差异，不得因一次跑出的差异下结论。
+
+| 改了什么 | 命令 | 单次花费与耗时 | 噪声底（出处） | 判定 |
+| --- | --- | --- | --- | --- |
+| 指挥官提示词、委派条款、注入段、工具描述（首个动作变没变） | `bun $D/replay.ts run <变体> --runs 5 --budget 20`，再 `report <候选> --base <对照>` | 12 个时点 × 5 次约 $16（含冷写），单次 12–40 秒 | 原样继续每点 5 次，自身一致率 85%（2026-11-06，`compact-trigger/replay-report.md`） | 候选与对照多数动作的一致率 ≥ 对照自身一致率 − 6 点；低于线的点读“不一致”原文，确认没变差才算过 |
+| 压缩触发点、压缩提示词、压缩后前缀（先压缩再继续） | `bun $D/replay.ts compact <变体>`，再 `run`、`report <变体> --base <对照>` | 每次压缩另花 $0.4–0.7（Opus 摘要）、40–130 秒；其余同上 | Opus 摘要每点 5 次自身一致率 72%（`compact-trigger/replay-report.md`） | 同上，线 = 对照自身 − 6 点（66%）；无一处决策变差 |
+| 压缩摘要换模型 | `bun $D/replay.ts compact <变体> --summary-model <provider/模型/思考档>`，再 `run`、`report <变体> --base <Opus摘要变体>` | 每次压缩 Luna $0.005/42 秒、Haiku $0.009/30 秒、Terra $0.049/52 秒、Opus $0.445/85 秒 | Opus 摘要自身一致率 72%（`summary-model/REPORT.md`） | 同上，线 66%；摘要变体的 compact.json 另记花费与耗时 |
+| 压缩摘要的写法（模型、思考档、verbosity、附加指令） | 每份摘要 `replay.ts compact <变体> [--summary-model …] [--instructions-file …]`，每个配置 3 份，再 `bun $D/detail.ts score 对照=a,b,c 候选=d,e,f` | 每份 12 个时点的压缩约 $0.1–0.6（随模型），评分不花钱；标准答案一次 `detail.ts gt` 约几美分/点 | 细节保住率（条目池）：Luna 3 份 32–34%，Haiku 3 份 45–48%（`summary-detail/REPORT.md`） | 比对照高 ≥ 10 点，且大于两边各自份间极差；其余一律无效。命令自动给“有效/更差/无效” |
+| 影响整单亲手长任务的改动（上下文构成、工具输出、缓存） | `bun $D/run.ts <变体> --tasks t9-hand --runs 3 --budget 10` | $2.34–2.83、262–400 秒 | t9-hand 自身重复 $2.34–2.83、262–400 秒（`climb-log.md`） | 候选 3 次的花费、墙钟逐次对照区间：全落区间内 = 没差异；`check.ts t9` 的命中数不低于对照 |
+| 同上，多轮长会话（上下文逐批长到 30 万以上） | `bun $D/run.ts <变体> --tasks t9-rounds --runs 3 --budget 14 --reserve 5` | $2.95–3.48、446–644 秒 | t9-rounds A 组（对照）自身 $2.95–3.48、446–644 秒（`context-mask` 下报告） | 同上 |
+| 派活条款对完成跑的影响（调研、审计、六目录审计） | `bun $D/run.ts <变体[,变体…]> --runs 3 --budget 40`（默认 t3/t7/t9-big），再 `blind.ts` 盲评、`check.ts` 核对 | t3 $0.6–1.5、t7 $1.7–3.3、t9-big $2.9–6.3，最长约 18 分钟 | 未测：先把对照跑 3 次定区间 | 变体同批交错跑；花费、墙钟出区间且质量命中数（真值）不降 |
+| 冷启动首步决策 | `bun $D/decide.ts <变体>` | 全套 t1–t8、t11 各 2 次约 $5，单次数秒到数分钟 | 两版提示词各 10 次决策完全一样（噪声为 0，但与真实会话对不上，所以只作粗筛） | `report` 的符合数下降才算退步 |
+| 角色的模型原子 | `bun $D/worker.ts <原子[,原子…]> --tasks audit,research --runs 2`，再 `worker.ts report` | 随原子；单格见 `report` | 未测：同一原子每格重复 ≥ 3 次定区间 | 质量不降且墙钟或花费出区间 |
+| 技能触发 | FriedBun 的 `evals/skill-trigger/`（搬家中） | | | 命令以后补 |
+
+两类时点清单、标准答案含个人会话路径，不进仓库，放在仓库外：重放时点 `~/.cache/firecode-eval/context-mask/replay/points.json`（12 个，与 `summary-model/replay/points.json` 相同），命令用 `REPLAY_POINTS` 指过去；`EVAL_DIR` 另设一个临时目录放运行产物。细节保住率的标准答案在 `$EVAL_DIR/detail/gt/`，可直接用 `EVAL_DIR=~/.cache/firecode-eval/summary-detail` 读那份已造好的（同一批 12 个时点的 `compacted.jsonl` 须在 `$EVAL_DIR/replay/runs/<变体>/` 下）。
+
+**从会话重新选点**（时点或会话变了，旧噪声底作废，须重测）：
+
+```bash
+export EVAL_DIR=$(mktemp -d)                              # 产物只写这里
+bun $D/replay.ts scan --max-tokens 260000                 # 读你的 sessions/ → $EVAL_DIR/replay/candidates.json
+REPLAY_POINTS=~/.cache/firecode-eval/my-points.json bun $D/replay.ts pick --count 12   # 6 组（项目 × 类型）各 2 个
+bun $D/detail.ts gt                                       # 需要细节保住率时，先用 compact 造出至少一份摘要
+```
+
+**冒烟**（只验证命令能跑，不测质量）：整单、决策、角色类用下文“便宜地验证脚本能跑通”的 H 变体（另可加 `run.ts H --tasks t9-hand|t9-rounds --runs 1 --budget 1`）。重放、压缩与评分只跑 1 个时点：`REPLAY_POINTS` 指到只含这一个时点的文件，依次 `replay.ts run main --points <id> --runs 2`、`replay.ts compact C --points <id> --summary-model <完整原子>`、`replay.ts run C --points <id> --runs 2`、`replay.ts report C --base main`、`detail.ts gt --model <完整原子>`、`detail.ts score a=C b=C`，约 $1.3（时点 16 万 token，Opus 续跑两次占大头）。
+
 ## 怎么跑
 
 以下命令都在仓库根目录执行，先 `D=evals/delegation`。
@@ -38,7 +68,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 
 **便宜地验证脚本能跑通**（不测质量）：用上面的 `--model` 变体跑 `decide.ts H --runs 1`、`run.ts H --tasks t3-research --runs 1 --budget 3`、`worker.ts <同一个原子> --runs 1`，再依次 `summary.ts`、`blind.ts`、`check.ts`。Haiku low 这一套约 $0.6。要走到“指挥官派 Worker”的路径，用 `--prompt-file` 在提示词末尾加一句“调研一律派调研员”。
 
-`run.ts` 其余参数：`--tasks`（默认 t3-research,t7-audit,t9-big，可加 t9-hand）、`--runs`（默认 3）、`--concurrency`（默认 2）、`--force`。已 settled 的结果会跳过，被预算打断的重跑会续上。`decide.ts` 参数：`--steps`（模型回合数上限，超过判亲手，默认 15）、`--timeout`（秒，默认 300）。
+`run.ts` 其余参数：`--tasks`（默认 t3-research,t7-audit,t9-big，可加 t9-hand、t9-rounds）、`--runs`（默认 3）、`--concurrency`（默认 2）、`--reserve`（一次运行的预留美元：已花加在跑再加一次预留超过 `--budget` 就不再开新的，免得被截成半截；有运行完成后改取最贵那次的 1.1 倍）、`--force`。已 settled 的结果会跳过，被预算打断的重跑会续上。`decide.ts` 参数：`--steps`（模型回合数上限，超过判亲手，默认 15）、`--timeout`（秒，默认 300）。
 
 ## 机制
 
@@ -62,6 +92,7 @@ bun $D/check.ts t3|t7|t9 $EVAL_DIR/blind/X*.md          # 核对，见下
 | t11 | 高影响实现（持久化与崩溃恢复） | 委派工程师且 review:true | 当前提示词下指挥官亲手做、不送审（2026-11） |
 | t9-big | 六目录审计（约 1.06 万行，14 处植入缺陷） | 无预设 | 完成跑；真值：`t9-truth.json` |
 | t9-hand | 同上，末尾加“完全亲手” | — | 亲手基线 |
+| t9-rounds | t9 按目录分三批逐条下发、最后汇总，全程亲手 | — | 多轮长会话，`run.ts` 每歇下一次发下一条（`followUps`）；可判分的植入缺陷 M1–M4、T1–T5 |
 
 任务原话与理想决策只在 `tasks.ts`；改理想只改它再 `decide.ts report`，不用重跑。
 
@@ -98,6 +129,8 @@ bun $D/replay.ts pick [--count 20]                      # 分层抽取 → point
 bun $D/variant.ts main                                  # 变体同上
 bun $D/replay.ts run main --runs 2 --budget 30          # 每个时点跑 N 次，并发默认 3；超预算即停，已跑完的跳过
 bun $D/replay.ts report main,B                          # 变体对比表与汇总行
+bun $D/replay.ts report B,C --base main                 # 与 base 比：多数动作一致率（base 自己留一作噪声底）、首 token、请求耗时、输入、缓存读占比、花费，及不一致的动作原文
+bun $D/replay.ts compact C [--points …] [--summary-model <provider/模型/思考档>] [--instructions-file f]   # 先在每个时点做一次宿主压缩；变体 C 之后的 run 从压缩后的会话接着跑
 ```
 
 - **时点**：`event`：子代理事件送达后的下一步。探针用自定义消息加 triggerTurn 重发原来那条 `firecode-master-event`，和生产投递走同一条路径。`user`：用户新需求到达后的第一步，原话与图片经 RPC prompt 发出。会话的工作目录须在本机，且属于 CuePad、yuanzhuoai（含 `yz-*` 检出）或 firecode。只收原会话里指挥官已激活、原回应没出错的时点，模型须在你的模型表里，上下文按截取前最后一次用量计，不超过 `--max-tokens`。审查停在进行中的时点不收：重开会话会自动续审，而审查会话不带探针。
@@ -105,7 +138,9 @@ bun $D/replay.ts report main,B                          # 变体对比表与汇�
 - **前缀**：只把截取点父条目的整条分支复制进运行目录再 `--session` 打开，原文件不动；未确认的事件补一条 ack，免得 Master 重开会话时自己重投。模型与思考档取原回应用的那一个。
 - **不执行任何工具**：被重放的项目有生产权限。探针 `replay-probe.ts` 拦下每个工具调用，第一条助手消息一结束就杀掉整棵进程树。另有第二道保险：沙箱（`lib.ts` 的 lockdown）只许写运行目录、变体目录与 `/dev`，项目目录只读。供应商在本机时，网络只通它的端口，本机 HTTP 代理也不通（经 `NO_PROXY` 直连）；供应商不在本机就只剩文件这一层。
 - **动作分类**：静态看参数，codemode 只看脚本里调了哪些 `tools.*`，字符串与注释里的不算，循环里的只计一次。一条消息里有多个调用时取分量最重的：start（几个、角色、是否 review:true）> send > review（记为“其他(review)”）> 亲手读/改 > 其他 > 歇着（结束回合不调工具）。kill、ack、list、tail 旁边有读改就算亲手。结果只存原始调用，报表读时再分类，改了规则用 `report` 重打即可。
-- **口径**：“一致”指同一时点多次结果的标签全同（另列只比大类）。“与原会话同大类”只作参考：原会话跑的是当时的提示词。花费取第一条助手消息的 usage。
+- **口径**：“一致”指同一时点多次结果的标签全同（另列只比大类）。“与原会话同大类”只作参考：原会话跑的是当时的提示词。花费取第一条助手消息的 usage。首 token 从助手消息的 timestamp（宿主记的请求开始）算到第一条增量；第 1 次写缓存记为冷，其余几次读缓存记为热。
+- **压缩**：`compact` 与 `/compact` 同一路径，写摘要的模型默认用时点原模型，`--summary-model` 换成别的（换了模型宿主会往会话里追加 model_change / thinking_level_change，压缩后摘掉并接回父链，免得接着跑的会话多出切点前的条目）；`--instructions-file` 的内容作压缩的附加指令。每个时点的 `compact/compact.json` 记摘要的用量、花费、整条命令耗时与 RPC 往返耗时，`compacted.jsonl` 是接着跑的前缀，`detail.ts` 也读它。
+- **时点清单**：含个人会话路径，不进仓库；`REPLAY_POINTS` 指向仓库外的 points.json（`pick` 也写那里），不设则用 `$EVAL_DIR/replay/points.json`。
 - **提示词的位置**：会话前缀里记的是当时的系统提示。宿主打开会话时比对当前的提示段，有差异就追加一条系统更新，所以变体提示词是以更新的形式送达的，不是位于会话开头。生产里 reload 后改了提示词也是这样；全新会话里提示词在开头，权重可能不同。
 
 基线（2026-11-05，当时 main 的提示词，20 个时点，三个项目各有 event 与 user，每个时点 2 次）：一致 14/20。首次每个时点平均 $0.31（写提示缓存），第二次 $0.03（命中缓存），合计 $6.74，单次约 12 秒。同一时点的几次是顺序跑的。动作的分歧集中在“审查失败或子代理返回后，是 send 续派、送审还是亲手看”这类边界时点，要分辨变体差异须加次数（建议每个时点 ≥5 次）。

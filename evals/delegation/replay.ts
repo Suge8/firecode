@@ -4,7 +4,8 @@
 //   bun replay.ts scan [--max-tokens 120000]                          候选时点 → $EVAL_DIR/replay/candidates.json
 //   bun replay.ts pick [--count 20]                                   按项目 × 时点类型分层抽取 → points.json
 //   bun replay.ts run <变体> [--runs 2] [--concurrency 3] [--budget 30] [--timeout 300] [--points id,…] [--force]
-//   bun replay.ts report <变体>[,<变体>…]
+//   bun replay.ts compact <变体> [--points id,…]                        先在每个时点做一次宿主压缩，该变体之后的 run 从压缩后的会话接着跑
+//   bun replay.ts report <变体>[,<变体>…] [--base <变体>]              给了 base：各变体与 base 多数动作的一致率、延迟、输入与花费，以及不一致的原文
 // 时点两类：event = 子代理事件送达后的下一步（探针重发那条 firecode-master-event，自定义消息 + triggerTurn，与生产投递同一路径）；
 // user = 用户新需求到达后的第一步（RPC prompt 发原话与图片）。
 // 被重放的会话属于有生产权限的项目：探针拦下每个工具调用不执行，第一条助手消息一结束就杀进程；动作按参数静态分类，
@@ -49,6 +50,14 @@ interface Reply {
 	stopReason: string;
 	errorMessage?: string;
 	toolCalls: Array<{ name: string; arguments: any }>;
+	/** 正文开头，判断不一致时的优劣用。 */
+	text?: string;
+}
+interface Usage {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+	output: number;
 }
 interface Call {
 	tool: string;
@@ -71,6 +80,10 @@ interface Result {
 	cost: number;
 	sec: number;
 	blocked: number;
+	usage?: Usage;
+	/** 首 token：请求开始（助手消息 timestamp）到第一条增量；request：到 message_end。都是本机墙钟。 */
+	ttftMs?: number;
+	requestMs?: number;
 }
 
 // ───────────── 动作分类 ─────────────
@@ -170,7 +183,8 @@ function callArgs(args: Record<string, unknown>): Omit<Call, "tool"> {
 
 function toReply(message: any): Reply {
 	const toolCalls = (message.content ?? []).filter((c: any) => c.type === "toolCall").map((c: any) => ({ name: c.name, arguments: c.arguments }));
-	return { stopReason: message.stopReason, ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}), toolCalls };
+	const text = (message.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("").slice(0, 3000);
+	return { stopReason: message.stopReason, ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}), toolCalls, ...(text ? { text } : {}) };
 }
 
 /**
@@ -212,7 +226,7 @@ function projectOf(cwd: string): string | undefined {
 
 const modelTable = (): any => JSON.parse(readFileSync(join(USER_AGENT_DIR, "models.json"), "utf8"));
 
-/** 供应商在本机时的端口：沙箱据此只放行这一个端口。 */
+/** 供应商在本机时的端口：沙箱据此只放行这一个端口。EVAL_MODEL_PORT 覆盖：变体的 models.json 指向本机转发时用。 */
 function localPort(provider: string): number | undefined {
 	const base = modelTable().providers?.[provider]?.baseUrl;
 	if (!base) return undefined;
@@ -366,11 +380,12 @@ function pick(candidates: Point[], count: number): Point[] {
 
 /** 前缀：截取点父条目的整条分支；没确认的事件补一条 ack，免得 Master 重开会话时自己重投。 */
 function writePrefix(point: Point, dest: string): any {
+	// 每个副本用新的 session id：网关按 session id 复用上游会话，沿用源会话的 id 会接回未压缩的原会话（压缩后续跑读到压缩前的整段缓存）。
 	const file = session(point.file);
 	const branch = file.branch(file.byId.get(point.entryId).parentId);
 	const acked = new Set(branch.filter((e) => e.type === "custom" && e.customType === ACK_TYPE).flatMap((e) => e.data?.ids ?? []));
 	const unacked = branch.filter((e) => e.type === "custom" && e.customType === PENDING_TYPE && !acked.has(e.data?.id)).map((e) => e.data.id);
-	const lines = [file.header, ...branch];
+	const lines = [{ ...file.header, id: crypto.randomUUID() }, ...branch];
 	if (unacked.length) {
 		lines.push({ type: "custom", customType: ACK_TYPE, data: { ids: unacked }, id: crypto.randomUUID().slice(0, 8), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() });
 	}
@@ -379,6 +394,70 @@ function writePrefix(point: Point, dest: string): any {
 }
 
 const runDir = (variant: string, point: string, run: number) => join(ROOT, "runs", variant, point, String(run));
+/** compact 写下的压缩后前缀：有它的变体从这里接着跑。 */
+const compactedPrefix = (variant: string, point: string) => join(ROOT, "runs", variant, point, "compacted.jsonl");
+
+/** 压缩的写摘要模型（provider/model/thinking）；不给就用时点原模型与思考档。 */
+interface SummaryModel { provider: string; model: string; thinking: string }
+const parseSummaryModel = (atom: string): SummaryModel => {
+	const [provider, ...rest] = atom.split("/");
+	const thinking = rest.pop();
+	return { provider: provider!, model: rest.join("/"), thinking: thinking! };
+};
+const SUMMARY_NOISE = new Set(["model_change", "thinking_level_change"]);
+
+/**
+ * 在时点前缀上做一次宿主压缩（与 /compact 同一路径），存下压缩后的会话。
+ * 换了写摘要的模型时，宿主启动会往会话里追加 model_change / thinking_level_change：压缩后把它们摘掉并接回父链，
+ * 让接着跑的会话和原模型压缩的结构一致（否则切点前多出的条目会改变后续请求）。
+ * 记 compact.json：压缩条目的 usage 与花费、整条命令耗时（含进程启动）、RPC 往返耗时（只含压缩）。
+ */
+function compactOnce(point: Point, variant: string, timeoutSec: number, summary?: SummaryModel, instructions?: string): Promise<{ cost: number; ok: boolean; sec: number }> {
+	const dir = join(ROOT, "runs", variant, point.id, "compact");
+	rmSync(dir, { recursive: true, force: true });
+	const tmp = join(dir, "tmp");
+	mkdirSync(join(dir, "sessions"), { recursive: true });
+	mkdirSync(tmp, { recursive: true });
+	const sessionPath = join(dir, "sessions", basename(point.file));
+	writePrefix(point, sessionPath);
+	const baseCount = readJsonl(sessionPath).length;
+	const m = summary ?? point;
+	const thinking = summary?.thinking ?? point.thinking;
+	const args = ["--mode", "rpc", "--session", sessionPath, "-e", PROBE, "--provider", m.provider, "--model", m.model, ...(thinking ? ["--thinking", thinking] : [])];
+	const child = startPi(args, { agentDir: variantAgent(variant), cwd: point.cwd, tmp, stdin: "pipe", env: { EVAL_LOG: join(dir, "blocked.jsonl") }, allow: [dir, PROBE], lockdown: { modelPort: localPort(m.provider) } });
+	const t0 = Date.now();
+	let sent = 0;
+	let rpcMs = 0;
+	let ok = false;
+	let error = "";
+	const timer = setTimeout(() => killTree(child), timeoutSec * 1000);
+	onJsonLines(child, (event) => {
+		if (event.type !== "response" || event.command !== "compact") return;
+		ok = event.success === true;
+		if (!ok) error = String(event.error ?? "");
+		rpcMs = Date.now() - sent;
+		clearTimeout(timer);
+		killTree(child);
+	});
+	sent = Date.now();
+	child.stdin!.write(JSON.stringify({ type: "compact", ...(instructions ? { customInstructions: instructions } : {}) }) + "\n");
+	return new Promise((resolve) => child.on("close", () => {
+		const entries = readJsonl(sessionPath);
+		const entry = entries.findLast((e) => e.type === "compaction");
+		const sec = (Date.now() - t0) / 1000;
+		if (ok && entry) {
+			const added = new Set(entries.slice(baseCount).filter((e) => SUMMARY_NOISE.has(e.type)).map((e) => e.id));
+			const parentOf = new Map(entries.map((e) => [e.id, e.parentId]));
+			const up = (id: string | null): string | null => (id && added.has(id) ? up(parentOf.get(id) ?? null) : id);
+			const clean = entries.filter((e) => !added.has(e.id)).map((e) => (added.has(e.parentId) ? { ...e, parentId: up(e.parentId) } : e));
+			writeFileSync(compactedPrefix(variant, point.id), clean.map((e) => JSON.stringify(e)).join("\n") + "\n");
+			writeFileSync(join(dir, "compact.json"), JSON.stringify({ point: point.id, variant, summary: m.provider + "/" + m.model + "/" + thinking, usage: entry.usage, tokensBefore: entry.tokensBefore, firstKeptEntryId: entry.firstKeptEntryId, summaryChars: entry.summary.length, sec, rpcSec: rpcMs / 1000, stripped: added.size }, null, 1));
+		} else {
+			writeFileSync(join(dir, "compact-error.json"), JSON.stringify({ error, sec }));
+		}
+		resolve({ ok: ok && !!entry, cost: entry?.usage?.cost?.total ?? 0, sec });
+	}));
+}
 
 function replayOnce(point: Point, variant: string, run: number, timeoutSec: number): Promise<Result> {
 	const dir = runDir(variant, point.id, run);
@@ -388,6 +467,11 @@ function replayOnce(point: Point, variant: string, run: number, timeoutSec: numb
 	mkdirSync(tmp, { recursive: true });
 	const sessionPath = join(dir, "sessions", basename(point.file));
 	const cut = writePrefix(point, sessionPath);
+	const compacted = compactedPrefix(variant, point.id);
+	if (existsSync(compacted)) {
+		const [header, ...rest] = readFileSync(compacted, "utf8").split("\n");
+		writeFileSync(sessionPath, [JSON.stringify({ ...JSON.parse(header!), id: crypto.randomUUID() }), ...rest].join("\n"));
+	}
 	const log = join(dir, "blocked.jsonl");
 	const env: Record<string, string> = { EVAL_LOG: log };
 	if (point.kind === "event") {
@@ -401,6 +485,10 @@ function replayOnce(point: Point, variant: string, run: number, timeoutSec: numb
 	let cost = 0;
 	let reason = "";
 	let reply: Reply | undefined;
+	let usage: Usage | undefined;
+	let started: number | undefined;
+	let firstToken: number | undefined;
+	let requestMs: number | undefined;
 	const stderr: string[] = [];
 	child.stderr!.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
 	const finish = (why: string) => {
@@ -412,7 +500,14 @@ function replayOnce(point: Point, variant: string, run: number, timeoutSec: numb
 	const timer = setTimeout(() => finish("timeout"), timeoutSec * 1000);
 	onJsonLines(child, (event) => {
 		if (event.type === "response" && event.success === false) finish("rpc: " + event.error);
+		// message_update 不带 message；首个增量（思考、正文或工具调用）即首 token。
+		if (event.type === "message_update" && event.assistantMessageEvent) firstToken ??= Date.now();
 		if (event.type !== "message_end" || event.message?.role !== "assistant") return;
+		// 起点取助手消息的 timestamp（宿主记的请求开始时刻），不取 message_start：后者要等响应头。
+		started = event.message.timestamp;
+		requestMs = Date.now() - started!;
+		const u = event.message.usage;
+		if (u) usage = { input: u.input, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, output: u.output };
 		cost += event.message.usage?.cost?.total ?? 0;
 		reply = toReply(event.message);
 		finish(classify(reply).kind === "error" ? "error: " + (reply.errorMessage ?? reply.stopReason) : "first-message");
@@ -423,7 +518,8 @@ function replayOnce(point: Point, variant: string, run: number, timeoutSec: numb
 		child.on("close", (code) => {
 			finish("exit " + code);
 			const blocked = existsSync(log) ? readJsonl(log).length : 0;
-			const result: Result = { point: point.id, variant, run, ...(reply ? { reply } : {}), reason, cost, sec: (Date.now() - t0) / 1000, blocked };
+			const timing = started && firstToken ? { ttftMs: firstToken - started, requestMs } : {};
+			const result: Result = { point: point.id, variant, run, ...(reply ? { reply } : {}), reason, cost, sec: (Date.now() - t0) / 1000, blocked, ...(usage ? { usage } : {}), ...timing };
 			writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2));
 			if (!reason.startsWith("first")) writeFileSync(join(dir, "stderr.txt"), stderr.join(""));
 			resolve(result);
@@ -472,6 +568,68 @@ function report(variants: string[], points: Point[]): void {
 	}
 }
 
+function majority(labels: string[]): string | undefined {
+	const counts = new Map<string, number>();
+	for (const l of labels) counts.set(l, (counts.get(l) ?? 0) + 1);
+	return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+}
+
+const median = (xs: number[]): number => {
+	const s = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+	if (!s.length) return NaN;
+	const m = s.length / 2;
+	return s.length % 2 ? s[Math.floor(m)]! : (s[m - 1]! + s[m]!) / 2;
+};
+const contextOf = (r: Result) => (r.usage ? r.usage.input + r.usage.cacheRead + r.usage.cacheWrite : NaN);
+
+/** 第一个动作的原文摘录：调用名与参数开头（codemode 取脚本），再加正文开头。 */
+function actionText(r: Result): string {
+	const calls = (r.reply?.toolCalls ?? []).map((c) => c.name + " " + String(c.name === "codemode" ? c.arguments?.code : JSON.stringify(c.arguments)).replace(/\s+/gu, " ").slice(0, 400));
+	return [...calls, ...(r.reply?.text ? ["正文：" + r.reply.text.replace(/\s+/gu, " ").slice(0, 400)] : [])].join(" ‖ ") || "（空）";
+}
+
+/**
+ * 与 base 比：每个时点取 base 多数动作（标签），各变体每次结果与它比；base 自己用留一法（与其余几次的多数比），作噪声底。
+ * 延迟、输入分冷（第 1 次，写缓存）与热（其余几次，读缓存）两组取中位：热组是稳态，冷组对应改动后第一次重写前缀的那一次。
+ */
+function compare(variants: string[], base: string, points: Point[]): void {
+	const all = new Map([base, ...variants].map((v) => [v, results(v).filter((r) => points.some((p) => p.id === r.point))]));
+	const baseRuns = (id: string) => all.get(base)!.filter((r) => r.point === id && ok(r));
+	console.log("| 变体 | 次数 | 出错 | 与 base 多数一致 | 只比大类 | 首 token 中位 冷/热 s | 请求耗时中位 冷/热 s | 输入中位 冷/热 k | 缓存读占比中位 热 | 花费合计 $ |");
+	console.log("|---|---|---|---|---|---|---|---|---|---|");
+	for (const v of [base, ...variants]) {
+		const rs = all.get(v)!;
+		let same = 0, sameKind = 0, n = 0;
+		for (const r of rs.filter(ok)) {
+			const others = v === base ? baseRuns(r.point).filter((x) => x.run !== r.run) : baseRuns(r.point);
+			const label = majority(others.map((x) => act(x).label));
+			const kind = majority(others.map((x) => act(x).kind));
+			if (!label) continue;
+			n++;
+			if (act(r).label === label) same++;
+			if (act(r).kind === kind) sameKind++;
+		}
+		const cold = rs.filter((r) => r.run === 1 && ok(r));
+		const warm = rs.filter((r) => r.run > 1 && ok(r));
+		const s = (xs: number[], d = 1) => (Number.isFinite(median(xs)) ? median(xs).toFixed(d) : "—");
+		const ratio = warm.map((r) => (r.usage ? r.usage.cacheRead / contextOf(r) : NaN));
+		console.log("| " + [v + (v === base ? "（留一）" : ""), rs.length, rs.length - rs.filter(ok).length, same + "/" + n + "（" + ((100 * same) / Math.max(1, n)).toFixed(0) + "%）", sameKind + "/" + n,
+			s(cold.map((r) => (r.ttftMs ?? NaN) / 1000)) + " / " + s(warm.map((r) => (r.ttftMs ?? NaN) / 1000)),
+			s(cold.map((r) => (r.requestMs ?? NaN) / 1000)) + " / " + s(warm.map((r) => (r.requestMs ?? NaN) / 1000)),
+			s(cold.map((r) => contextOf(r) / 1000), 0) + " / " + s(warm.map((r) => contextOf(r) / 1000), 0),
+			(100 * median(ratio)).toFixed(1) + "%", rs.reduce((sum, r) => sum + r.cost, 0).toFixed(2)].join(" | ") + " |");
+	}
+	console.log("\n### 不一致（与 base 多数不同）\n");
+	for (const p of points) {
+		const label = majority(baseRuns(p.id).map((x) => act(x).label));
+		const lines = variants.flatMap((v) => all.get(v)!.filter((r) => r.point === p.id && ok(r) && act(r).label !== label).sort((a, b) => a.run - b.run).map((r) => "- " + v + "#" + r.run + " " + act(r).label + "：" + actionText(r)));
+		if (!lines.length) continue;
+		const sample = baseRuns(p.id).find((r) => act(r).label === label);
+		console.log("**" + p.id + "**（" + Math.round(p.tokens / 1000) + "k，" + p.summary.slice(0, 50) + "）base 多数 " + label + "：" + (sample ? actionText(sample) : "—"));
+		console.log(lines.join("\n") + "\n");
+	}
+}
+
 // ───────────── 入口 ─────────────
 
 const { values, positionals } = parseArgs({
@@ -479,11 +637,13 @@ const { values, positionals } = parseArgs({
 	options: {
 		"max-tokens": { type: "string", default: "120000" }, count: { type: "string", default: "20" },
 		runs: { type: "string", default: "2" }, concurrency: { type: "string", default: "3" }, budget: { type: "string", default: "30" },
-		timeout: { type: "string", default: "300" }, points: { type: "string" }, force: { type: "boolean" },
+		timeout: { type: "string", default: "300" }, points: { type: "string" }, force: { type: "boolean" }, base: { type: "string" }, "summary-model": { type: "string" }, "instructions-file": { type: "string" },
 	},
 });
 mkdirSync(ROOT, { recursive: true });
-const loadPoints = (): Point[] => JSON.parse(readFileSync(join(ROOT, "points.json"), "utf8"));
+/** 时点清单含个人会话路径，不进仓库；REPLAY_POINTS 指向仓库外的 points.json（detail.ts 同用）。 */
+const POINTS = process.env.REPLAY_POINTS ?? join(ROOT, "points.json");
+const loadPoints = (): Point[] => JSON.parse(readFileSync(POINTS, "utf8"));
 const [command, arg] = positionals;
 
 if (command === "scan") {
@@ -498,7 +658,7 @@ if (command === "scan") {
 	for (const [k, n] of [...tally].sort()) console.log("  " + k + " " + n);
 } else if (command === "pick") {
 	const picked = pick(JSON.parse(readFileSync(join(ROOT, "candidates.json"), "utf8")), Number(values.count));
-	writeFileSync(join(ROOT, "points.json"), JSON.stringify(picked, null, 1));
+	writeFileSync(POINTS, JSON.stringify(picked, null, 1));
 	for (const p of picked) console.log(p.id + "  " + Math.round(p.tokens / 1000) + "k  原始 " + classify(p.original).label + "  " + p.summary);
 } else if (command === "run") {
 	if (!arg || !existsSync(variantAgent(arg))) throw new Error("变体 " + arg + " 不存在，先 bun variant.ts " + arg);
@@ -519,8 +679,20 @@ if (command === "scan") {
 	await pool(jobs, Number(values.concurrency));
 	if (spent >= budget) console.error("已到预算 $" + budget + "，余下的没跑");
 	report([arg], loadPoints());
+} else if (command === "compact") {
+	if (!arg || !existsSync(variantAgent(arg))) throw new Error("变体 " + arg + " 不存在，先 bun variant.ts " + arg);
+	const wanted = parseList(values.points);
+	let spent = 0;
+	const jobs = loadPoints().filter((p) => (!wanted || wanted.includes(p.id)) && (values.force || !existsSync(compactedPrefix(arg, p.id)))).map((point) => async () => {
+		if (spent >= Number(values.budget)) return;
+		const r = await compactOnce(point, arg, Number(values.timeout), values["summary-model"] ? parseSummaryModel(values["summary-model"]) : undefined, values["instructions-file"] ? readFileSync(values["instructions-file"], "utf8").trim() : undefined);
+		spent += r.cost;
+		console.error(point.id + " 压缩" + (r.ok ? "完成" : "失败") + " $" + r.cost.toFixed(3) + " " + r.sec.toFixed(0) + "s（本批累计 $" + spent.toFixed(2) + "）");
+	});
+	await pool(jobs, Number(values.concurrency));
 } else if (command === "report") {
-	report(parseList(arg) ?? [], loadPoints());
+	if (values.base) compare(parseList(arg) ?? [], values.base, loadPoints());
+	else report(parseList(arg) ?? [], loadPoints());
 } else {
 	throw new Error("用法见文件头注释");
 }
