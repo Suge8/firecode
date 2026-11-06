@@ -1,7 +1,7 @@
 /**
  * 事件发件箱：落定事件先以 pending entry 写进主会话，再经 deliver.ts 投递，成功后写 ack；reload 重投差集。
  * 同一节拍内的落定合并成一条消息。在飞子代理数也在这里算：指挥官在等的 working/reviewing 加上它们的事件还在队列
- * 或投递中的子代理，所以归零只发生在事件交给指挥官之后。视图起的运行（见 RunOrigin）不算在飞，它的事件只告知不唤醒。
+ * 或投递中的子代理，所以归零只发生在事件进入指挥官的回合之后（deliver 的回执，见 deliver.ts）。视图起的运行（见 RunOrigin）不算在飞，它的事件只告知不唤醒。
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";

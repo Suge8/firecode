@@ -182,9 +182,8 @@ test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展�
 	let release!: () => void;
 	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
 	const session = await hostSession(`
-import { deliver, watchSessionMaintenance, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+import { deliver, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
-	watchSessionMaintenance(pi);
 	// 排在 deliver 的登记之后的其他扩展：宿主逐个 await 处理器，压缩状态要等它跑完才清。
 	pi.on("session_compact", () => new Promise((resolve) => setTimeout(resolve, 80)));
 	pi.on("session_start", (_event, ctx) => {
@@ -230,9 +229,8 @@ async function summarizingSession() {
 	let release!: () => void;
 	const summaryGate = new Promise<void>((resolve) => { release = resolve; });
 	const session = await hostSession(`
-import { deliver, watchSessionMaintenance, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
+import { deliver, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
 export default function (pi) {
-	watchSessionMaintenance(pi);
 	pi.on("session_start", (_event, ctx) => {
 		globalThis.__deliverDuringSummary = () => deliver(pi, ctx, { customType: "firecode-review-card", content: wrapEnvelope("firecode_master_event", "worker done") });
 	});

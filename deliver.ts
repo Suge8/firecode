@@ -1,13 +1,9 @@
 /**
  * 统一投递入口（Master 事件与 review 的修复反馈/总结提示共用）：一律以自定义消息 + triggerTurn 交给宿主，
- * 宿主在回合进行中（含开回合的准备阶段）把它放进 steer 队列句缝送达，歇透时由它开一个回合，回合照常经过
- * before_agent_start（pi 1.2.0 起），扩展注入的系统提示段不被撤下。只告知不唤醒的结果走 inform。
- *
- * 例外是手动 /compact 与带摘要的 /tree 切换：它们不在回合里，宿主 isIdle 为 false、isStreaming 为 false，此时 steer 只会被当场
- * 追加、没人被唤起，triggerTurn 则会在压缩还没落定时开一个回合；/tree 还会把消息挂到被丢下的旧分支。所以发送前先等它们落定。
- * 自动压缩在回合内部，宿主压缩后按队列续跑，不受影响。
- *
- * 歇透时要开回合的投递先过唤醒前钩子（beforeWake，闲置压缩用它在请求发出前把过期的上下文换成摘要），再按上面的规则等维护落定。
+ * 回合进行中在句缝送达，歇透时由宿主开一个回合，回合照常经过 before_agent_start（pi 1.2.0 起），扩展注入的系统提示段
+ * 不被撤下。送达只认这条消息进入回合（它的 message_start），入队不算：入队的消息可能被清掉或滞留。
+ * 手动 /compact、带摘要的 /tree 等不在回合里的忙先等它落定；自动压缩在回合内部，不受影响。规则见 deliver 与 DeliveryLine。
+ * 只告知不唤醒的结果走 inform。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -49,16 +45,82 @@ export interface Delivery {
 	content: string;
 }
 
-interface MaintenanceState {
-	/** 手动压缩进行中的等待点；undefined 表示没有。 */
-	pending?: PromiseWithResolvers<void>;
-	/** 维护动作的事件已发完、或事件不完整（分支摘要），宿主可能还没退出忙状态的收尾期；deliver 按 isIdle 等。 */
-	settling: boolean;
-	/** 收尾期的检查间隔：分支摘要要等整个摘要请求，放宽；压缩只剩别的扩展的处理器，收紧。 */
-	tickMs: number;
+type DeliveryMessage = { customType: string; content: string; display: true; details: { delivery: string } };
+
+/**
+ * 每个会话一条投递线：持有回合进行中等着上车的投递，凭 message_start 发回执。
+ * 回合进行中不在调用时就把消息交给宿主的 steer 队列：在那里它可能被用户的 Esc/出队键清掉（宿主编辑器只回填文本，
+ * 自定义消息无声丢失），也可能因回合被中止（含 /compact 开头的中止）滞留到用户下次输入，而扩展看不到那个队列，
+ * 事后分不清是哪一种，补投就可能重复。所以消息先留在这里，只在宿主马上要取队列的时刻（turn_end、agent_end，
+ * 回合未被中止、用户没有排队的话）上车：宿主紧接着取走它并发 message_start。一次只上一条：宿主默认逐条取队列。
+ * 回合落定时还没进入的（中止、没赶上句缝）回到 deliver，等歇透后自己开回合。
+ * 残余：上车后同一节拍里被清或被中止，或别的扩展的 steer 占了逐条取的那一格，落定时同样按未进入处理，
+ * 可能重复一次——宁可重复不丢。
+ */
+class DeliveryLine {
+	private readonly receipts = new Map<string, PromiseWithResolvers<boolean>>();
+	private readonly riders: { message: DeliveryMessage; boarded: boolean }[] = [];
+
+	constructor(private readonly pi: ExtensionAPI) {
+		pi.on("turn_end", (_event, ctx) => this.board(ctx));
+		pi.on("agent_end", (_event, ctx) => this.board(ctx));
+		pi.on("message_start", ({ message }) => {
+			if (message.role !== "custom") return;
+			const delivery = (message.details as { delivery?: unknown } | undefined)?.delivery;
+			if (typeof delivery === "string") this.receipts.get(delivery)?.resolve(true);
+		});
+		pi.on("agent_settled", () => {
+			for (const rider of this.riders) this.receipts.get(rider.message.details.delivery)?.resolve(false);
+		});
+	}
+
+	/** 歇透：宿主开回合，等这条消息的 message_start。 */
+	async wake(message: DeliveryMessage, signal?: AbortSignal): Promise<void> {
+		await this.receipt(message, signal, () => this.pi.sendMessage(message, { triggerTurn: true }));
+	}
+
+	/** 回合在跑：排队等句缝；true 是已进入这一回合，false 是回合落定时还没进入。 */
+	async ride(message: DeliveryMessage, signal?: AbortSignal): Promise<boolean> {
+		const rider = { message, boarded: false };
+		this.riders.push(rider);
+		try {
+			return await this.receipt(message, signal);
+		} finally {
+			this.riders.splice(this.riders.indexOf(rider), 1);
+		}
+	}
+
+	private async receipt(message: DeliveryMessage, signal?: AbortSignal, send?: () => void): Promise<boolean> {
+		const receipt = Promise.withResolvers<boolean>();
+		this.receipts.set(message.details.delivery, receipt);
+		try {
+			send?.();
+			return await abortable(receipt.promise, signal);
+		} finally {
+			this.receipts.delete(message.details.delivery);
+		}
+	}
+
+	/** 宿主取 steer 队列之前（处理器返回后它立即取）：队首还没上车就上车，取走时发 message_start；发送抛错交回这条投递。 */
+	private board(ctx: ExtensionContext): void {
+		const next = this.riders[0];
+		if (!next || next.boarded || ctx.signal?.aborted || ctx.hasPendingMessages()) return;
+		next.boarded = true;
+		try {
+			this.pi.sendMessage(next.message, { triggerTurn: true });
+		} catch (error) {
+			this.receipts.get(next.message.details.delivery)?.reject(error);
+		}
+	}
 }
 
-const maintenance = new WeakMap<ExtensionAPI, MaintenanceState>();
+/** 第一次投递时建线：订阅从那以后的回合事件就够了，乘车的投递只在宿主 agent 循环在跑时加入（见 deliver）。 */
+const lines = new WeakMap<ExtensionAPI, DeliveryLine>();
+function lineOf(pi: ExtensionAPI): DeliveryLine {
+	let line = lines.get(pi);
+	if (!line) lines.set(pi, line = new DeliveryLine(pi));
+	return line;
+}
 const wakeHooks = new WeakMap<ExtensionAPI, (ctx: ExtensionContext) => Promise<void>>();
 
 /** 登记歇透时开回合前要先做完的事（每个会话一个）：它可以发起手动压缩，deliver 之后照常等压缩落定。 */
@@ -66,65 +128,25 @@ export function beforeWake(pi: ExtensionAPI, hook: (ctx: ExtensionContext) => Pr
 	wakeHooks.set(pi, hook);
 }
 
-const COMPACTION_TICK_MS = 5;
-const SUMMARY_TICK_MS = 50;
+/** 宿主忙却不在回合里时检查歇透的间隔：这类忙没有成对的结束事件可等（见 deliver）。 */
+const IDLE_TICK_MS = 20;
 
 /**
- * 登记宿主的两类"不在回合里的忙"，主会话注册时调用一次：手动 /compact 与带摘要的 /tree 分支切换。
- * 两者宿主 isIdle 为 false、isStreaming 为 false，steer 只会被当场追加、没人被唤起；分支切换更糟，
- * 追加发生在摘要期间，消息挂在即将被丢下的旧分支上，模型之后永远看不到。所以 deliver 要等它们落定再投。
- *
- * 手动压缩有成对的事件：session_before_compact 开始，session_compact / session_compact_failed 结束，用 pending 等。
- * session_compact 在宿主清掉压缩状态之前发出，宿主还逐个 await 排在后面的扩展的处理器，所以事件到达时 isIdle 仍是 false，
- * 之后进入收尾期按 isIdle 等到真正落定。
- *
- * 分支切换没有成对的事件：宿主只在切换成功时发 session_tree，扩展取消、用户取消和摘要报错都没有事件，等事件会永远悬挂。
- * 所以 session_before_tree 起就只置收尾期、按 isIdle 等（摘要期间间隔放宽）；成功的 session_tree 到达后摘要已结束，间隔收紧。
- * 收尾期里有回合开始（agent_start）就不再等：之后的忙是回合在忙，steer 会被续跑。
- */
-export function watchSessionMaintenance(pi: ExtensionAPI): void {
-	if (maintenance.has(pi)) return;
-	const state: MaintenanceState = { settling: false, tickMs: COMPACTION_TICK_MS };
-	maintenance.set(pi, state);
-	const finishCompaction = () => {
-		const waiting = state.pending;
-		if (!waiting) return;
-		state.pending = undefined;
-		state.settling = true;
-		waiting.resolve();
-	};
-	pi.on("session_before_compact", (event) => {
-		if (event.reason !== "manual") return;
-		state.settling = false;
-		state.tickMs = COMPACTION_TICK_MS;
-		state.pending ??= Promise.withResolvers<void>();
-	});
-	pi.on("session_compact", (event) => { if (event.reason === "manual") finishCompaction(); });
-	pi.on("session_compact_failed", (event) => { if (event.reason === "manual") finishCompaction(); });
-	pi.on("session_before_tree", () => {
-		state.settling = true;
-		state.tickMs = SUMMARY_TICK_MS;
-	});
-	pi.on("session_tree", () => { state.tickMs = COMPACTION_TICK_MS; });
-	pi.on("agent_start", () => { state.settling = false; });
-	pi.on("session_shutdown", () => {
-		state.settling = false;
-		finishCompaction();
-	});
-}
-
-/**
- * 统一投递，resolve 即这条消息已进入回合：
- * - 主回合在跑：宿主把卡片放进 steer 队列，入队即交付；
- * - 主回合歇透：宿主开回合，等这条消息本身的 message_start（宿主对回合起始消息与送达的 steer 都发，先于模型请求）再 resolve。
- *   宿主在回合开始之前就从 sendMessage 返回，过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。
- *   不以“下一个 agent_start”为回执：只有一个投递方时它确实是本消息开的回合，但 agent_settled 派发期间宿主把 triggerTurn
- *   推迟到派发完逐个执行，别人先排进去时下一个回合是别人的，曾让审查把别人的回合当成自己的总结/修复回合收尾。
- *   认消息靠 details 里每次投递新生成的 delivery id（宿主把 details 原样带进消息与会话记录），不比正文：同类型同正文的
- *   两条投递（或别的扩展发的同文消息）也不会互相确认。details 只承载这个 id，渲染与折叠界面不认它，照常降级；
- * - 手动压缩或分支切换中：等它落定再按上两条投递，期间保持未完成（见 watchSessionMaintenance）。
+ * 统一投递，resolve 即这条消息已进入回合（宿主为它发了 message_start，先于带上它的模型请求）：
+ * - 主回合歇透：宿主开回合，等这条消息的 message_start。宿主在回合开始之前就从 sendMessage 返回，过早 resolve 会让
+ *   Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。不以“下一个 agent_start”为回执：agent_settled 派发期间
+ *   宿主把 triggerTurn 推迟到派发完逐个执行，别人先排进去时下一个回合是别人的。
+ * - 主回合在跑（宿主 agent 循环在跑，ctx.signal 有值）：经投递线在句缝上车（见 DeliveryLine），同样等自己的
+ *   message_start；回合落定时还没进入就回到下一条。
+ * - 宿主忙却不在回合里：开回合的准备段、手动 /compact、带摘要的 /tree、落定收尾。此时 steer 只会被当场追加、没人
+ *   唤起，triggerTurn 会在压缩落定前开回合，/tree 还会把消息挂到被丢下的旧分支，所以按间隔查 isIdle 等歇透或回合开始。
+ *   不等事件：分支切换只在成功时发 session_tree（取消、报错都没有事件），session_compact 先于宿主清压缩状态发出，
+ *   宿主还逐个 await 排在后面的扩展的处理器。回合没赶上而落定后也先等一个间隔：宿主在落定处理器返回后才放行
+ *   等着它歇下的压缩与分支切换（它们开头先中止回合），让它们先占住会话，投递随后唤醒，不抢在它们前面开回合。
+ * 认消息靠 details 里每次投递新生成的 delivery id（宿主把 details 原样带进消息与会话记录），不比正文：同类型同正文的
+ * 两条投递（或别的扩展发的同文消息）也不会互相确认。details 只承载这个 id，渲染与折叠界面不认它，照常降级。
  * 忙闲判断与发送之间不能 await：两者在同一节拍，读到的忙闲就是宿主处理这条消息时的忙闲。
- * 调用方收口（signal 中止）时退订并以中止原因 reject。
+ * 歇透时要开回合的投递先过唤醒前钩子（beforeWake）。调用方收口（signal 中止）时撤下并以中止原因 reject。
  */
 export async function deliver(
 	pi: ExtensionAPI,
@@ -132,29 +154,22 @@ export async function deliver(
 	envelope: Delivery,
 	signal?: AbortSignal,
 ): Promise<void> {
-	const hook = wakeHooks.get(pi);
-	if (hook && ctx.isIdle()) await abortable(hook(ctx), signal);
-	const state = maintenance.get(pi);
-	while (state?.pending) await abortable(state.pending.promise, signal);
-	while (state?.settling && !ctx.isIdle()) {
+	const line = lineOf(pi);
+	const message: DeliveryMessage = {
+		customType: envelope.customType, content: envelope.content, display: true, details: { delivery: crypto.randomUUID() },
+	};
+	for (;;) {
 		signal?.throwIfAborted();
-		await new Promise((resolve) => setTimeout(resolve, state.tickMs));
-	}
-	signal?.throwIfAborted();
-	const delivery = crypto.randomUUID();
-	const started = ctx.isIdle() ? Promise.withResolvers<void>() : undefined;
-	const unsubscribe = started && pi.on("message_start", ({ message }) => {
-		if (message.role === "custom" && (message.details as { delivery?: unknown } | undefined)?.delivery === delivery) started.resolve();
-	});
-	try {
-		pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true, details: { delivery } }, { triggerTurn: true });
-		if (started) await abortable(started.promise, signal);
-	} finally {
-		unsubscribe?.();
+		if (ctx.isIdle()) {
+			const hook = wakeHooks.get(pi);
+			if (hook) await abortable(hook(ctx), signal);
+			if (ctx.isIdle()) return line.wake(message, signal);
+		} else if (ctx.signal && await line.ride(message, signal)) return;
+		await abortable(new Promise<void>((resolve) => setTimeout(resolve, IDLE_TICK_MS)), signal);
 	}
 }
 
-function abortable(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 	if (!signal) return promise;
 	signal.throwIfAborted();
 	const aborted = Promise.withResolvers<never>();

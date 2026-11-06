@@ -29,8 +29,11 @@ const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 let faux: any;
 let directory: string | undefined;
+let stopSentenceBreaks: (() => void) | undefined;
 
 afterEach(async () => {
+	stopSentenceBreaks?.();
+	stopSentenceBreaks = undefined;
 	setSystemTime();
 	delete (globalThis as any).__reviewTick;
 	delete (globalThis as any).__loadGate;
@@ -2286,6 +2289,7 @@ async function setup(activate = true, options: {
 			if (failures > 0) { failures--; throw new Error("投递失败"); }
 			messages.push({ message, options: sendOptions });
 			entries.push({ type: "custom_message", customType: message.customType, content: message.content });
+			if (sendOptions?.triggerTurn === true && !idle) steered.push(message);
 			if (sendOptions?.triggerTurn === true && idle) {
 				idle = false;
 				starting = message;
@@ -2295,6 +2299,25 @@ async function setup(activate = true, options: {
 			onMessage?.();
 		},
 	});
+	/**
+	 * 指挥官回合在跑（idle 为 false）时宿主不断经过句缝：发 turn_end，处理器返回后取走 steer 队列，逐条发 message_start。
+	 * 回合在跑时 ctx.signal 有值（宿主 agent 循环的中止信号）。
+	 */
+	const steered: any[] = [];
+	const run = new AbortController();
+	let breaking = false;
+	const sentenceBreaks = setInterval(async () => {
+		if (idle || breaking) return;
+		breaking = true;
+		try {
+			await fake.fire("turn_end", {}, ctx);
+			for (const { customType, content, display, details } of steered.splice(0))
+				await fake.fire("message_start", { message: { role: "custom", customType, content, display, details } }, ctx);
+		} finally {
+			breaking = false;
+		}
+	}, 5);
+	stopSentenceBreaks = () => clearInterval(sentenceBreaks);
 	/** 唤起的回合真正开始：agent_start 在前，随后宿主记录这条自定义消息本身。 */
 	const wake = async () => {
 		const { customType, content, display, details } = starting;
@@ -2326,6 +2349,8 @@ async function setup(activate = true, options: {
 	const ctx = {
 		cwd,
 		isIdle: () => idle,
+		get signal() { return idle ? undefined : run.signal; },
+		hasPendingMessages: () => false,
 		hasUI: options.confirmAnswer !== undefined,
 		sessionManager: {
 			getSessionId: () => sessionId,

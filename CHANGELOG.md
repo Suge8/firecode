@@ -45,6 +45,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Reloading again before a Worker interrupted by a reload was resumed no longer loses the reminder to resume it. If the reminder cannot be saved to the session, it is sent again after the next reload.
 - The 15-Worker concurrency limit now also applies to `send` and `review` on idle Workers.
 - Sending to, or auto-resuming, a Worker whose idle session is still shutting down now waits for the shutdown instead of failing with "already held by an in-process session".
+- Subagent results and review feedback delivered while the main turn is running are no longer lost when you press Esc, and no longer sit unseen until your next message when the turn is aborted (including by `/compact`). A message counts as delivered only once it actually enters a turn, and FireCode wakes the agent itself if the turn ended first.
 
 ## [1.8.0] - 2026-11-05
 
