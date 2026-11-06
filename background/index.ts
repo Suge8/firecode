@@ -3,7 +3,8 @@
  * 省略整节三项都关，压缩回到 pi 默认（会话模型写摘要）。本模块管后两项：
  * - 压缩摘要：主会话与子会话的自动压缩与 /compact 都由后台链写摘要（summarize.ts）。整条链都失败时出一条提示，交回 pi 默认压缩，不静默；
  *   子会话没有界面，提示以扩展错误抛出，经 spawn.ts 的 onExtensionError 报给指挥官，宿主同样接着走默认压缩。
- * - 闲置压缩：idle.ts，只在主会话（子代理的热会话闲置 Timing.idleSessionMs 就释放，等不到缓存过期线）。
+ * - 闲置压缩：idle.ts，主会话与子会话都有（子代理热会话多数在闲置 Timing.idleSessionMs 后释放、预算随之作废，
+ *   但审查中的子代理会一直持有，可能闲过缓存过期线）。
  * 与原生压缩的先后在 registerOpenAINative：它接管的会话不会走到这里。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -15,10 +16,10 @@ import { msg } from "./messages.js";
 import { summarize } from "./summarize.js";
 
 /** 返回交给压缩钩子的后台摘要；没配 background 时 undefined（pi 默认压缩）。 */
-export function registerBackground(pi: ExtensionAPI, pool: InProcessSessionPool, subsession: boolean): CompactionHook | undefined {
+export function registerBackground(pi: ExtensionAPI, pool: InProcessSessionPool): CompactionHook | undefined {
 	const background = loadConfig().config.background;
 	if (!background) return undefined;
-	const idle = !subsession && background.idleCompaction ? new IdleCompaction(pi, pool, background.model) : undefined;
+	const idle = background.idleCompaction ? new IdleCompaction(pi, pool, background.model) : undefined;
 	return async (event, ctx) => {
 		const ready = idle?.applying();
 		if (ready) return { compaction: ready };

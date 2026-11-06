@@ -1,8 +1,8 @@
 /**
- * 闲置压缩（只在主会话）：歇下后闲置到 Timing.cacheTtlMs − idleCompactionLeadMs，用后台链预先算好摘要，只放内存，
+ * 闲置压缩（主会话与子会话）：歇下后闲置到 Timing.cacheTtlMs − idleCompactionLeadMs，用后台链预先算好摘要，只放内存，
  * 绑定当时的会话末端（leaf）。下一次请求发出前——用户输入经 input 事件，插件投递经 deliver.ts 的 beforeWake——
  * 闲置已超过缓存过期线且会话末端没变，就经宿主 ctx.compact 把它作为一次压缩应用（压缩钩子交出这份摘要，持久化与事件仍是宿主的），
- * 再发请求；否则丢弃。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
+ * 再发请求；否则丢弃。指挥官给暂停的子代理续跑时直接投自定义消息、不经这两处，那次请求开回合时预算作废、照常发出。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
  *
  * 不当场算：进程重启后没有预算好的摘要就照常走；请求到达时预算还在飞，作废预算。上下文不到 MIN_CONTEXT_TOKENS 不预算。
  * 原生压缩接管的会话不碰（见 openai-native 的 nativeTakesOver）。
@@ -16,7 +16,9 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	buildSessionProjection,
+	calculateContextTokens,
 	findCutPoint,
+	getLastAssistantUsage,
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelChain } from "../config.js";
@@ -81,9 +83,11 @@ export class IdleCompaction {
 	private async precompute(ctx: ExtensionContext): Promise<void> {
 		this.timer = undefined;
 		const idleSince = this.idleSince;
-		const tokensBefore = ctx.getContextUsage()?.tokens ?? 0;
-		if (idleSince === undefined || !ctx.isIdle() || tokensBefore < MIN_CONTEXT_TOKENS) return;
 		const branch = ctx.sessionManager.getBranch();
+		// 子会话的模型是路由虚拟模型，宿主算不出它的上下文用量：退回分支上最后一次回复报告的用量（同一口径）。
+		const lastUsage = getLastAssistantUsage(branch);
+		const tokensBefore = ctx.getContextUsage()?.tokens ?? (lastUsage ? calculateContextTokens(lastUsage) : 0);
+		if (idleSince === undefined || !ctx.isIdle() || tokensBefore < MIN_CONTEXT_TOKENS) return;
 		if (nativeTakesOver(branch, physicalModel(ctx.model), nativeCompactionEnabled())) return;
 		const preparation = idlePreparation(branch, this.settings(ctx), tokensBefore);
 		if (!preparation) return;

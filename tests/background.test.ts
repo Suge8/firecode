@@ -194,3 +194,23 @@ test("闲置期间会话末端变了：过期后也不应用，请求带完整�
 	expect(sessionRequests(requests).at(-1)!.text.length).toBeGreaterThan(HUGE.length);
 	expect(compactions()).toHaveLength(0);
 });
+
+test("子会话闲置超过缓存过期线：下一次请求同样从预算好的摘要开始", async () => {
+	const { pool, requests, cwd } = await setup({ background: { model: [LUNA] }, timing: IDLE });
+	const spawned = await pool.spawn({
+		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
+		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
+	});
+	cleanups.push(() => spawned.dispose());
+	let settledAt = 0;
+	spawned.session.subscribe((event: any) => { if (event.type === "agent_end") settledAt = Date.now(); });
+	await spawned.session.prompt(`big ${HUGE}`);
+	await spawned.session.prompt(`follow-up ${"word ".repeat(400)}`);
+	await until(() => summaries(requests).length === 1);
+	await until(() => Date.now() >= settledAt + IDLE.cacheTtlMs + 50);
+	await spawned.session.prompt("next task");
+	const last = sessionRequests(requests).at(-1)!;
+	expect(last.text).toContain("SUMMARY by luna");
+	expect(last.text.length).toBeLessThan(HUGE.length / 10);
+	expect(spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")).toHaveLength(1);
+});
