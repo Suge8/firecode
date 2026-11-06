@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-06
+
 ### Added
 
 - Background session naming (`background.sessionNames`, on by default; older configs keep working): an unnamed session in the main interactive or RPC session is named in the background from your first message (about 1k bytes of text, no images) by the `background` chain, without delaying the reply. The name is one short line in your language. If the message holds no task (a greeting), no name is set and the next message tries again; a failed request is not retried on the main model. A name you set yourself (`/name`, the rename key, CuePad) always wins, and a session is named only once. With no `background` section nothing is named.
@@ -318,7 +320,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/Suge8/firecode/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Suge8/firecode/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Suge8/firecode/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/Suge8/firecode/compare/v1.6.0...v1.7.0
