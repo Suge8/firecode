@@ -380,11 +380,12 @@ function pick(candidates: Point[], count: number): Point[] {
 
 /** 前缀：截取点父条目的整条分支；没确认的事件补一条 ack，免得 Master 重开会话时自己重投。 */
 function writePrefix(point: Point, dest: string): any {
+	// 每个副本用新的 session id：网关按 session id 复用上游会话，沿用源会话的 id 会接回未压缩的原会话（压缩后续跑读到压缩前的整段缓存）。
 	const file = session(point.file);
 	const branch = file.branch(file.byId.get(point.entryId).parentId);
 	const acked = new Set(branch.filter((e) => e.type === "custom" && e.customType === ACK_TYPE).flatMap((e) => e.data?.ids ?? []));
 	const unacked = branch.filter((e) => e.type === "custom" && e.customType === PENDING_TYPE && !acked.has(e.data?.id)).map((e) => e.data.id);
-	const lines = [file.header, ...branch];
+	const lines = [{ ...file.header, id: crypto.randomUUID() }, ...branch];
 	if (unacked.length) {
 		lines.push({ type: "custom", customType: ACK_TYPE, data: { ids: unacked }, id: crypto.randomUUID().slice(0, 8), parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString() });
 	}
@@ -467,7 +468,10 @@ function replayOnce(point: Point, variant: string, run: number, timeoutSec: numb
 	const sessionPath = join(dir, "sessions", basename(point.file));
 	const cut = writePrefix(point, sessionPath);
 	const compacted = compactedPrefix(variant, point.id);
-	if (existsSync(compacted)) writeFileSync(sessionPath, readFileSync(compacted));
+	if (existsSync(compacted)) {
+		const [header, ...rest] = readFileSync(compacted, "utf8").split("\n");
+		writeFileSync(sessionPath, [JSON.stringify({ ...JSON.parse(header!), id: crypto.randomUUID() }), ...rest].join("\n"));
+	}
 	const log = join(dir, "blocked.jsonl");
 	const env: Record<string, string> = { EVAL_LOG: log };
 	if (point.kind === "event") {
