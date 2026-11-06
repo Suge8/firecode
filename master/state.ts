@@ -24,6 +24,11 @@ export interface WorkerRef {
 	launch: number;
 	reviewNeeded?: boolean;
 	/**
+	 * 回合被会话重载打断、“待续跑”提醒还没发出：载入时从在飞收敛的票带它，提醒发出或指挥官接手（send/review/ack）时清掉。
+	 * 必须持久化：只在载入那一刻推断的话，提醒时限内再 reload 一次，这票已是 idle，与指挥官自己 interrupt 的票分不出来，提醒就丢了。
+	 */
+	reloadInterrupted?: true;
+	/**
 	 * 瞬时失败后的自动续跑：idle 且带它就是“暂停到 at，到时自动续跑”（review 为真时续的是审查）。持久化，reload 后按 at 重挂。
 	 * 自动续跑开始后保留到这次运行落定才清：续跑中被 reload 打断时载入收敛回暂停、立即再续，而不是变成等指挥官的中断。
 	 * 指挥官 send/review/interrupt/ack 会清掉它（工作归指挥官接手），所以同一次暂停只续跑一次；暂停时它已在就说明这次运行告知过“已暂停”。
@@ -44,31 +49,28 @@ export function masterStatePath(agentDir: string, sessionId: string): string {
 }
 
 /**
- * 池档案的唯一所有者：每次变更同步原子落盘（0600），池变空就删文件。构造即加载——运行时不跨进程存活，所以载入时
- * 在飞的 working/reviewing 一律收敛为带 interruptedAt 的 idle（会话与审查义务保留，等指挥官续派），名字记在 recovered。
+ * 池档案的唯一所有者：每次变更先同步原子落盘（0600）、成功后才换内存列表，写盘失败照常抛错且内存不变，两者不分叉；池变空就删文件。
+ * 构造即加载——运行时不跨进程存活，所以载入时在飞的 working/reviewing 一律收敛为带 interruptedAt 与 reloadInterrupted 的 idle
+ * （会话与审查义务保留，等指挥官续派）。
  * 列表始终按启动序（launch）排列，读者不再二次排序。
  * 旧版档案由所有者丢弃并记下版本，供上层告知；新版本（降级）与格式损坏明确失败，不删、不当作空池。
  */
 export class MasterStore {
 	private list: readonly WorkerRef[];
 	readonly discardedLegacyVersion?: number;
-	/** 本次载入从在飞收敛为 idle 的子代理名字：只有它们的回合是被会话重载打断的。 */
-	readonly recovered: readonly string[];
 
 	constructor(private readonly path: string, private readonly onChange?: () => void) {
 		const loaded = load(path);
 		this.discardedLegacyVersion = loaded.legacyVersion;
 		const now = Date.now();
-		const recovered: string[] = [];
-		this.list = loaded.workers.map((worker) => {
+		const list = loaded.workers.map((worker): WorkerRef => {
 			if (worker.status === "idle") return worker;
 			// 自动续跑中被打断：仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续。
 			if (worker.resume) return { ...worker, status: "idle" };
-			recovered.push(worker.name);
-			return { ...worker, status: "idle", interruptedAt: now };
+			return { ...worker, status: "idle", interruptedAt: now, reloadInterrupted: true };
 		});
-		this.recovered = recovered;
-		if (loaded.workers.some((worker) => worker.status !== "idle")) this.persist();
+		if (loaded.workers.some((worker) => worker.status !== "idle")) this.persist(list);
+		this.list = list;
 	}
 
 	get workers(): readonly WorkerRef[] {
@@ -88,34 +90,33 @@ export class MasterStore {
 	/** 按名字新增或覆盖；新增的按启动序插入。 */
 	upsert(worker: WorkerRef): void {
 		const existing = this.find(worker.name);
-		this.list = existing
+		this.commit(existing
 			? this.list.map((candidate) => (candidate === existing ? worker : candidate))
-			: [...this.list, worker].sort(byLaunch);
-		this.commit();
+			: [...this.list, worker].sort(byLaunch));
 	}
 
 	/** 返回是否确有这一票。 */
 	remove(name: string): boolean {
 		if (!this.find(name)) return false;
-		this.list = this.list.filter((worker) => worker.name !== name);
-		this.commit();
+		this.commit(this.list.filter((worker) => worker.name !== name));
 		return true;
 	}
 
-	private commit(): void {
-		this.persist();
+	private commit(list: readonly WorkerRef[]): void {
+		this.persist(list);
+		this.list = list;
 		this.onChange?.();
 	}
 
-	private persist(): void {
-		if (!this.list.length) {
+	private persist(list: readonly WorkerRef[]): void {
+		if (!list.length) {
 			rmSync(this.path, { force: true });
 			return;
 		}
 		mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
 		const temporary = `${this.path}.${process.pid}.${crypto.randomUUID()}.tmp`;
 		try {
-			writeFileSync(temporary, `${JSON.stringify({ version: STATE_VERSION, workers: this.list })}\n`, { encoding: "utf8", mode: 0o600 });
+			writeFileSync(temporary, `${JSON.stringify({ version: STATE_VERSION, workers: list })}\n`, { encoding: "utf8", mode: 0o600 });
 			renameSync(temporary, this.path);
 		} catch (error) {
 			rmSync(temporary, { force: true });
@@ -175,6 +176,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
+	if (record.reloadInterrupted !== undefined && record.reloadInterrupted !== true) return false;
 	if (record.resume !== undefined && !isResume(record.resume)) return false;
 	return typeof record.launch === "number" && Number.isInteger(record.launch) && record.launch > 0;
 }

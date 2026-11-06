@@ -19,7 +19,7 @@ type ToolResult = { content: { type: "text"; text: string }[]; details: unknown 
 /** origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数，所以不进 params。 */
 type Handler = (active: MasterRuntime, params: Params, ctx: ExtensionContext, origin: RunOrigin) => Promise<ToolResult>;
 
-/** 同时 working/reviewing 的 Worker 上限；超出直接拒绝，不排队。 */
+/** 同时 working/reviewing 的 Worker 上限；指挥官开新运行（start、对空闲票 send/review）超出直接拒绝，不排队。 */
 const MAX_IN_FLIGHT = 15;
 
 export const ACTION_HANDLERS: Record<Action, Handler> = { start, send, interrupt, review, tail, ack, kill };
@@ -50,14 +50,15 @@ async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
 	// ack 清掉失败与被中断的行，并取消还没发出的续跑提醒与暂停后的自动续跑；完成的留在“✓ 已完成”里直到 kill。
+	// 先落档：写盘失败时报错，运行时事实也不动。
+	if (target.resume || target.reloadInterrupted) {
+		const { resume: _resume, reloadInterrupted: _reload, ...rest } = target;
+		active.store.upsert(rest);
+	}
 	const live = active.live.get(target.name);
 	if (live) {
 		active.cancelTimers(live);
 		if (live.outcome && live.outcome.kind !== "done") live.outcome = undefined;
-	}
-	if (target.resume) {
-		const { resume: _resume, ...rest } = target;
-		active.store.upsert(rest);
 	}
 	active.render();
 	return toolResult({ acked: true });
@@ -68,6 +69,7 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 	const target = targetOf(active, params);
 	const live = active.liveOf(target.name);
 	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
+	admit(active);
 	live.transitioning = true;
 	try {
 		await startReview(active, target);
@@ -158,6 +160,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	if (target.status === "working") throw new Error(msg.action.workingSwitch(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.reviewingSend(target.name));
 	const thinkingOverride = validThinking(requestedThinking);
+	admit(active);
 	live.transitioning = true;
 	try {
 		const cwd = await resolveSendCwd(target, requestedCwd);
@@ -176,7 +179,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 		const latest = active.current(target);
 		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
-		const working = active.commit(target, ({ interruptedAt: _interrupted, resume: _resume, ...rest }) => ({
+		const working = active.commit(target, ({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...rest }) => ({
 			...rest,
 			role,
 			model,
@@ -220,12 +223,9 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		throw new Error(msg.action.needWorker);
 	const name = params.worker.trim();
 	validateWorkerName(name);
-	const starting = [...active.live].flatMap(([candidate, live]) => (live.starting ? [candidate] : []));
-	if (active.store.find(name) || starting.includes(name))
+	if (active.store.find(name) || active.live.get(name)?.starting)
 		throw new Error(msg.action.exists(name));
-	const inFlight = active.store.workers.filter((worker) => worker.status === "working" || worker.status === "reviewing");
-	if (inFlight.length + starting.length >= MAX_IN_FLIGHT)
-		throw new Error(msg.action.limit(MAX_IN_FLIGHT, [...inFlight.map((worker) => worker.name), ...starting]));
+	admit(active);
 	const prompt = requiredString(params.prompt, "prompt");
 	const requestedRole = optionalString(params.role);
 	if (!requestedRole) throw new Error(msg.action.needRole);
@@ -272,6 +272,18 @@ function rearmRelease(active: MasterRuntime, target: WorkerRef): void {
 	if (current?.status !== "idle") return;
 	active.setup.pool.markIdle(target.sessionPath);
 	armResume(active, current);
+}
+
+/**
+ * 在飞上限：数 working/reviewing 的票、还没落档的 start，以及正在准备 send/review 的票（越过准备段的 await 后才写 working，
+ * 不算进去的话并行 send 能一起越过上限）。暂停后的自动续跑是已放行的那次运行接着跑，不经这里，可能短暂越过上限。
+ */
+function admit(active: MasterRuntime): void {
+	const busy = active.store.workers.flatMap((worker) =>
+		worker.status !== "idle" || active.live.get(worker.name)?.transitioning ? [worker.name] : []);
+	const starting = [...active.live].flatMap(([name, live]) => (live.starting ? [name] : []));
+	if (busy.length + starting.length >= MAX_IN_FLIGHT)
+		throw new Error(msg.action.limit(MAX_IN_FLIGHT, [...busy, ...starting]));
 }
 
 function toolResult(value: unknown): ToolResult {

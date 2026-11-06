@@ -50,7 +50,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		cwd: worker.cwd ?? process.cwd(),
 		chain: role.models,
 		thinkingOverride: override,
-		onModelChange: (atom, previous, reason) => {
+		onModelChange: (atom, previous, reason) => active.detached(worker.name, () => {
 			const current = active.find(worker);
 			if (!current) return;
 			const from = previous ?? { model: current.model, thinking: current.thinking };
@@ -58,7 +58,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 			// 只告知不唤醒：同一会话自动续跑，指挥官无事可做（断网时每次切换都唤醒它，只换来一串同样失败的指挥官回合）。
 			if (from.model !== atom.model)
 				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name, true);
-		},
+		}),
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
@@ -158,7 +158,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 	const unsubscribeTerminal = session.subscribe((event) => {
 		if (mine() && event.type === "agent_end") terminal = captureWorkerTerminal(event.messages);
 	});
-	const settled = async (error?: unknown) => {
+	const settle = (error?: unknown) => {
 		unsubscribeTerminal();
 		if (!mine()) return;
 		const stranded = session.clearQueue().steering;
@@ -173,6 +173,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 		if (pause) return pauseWorker(active, worker, pause);
 		settleWorker(active, worker, terminal, error);
 	};
+	const settled = (error?: unknown) => active.detached(worker.name, () => settle(error));
 	if (typeof input !== "string") {
 		void session.sendCustomMessage({ ...input, display: true }, { triggerTurn: true }).then(() => settled(), settled);
 		return;
@@ -199,21 +200,26 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = 
 }
 
 /**
- * 会话重载打断的回合：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间。指挥官自己 interrupt 的不提醒。
+ * 会话重载打断的回合（档案带 reloadInterrupted）：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间，
+ * 时限内再 reload 也照样按原时刻提醒。指挥官自己 interrupt 的不带标记、不提醒。提醒的 pending 落进主会话后才清标记（之后由 reload 重投保证送达），
+ * 落盘失败就保留标记，reload 后再提醒。
  * 只提醒、不代发“继续”：工作说明归指挥官，插件盲续会复活它已作废的任务。
  */
 export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): void {
-	if (active.closed) return;
+	if (active.closed || !worker.reloadInterrupted) return;
 	const live = active.liveOf(worker.name);
 	clearTimeout(live.interruptTimer);
 	const delay = Math.max(0, (worker.interruptedAt ?? Date.now()) + active.setup.pool.timing.interruptResumeMs - Date.now());
-	live.interruptTimer = setTimeout(() => {
+	live.interruptTimer = setTimeout(() => active.detached(worker.name, () => {
 		if (active.closed || active.live.get(worker.name) !== live) return;
 		live.interruptTimer = undefined;
 		const current = active.find(worker);
-		if (!current?.interruptedAt || current.interruptedAt !== worker.interruptedAt) return;
-		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
-	}, delay);
+		if (!current?.reloadInterrupted || current.interruptedAt !== worker.interruptedAt) return;
+		// pending 没落盘时 reload 不会重投这条提醒：标记留着，reload 后照常再提醒。
+		if (!active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name)) return;
+		const { reloadInterrupted: _reload, ...reminded } = current;
+		active.store.upsert(reminded);
+	}), delay);
 	live.interruptTimer.unref?.();
 }
 
@@ -249,7 +255,7 @@ export function armResume(active: MasterRuntime, worker: WorkerRef): void {
 		live.resumeTimer = undefined;
 		if (active.closed || active.live.get(worker.name) !== live) return;
 		if (Date.now() < resume.at) armResume(active, worker);
-		else void resumeWorker(active, worker, resume);
+		else active.detached(worker.name, () => resumeWorker(active, worker, resume));
 	}, delayUntil(resume.at));
 	live.resumeTimer.unref?.();
 }
@@ -314,7 +320,7 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	if (resumed && resumeSuperseded(active, target, target.resume!)) return;
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 	// 指挥官发起的审查接手了这票，清掉续跑意图；自动续审保留到落定（同 resumeWorker）。
-	active.commit(target, ({ interruptedAt: _interruptedAt, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
+	active.commit(target, ({ interruptedAt: _interruptedAt, reloadInterrupted: _reload, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
 	observeWorker(active, target, session);
 	if (!resumed) active.beginRun(target.name);
 	else active.liveOf(target.name).runStartedAt ??= Date.now();
@@ -344,7 +350,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 		return current?.status === "reviewing" ? current : undefined;
 	};
 	void monitorReview(session, target.sessionPath, previousRunId).then(
-		(outcome) => {
+		(outcome) => active.detached(target.name, () => {
 			const interrupted = live.interruptedReview;
 			live.interruptedReview = undefined;
 			const current = reviewing();
@@ -356,8 +362,8 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			active.store.upsert(idle);
 			active.markIdle(idle, reviewOutcomeRow(outcome));
 			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
-		},
-		(error) => {
+		}),
+		(error) => active.detached(target.name, () => {
 			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
@@ -365,7 +371,7 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			active.store.upsert(idle);
 			active.markIdle(idle, { kind: "failed", note: msg.run.reviewIncomplete });
 			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
-		},
+		}),
 	);
 }
 

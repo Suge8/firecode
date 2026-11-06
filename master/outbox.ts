@@ -47,21 +47,27 @@ export class Outbox {
 
 	constructor(private readonly active: MasterRuntime) {}
 
-	/** 新产出的事件：追加耗时、持久化为 pending、排队投递。informOnly 只告知不唤醒（视图起的运行默认如此）。 */
-	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view"): void {
-		if (this.active.closed) return;
+	/**
+	 * 新产出的事件：追加耗时、持久化为 pending、排队投递。informOnly 只告知不唤醒（视图起的运行默认如此）。
+	 * 返回 pending 是否落盘：没落盘的事件这次照样投，但 reload 不会重投，靠档案标记重新产出它的调用方据此决定清不清标记。
+	 */
+	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view"): boolean {
+		if (this.active.closed) return false;
 		const event: PendingMasterEvent = {
 			id: crypto.randomUUID(),
 			content: this.withElapsed(produced, worker),
 			...(worker ? { worker } : {}),
 			...(informOnly ? { inform: true as const } : {}),
 		};
+		let persisted = true;
 		try {
 			this.active.setup.pi.appendEntry(PENDING_EVENT_TYPE, event);
 		} catch (error) {
+			persisted = false;
 			this.active.ctx.ui.notify(msg.outbox.persistFailed(String(error)), "warning");
 		}
 		this.push(event);
+		return persisted;
 	}
 
 	/** reload 重投 pending 与 ack 的差集：正文已带落定当时的耗时，原样再投。 */

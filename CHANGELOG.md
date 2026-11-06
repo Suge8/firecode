@@ -41,6 +41,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - Claude image uploads: when Anthropic keeps reporting an uploaded file as missing, FireCode now re-uploads and retries at most once per turn instead of looping.
 - Idle compaction now respects Pi's `compaction.enabled` setting: with compaction turned off, FireCode no longer prepares or applies an idle summary, so your full context is kept.
 - A retry after "model chain exhausted" no longer hands the request back to a model that is still cooling down; the turn ends as paused until a model recovers.
+- A failed write of the Worker state file no longer leaves memory and disk out of sync. It is reported, instead of silently losing a Worker's result or making `kill` look like it worked.
+- Reloading again before a Worker interrupted by a reload was resumed no longer loses the reminder to resume it. If the reminder cannot be saved to the session, it is sent again after the next reload.
+- The 15-Worker concurrency limit now also applies to `send` and `review` on idle Workers.
+- Sending to, or auto-resuming, a Worker whose idle session is still shutting down now waits for the shutdown instead of failing with "already held by an in-process session".
 
 ## [1.8.0] - 2026-11-05
 

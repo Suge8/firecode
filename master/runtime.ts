@@ -189,6 +189,8 @@ export class MasterRuntime {
 	 * 运行时事实只删属于 expected 的那一条（kill 后同名重开的新票不受影响）。
 	 */
 	remove(name: string, expected = this.live.get(name)): void {
+		// 先删档案：写盘失败时照常抛错，运行时事实与档案都不动。
+		const removed = this.store.remove(name);
 		const live = this.live.get(name);
 		if (live && live === expected) {
 			clearTimeout(live.interruptTimer);
@@ -198,8 +200,24 @@ export class MasterRuntime {
 			this.live.delete(name);
 			this.progress?.remove(name);
 		}
-		if (!this.store.remove(name)) return;
+		if (!removed) return;
 		for (const notify of this.removedListeners) notify(name);
+	}
+
+	/**
+	 * 没有调用方可抛的续延（回合与审查落定、计时器、换模型回调）的唯一执行口：失败（如档案写盘失败）报给用户，
+	 * 不成为无人处理的拒绝。档案没写成就保持写前的样子，reload 时照常收敛。
+	 */
+	detached(name: string, task: () => void | Promise<void>): void {
+		const report = (error: unknown) => {
+			if (!this.closedValue) this.ctx.ui.notify(msg.runtime.detachedFailed(name, error instanceof Error ? error.message : String(error)), "error");
+		};
+		try {
+			const pending = task();
+			if (pending) pending.catch(report);
+		} catch (error) {
+			report(error);
+		}
 	}
 
 	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就释放热会话并放弃本次动作。 */

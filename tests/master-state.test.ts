@@ -32,19 +32,19 @@ const exists = (file: string) => access(file).then(() => true, () => false);
 
 afterEach(() => rm(directory, { recursive: true, force: true }));
 
-test("载入时在飞状态收敛为带中断标记的 idle 并记入 recovered，审查义务等标记原样保留，已落定的不变", async () => {
+test("载入时在飞状态收敛为带中断标记与重载打断标记的 idle，审查义务等标记原样保留，已落定的不变", async () => {
 	const reviewing = { ...other, status: "reviewing", reviewNeeded: true };
 	const idle = { ...worker, name: "idle", sessionPath: "/tmp/subagents/idle.jsonl", status: "idle", launch: 3, interruptedAt: 7 };
 	await seed([worker, reviewing, idle]);
 	const store = new MasterStore(path);
-	expect(store.workers).toEqual([
-		{ ...worker, status: "idle", interruptedAt: expect.any(Number) },
-		{ ...reviewing, status: "idle", interruptedAt: expect.any(Number) },
+	const converged = [
+		{ ...worker, status: "idle", interruptedAt: expect.any(Number), reloadInterrupted: true },
+		{ ...reviewing, status: "idle", interruptedAt: expect.any(Number), reloadInterrupted: true },
 		idle,
-	]);
-	expect(store.recovered).toEqual(["worker-1", "worker-2"]);
-	// 收敛结果已落盘：下一次载入不再把它们当在飞，也不再算本次收敛的。
-	expect(new MasterStore(path).recovered).toEqual([]);
+	];
+	expect(store.workers).toEqual(converged);
+	// 收敛结果连同重载打断标记已落盘：提醒发出前再载入一次，仍认得出是被重载打断的。
+	expect(new MasterStore(path).workers).toEqual(converged);
 });
 
 test("格式不合法的档案明确失败，不当作空池", async () => {
