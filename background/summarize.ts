@@ -20,11 +20,12 @@ const OUTPUT_TOKENS = 16_384;
 /** 与 pi 的 estimateTokens 同一口径。 */
 const CHARS_PER_TOKEN = 4;
 
-/** 一次摘要请求的输入量：拆分回合时是两次请求，取大的那次。 */
-function inputTokens(preparation: Preparation): number {
+/** 一次摘要请求的输入量：拆分回合时是两次请求，取大的那次；手动 /compact 的附加指令两次都带。 */
+function inputTokens(preparation: Preparation, customInstructions: string | undefined): number {
 	const chars = (messages: Preparation["messagesToSummarize"]) => messages.length ? serializeConversation(convertToLlm(messages)).length : 0;
 	const history = chars(preparation.messagesToSummarize) + (preparation.previousSummary?.length ?? 0);
-	return Math.ceil(Math.max(history, chars(preparation.turnPrefixMessages)) / CHARS_PER_TOKEN) + PROMPT_TOKENS;
+	const extra = customInstructions?.length ?? 0;
+	return Math.ceil((Math.max(history, chars(preparation.turnPrefixMessages)) + extra) / CHARS_PER_TOKEN) + PROMPT_TOKENS;
 }
 
 export interface Summary {
@@ -40,7 +41,7 @@ export async function summarize(
 	customInstructions: string | undefined,
 	signal: AbortSignal,
 ): Promise<Summary> {
-	const need = inputTokens(preparation) + OUTPUT_TOKENS;
+	const need = inputTokens(preparation, customInstructions) + OUTPUT_TOKENS;
 	const { value, model } = await pool.tryOnChain(
 		chain,
 		signal,

@@ -12,11 +12,13 @@ const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager,
 const LUNA = "test/luna/low";
 /** 上下文窗口放不下这次摘要输入的候选：链上排在 luna 前面，应被跳过、不收到请求。 */
 const SMALL = "test/small/low";
-const WINDOWS = { "test/session": 1_000_000, "test/luna": 1_000_000, "test/small": 4_000 };
+/** 放得下普通摘要输入、放不下再加一大段 /compact 附加指令的候选。 */
+const MEDIUM = "test/medium/low";
+const WINDOWS = { "test/session": 1_000_000, "test/luna": 1_000_000, "test/small": 4_000, "test/medium": 40_000 };
 /** 闲置压缩只在上下文 ≥15 万 token 时预算；faux 按 4 字符 1 token 估算用量。 */
 const HUGE = "history ".repeat(80_000);
 
-let directory: string | undefined;
+const directories: string[] = [];
 let faux: any;
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -24,8 +26,7 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 	faux?.unregister();
 	faux = undefined;
-	if (directory) await rm(directory, { recursive: true, force: true });
-	directory = undefined;
+	for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
 interface Request { model: string; summary: boolean; text: string }
@@ -35,7 +36,8 @@ interface Request { model: string; summary: boolean; text: string }
  * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错。
  */
 async function setup(options: { background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[] } = {}) {
-	directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
+	const directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
+	directories.push(directory);
 	const cwd = join(directory, "project");
 	const agentDir = join(directory, "agent");
 	await Promise.all([mkdir(cwd), mkdir(agentDir)]);
@@ -43,7 +45,7 @@ async function setup(options: { background?: unknown; timing?: Record<string, nu
 	await writeFile(join(agentDir, "settings.json"), JSON.stringify({
 		compaction: { enabled: false, keepRecentTokens: 200 }, retry: { enabled: false }, cacheWarming: "off", ...options.settings,
 	}));
-	faux = await installFaux(agentDir, ["test/session", "test/small", "test/luna"], [], WINDOWS);
+	faux = await installFaux(agentDir, ["test/session", "test/small", "test/medium", "test/luna"], [], WINDOWS);
 	const requests: Request[] = [];
 	const step = (context: any, _options: unknown, _state: unknown, model: any) => {
 		const text = JSON.stringify(context);
@@ -105,6 +107,15 @@ test("/compact：后台链写摘要，窗口放不下的候选被跳过，会话
 	expect(compactions()).toHaveLength(1);
 	expect(compactions()[0].summary).toStartWith("SUMMARY by luna");
 	expect(compactions()[0].usage.output).toBeGreaterThan(0);
+	// 附加指令也计入输入量：普通摘要放得下的 medium，加上一大段附加指令就放不下，跳到 luna。
+	const { session: other, requests: otherRequests } = await setup({ background: { model: [MEDIUM, LUNA] } });
+	await conversation(other);
+	await other.compact();
+	expect(summaries(otherRequests)).toEqual(["medium"]);
+	await conversation(other);
+	otherRequests.length = 0;
+	await other.compact("focus ".repeat(20_000));
+	expect(summaries(otherRequests)).toEqual(["luna"]);
 });
 
 test("阈值自动压缩同样由后台链写摘要", async () => {
