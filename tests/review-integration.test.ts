@@ -156,7 +156,7 @@ function makePi(sessionManager: MockSessionManager) {
 		get sent() { return fake.sent.map(({ message }) => message); },
 		get sentOptions() { return fake.sent.map(({ options }) => options); },
 		/** 投给执行模型的消息（修复反馈、总结提示）：带 triggerTurn:true 的自定义消息；结果卡不带。 */
-		get delivered() { return fake.sent.filter(({ options }) => options?.triggerTurn === true).map(({ message }) => message as { customType: string; content: string; display: boolean }); },
+		get delivered() { return fake.sent.filter(({ options }) => options?.triggerTurn === true).map(({ message }) => message as { customType: string; content: string; display: boolean; details?: unknown }); },
 		get emitted() { return fake.emitted.map(([name, data]) => ({ name, data })); },
 	};
 	return { pi: fake.pi, registered };
@@ -194,12 +194,12 @@ async function loadReviewWithVerdict(
 
 /**
  * 宿主为空闲时 triggerTurn 投递的最近一条自定义消息开回合：agent_start，随后记录这条消息（message_start，deliver 以此确认送达）
- * （role 为 custom，customType 与 content 原样）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。
+ * （role 为 custom，customType、content 与 details 原样）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。
  */
 async function startTurn(registered: ReturnType<typeof makePi>["registered"], ctx: unknown) {
-	const { customType, content } = registered.delivered.at(-1)!;
+	const { customType, content, details } = registered.delivered.at(-1)!;
 	await registered.fire("agent_start", {}, ctx);
-	await registered.fire("message_start", { message: { role: "custom", customType, content, display: true } }, ctx);
+	await registered.fire("message_start", { message: { role: "custom", customType, content, display: true, details } }, ctx);
 	await new Promise((resolve) => setImmediate(resolve));
 }
 
