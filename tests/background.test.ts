@@ -33,9 +33,9 @@ interface Request { model: string; summary: boolean; text: string }
 
 /**
  * 真实主会话（registerFirecode）+ 真实池 + faux 供应商。会话模型是 test/session；
- * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错。
+ * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错；down 里的模型对会话请求报过载。
  */
-async function setup(options: { background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[] } = {}) {
+async function setup(options: { background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
 	directories.push(directory);
 	const cwd = join(directory, "project");
@@ -51,6 +51,7 @@ async function setup(options: { background?: unknown; timing?: Record<string, nu
 		const text = JSON.stringify(context);
 		const summary = text.includes("context summarization assistant");
 		requests.push({ model: model.id, summary, text: JSON.stringify(context.messages) });
+		if (!summary && options.down?.includes(model.id)) return fauxAssistantMessage("", { stopReason: "error", errorMessage: `${model.id} overloaded` });
 		if (summary && options.failing?.includes(model.id)) return fauxAssistantMessage("", { stopReason: "error", errorMessage: `${model.id} overloaded` });
 		return fauxAssistantMessage(summary ? `SUMMARY by ${model.id}` : "reply");
 	};
@@ -157,6 +158,33 @@ test("子会话的压缩同样由后台链写摘要并持久化", async () => {
 	await spawned.session.compact();
 	expect(summaries(requests)).toEqual(["luna"]);
 	expect(spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")[0].summary).toStartWith("SUMMARY by luna");
+});
+
+/** 窗口 100 万的物理模型，按模型覆写 reserve 后阈值是 3000 token；一轮对话约 2500 token，第二轮越线。默认 reserve（5 万）下远不到阈值。 */
+const OVERRIDE = { reserveTokens: 1_000_000 - 3_000 };
+
+test.each([
+	["子代理路由到有覆写的模型：在物理窗口 − 覆写 reserve 处自动压缩", { "test/session": OVERRIDE }, [], ["test/session"]],
+	["链换到另一个物理模型后用那个模型的阈值", { "test/luna": OVERRIDE }, ["session"], ["test/session", "test/luna"]],
+] as const)("%s，摘要由后台链写", async (_name, modelOverrides, down, chain) => {
+	const { pool, requests, cwd } = await setup({
+		background: { model: [MEDIUM] },
+		settings: { compaction: { enabled: true, keepRecentTokens: 200, modelOverrides } },
+		down: [...down],
+	});
+	const spawned = await pool.spawn({
+		cwd, chain: chain.map((model) => ({ model, thinking: "low" })), tools: [], contextFiles: false,
+		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
+	});
+	cleanups.push(() => spawned.dispose());
+	const compactions = () => spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction");
+	await conversation(spawned.session, 1);
+	expect(compactions()).toHaveLength(0);
+	await conversation(spawned.session, 1);
+	await until(() => compactions().length === 1);
+	expect(compactions()[0].tokensBefore).toBeGreaterThan(3_000);
+	expect(compactions()[0].summary).toContain("SUMMARY by medium");
+	expect(sessionRequests(requests).at(-1)!.model).toBe(chain.at(-1)!.slice("test/".length));
 });
 
 const IDLE = { cacheTtlMs: 900, idleCompactionLeadMs: 700 };

@@ -27,6 +27,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Worker prompt carries its own implementation contract (acceptance written as runnable checks, implement, run every check, commit with explicit paths, no push) instead of asking Workers to read an `implement` skill that only existed on the maintainer's machine. Handbacks list each criterion's result, failures and gaps, without commands and exit codes. Workers write only inside their checkout and the system temp directory, and wait for their own background processes to finish before handing back.
 - The Master no longer restates global principles and skills in delegations, lists an acceptance matrix (screenshots, interaction paths, reference datasets) for UI, interaction and data work, splits batches of similar work across 2–3 Workers by file ownership, and hands integration to one Worker or the project's merge entry point. When a review ends incomplete because the reviewers themselves failed, it reviews the diff itself and tells the user which model failed instead of re-dispatching, it only dogfoods UI and interaction changes (non-UI changes that went to review are not dogfooded), and it does not write sleep loops to watch other sessions.
 
+### Fixed
+
+- Workers now compact at the threshold Pi's settings give the model they are actually running on. A Worker's session model is FireCode's routing model, so a `compaction.modelOverrides` entry for, say, `anthropic/claude-opus-5-5` never matched and Workers fell back to the default reserve: a Claude Worker with a 1M window and a 650k reserve compacted near 950k instead of 350k. Reserve and keep-recent tokens now follow the routed model, also after the chain switches models, for automatic compaction, `/compact` and idle compaction. Settings still live only in Pi's `settings.json`.
+
 ## [1.8.0] - 2026-11-05
 
 ### Changed

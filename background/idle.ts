@@ -12,7 +12,6 @@
  */
 import {
 	type CompactionResult,
-	DEFAULT_COMPACTION_SETTINGS,
 	type ExtensionAPI,
 	type ExtensionContext,
 	buildSessionProjection,
@@ -20,10 +19,11 @@ import {
 	findCutPoint,
 	getLastAssistantUsage,
 	type SessionEntry,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelChain } from "../config.js";
 import { beforeWake } from "../deliver.js";
-import { physicalModel } from "../model-route.js";
+import { followRoute, physicalModel } from "../model-route.js";
 import { nativeCompactionEnabled } from "../provider/openai-native/index.js";
 import { nativeTakesOver } from "../provider/openai-native/src/native-compaction.js";
 import type { InProcessSessionPool } from "../spawn.js";
@@ -121,15 +121,9 @@ export class IdleCompaction {
 		}
 	}
 
-	/** 与宿主 getCompactionSettings 同一规则：按模型覆写、普通设置、内置默认的顺序取。 */
+	/** 宿主的同一条解析规则（按模型覆写、普通设置、内置默认），子会话按路由到的物理模型查。 */
 	private settings(ctx: ExtensionContext): Preparation["settings"] {
-		const compaction = this.pi.getSettings().compaction ?? {};
-		const override = ctx.model ? compaction.modelOverrides?.[`${ctx.model.provider}/${ctx.model.id}`] : undefined;
-		return {
-			enabled: compaction.enabled ?? DEFAULT_COMPACTION_SETTINGS.enabled,
-			reserveTokens: override?.reserveTokens ?? compaction.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-			keepRecentTokens: override?.keepRecentTokens ?? compaction.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
-		};
+		return followRoute(SettingsManager.inMemory(this.pi.getSettings())).getCompactionSettings(ctx.model);
 	}
 }
 

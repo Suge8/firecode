@@ -1,5 +1,5 @@
 import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Context, type Model } from "@earendil-works/pi-ai";
-import type { ExtensionFactory, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ThinkingLevelValue } from "./config.js";
 import { matchModels } from "./model-match.js";
 import { msg } from "./messages.js";
@@ -18,7 +18,23 @@ const routes = processShared("physical-models", () => new Map<string, RouteState
 export function physicalModel(model: Model<Api> | undefined): Model<Api> | undefined {
 	return model?.api === "pi-virtual" ? routes.get(`${model.provider}/${model.id}`)?.current?.model : model;
 }
-const key = (model: Model<Api>) => `${model.provider}/${model.id}`;
+const key = (model: Pick<Model<Api>, "provider" | "id">) => `${model.provider}/${model.id}`;
+
+/**
+ * 让 settings 的压缩设置跟随路由：宿主按会话模型查 compaction.modelOverrides，路由会话的会话模型是随机 id 的虚拟模型，
+ * 查不到覆写就退回默认，而窗口取自产生回复的物理模型——阈值与窗口对不上。这里改成按虚拟模型此刻路由到的物理模型查，
+ * 换模型后下一次查询即用新模型的值；解析规则仍是宿主的，设置仍只在 pi 的 settings.json。
+ * 不改写设置层（applyOverrides）：宿主 reload/保存会按文件重算设置，写进去的映射会被冲掉，还得在每次换模型时重写。
+ */
+export function followRoute(settings: SettingsManager): SettingsManager {
+	const routed = <T extends Pick<Model<Api>, "provider" | "id">>(model?: T) => (model && routes.get(key(model))?.current?.model) ?? model;
+	// 三个公开查询都改：宿主现在只调 getCompactionSettings，它内部经另两个取值；物理模型不在路由表里，重复映射无害。
+	for (const name of ["getCompactionSettings", "getCompactionReserveTokens", "getCompactionKeepRecentTokens"] as const) {
+		const original = settings[name].bind(settings) as (model?: Pick<Model<Api>, "provider" | "id">) => never;
+		settings[name] = ((model?: Pick<Model<Api>, "provider" | "id">) => original(routed(model))) as never;
+	}
+	return settings;
+}
 
 /** 模型失败后记一次冷却：连续第 n 次失败按阶梯或报错里的重置时刻决定何时再选它。 */
 function coolDown(model: Model<Api>, reason: string, ladder: readonly number[]): void {
