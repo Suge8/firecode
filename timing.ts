@@ -70,6 +70,6 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
  * 到绝对时刻 at 的计时延迟，截到 setTimeout 上限。at 来自供应商写明的重置时刻，可以远超上限；
  * 截断后回调可能早于 at 触发，调用方在回调里见 `Date.now() < at` 就按同一个 at 重挂。
  */
-export function delayUntil(at: number, now = Date.now()): number {
-	return Math.min(Math.max(0, at - now), MAX_TIMER_MS);
+export function delayUntil(at: number): number {
+	return Math.min(Math.max(0, at - Date.now()), MAX_TIMER_MS);
 }
