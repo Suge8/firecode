@@ -93,7 +93,7 @@ async function open(options: {
 		new Map(Object.entries(record ?? {}).map(([name, value]) => [`/s/${name}.jsonl`, value]));
 	const port = {
 		facts: () => ({
-			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), lastOutputAt: new Map(), progress: new Map(),
+			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), quietSince: new Map(), progress: new Map(),
 			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled), stallMs: 30 * 60_000,
 		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),

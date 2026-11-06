@@ -68,8 +68,8 @@ export interface WorkerLive {
 	/** 这次运行里用户在子代理全过程视图直接说的话；落定事件据此注明来源。 */
 	viewPrompts: string[];
 	origin: RunOrigin;
-	/** 最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
-	lastOutputAt?: number;
+	/** 无输出计时的起点：本回合开始（runWorker）或其后最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
+	quietSince?: number;
 	/** 停摆检查计时：只在“卡住”可能成立的时刻看一眼（run.ts 的 watchStall）。 */
 	stallTimer?: NodeJS.Timeout;
 	/** 这段无输出已报给指挥官：同一次运行不再报，有输出后清掉、可再报。 */
@@ -316,7 +316,7 @@ export class MasterRuntime {
 			currentTools: byPath((live) => (live.currentTools.size ? live.currentTools : undefined)),
 			reviewProgress: byPath((live) => live.reviewProgress),
 			runStartedAt: byPath((live) => live.runStartedAt),
-			lastOutputAt: byPath((live) => live.lastOutputAt),
+			quietSince: byPath((live) => live.quietSince),
 			progress: new Map(workers.flatMap((worker) => {
 				const text = this.progress?.text(worker.name);
 				return text ? [[worker.sessionPath, text] as const] : [];

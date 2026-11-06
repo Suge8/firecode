@@ -92,7 +92,7 @@ function reportExtensionError(active: MasterRuntime, worker: WorkerRef, error: E
 export function observeWorker(active: MasterRuntime, worker: WorkerRef, session: AgentSession): void {
 	active.observe(worker, session, (live, event) => {
 		if (OUTPUT_EVENTS.has(event.type)) {
-			live.lastOutputAt = Date.now();
+			live.quietSince = Date.now();
 			if (live.stallReported) {
 				live.stallReported = undefined;
 				watchStall(active, worker);
@@ -112,7 +112,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 }
 
 /**
- * 停摆唤醒：在跑的回合落入活动列表的“卡住”（同一个 workerPhase 判定、同一份 lastOutputAt）时给指挥官投一条事件。
+ * 停摆唤醒：在跑的回合落入活动列表的“卡住”（同一个 workerPhase 判定、同一份 quietSince）时给指挥官投一条事件。
  * 计时器不另算无输出时长，只在判定可能成立的时刻去看一眼：还没到就按剩余时间重挂，不再 working 就停；
  * 报过后停到下一次输出（observeWorker 清掉标记并重挂），所以同一段无输出只报一次。
  */
@@ -150,6 +150,8 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, sessio
 	const live = active.liveOf(worker.name);
 	const run = Symbol(worker.name);
 	live.run = run;
+	// 静默从本回合开始算：自动续跑沿用暂停前的运行起点，暂停期不是无输出。
+	live.quietSince = Date.now();
 	watchStall(active, worker);
 	const mine = () => !active.closed && active.live.get(worker.name) === live && live.run === run;
 	let terminal: WorkerTerminal | undefined;

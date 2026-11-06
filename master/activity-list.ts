@@ -26,8 +26,8 @@ export interface ActivityFacts {
 	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
 	reviewProgress: ReadonlyMap<string, ReviewRoundProgress>;
 	runStartedAt: ReadonlyMap<string, number>;
-	/** 最近一次输出（工具事件或模型 token）的时刻；卡住按它与本次运行起点中较晚者计算。 */
-	lastOutputAt: ReadonlyMap<string, number>;
+	/** 无输出计时的起点（本回合开始或最近一次输出）；卡住按它与本次运行起点中较晚者计算。 */
+	quietSince: ReadonlyMap<string, number>;
 	/** 在跑子代理的进展行（见 progress.ts）：一句现在时的“在做什么”，有就替代在跑行的工具动作。 */
 	progress: ReadonlyMap<string, string>;
 	settled: ReadonlyMap<string, SettledFact>;
@@ -107,7 +107,7 @@ export function workerPhase(facts: ActivityFacts, index: number, now: number): W
 	const path = worker.sessionPath;
 	const startedAt = facts.runStartedAt.get(path);
 	if (worker.status === "working") {
-		const quietMs = now - Math.max(startedAt ?? now, facts.lastOutputAt.get(path) ?? 0);
+		const quietMs = now - Math.max(startedAt ?? now, facts.quietSince.get(path) ?? 0);
 		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
 		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
 		// 卡住时动作照常显示（用户要知道卡在哪条命令上），只追加提醒；前台长命令同样按无输出计时。
