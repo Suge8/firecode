@@ -37,9 +37,10 @@
 	//   A candidate whose context window cannot hold the conversation is skipped; if the whole chain fails, Pi's default compaction runs;
 	// - idleCompaction: when a session sits idle past the 1-hour prompt cache, the next request starts from a summary prepared in advance
 	//   instead of re-sending 150k+ tokens uncached.
+	// Haiku comes first: in replays of real sessions its summaries kept more of the details used later (46% vs 33% for Luna).
 	// GPT-only: ["gpt-6-luna/low"]. Claude-only: ["claude-haiku-5-5/low"]. Remove the whole section to turn all three off.
 	"background": {
-		"model": ["gpt-6-luna/low", "claude-haiku-5-5/low"],
+		"model": ["claude-haiku-5-5/low", "gpt-6-luna/low"],
 		"idleCompaction": true
 	},
 
