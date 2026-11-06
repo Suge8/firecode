@@ -2297,10 +2297,10 @@ async function setup(activate = true, options: {
 	});
 	/** 唤起的回合真正开始：agent_start 在前，随后宿主记录这条自定义消息本身。 */
 	const wake = async () => {
-		const { customType, content, display } = starting;
+		const { customType, content, display, details } = starting;
 		turns.push(content);
 		await fake.fire("agent_start", {}, ctx);
-		await fake.fire("message_start", { message: { role: "custom", customType, content, display } }, ctx);
+		await fake.fire("message_start", { message: { role: "custom", customType, content, display, details } }, ctx);
 	};
 	let failedTurns = options.failTurns?.count ?? 0;
 	const finishTurn = async () => {

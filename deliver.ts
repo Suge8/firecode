@@ -114,11 +114,14 @@ export function watchSessionMaintenance(pi: ExtensionAPI): void {
 }
 
 /**
- * 统一投递，resolve 即指挥官回合已在跑：
+ * 统一投递，resolve 即这条消息已进入回合：
  * - 主回合在跑：宿主把卡片放进 steer 队列，入队即交付；
- * - 主回合歇透：宿主当场把会话置为忙并开回合，等这个回合的 agent_start 再 resolve。宿主在 agent_start 之前就返回，
- *   过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。会话已置为忙，期间没有别的回合能先开始，
- *   所以下一个 agent_start 就是它开的回合；agent_settled 派发期间发出的，宿主推迟到派发完再开，同样是下一个；
+ * - 主回合歇透：宿主开回合，等这条消息本身的 message_start（宿主对回合起始消息与送达的 steer 都发，先于模型请求）再 resolve。
+ *   宿主在回合开始之前就从 sendMessage 返回，过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。
+ *   不以“下一个 agent_start”为回执：只有一个投递方时它确实是本消息开的回合，但 agent_settled 派发期间宿主把 triggerTurn
+ *   推迟到派发完逐个执行，别人先排进去时下一个回合是别人的，曾让审查把别人的回合当成自己的总结/修复回合收尾。
+ *   认消息靠 details 里每次投递新生成的 delivery id（宿主把 details 原样带进消息与会话记录），不比正文：同类型同正文的
+ *   两条投递（或别的扩展发的同文消息）也不会互相确认。details 只承载这个 id，渲染与折叠界面不认它，照常降级；
  * - 手动压缩或分支切换中：等它落定再按上两条投递，期间保持未完成（见 watchSessionMaintenance）。
  * 忙闲判断与发送之间不能 await：两者在同一节拍，读到的忙闲就是宿主处理这条消息时的忙闲。
  * 调用方收口（signal 中止）时退订并以中止原因 reject。
@@ -138,10 +141,13 @@ export async function deliver(
 		await new Promise((resolve) => setTimeout(resolve, state.tickMs));
 	}
 	signal?.throwIfAborted();
+	const delivery = crypto.randomUUID();
 	const started = ctx.isIdle() ? Promise.withResolvers<void>() : undefined;
-	const unsubscribe = started && pi.on("agent_start", () => started.resolve());
+	const unsubscribe = started && pi.on("message_start", ({ message }) => {
+		if (message.role === "custom" && (message.details as { delivery?: unknown } | undefined)?.delivery === delivery) started.resolve();
+	});
 	try {
-		pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true }, { triggerTurn: true });
+		pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true, details: { delivery } }, { triggerTurn: true });
 		if (started) await abortable(started.promise, signal);
 	} finally {
 		unsubscribe?.();

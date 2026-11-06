@@ -13,7 +13,7 @@ import { readPrompt } from "../i18n.js";
 import { routePause } from "../model-route.js";
 import { runAdvisor } from "./advisor.js";
 import { buildCard, CARD_TYPE } from "./card.js";
-import { type CheckpointWriter, sealCheckpoint } from "./checkpoint.js";
+import type { CheckpointWriter } from "./checkpoint.js";
 import { buildEvidence } from "./evidence.js";
 import { msg } from "./messages.js";
 import { buildAdvisorPrompt, buildFixFeedback, buildReviewPrompt, buildSummaryPrompt, type PromptLayers } from "./prompt.js";
@@ -175,7 +175,7 @@ export class Run {
 		} catch (error) {
 			this.notify(msg.notify.checkpointWriteFailed(errorText(error)), "error");
 			try {
-				sealCheckpoint(this.pi, this.state);
+				this.writer.seal(this.state);
 			} catch {
 				this.notify(msg.notify.cannotSeal, "warning");
 			}
