@@ -16,7 +16,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 `session_start` 只恢复 checkpoint，宿主在所有异步 session_start handler 完成后发出的 `resources_discover` 才允许推进；`agent_settled` 由 review 判断能否开审。`agent_start` 另作竞态兜底：若审查仍在跑，先 abort 并等待全部审查会话释放（dispose，bash 子进程随 abort 同步被杀），执行模型才进入 turn_start。审查者的中断不等 pi 的 `session.abort()` 返回：模型流卡在半开连接上时它永不返回（Bun fetch 在网络切换后不保证响应 AbortSignal，pi 的 agent loop 也没有 abort 竞争），等它会把 kill 与会话关闭一起拖死；卡死的审查者会话在进程里惰性留到 TCP 层放弃。
 
-`awaiting_fix` 的 `turn` 写进 checkpoint；reload 会把未完成的反馈重置为 pending 重投，只有 done 才进入下一审查轮。反馈经根级 `deliver.ts` 投递（投递带 Run 的终止信号），以回合开始为回执、没有计时器：deliver resolve 推进 pending → running，`agent_settled` 才判回合结局，避免把自动重试或 `agent_before_settle` 续跑前的 `agent_end` 当终态。宿主标记中止时取消，分支最后一条 assistant 为 error 或反馈投递失败时以故障收尾并保留原文，其余推进；等待期间 `delivering` 标记挡住重复推进。
+`awaiting_fix` 的 `turn` 写进 checkpoint；reload 会把未完成的反馈重置为 pending 重投，只有 done 才进入下一审查轮。反馈经根级 `deliver.ts` 投递（投递带 Run 的终止信号），以这条消息本身进入回合（宿主对它发的 `message_start`）为回执、没有计时器，别的投递方先开的回合不算：deliver resolve 推进 pending → running，`agent_settled` 才判回合结局，避免把自动重试或 `agent_before_settle` 续跑前的 `agent_end` 当终态。宿主标记中止时取消，分支最后一条 assistant 为 error 或反馈投递失败时以故障收尾并保留原文，其余推进；等待期间 `delivering` 标记挡住重复推进。
 
 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 `summarizing` 相：结果卡照发，再投递带反循环禁令的总结提示（经 `deliver.ts` 投递，回执与收尾规则同修复反馈），总结回合结束才落 `settled`；总结生命周期持久化，reload 重投未确认总结，失败静默收尾不升级；事故终态（取消/超时/基础设施错误/quit）不烧总结回合。修复反馈、总结提示与状态卡都是 `CARD_TYPE` 自定义消息，content 统一经 `deliver.ts` 的 `wrapEnvelope` 包在 `<firecode_review>` 中，折叠界面据此把它们归入过程；details 保持原始卡片数据。给审查者的证据（`sessionEntries`）过滤掉这些自定义消息。占用标签持有到总结完成，Master 的审查等待自然捕获总结作为最终回复。
 
@@ -26,7 +26,7 @@ reload/new/resume/fork 保留可恢复状态，quit 才落终态；子会话被�
 
 三种记录与快照内容见 `checkpoint.ts` 头注释。恢复时 `readCheckpoint` 按轮记录补回内存里的 `history`，没有存档与旧版本存档按没有处理、无提示；同版本存档损坏（字段无效，或快照记的轮数与轮记录条数对不上，不分审查是否已收口）作废并经 `onDamaged` 在 `session_start` 提示用户重新 `/fire-review`，同时追加一份空的已收口（取消）存档作废它，同一会话只提示一次；关闭 review 的入口不传 `onDamaged`，不提示也不写。Master 读结果的 `outcome.ts` 只读快照里的 `rounds` 与 `last`，不读轮记录。
 
-写入口是 `CheckpointWriter`（记得已写过多少轮全文）；没有写入凭证或并发写者检测——同一会话文件只有一个活动运行时。审查席位形状变化已升检查点版本，旧档按没有处理，不写迁移。持久化失败不能当成功继续：通知、尽力补写终态（否则重启会把磁盘上的活动 checkpoint 恢复成幽灵审查）、释放。
+写入口是 `CheckpointWriter`（记得已写过多少轮全文）；没有写入凭证或并发写者检测——同一会话文件只有一个活动运行时。审查席位形状变化已升检查点版本，旧档按没有处理，不写迁移。持久化失败不能当成功继续：通知、尽力补写终态（否则重启会把磁盘上的活动 checkpoint 恢复成幽灵审查）、释放；补写经同一个 `CheckpointWriter` 封存，快照只计已落盘的轮，没写进去的那轮不算，下次打开不会被判为损坏。
 
 ## 卡片与审查进度
 

@@ -193,7 +193,7 @@ async function loadReviewWithVerdict(
 }
 
 /**
- * 宿主为空闲时 triggerTurn 投递的最近一条自定义消息开回合：agent_start（deliver 以此确认送达），随后记录这条消息
+ * 宿主为空闲时 triggerTurn 投递的最近一条自定义消息开回合：agent_start，随后记录这条消息（message_start，deliver 以此确认送达）
  * （role 为 custom，customType 与 content 原样）；让出一拍，等确认推进的迁移落定（真实回合里模型请求远比这长）。
  */
 async function startTurn(registered: ReturnType<typeof makePi>["registered"], ctx: unknown) {
@@ -964,7 +964,7 @@ describe("the loop survives failing side effects", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 	});
 
-	// 空闲时投递以宿主开回合（agent_start）为回执、没有计时器：回执到来前一直是 pending。
+	// 空闲时投递以这条消息进入宿主回合（message_start）为回执、没有计时器：回执到来前一直是 pending。
 	test("feedback is delivered once as a waking custom message and counts as started only when the host starts the turn", async () => {
 		const { registerReview, readCheckpoint } = await loadSingleFailReview();
 		const sessionManager = makeSessionManager();

@@ -7,6 +7,8 @@
  *   （去掉审查全文与摘要；Master 单凭一条快照就能给出终态判定），所以每条快照体积有界，
  *   一场审查的累计写入量随轮数线性增长；
  * - 拒绝记录：命令入口拒绝启动的原因（无 UI 的 Worker 里这是唯一出口）。
+ * 快照的轮数只计已落盘的轮记录：写入失败后的终态封存只带写成功的那些轮（没落盘的那轮随这场审查一起放弃），
+ * 否则轮数与轮记录条数对不上，下次打开会话被判为存档损坏。
  * 校验只守版本与关键字段：数据是本代码写的，字段形状由类型保证，版本门挡住旧档，不做字段级兼容。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -50,11 +52,16 @@ export class CheckpointWriter {
 		}
 		this.pi.appendEntry(CHECKPOINT_TYPE, { version: VERSION, ...snapshotOf(state) });
 	}
+
+	/** 终态封存（按取消收尾）：只追加一条快照，历史截到已落盘的轮；写不进去时抛错，调用方处理。 */
+	seal(state: ReviewState): void {
+		this.write({ ...state, phase: "settled", end: "cancelled", history: state.history.slice(0, this.written), updatedAt: Date.now() } as ReviewState);
+	}
 }
 
-/** 终态封存（按取消收尾）：把活动态改成 settled 写下去，调用方负责处理写不进去的情况。 */
+/** 封存一份历史已全部落盘的状态（从会话恢复的，或没有历史的空状态）。 */
 export function sealCheckpoint(pi: ExtensionAPI, state: ReviewState): void {
-	new CheckpointWriter(pi, state).write({ ...state, phase: "settled", end: "cancelled", updatedAt: Date.now() } as ReviewState);
+	new CheckpointWriter(pi, state).seal(state);
 }
 
 function snapshotOf(state: ReviewState): Snapshot {

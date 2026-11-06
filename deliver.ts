@@ -114,11 +114,13 @@ export function watchSessionMaintenance(pi: ExtensionAPI): void {
 }
 
 /**
- * 统一投递，resolve 即指挥官回合已在跑：
+ * 统一投递，resolve 即这条消息已进入回合：
  * - 主回合在跑：宿主把卡片放进 steer 队列，入队即交付；
- * - 主回合歇透：宿主当场把会话置为忙并开回合，等这个回合的 agent_start 再 resolve。宿主在 agent_start 之前就返回，
- *   过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。会话已置为忙，期间没有别的回合能先开始，
- *   所以下一个 agent_start 就是它开的回合；agent_settled 派发期间发出的，宿主推迟到派发完再开，同样是下一个；
+ * - 主回合歇透：宿主开回合，等这条消息本身的 message_start（宿主对回合起始消息与送达的 steer 都发，先于模型请求）再 resolve。
+ *   宿主在回合开始之前就从 sendMessage 返回，过早 resolve 会让 Master 先扣掉在飞数，busy.ts 在回合开始前误报一次歇下。
+ *   不以“下一个 agent_start”为回执：只有一个投递方时它确实是本消息开的回合，但 agent_settled 派发期间宿主把 triggerTurn
+ *   推迟到派发完逐个执行，别人先排进去时下一个回合是别人的，曾让审查把别人的回合当成自己的总结/修复回合收尾。
+ *   按 customType 与正文认消息：同类型同正文的两条并发投递无法区分，任一条进入回合都算送达；
  * - 手动压缩或分支切换中：等它落定再按上两条投递，期间保持未完成（见 watchSessionMaintenance）。
  * 忙闲判断与发送之间不能 await：两者在同一节拍，读到的忙闲就是宿主处理这条消息时的忙闲。
  * 调用方收口（signal 中止）时退订并以中止原因 reject。
@@ -139,7 +141,9 @@ export async function deliver(
 	}
 	signal?.throwIfAborted();
 	const started = ctx.isIdle() ? Promise.withResolvers<void>() : undefined;
-	const unsubscribe = started && pi.on("agent_start", () => started.resolve());
+	const unsubscribe = started && pi.on("message_start", ({ message }) => {
+		if (message.role === "custom" && message.customType === envelope.customType && message.content === envelope.content) started.resolve();
+	});
 	try {
 		pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true }, { triggerTurn: true });
 		if (started) await abortable(started.promise, signal);
