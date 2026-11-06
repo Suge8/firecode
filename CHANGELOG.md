@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-06
+
 ### Fixed
 
 - Sub-agent progress lines now reach the `firecode:subagents` roster as well, so other extensions such as CuePad show the same "what it is doing" line as the terminal activity list instead of the raw tool command. A stuck sub-agent still shows the command it is stuck on.
@@ -324,7 +326,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/Suge8/firecode/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/Suge8/firecode/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Suge8/firecode/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/Suge8/firecode/compare/v1.7.0...v1.8.0
