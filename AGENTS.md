@@ -16,7 +16,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `session/` | 用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布 | [review/AGENTS.md](review/AGENTS.md) |
 | `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
-| `background/` | 后台小模型：`background.model` 是进展行、压缩摘要与闲置压缩唯一的模型来源；压缩摘要沿用 pi 的 preparation 与提示词只换模型（主会话与子会话），闲置压缩在缓存过期后的下一次请求前应用预先算好的摘要（主会话与子会话）；与原生压缩的先后在 `registerOpenAINative`，约定见各文件头注释 | |
+| `background/` | 后台小模型：`background.model` 是进展行、压缩摘要、闲置压缩与会话命名唯一的模型来源；压缩摘要沿用 pi 的 preparation 与提示词只换模型（主会话与子会话），闲置压缩在缓存过期后的下一次请求前应用预先算好的摘要（主会话与子会话），会话命名只在主会话、用第一条用户消息一次性起名；与原生压缩的先后在 `registerOpenAINative`，约定见各文件头注释 | |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并续跑（同一轮最多一次），历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
@@ -72,7 +72,7 @@ OpenAI 原生压缩经宿主公开的 `ctx.modelRegistry.streamSimple` 走宿主
 撞上任何一个都在启动时弹 “Extension issues”；撞到编辑器全局保留键则扩展直接被跳过，其余则扩展先于内置处理。
 所以默认键必须避开宿主全部默认键位（`tests/config-seam.test.ts` 守），改名这类宿主已有键位的动作不注册快捷键，
 而是挂宿主的编辑器动作（见 `statusbar/index.ts` 的 `ShellEditor`）。
-`background` 节写了就必须完整，有问题时整节不生效（三项后台活都关、问题进全局警告），省略整节同样全关：后台活都是真实调用，不替用户补模型。
+`background` 节写了就必须完整，有问题时整节不生效（四项后台活都关、问题进全局警告），省略整节同样全关：后台活都是真实调用，不替用户补模型。
 `review` 与 `master` 节有问题时对应功能拒绝启动而不是回退默认——静默回退会拿用户没配的模型
 真实发起调用。能否启动只由 `loadConfig()` 给出的每节判定决定（文件级与 features 问题阻断三节），消费端不再自己筛
 问题；关闭的功能那一节的问题不进 session_start 全局警告。

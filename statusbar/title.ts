@@ -18,17 +18,17 @@ const CONTROL_CHARS = /[\x00-\x09\x0b-\x1f\x7f-\x9f]/g;
 const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g;
 
 /** 去掉终端控制序列、控制字符与零宽字符：标题来自模型输入与用户输入，不能带样式或改写终端。 */
-const clean = (text: string) => stripVTControlCharacters(text).replace(CONTROL_CHARS, " ").replace(INVISIBLE_CHARS, "");
+export const cleanName = (text: string) => stripVTControlCharacters(text).replace(CONTROL_CHARS, " ").replace(INVISIBLE_CHARS, "");
 
 function userTitle(message: MessageStartEvent["message"]): string | undefined {
 	if (message.role !== "user") return undefined;
-	return clip(firstSentence(clean(textOf(message.content))), TITLE_MAX_WIDTH) || undefined;
+	return clip(firstSentence(cleanName(textOf(message.content))), TITLE_MAX_WIDTH) || undefined;
 }
 
 /** incoming：刚开始、尚未落盘的用户消息，让标题在消息进分支之前就能显示。 */
 export function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent["message"]): string {
 	const name = ctx.sessionManager.getSessionName();
-	if (name) return oneLine(clean(name));
+	if (name) return oneLine(cleanName(name));
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message") continue;
 		const title = userTitle(entry.message);
@@ -39,7 +39,7 @@ export function displayTitle(ctx: ExtensionContext, incoming?: MessageStartEvent
 
 export async function promptRename(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	const next = await ctx.ui.input(msg.rename.title, pi.getSessionName() ?? msg.rename.placeholder);
-	const name = Array.from(oneLine(clean(next ?? ""))).slice(0, MAX_NAME_CHARS).join("");
+	const name = Array.from(oneLine(cleanName(next ?? ""))).slice(0, MAX_NAME_CHARS).join("");
 	if (!name) return;
 	pi.setSessionName(name);
 	ctx.ui.notify(msg.rename.done(name), "info");

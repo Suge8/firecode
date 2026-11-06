@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist");
-const PROMPT_DIRS = ["master/prompts", "review/prompts"];
+const PROMPT_DIRS = ["master/prompts", "review/prompts", "background/prompts"];
 
 await rm(DIST, { recursive: true, force: true });
 

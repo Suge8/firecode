@@ -35,7 +35,7 @@ interface Request { model: string; summary: boolean; text: string }
  * 真实主会话（registerFirecode）+ 真实池 + faux 供应商。会话模型是 test/session；
  * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错；down 里的模型对会话请求报过载。
  */
-async function setup(options: { background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
+async function setup(options: { naming?: (text: string) => string; background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
 	directories.push(directory);
 	const cwd = join(directory, "project");
@@ -50,6 +50,10 @@ async function setup(options: { background?: unknown; timing?: Record<string, nu
 	const step = (context: any, _options: unknown, _state: unknown, model: any) => {
 		const text = JSON.stringify(context);
 		const summary = text.includes("context summarization assistant");
+		if (text.includes("You name a coding session") || text.includes("你给终端里的编程会话起名")) {
+			requests.push({ model: model.id, summary: false, text: "NAMING " + JSON.stringify(context.messages) });
+			return fauxAssistantMessage(options.naming?.(JSON.stringify(context.messages)) ?? "");
+		}
 		requests.push({ model: model.id, summary, text: JSON.stringify(context.messages) });
 		if (!summary && options.down?.includes(model.id)) return fauxAssistantMessage("", { stopReason: "error", errorMessage: `${model.id} overloaded` });
 		if (summary && options.failing?.includes(model.id)) return fauxAssistantMessage("", { stopReason: "error", errorMessage: `${model.id} overloaded` });
@@ -83,7 +87,7 @@ async function setup(options: { background?: unknown; timing?: Record<string, nu
 	const notices: string[] = [];
 	const errors: string[] = [];
 	const ui = new Proxy({ notify: (text: string) => notices.push(text) }, { get: (target: any, key) => target[key] ?? (() => undefined) });
-	await session.bindExtensions({ mode: "print", uiContext: ui, onError: (error: any) => errors.push(error.error) });
+	await session.bindExtensions({ mode: "rpc", uiContext: ui, onError: (error: any) => errors.push(error.error) });
 	cleanups.push(async () => {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
@@ -254,4 +258,47 @@ test("子会话闲置超过缓存过期线：下一次请求同样从预算好�
 	expect(last.text).toContain("SUMMARY by luna");
 	expect(last.text.length).toBeLessThan(HUGE.length / 10);
 	expect(spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")).toHaveLength(1);
+});
+
+test("会话命名：第一句话后后台模型起名，主回复不等它；问候不设名、下一句再起；只起一次", async () => {
+	let named = 0;
+	const { session, requests } = await setup({
+		background: { model: [LUNA] },
+		naming: (input) => (input.includes("hello") ? "" : (named++, "Fix login bug")),
+	});
+	const naming = () => requests.filter((request) => request.text.startsWith("NAMING"));
+	await session.prompt("hello");
+	await until(() => naming().length === 1);
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	expect(session.sessionManager.getSessionName()).toBeUndefined();
+	await session.prompt("please fix the login bug");
+	await until(() => session.sessionManager.getSessionName() === "Fix login bug");
+	expect(requests.filter((request) => request.model === "session")).toHaveLength(2);
+	expect(naming().every((request) => request.model === "luna")).toBe(true);
+	await session.prompt("another message");
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	expect(named).toBe(1);
+	expect(naming()).toHaveLength(2);
+});
+
+test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad 桥接路径）同样起名", async () => {
+	const { host, session } = await setup({ background: { model: [LUNA] }, naming: () => "From bridge" });
+	host.pi.sendUserMessage("fix the bridge");
+	await until(() => session.sessionManager.getSessionName() === "From bridge");
+});
+
+test("会话命名：起名请求在飞时用户手动改名，结果回来后仍是用户的名字；没配 background 不发起名请求", async () => {
+	let rename = () => {};
+	const { session, host, requests } = await setup({ background: { model: [LUNA] }, naming: () => { rename(); return "Auto name"; } });
+	rename = () => host.pi.setSessionName("Mine");
+	await session.prompt("first message");
+	await until(() => requests.some((request) => request.text.startsWith("NAMING")));
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	expect(session.sessionManager.getSessionName()).toBe("Mine");
+	const { session: bare, requests: bareRequests } = await setup({ naming: () => "Auto name" });
+	await bare.prompt("first message");
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	expect(bare.sessionManager.getSessionName()).toBeUndefined();
+	expect(bareRequests.filter((request) => request.text.startsWith("NAMING"))).toHaveLength(0);
+	expect(requests.length).toBeGreaterThan(0);
 });
