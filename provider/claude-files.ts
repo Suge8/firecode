@@ -10,7 +10,9 @@
  * - file_id 只在上传它的组织里有效：映射记组织 id（凭据第一次带图时问一次接口的响应头，按凭据记在内存），
  *   换号、订阅与 API key 互换后只认新组织的映射，旧图按新凭据重新上传一次。不带组织 id 的旧版映射一律不认。
  * - 同一组织里文件仍可能失效（被删除）：请求报某个 file_id 不存在时，这条映射作废（记一条 fileId 为 null 的条目），
- *   失败的回复从模型投影里省略并续跑一次，续跑时这张图重新上传。只对仍在用的映射续跑，所以不会循环。
+ *   失败的回复从模型投影里省略并续跑，续跑时这张图重新上传。同一轮（自最近一条用户或自定义消息起）最多续跑一次：
+ *   “仍在用”只能挡住已作废的旧 id，重传得到的新 id 照样算在用，服务端若立刻又报不存在会无限重传，所以按本轮已有的作废条目封顶；
+ *   封顶后失败照常落定，下一轮用户消息再给一次机会。
  * - 上传失败的图这一轮原样内嵌并提示；下一轮上传成功后它的表示变了，前缀从这张图起失效一次。
  */
 import { createHash } from "node:crypto";
@@ -149,6 +151,8 @@ export function registerClaudeFiles(pi: ExtensionAPI): void {
 		const failure = branch.findLast((entry) => entry.type === "message");
 		if (failure?.type !== "message" || failure.message.role !== "assistant" || failure.message.provider !== "anthropic") return;
 		const fileId = failure.message.errorMessage?.match(FILE_GONE)?.[1];
+		const turnStart = branch.findLastIndex((entry) => entry.type === "custom_message" || (entry.type === "message" && entry.message.role === "user"));
+		if (fileEntries(branch.slice(turnStart + 1)).some((entry) => entry.fileId === null)) return;
 		const entries = fileEntries(branch);
 		const gone = fileId && entries.find((entry) => entry.fileId === fileId);
 		// 只作废仍在用的映射：已作废过或不是本扩展上传的文件，续跑也解决不了，照常落定。
