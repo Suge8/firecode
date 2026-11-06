@@ -201,7 +201,8 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = 
 
 /**
  * 会话重载打断的回合（档案带 reloadInterrupted）：恢复后满时限仍未续派就提醒指挥官；按档案里的中断时刻补算剩余时间，
- * 时限内再 reload 也照样按原时刻提醒。指挥官自己 interrupt 的不带标记、不提醒。提醒入队（pending 同步落进主会话）后清标记，只提醒一次。
+ * 时限内再 reload 也照样按原时刻提醒。指挥官自己 interrupt 的不带标记、不提醒。提醒的 pending 落进主会话后才清标记（之后由 reload 重投保证送达），
+ * 落盘失败就保留标记，reload 后再提醒。
  * 只提醒、不代发“继续”：工作说明归指挥官，插件盲续会复活它已作废的任务。
  */
 export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): void {
@@ -214,7 +215,8 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		live.interruptTimer = undefined;
 		const current = active.find(worker);
 		if (!current?.reloadInterrupted || current.interruptedAt !== worker.interruptedAt) return;
-		active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name);
+		// pending 没落盘时 reload 不会重投这条提醒：标记留着，reload 后照常再提醒。
+		if (!active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name)) return;
 		const { reloadInterrupted: _reload, ...reminded } = current;
 		active.store.upsert(reminded);
 	}), delay);
