@@ -18,7 +18,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
-import { type Candidate, candidates, type ChainCompletion, completeOnChain, createModelRoute, tryOnChain } from "./model-route.js";
+import { type Candidate, candidates, type ChainCompletion, completeOnChain, createModelRoute, followRoute, tryOnChain } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -162,8 +162,8 @@ export class InProcessSessionPool {
 			const agentDir = getAgentDir();
 			const runtime = await this.modelRuntime();
 			route = await createModelRoute(runtime, options.chain, this.timing.cooldownMs, options.thinkingOverride, options.onModelChange);
-			// 加载器与会话共用同一个 SettingsManager：项目信任只判定一次，两处读到的设置也不会分叉。
-			const settingsManager = SettingsManager.create(options.cwd, agentDir, { projectTrusted: false });
+			// 加载器与会话共用同一个 SettingsManager：项目信任只判定一次，两处读到的设置也不会分叉；压缩设置按路由到的物理模型查。
+			const settingsManager = followRoute(SettingsManager.create(options.cwd, agentDir, { projectTrusted: false }));
 			settingsManager.setProjectTrusted(projectTrusted(options.cwd, agentDir, settingsManager));
 			const loader = new DefaultResourceLoader({
 				cwd: options.cwd,
