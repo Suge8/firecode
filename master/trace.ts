@@ -4,9 +4,8 @@
  * 错误（stopReason / errorMessage）放最前，其后是按时间的正文，超出预算时丢最早的行；
  * 工具调用只留名字与简短参数，工具结果只留开头，免得一次大输出吃掉整份预算。
  */
-import { existsSync } from "node:fs";
-import { dirname } from "node:path";
-import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync } from "node:fs";
+import { type AgentSession, parseSessionEntries, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clip, oneLine, textOf } from "../format.js";
 import { isRecord } from "../jsonc.js";
@@ -24,12 +23,16 @@ const ARGS_WIDTH = 100;
 type TraceMessage = { role: string; content?: unknown; stopReason?: string; errorMessage?: string; isError?: boolean };
 
 /**
- * 已释放（冷）子代理的会话按文件打开（宿主的会话解析与分支规则）。文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放
+ * 已释放（冷）子代理的会话只读载入：宿主解析、迁移与分支规则，但放在内存会话里。不用 SessionManager.open：它遇到空文件写头、
+ * 遇到旧版格式迁移后整份重写，看一眼记录不该改文件。文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放
  * （宿主此前没写文件），没有任何记录，返回 undefined；恢复会话时同一条规则改为新开（run.ts 的 spawnWorker）。
  */
 export function readWorkerSession(worker: WorkerRef): SessionManager | undefined {
 	if (!existsSync(worker.sessionPath)) return undefined;
-	return SessionManager.open(worker.sessionPath, dirname(worker.sessionPath), worker.cwd);
+	const content = readFileSync(worker.sessionPath, "utf8");
+	const entries = parseSessionEntries(content);
+	if (!entries.length && content.trim()) throw new Error(msg.action.sessionInvalid(worker.sessionPath));
+	return SessionManager.inMemory(worker.cwd, undefined, entries);
 }
 
 export function workerTrace(worker: WorkerRef, session: AgentSession | undefined): string {

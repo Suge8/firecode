@@ -445,3 +445,27 @@ test("中断键避开宿主全部默认键位（根 AGENTS.md「快捷键冲突�
 	expect(hostKeys).not.toContain(INTERRUPT_KEY);
 });
 
+
+test("打开已释放子代理的全过程视图只读会话文件：空文件与宿主旧版格式的文件，打开前后字节不变，旧版记录照常显示", async () => {
+	const [{ mkdtemp, readFile, writeFile }, { tmpdir }, { join }] = await Promise.all([import("node:fs/promises"), import("node:os"), import("node:path")]);
+	const dir = await mkdtemp(join(tmpdir(), "firecode-cold-"));
+	const empty = { ...worker("empty"), sessionPath: join(dir, "empty.jsonl"), cwd: dir };
+	const legacy = { ...worker("legacy"), sessionPath: join(dir, "legacy.jsonl"), cwd: dir };
+	await writeFile(empty.sessionPath, "");
+	// 宿主 v1 格式：头不带 version、条目不带 id；宿主按会话文件打开时会迁移并整份重写。
+	await writeFile(legacy.sessionPath, [
+		{ type: "session", id: "legacy", timestamp: at(), cwd: dir },
+		{ type: "message", timestamp: at(), message: { role: "user", content: [{ type: "text", text: "旧版派单" }], timestamp: clock } },
+		{ type: "message", timestamp: at(), message: { role: "assistant", content: [{ type: "text", text: "旧版交付。" }], stopReason: "stop", timestamp: clock, usage: {} } },
+	].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+	const read = () => Promise.all([readFile(empty.sessionPath, "utf8"), readFile(legacy.sessionPath, "utf8")]);
+	const before = await read();
+
+	const emptyView = await open({ workers: [empty], sessions: {} });
+	emptyView.component.dispose();
+	const legacyView = await open({ workers: [legacy], sessions: {} });
+	expect(legacyView.lines().join("\n")).toContain("旧版交付。");
+	legacyView.component.dispose();
+
+	expect(await read()).toEqual(before);
+});
