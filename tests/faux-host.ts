@@ -10,10 +10,10 @@ const MISSING_KEY = "$FIRECODE_TEST_UNSET_API_KEY";
 /**
  * 把 faux 供应商装进测试 Agent 目录：模型原子 "provider/model" 写进真实的 models.json，
  * 池照生产路径读取它，模型解析、鉴权与流式都走宿主的真实链路，只有供应商的回答由测试脚本化。
- * keyless 里的供应商没有凭据（认证失败的场景）；windows 按模型原子改上下文窗口。调用方负责把 PI_CODING_AGENT_DIR 指向 agentDir。
+ * keyless 里的供应商没有凭据（认证失败的场景）；windows 按模型原子改上下文窗口；reasoning 里的模型支持思考档（请求带上档位）。调用方负责把 PI_CODING_AGENT_DIR 指向 agentDir。
  * faux 给回复盖上一个供应商名：只有一个供应商时盖它，宿主才能按回复找回产生它的物理模型（窗口、阈值）；多供应商时仍是 faux。
  */
-export async function installFaux(agentDir: string, atoms: string[], keyless: string[] = [], windows: Record<string, number> = {}) {
+export async function installFaux(agentDir: string, atoms: string[], keyless: string[] = [], windows: Record<string, number> = {}, reasoning: string[] = []) {
 	// 每次安装都是独立测试的供应商；同一次安装内的所有池仍共享冷却表。
 	((globalThis as Record<symbol, unknown>)[Symbol.for("firecode.model-cooldowns")] as Map<string, unknown> | undefined)?.clear();
 	const providerNames = new Set(atoms.map((atom) => atom.slice(0, atom.indexOf("/"))));
@@ -27,7 +27,7 @@ export async function installFaux(agentDir: string, atoms: string[], keyless: st
 		providers[provider].models.push({
 			id: atom.slice(slash + 1),
 			name: atom,
-			reasoning: template.reasoning,
+			reasoning: reasoning.includes(atom) || template.reasoning,
 			input: template.input,
 			cost: template.cost,
 			contextWindow: windows[atom] ?? template.contextWindow,

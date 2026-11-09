@@ -13,6 +13,11 @@ export interface WorkerRef {
 	role: string;
 	model: string;
 	thinking: ThinkingLevelValue;
+	/**
+	 * 指挥官在 start/send 指定的思考档（覆盖角色链各原子的档）；省略按原子。开会话与重配路由都只从这里取，热会话与冷启动（含暂停后的
+	 * 自动续跑、续审）一致；send 每次按自己的 thinking 改写，不带就清掉。thinking 是路由按它选出的实际档，两者不是同一件事。
+	 */
+	thinkingOverride?: ThinkingLevelValue;
 	status: WorkerStatus;
 	sessionPath: string;
 	/** 工作目录：start 必写（realpath），send 带 cwd 时改写。 */
@@ -234,6 +239,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (typeof record.cwd !== "string" || !record.cwd) return false;
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
+	if (record.thinkingOverride !== undefined && !THINKING_LEVELS.includes(record.thinkingOverride as ThinkingLevelValue)) return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
 	if (record.reloadInterrupted !== undefined && record.reloadInterrupted !== true) return false;
 	if (record.resume !== undefined && !isResume(record.resume)) return false;

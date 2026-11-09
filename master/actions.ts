@@ -149,20 +149,20 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 		await roles.resolve(selectedRole, thinkingOverride);
 		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
 		active.current(target);
-		const role = selectedRole.role;
-		const session = await openWorkerSession(active, { ...target, cwd, role }, thinkingOverride);
+		// 这次 send 之后的档案（角色、目录、思考档）：开会话与路由都从它取，接手时原样写进档案。
+		const { thinkingOverride: _previous, ...base } = target;
+		const next = { ...base, cwd, role: selectedRole.role, ...(thinkingOverride ? { thinkingOverride } : {}) };
+		const session = await openWorkerSession(active, next);
 		await pool.idle(session);
 		active.assertOpen();
-		pool.configureRoute(target.sessionPath, selectedRole.models, thinkingOverride);
+		pool.configureRoute(target.sessionPath, selectedRole.models, next.thinkingOverride);
 		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 		const latest = active.current(target);
 		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
-		const working = active.commit(target, (current) => ({
-			...transition.takeOver(current, "working"),
-			role,
-			cwd,
-			...(input.review ? { reviewNeeded: true } : {}),
-		}));
+		const working = active.commit(target, (current) => {
+			const { thinkingOverride: _previous, ...taken } = transition.takeOver(current, "working");
+			return { ...taken, role: next.role, cwd, ...(next.thinkingOverride ? { thinkingOverride: next.thinkingOverride } : {}), ...(input.review ? { reviewNeeded: true } : {}) };
+		});
 		active.beginRun(target.name, fromView ? "view" : "master", prompt);
 		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, cutOff ? `${RESUME_CHECK_PROMPT}\n\n${prompt}` : prompt);
@@ -202,13 +202,14 @@ async function start(active: MasterRuntime, input: ActionInput) {
 			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
 			cwd,
 			launch,
+			...(override ? { thinkingOverride: override } : {}),
 			...(input.review ? { reviewNeeded: true } : {}),
 		};
 		active.store.upsert(worker);
 		live.starting = undefined;
 		active.beginRun(name, "master", prompt);
 		try {
-			await runWorker(active, worker, spawnWorker(active, worker, false, override), prompt);
+			await runWorker(active, worker, spawnWorker(active, worker, false), prompt);
 		} finally {
 			// 开会话期间被 kill：新开的会话没人要了，在这里释放。
 			returnSession(active, worker);

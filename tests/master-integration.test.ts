@@ -2115,6 +2115,23 @@ test("审查的修复回合撞上 429 限流：审查暂停，到时自动重新
 	await harness.command("");
 }, 20_000);
 
+test("start 指定了思考档的运行暂停后、会话已释放再自动续跑：冷启动续跑沿用同一思考档，档案的实际档也是它", async () => {
+	const harness = await setup(true, { timing: { idleSessionMs: 15 }, roles: { 工程师: { model: "test/thinker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	const levels: string[] = [];
+	faux.setResponses([
+		(_context: any, options: any) => { levels.push(String(options.reasoning)); return fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.15}` }); },
+		(_context: any, options: any) => { levels.push(String(options.reasoning)); return fauxAssistantMessage("续跑完成"); },
+	]);
+	const started = await harness.execute({ action: "start", worker: "deep", prompt: "执行", role: "工程师", thinking: "high" });
+	await until(async () => (await harness.list()).details.workers[0]?.resume);
+	// 暂停期间热会话按空闲时限释放，续跑只能冷启动。
+	await until(() => !harness.pool.getSession((started.details as any).worker.session));
+	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("续跑完成")));
+	expect(levels).toEqual(["high", "high"]);
+	expect((await harness.list()).details.workers[0]).toMatchObject({ thinking: "high" });
+});
+
 test("审查者撞上 429 限流整轮缺席：审查暂停后自动续审并通过", async () => {
 	const harness = await setup(true, { review: true, workerReview: { review: TEST_REVIEW_CONFIG } });
 	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
@@ -2417,7 +2434,7 @@ async function setup(activate = true, options: {
 	if (options.loadGate)
 		await writeFile(join(extensions, "load-gate.ts"), "export default async function() { await globalThis.__loadGate; }");
 	process.env.PI_CODING_AGENT_DIR = agentDir;
-	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/reviewer", "test/advisor", "test/summary", "nokey/model"], ["nokey"]);
+	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/thinker", "test/reviewer", "test/advisor", "test/summary", "nokey/model"], ["nokey"], {}, ["test/thinker"]);
 	const { SessionManager } = await import(PI_CODING_AGENT_URL) as any;
 	const spawnModule = await loadFirecodeModule("spawn.js");
 	// 测试默认立即唤醒指挥官、让事件重试远在测试之外；用例按需缩短别的等待。

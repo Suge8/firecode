@@ -8,7 +8,7 @@
  */
 import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
-import { modelAtomText, type ThinkingLevelValue } from "../config.js";
+import { modelAtomText } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, oneLine, textOf, tildeHome } from "../format.js";
 import { routePause, type ChainPause } from "../model-route.js";
@@ -41,14 +41,14 @@ interface WorkerTerminal {
  * 恢复时文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放（宿主此前没写文件），没有任何上下文可恢复，
  * 就在同一路径上新开；这也包括文件被人删掉的情形，那时同样没有东西可恢复。
  */
-export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean, override?: ThinkingLevelValue): Promise<AgentSession> {
+export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean): Promise<AgentSession> {
 	const { pool, exclusions } = active.setup;
 	const role = active.roles.require(worker.role);
 	active.assertOpen();
 	const spawned = await pool.spawn({
 		cwd: worker.cwd,
 		chain: role.models,
-		thinkingOverride: override,
+		thinkingOverride: worker.thinkingOverride,
 		// 档案的模型原子只由这里写：路由每次选定（新会话首选、换角色或思考档后重选、故障切换）都报到这里。
 		onModelChange: (atom, previous, reason) => active.detached(worker.name, () => {
 			const current = active.find(worker);
@@ -74,9 +74,9 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 }
 
 /** 准备段里打开要开回合的会话：热的经 hold 取消释放计时，冷的重开；归还由 prepare 负责。 */
-export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef, override?: ThinkingLevelValue): Promise<AgentSession> {
+export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	active.assertOpen();
-	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true, override);
+	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true);
 }
 
 /**
