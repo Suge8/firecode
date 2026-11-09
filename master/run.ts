@@ -74,9 +74,42 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 	return spawned.session;
 }
 
+/** 准备段里打开要开回合的会话：热的经 hold 取消释放计时，冷的重开；归还由 prepare 负责。 */
 export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef, override?: ThinkingLevelValue): Promise<AgentSession> {
 	active.assertOpen();
 	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true, override);
+}
+
+/**
+ * 准备段（send、review 与暂停后的自动续跑）：按 Worker 单飞（transitioning）跑 work，结束（含失败）后归还会话。
+ * 准备期间到期的自动续跑见 transitioning 就让路，所以归还时还要补回它。
+ */
+export async function prepare<T>(active: MasterRuntime, target: WorkerRef, work: () => Promise<T>): Promise<T> {
+	const live = active.liveOf(target.name);
+	live.transitioning = true;
+	try {
+		return await work();
+	} finally {
+		live.transitioning = undefined;
+		returnSession(active, target);
+	}
+}
+
+/**
+ * 准备段或 start 结束后归还会话：hold 取消了池的释放计时，没开成回合就得补回，否则这个热会话不再释放。
+ * 票已不在（期间被 kill 或同名换票）就释放它；仍是 idle（准备失败、续跑让路、回合已落定）就补回释放计时与暂停续跑；
+ * 进了 working/reviewing 由那次运行落定（runtime.settle）归还。
+ */
+export function returnSession(active: MasterRuntime, target: WorkerRef): void {
+	if (active.closed) return;
+	const current = active.find(target);
+	if (!current) {
+		void active.setup.pool.dispose(target.sessionPath);
+		return;
+	}
+	if (current.status !== "idle") return;
+	active.setup.pool.markIdle(target.sessionPath);
+	armResume(active, current);
 }
 
 /** 子代理会话里的扩展出错：同一处错误只告知指挥官一次（事件处理器每次触发都会再抛）。 */
@@ -264,48 +297,40 @@ export function armResume(active: MasterRuntime, worker: WorkerRef): void {
 /**
  * 到时续跑：档案仍是这次暂停（指挥官没有 send/review/interrupt/ack 接手）才续；任务在原会话里以续跑提示开回合，
  * 审查则重新发起 fire-review。本次运行的起点与来源沿用暂停前的，落定事件只有续跑结束的那一条。
- * 续跑准备失败（会话打不开、角色已删）不是瞬时故障，照常作为失败交给指挥官。
+ * 续跑准备失败（会话打不开、角色已删）不是瞬时故障，照常作为失败交给指挥官；那时 resume 已被接手清掉就不再报。
  */
 async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): Promise<void> {
-	const live = active.liveOf(identity.name);
 	const current = active.find(identity);
-	if (current?.status !== "idle" || current.resume?.at !== resume.at || live.transitioning) return;
-	live.transitioning = true;
-	try {
-		if (resume.review) {
-			await startReview(active, current, true);
-			return;
+	if (current?.status !== "idle" || current.resume?.at !== resume.at || active.liveOf(identity.name).transitioning) return;
+	await prepare(active, current, async () => {
+		try {
+			if (resume.review) return await startReview(active, current, true);
+			const session = await openWorkerSession(active, current);
+			await session.waitForIdle();
+			active.assertOpen();
+			if (superseded(active, current, resume)) return;
+			const working = active.commit(current, (latest) => transition.continued(latest, "working"));
+			active.continueRun(identity.name);
+			active.progress?.resume(identity.name);
+			const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
+			await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
+		} catch (error) {
+			const failure = error instanceof Error ? error.message : String(error);
+			active.settle(identity, (latest) => latest.resume && {
+				worker: transition.landed(latest),
+				outcome: { kind: "failed", note: firstSentence(failure) },
+				event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, takeViewPrompts(active, identity)),
+			});
 		}
-		const session = await openWorkerSession(active, current);
-		await session.waitForIdle();
-		active.assertOpen();
-		if (resumeSuperseded(active, current, resume)) return;
-		const working = active.commit(current, (latest) => transition.continued(latest, "working"));
-		active.continueRun(identity.name);
-		active.progress?.resume(identity.name);
-		const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
-		await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
-	} catch (error) {
-		const failure = error instanceof Error ? error.message : String(error);
-		active.settle(identity, (latest) => latest.resume && {
-			worker: transition.landed(latest),
-			outcome: { kind: "failed", note: firstSentence(failure) },
-			event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, takeViewPrompts(active, identity)),
-		});
-	} finally {
-		live.transitioning = undefined;
-	}
+	});
 }
 
 /**
- * 续跑准备越过 await 后的核对：档案已不是这次暂停（准备期间指挥官 ack 清掉了 resume）就放弃续跑，
- * 补回 openWorkerSession 取消的释放计时。ack 不等准备结束、也不拒绝：取消还没开跑的续跑正是它的承诺，写回方让路。
- * 票被 kill 时 current 抛错，由调用方的失败路径放弃。
+ * 续跑准备越过 await 后的核对：档案已不是这次暂停（准备期间指挥官 ack 清掉了 resume）就放弃续跑，会话由 prepare 归还。
+ * ack 不等准备结束、也不拒绝：取消还没开跑的续跑正是它的承诺，写回方让路。票被 kill 时 current 抛错，由调用方的失败路径放弃。
  */
-function resumeSuperseded(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): boolean {
-	if (active.current(identity).resume?.at === resume.at) return false;
-	active.setup.pool.markIdle(identity.sessionPath);
-	return true;
+function superseded(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): boolean {
+	return active.current(identity).resume?.at !== resume.at;
 }
 
 /**
@@ -316,7 +341,7 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	const session = await openWorkerSession(active, target);
 	await session.waitForIdle();
 	active.assertOpen();
-	if (resumed && resumeSuperseded(active, target, target.resume!)) return;
+	if (resumed && superseded(active, target, target.resume!)) return;
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 	active.commit(target, (latest) => (resumed ? transition.continued(latest, "reviewing") : transition.takeOver(latest, "reviewing")));
 	const turn: Turn = { running: Promise.resolve(session) };

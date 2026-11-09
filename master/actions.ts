@@ -7,7 +7,7 @@ import { THINKING_LEVELS, type MasterRole, type ModelAtom, type ThinkingLevelVal
 import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
-import { armResume, openWorkerSession, resumeCheckPrompt, runWorker, spawnWorker, startReview } from "./run.js";
+import { openWorkerSession, prepare, resumeCheckPrompt, returnSession, runWorker, spawnWorker, startReview } from "./run.js";
 import type { MasterRuntime, RunOrigin } from "./runtime.js";
 import { transition, WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
@@ -67,16 +67,8 @@ async function review(active: MasterRuntime, params: Params): Promise<ToolResult
 	const live = active.liveOf(target.name);
 	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
 	admit(active);
-	live.transitioning = true;
-	try {
-		await startReview(active, target);
-		return toolResult({ reviewing: true });
-	} catch (error) {
-		rearmRelease(active, target);
-		throw error;
-	} finally {
-		live.transitioning = undefined;
-	}
+	await prepare(active, target, () => startReview(active, target));
+	return toolResult({ reviewing: true });
 }
 
 async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
@@ -152,8 +144,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	if (target.status !== "idle") throw new Error(msg.action.reviewingSend(target.name));
 	const thinkingOverride = validThinking(requestedThinking);
 	admit(active);
-	live.transitioning = true;
-	try {
+	return prepare(active, target, async () => {
 		const cwd = await resolveSendCwd(target, requestedCwd);
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
 		const selectedRole = selection ?? resolveRole(roster, target.role);
@@ -179,12 +170,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, cutOff ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
 		return toolResult({ sent: true });
-	} catch (error) {
-		rearmRelease(active, target);
-		throw error;
-	} finally {
-		live.transitioning = undefined;
-	}
+	});
 }
 
 /**
@@ -242,24 +228,18 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		active.store.upsert(worker);
 		live.starting = undefined;
 		active.beginRun(name, "master", prompt);
-		await runWorker(active, worker, spawnWorker(active, worker, false, override), prompt);
+		try {
+			await runWorker(active, worker, spawnWorker(active, worker, false, override), prompt);
+		} finally {
+			// 开会话期间被 kill：新开的会话没人要了，在这里释放。
+			returnSession(active, worker);
+		}
 		return toolResult({ started: true, worker: compactWorker(worker) });
 	} catch (error) {
 		// 只撤自己这一票：kill 后同名重开的新票不受影响。
 		if (!active.closed && active.live.get(name) === live) active.remove(name, live);
 		throw error;
 	}
-}
-
-/**
- * 准备段失败而票仍是 idle：openWorkerSession 取消了池的释放计时，这里补回，否则这个热会话再也不会被释放。
- * 暂停中的票同样补回自动续跑：准备期间到期的续跑见 transitioning 已让路，这次接手又没成，不补就再也没人续。
- */
-function rearmRelease(active: MasterRuntime, target: WorkerRef): void {
-	const current = active.find(target);
-	if (current?.status !== "idle") return;
-	active.setup.pool.markIdle(target.sessionPath);
-	armResume(active, current);
 }
 
 /**

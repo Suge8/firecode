@@ -229,12 +229,11 @@ export class MasterRuntime {
 		}
 	}
 
-	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就释放热会话并放弃本次动作。 */
+	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就放弃本次动作；准备段占住的会话由 run.ts 的 returnSession 归还。 */
 	current(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef {
 		this.assertOpen();
 		const current = this.find(identity);
 		if (current) return current;
-		void this.setup.pool.dispose(identity.sessionPath);
 		throw new Error(msg.runtime.killed(identity.name));
 	}
 
