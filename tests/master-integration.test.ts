@@ -1065,7 +1065,7 @@ test("视图派的运行进行中指挥官又 send 给同一子代理：来源�
 
 test("子代理被 kill 时通知订阅方（全过程视图据此显示已移除）；之后视图补话报明确错误", async () => {
 	process.env.PI_CODING_AGENT_DIR = directory = await mkdtemp(join(tmpdir(), "firecode-master-kill-"));
-	const [{ MasterRuntime }, { ACTION_HANDLERS }] = await Promise.all([
+	const [{ MasterRuntime }, { ACTION_HANDLERS, send }] = await Promise.all([
 		loadFirecodeModule("master/runtime.js"),
 		loadFirecodeModule("master/actions.js"),
 	]) as any[];
@@ -1081,9 +1081,10 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 	});
 	const removed: string[] = [];
 	active.onWorkerRemoved((name: string) => removed.push(name));
-	await ACTION_HANDLERS.kill(active, { worker: "quick" }, ctx);
+	await ACTION_HANDLERS.kill(active, { worker: "quick" });
 	expect(removed).toEqual(["quick"]);
-	await expect(ACTION_HANDLERS.send(active, { worker: "quick", prompt: "还在吗" }, ctx, "view")).rejects.toThrow("子代理不存在：quick");
+	// 全过程视图的补话直接调 send 命令（来源 view）。
+	await expect(send(active, "quick", { prompt: "还在吗" }, "view")).rejects.toThrow("子代理不存在：quick");
 	active.close();
 });
 
@@ -2349,8 +2350,8 @@ async function setup(activate = true, options: {
 		}),
 	};
 	const module = await loadFirecodeModule("master/index.js", moduleOptions) as any;
-	// 全过程视图补话走 ACTION_HANDLERS.send(active, …, "view")；运行时对象只在注册闭包里，这里在 render 上截一份引用（只在测试副本里，幂等）。
-	const [{ MasterRuntime }, { ACTION_HANDLERS }] = await Promise.all([
+	// 全过程视图补话直接调 send(active, …, "view")；运行时对象只在注册闭包里，这里在 render 上截一份引用（只在测试副本里，幂等）。
+	const [{ MasterRuntime }, { send }] = await Promise.all([
 		loadFirecodeModule("master/runtime.js", moduleOptions),
 		loadFirecodeModule("master/actions.js", moduleOptions),
 	]) as any[];
@@ -2523,7 +2524,7 @@ async function setup(activate = true, options: {
 			tools.get("subagents_list").renderResult(result, { expanded: false }, ctx.ui.theme, context);
 			return tools.get("subagents_list").renderCall({}, ctx.ui.theme, context).render(120);
 		},
-		viewSend: (worker: string, prompt: string) => ACTION_HANDLERS.send((globalThis as any).__masterActive, { worker, prompt }, ctx, "view"),
+		viewSend: (worker: string, prompt: string) => send((globalThis as any).__masterActive, worker, { prompt }, "view"),
 		list: () => tools.get("subagents_list").execute("list", {}, undefined, undefined, ctx),
 		execute: (params: Record<string, unknown>) => tools.get("subagents").execute("call", params, undefined, undefined, ctx),
 	};

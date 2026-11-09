@@ -29,7 +29,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 - `ack`：清掉失败与被中断的活动列表行并取消未发出的续跑提醒；审查义务未履行时拒绝。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
 
-调用方身份（指挥官的工具 / 全过程视图）是处理函数的独立参数 `origin`，不在模型能填的 `params` 里，所以模型无法冒充视图来源。
+七个动作各是一个带类型的命令（`actions.ts`），工具处理表只把参数解析成命令输入；调用方身份（指挥官的工具 / 全过程视图）是 `send` 命令的独立参数 `origin`，工具一律以指挥官身份调用，全过程视图直接调 `send`/`interrupt` 命令，所以模型无法冒充视图来源。
 
 `subagents_list` 是零参数查询：模型结果只返回池快照（档案事实）；界面的展开行与 `/fire-master status` 由 `list-view.ts` 从相位投影，与活动列表同一说法。
 
@@ -88,7 +88,7 @@ Master 只跨模块读取 `review/outcome.ts`：审查进度与终态都由它�
 
 - 输入区与上下横线共用 `statusbar/render.ts` 的 `fitBorder`；调用点是活动列表的 `rowState`（上横线）与 `roundFromEntry`（轮记录），不在视图另算。
 - 已发出未送达的补话读子会话的排队队列。
-- 中断键 `ctrl+shift+x`（`INTERRUPT_KEY`）走 `ACTION_HANDLERS.interrupt`，对在跑和审查中的子代理生效（审查中走上面的 reviewing 中断），底行提示只在它不是空闲时出现；展开工具行经 `tools/group-view` 带形状校验的 `toggleToolDetails`，不直接读宿主私有字段。
+- 中断键 `ctrl+shift+x`（`INTERRUPT_KEY`）走 `interrupt` 命令（与指挥官同一入口），对在跑和审查中的子代理生效（审查中走上面的 reviewing 中断），底行提示只在它不是空闲时出现；展开工具行经 `tools/group-view` 带形状校验的 `toggleToolDetails`，不直接读宿主私有字段。
 - 被移除时正在看的子代理留着已有记录、不再更新，输入框停用并丢掉草稿；Tab 序列与 n/N 立即去掉它。
 - 浮层抢走焦点后宿主编辑器的全局键不生效，视图给出同义行为：esc 返回，ctrl+c 先清输入、再按关闭视图，空输入的 ctrl+d 关闭视图（不在浮层里退出 pi），ctrl+o 是当前子代理的全部展开。
 - 视图只处理滚轮与点击；按下、拖动与松开交还宿主做文字选择（有浮层时宿主按屏幕坐标选、松开即复制），不拖动的松开由宿主转成点击发回。点击展开/收起的视口锚定与主会话同一个 `tools/click-anchor.ts`。

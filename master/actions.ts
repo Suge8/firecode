@@ -1,8 +1,11 @@
-/** subagents 七个命令动作：每个动作一个处理函数，表驱动分发。 */
+/**
+ * subagents 七个命令动作：每个动作是一个带类型的命令（名字加它真正用到的输入），工具处理表只把参数解析成命令输入再包成工具结果。
+ * 全过程视图直接调 send 与 interrupt，不经工具参数。
+ */
 import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
-import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "../config.js";
 import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
@@ -16,13 +19,30 @@ export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "
 export type Action = (typeof ACTIONS)[number];
 type Params = Record<string, unknown>;
 type ToolResult = { content: { type: "text"; text: string }[]; details: unknown };
-/** origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数，所以不进 params。 */
-type Handler = (active: MasterRuntime, params: Params, ctx: ExtensionContext, origin: RunOrigin) => Promise<ToolResult>;
+
+/** 工具参数里 start/send 用的可选字段（去首尾空白，空串当没给）；必填与取值由各命令按自己的顺序校验。 */
+export interface ActionInput {
+	worker?: string;
+	prompt?: string;
+	role?: string;
+	thinking?: string;
+	cwd?: string;
+	review?: boolean;
+}
 
 /** 同时 working/reviewing 的 Worker 上限；指挥官开新运行（start、对空闲票 send/review）超出直接拒绝，不排队。 */
 const MAX_IN_FLIGHT = 15;
 
-export const ACTION_HANDLERS: Record<Action, Handler> = { start, send, interrupt, review, tail, ack, kill };
+/** 工具入口：调用方身份（origin）不是模型能填的参数，工具发起的一律是指挥官。 */
+export const ACTION_HANDLERS: Record<Action, (active: MasterRuntime, params: Params) => Promise<ToolResult>> = {
+	start: async (active, params) => toolResult(await start(active, inputOf(params))),
+	send: async (active, params) => toolResult(await send(active, nameOf(params), inputOf(params), "master")),
+	interrupt: async (active, params) => toolResult(await interrupt(active, nameOf(params))),
+	review: async (active, params) => toolResult(await review(active, nameOf(params))),
+	tail: async (active, params) => ({ content: [{ type: "text", text: tail(active, nameOf(params)) }], details: undefined }),
+	ack: async (active, params) => toolResult(ack(active, nameOf(params))),
+	kill: async (active, params) => toolResult(await kill(active, nameOf(params))),
+};
 
 /** 为新子代理在主会话目录下的 subagents/ 预分配会话文件路径（不会出现在 /resume）；路径是档案身份的唯一事实源。 */
 function preallocateWorkerSession(mainSessionPath: string, cwd: string): string {
@@ -31,22 +51,22 @@ function preallocateWorkerSession(mainSessionPath: string, cwd: string): string 
 	return sessionPath;
 }
 
-async function kill(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = targetOf(active, params);
+async function kill(active: MasterRuntime, name: string) {
+	const target = active.store.require(name);
 	// 同步段内删档案与运行时事实，迟到的异步写回据此全部作废；随后等 session_shutdown 收口释放热会话。
 	active.remove(target.name);
 	await active.setup.pool.dispose(target.sessionPath);
-	return toolResult({ killed: true });
+	return { killed: true };
 }
 
-async function tail(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = targetOf(active, params);
-	return { content: [{ type: "text", text: workerTrace(target, active.setup.pool.getSession(target.sessionPath)) }], details: undefined };
+function tail(active: MasterRuntime, name: string): string {
+	const target = active.store.require(name);
+	return workerTrace(target, active.setup.pool.getSession(target.sessionPath));
 }
 
 /** 动作名按模型先验取：曾叫 hold，被读成“暂停”而假成功。名字治误读，非 idle 报错治假成功。 */
-async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = targetOf(active, params);
+function ack(active: MasterRuntime, name: string) {
+	const target = active.store.require(name);
 	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
 	// ack 清掉失败与被中断的行，并取消还没发出的续跑提醒与暂停后的自动续跑；完成的留在“✓ 已完成”里直到 kill。
@@ -58,21 +78,22 @@ async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 		if (live.outcome && live.outcome.kind !== "done") live.outcome = undefined;
 	}
 	active.render();
-	return toolResult({ acked: true });
+	return { acked: true };
 }
 
-async function review(active: MasterRuntime, params: Params): Promise<ToolResult> {
+async function review(active: MasterRuntime, name: string) {
 	if (active.setup.reviewGate) throw new Error(active.setup.reviewGate);
-	const target = targetOf(active, params);
+	const target = active.store.require(name);
 	const live = active.liveOf(target.name);
 	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
 	admit(active);
 	await prepare(active, target, () => startReview(active, target));
-	return toolResult({ reviewing: true });
+	return { reviewing: true };
 }
 
-async function interrupt(active: MasterRuntime, params: Params): Promise<ToolResult> {
-	const target = targetOf(active, params);
+/** 与 send 同为全过程视图直接调用的命令。 */
+export async function interrupt(active: MasterRuntime, name: string) {
+	const target = active.store.require(name);
 	if (target.status === "reviewing") return interruptReview(active, target);
 	if (target.status === "idle" && target.resume) return interruptPause(active, target);
 	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
@@ -82,7 +103,7 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 	try {
 		await (await turn.running)?.abort();
 		active.assertOpen();
-		return toolResult({ interrupted: true });
+		return { interrupted: true };
 	} catch (error) {
 		turn.interrupted = undefined;
 		throw error;
@@ -90,19 +111,19 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 }
 
 /** 暂停中的子代理：取消自动续跑，按被中断落定（会话与审查义务保留，等指挥官续派或收口）。 */
-async function interruptPause(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
+async function interruptPause(active: MasterRuntime, target: WorkerRef) {
 	if (active.live.get(target.name)?.transitioning) throw new Error(msg.action.switching(target.name));
 	active.cancelTimers(active.liveOf(target.name));
 	const at = Date.now();
 	active.settle(target, (current) => ({ worker: transition.interrupted(current, at), outcome: { kind: "interrupted" }, at }));
-	return toolResult({ interrupted: true });
+	return { interrupted: true };
 }
 
 /**
  * 审查中的子代理：先在它的会话里取消审查（review/outcome.ts 的 CANCEL_REVIEW_COMMAND，与 esc 取消同一路径，终态 checkpoint 照写），
  * 再中止会话里可能在跑的修复/总结回合。落定由审查监视（run.ts）看到取消的终态后按中断处理：回到 idle、带中断标记、审查义务保留。
  */
-async function interruptReview(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
+async function interruptReview(active: MasterRuntime, target: WorkerRef) {
 	const turn = active.liveOf(target.name).turn!;
 	const session = (await turn.running)!;
 	turn.interrupted = true;
@@ -110,30 +131,29 @@ async function interruptReview(active: MasterRuntime, target: WorkerRef): Promis
 		await session.prompt(CANCEL_REVIEW_COMMAND);
 		if (session.isStreaming) await session.abort();
 		active.assertOpen();
-		return toolResult({ interrupted: true });
+		return { interrupted: true };
 	} catch (error) {
 		turn.interrupted = undefined;
 		throw error;
 	}
 }
 
-async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContext, origin: RunOrigin): Promise<ToolResult> {
+/** origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数。 */
+export async function send(active: MasterRuntime, name: string, input: ActionInput, origin: RunOrigin) {
 	const { reviewGate, pool } = active.setup;
 	const { roles } = active;
-	if (params.review === true && reviewGate) throw new Error(reviewGate);
-	const target = targetOf(active, params);
+	if (input.review && reviewGate) throw new Error(reviewGate);
+	const target = active.store.require(name);
 	const live = active.liveOf(target.name);
 	if (live.transitioning) throw new Error(msg.action.switching(target.name));
-	const requestedRole = optionalString(params.role);
-	const requestedThinking = optionalString(params.thinking);
-	const requestedCwd = optionalString(params.cwd);
-	const prompt = requiredString(params.prompt, "prompt");
+	const { role: requestedRole, thinking: requestedThinking, cwd: requestedCwd } = input;
+	const prompt = requiredString(input.prompt, "prompt");
 	const selection = requestedRole ? roles.require(requestedRole) : undefined;
 	// 子代理全过程视图的补话走同一入口，只多一个来源标记：视图起的运行指挥官不在等（见 RunOrigin），
 	// 落定事件注明是用户在视图里直接派的；视图补进别人起的运行只记原话，不改来源。
 	const fromView = origin === "view";
 	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
-		const result = await steer(active, target, prompt, params.review === true);
+		const result = await steer(active, target, prompt, input.review === true);
 		if (fromView) live.viewPrompts.push(prompt);
 		else if (live.origin !== "master") {
 			live.origin = "master";
@@ -165,12 +185,12 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 			...transition.takeOver(current, "working"),
 			role,
 			cwd,
-			...(params.review === true ? { reviewNeeded: true } : {}),
+			...(input.review ? { reviewNeeded: true } : {}),
 		}));
 		active.beginRun(target.name, fromView ? "view" : "master", prompt);
 		if (fromView) live.viewPrompts.push(prompt);
 		await runWorker(active, working, session, cutOff ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
-		return toolResult({ sent: true });
+		return { sent: true };
 	});
 }
 
@@ -178,7 +198,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
  * working Worker 的普通 send 经宿主 steer 在句缝送达，不打断。回合还在开会话或宿主前置阶段时先等它在飞；没开成就报未送达。
  * steer 会 await 子会话的 input 处理器：期间可能落定或被 kill，写回只认重读后的档案；回合已结束时清掉滞留队列并报未送达。
  */
-async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, review: boolean): Promise<ToolResult> {
+async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, review: boolean) {
 	const session = await active.liveOf(target.name).turn!.running;
 	active.current(target);
 	if (!session) throw new Error(msg.action.notDelivered(target.name));
@@ -189,29 +209,29 @@ async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, r
 		throw new Error(msg.action.notDelivered(target.name));
 	}
 	if (review) active.commit(target, (latest) => ({ ...latest, reviewNeeded: true }));
-	return toolResult({ steered: true });
+	return { steered: true };
 }
 
-async function start(active: MasterRuntime, params: Params, ctx: ExtensionContext): Promise<ToolResult> {
+async function start(active: MasterRuntime, input: ActionInput) {
 	const { reviewGate } = active.setup;
-	if (params.review === true && reviewGate) throw new Error(reviewGate);
-	if (typeof params.worker !== "string" || !params.worker.trim())
-		throw new Error(msg.action.needWorker);
-	const name = params.worker.trim();
+	const { ctx } = active;
+	if (input.review && reviewGate) throw new Error(reviewGate);
+	const name = input.worker;
+	if (!name) throw new Error(msg.action.needWorker);
 	validateWorkerName(name);
 	if (active.store.find(name) || active.live.get(name)?.starting)
 		throw new Error(msg.action.exists(name));
 	admit(active);
-	const prompt = requiredString(params.prompt, "prompt");
-	const requestedRole = optionalString(params.role);
+	const prompt = requiredString(input.prompt, "prompt");
+	const requestedRole = input.role;
 	if (!requestedRole) throw new Error(msg.action.needRole);
 	const selectedRole = active.roles.require(requestedRole);
-	const override = validThinking(optionalString(params.thinking));
+	const override = validThinking(input.thinking);
 	const { live, launch } = active.reserve(name);
 	try {
 		const selected = await active.roles.resolve(selectedRole, override);
 		const thinking = selected.thinking;
-		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
+		const cwd = await resolveWorkerCwd(input.cwd ?? ctx.cwd);
 		active.assertOpen();
 		const mainSessionPath = ctx.sessionManager.getSessionFile();
 		if (!mainSessionPath) throw new Error(msg.action.mainNotSaved);
@@ -224,7 +244,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
 			cwd,
 			launch,
-			...(params.review === true ? { reviewNeeded: true } : {}),
+			...(input.review ? { reviewNeeded: true } : {}),
 		};
 		active.store.upsert(worker);
 		live.starting = undefined;
@@ -235,7 +255,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 			// 开会话期间被 kill：新开的会话没人要了，在这里释放。
 			returnSession(active, worker);
 		}
-		return toolResult({ started: true, worker: compactWorker(worker) });
+		return { started: true, worker: compactWorker(worker) };
 	} catch (error) {
 		// 只撤自己这一票：kill 后同名重开的新票不受影响。
 		if (!active.closed && active.live.get(name) === live) active.remove(name, live);
@@ -259,17 +279,21 @@ function toolResult(value: unknown): ToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
 }
 
-function targetOf(active: MasterRuntime, params: Params): WorkerRef {
-	return active.store.require(requiredString(params.worker, "worker"));
+function nameOf(params: Params): string {
+	return requiredString(params.worker, "worker");
+}
+
+function inputOf(params: Params): ActionInput {
+	const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+	return {
+		worker: text(params.worker), prompt: text(params.prompt), role: text(params.role), thinking: text(params.thinking), cwd: text(params.cwd),
+		review: params.review === true,
+	};
 }
 
 function requiredString(value: unknown, field: string): string {
 	if (typeof value !== "string" || !value.trim()) throw new Error(msg.action.empty(field));
 	return value.trim();
-}
-
-function optionalString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function validThinking(value: string | undefined): WorkerRef["thinking"] | undefined {

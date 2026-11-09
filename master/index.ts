@@ -194,10 +194,10 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 			cwd: Type.Optional(Type.String({ description: msg.tool.cwd })),
 			review: Type.Optional(Type.Boolean({ description: msg.tool.review })),
 		}),
-		async execute(_id, params: Record<string, unknown>, _signal, _update, ctx) {
+		async execute(_id, params: Record<string, unknown>) {
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_TOOL));
-			return ACTION_HANDLERS[params.action as Action](active, params, ctx, "master");
+			return ACTION_HANDLERS[params.action as Action](active, params);
 		},
 	});
 

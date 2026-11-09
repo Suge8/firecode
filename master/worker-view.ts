@@ -21,7 +21,7 @@ import { toolRenderers } from "../tools/index.js";
 import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
-import { ACTION_HANDLERS } from "./actions.js";
+import { interrupt, send } from "./actions.js";
 import { ANIMATING_KINDS, rowState } from "./activity-list.js";
 import { msg } from "./messages.js";
 import type { ActivityFacts } from "./phase.js";
@@ -92,10 +92,10 @@ function runtimeSource(active: MasterRuntime, drafts: Map<string, string>): Work
 		onSession: (listener) => active.onWorkerSession(listener),
 		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),
 		send: async (name, prompt) => {
-			await ACTION_HANDLERS.send(active, { worker: name, prompt }, active.ctx, "view");
+			await send(active, name, { prompt }, "view");
 		},
 		interrupt: async (name) => {
-			await ACTION_HANDLERS.interrupt(active, { worker: name }, active.ctx, "master");
+			await interrupt(active, name);
 		},
 		drafts,
 	};
