@@ -14,7 +14,7 @@ import { clip, firstSentence, oneLine, textOf, tildeHome } from "../format.js";
 import { routePause, type ChainPause } from "../model-route.js";
 import { delayUntil } from "../timing.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
-import { quietMinutes, workerPhase } from "./activity-list.js";
+import { quietMinutes, workerPhase } from "./phase.js";
 import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
@@ -100,7 +100,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 			}
 		}
 		if (event.type === "tool_execution_start") {
-			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args, startedAt: Date.now() });
+			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args });
 			active.progress?.toolCall(worker.name, event.toolName, event.args, worker.cwd ?? "");
 		}
 		// 只记带工具调用的正文（边说边做）；以 stop 收尾的最终回复意味着回合马上落定，为它再调一次模型是白花。
@@ -113,7 +113,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 }
 
 /**
- * 停摆唤醒：在跑的回合落入活动列表的“卡住”（同一个 workerPhase 判定、同一份 quietSince）时给指挥官投一条事件。
+ * 停摆唤醒：在跑的回合落入“卡住”（与活动列表同一个 workerPhase 判定、同一份 quietSince）时给指挥官投一条事件。
  * 计时器不另算无输出时长，只在判定可能成立的时刻去看一眼：还没到就按剩余时间重挂，不再 working 就停；
  * 报过后停到下一次输出（observeWorker 清掉标记并重挂），所以同一段无输出只报一次。
  */
@@ -123,14 +123,14 @@ function watchStall(active: MasterRuntime, identity: WorkerRef): void {
 		clearTimeout(live.stallTimer);
 		live.stallTimer = undefined;
 		if (active.closed || active.live.get(identity.name) !== live || live.stallReported) return;
-		const facts = active.activityFacts();
-		const index = facts.workers.findIndex((worker) => worker.sessionPath === identity.sessionPath);
-		if (index < 0) return;
+		const current = active.find(identity);
+		if (!current) return;
 		const now = Date.now();
-		const { kind, action, startedAt, quietMs } = workerPhase(facts, index, now);
+		const { stallMs } = active.setup.pool.timing;
+		const { kind, action, startedAt, quietMs } = workerPhase(active.workerFacts(current), stallMs, now);
 		if (quietMs === undefined) return;
 		if (kind !== "stuck") {
-			live.stallTimer = setTimeout(check, facts.stallMs - quietMs);
+			live.stallTimer = setTimeout(check, stallMs - quietMs);
 			live.stallTimer.unref?.();
 			return;
 		}

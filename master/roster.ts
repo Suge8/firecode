@@ -1,9 +1,9 @@
 /**
  * 子代理名册：同进程里其他扩展（如 CuePad 桥）读的稳定接口。Master 在子代理的状态、动作或审查进度变化时，
- * 把整份名册发布在 `firecode:subagents` 频道（`{ workers }`，按启动序；停用时发空名册）。名册只是活动列表的投影，
- * 分组与动作文字取自 activity-list.ts 的 `workerPhase`，读者不要自己从会话文件推导。
+ * 把整份名册发布在 `firecode:subagents` 频道（`{ workers }`，按启动序；停用时发空名册）。名册与活动列表读同一份相位：
+ * 分组与动作文字取自 phase.ts 的 `workerPhase`，读者不要自己从会话文件推导。
  */
-import { workerPhase, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { workerPhase, type ActivityFacts, type PhaseKind } from "./phase.js";
 
 export const SUBAGENTS_CHANNEL = "firecode:subagents";
 
@@ -11,7 +11,7 @@ export const SUBAGENTS_CHANNEL = "firecode:subagents";
  * 活动列表的分组减去“卡住”（卡住仍是在跑，要靠计时才判得出，名册不发时间驱动的变化）：
  * running、review、paused（瞬时故障后暂停，到时自动续跑）、done、failed、interrupted、idle。
  */
-type SubagentState = Exclude<RowKind, "stuck">;
+type SubagentState = Exclude<PhaseKind, "stuck">;
 
 export interface SubagentInfo {
 	name: string;
@@ -35,8 +35,9 @@ export interface SubagentsPayload {
 
 /** 按档案顺序（启动序）投影整份名册。 */
 export function subagentInfos(facts: ActivityFacts, now: number): SubagentInfo[] {
-	return facts.workers.map((worker, index): SubagentInfo => {
-		const { kind, action, startedAt, settledAt } = workerPhase(facts, index, now);
+	return facts.workers.map((entry): SubagentInfo => {
+		const { worker } = entry;
+		const { kind, action, startedAt, settledAt } = workerPhase(entry, facts.stallMs, now);
 		return {
 			name: worker.name,
 			role: worker.role,

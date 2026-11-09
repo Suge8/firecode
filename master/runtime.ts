@@ -1,16 +1,16 @@
 /**
- * 一个指挥官会话的运行时：持久化档案（store）、按名字索引的 Worker 运行时事实（live）、事件发件箱与活动列表。
+ * 一个指挥官会话的运行时：持久化档案（store）、按名字索引的 Worker 运行时事实（live）与事件发件箱。不认识界面：
+ * 活动列表与全过程视图由 index.ts 挂载，读 activityFacts() 并经 onChange 重绘。
  * 运行时事实只在进程内；档案与 JSONL 才是身份与续派的事实源。会话关闭后 closed 置位，迟到的异步续延一律作废。
  */
 import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MasterRole, ModelChain } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewRoundProgress } from "../review/outcome.js";
-import { ActivityList, visibleRows, type ActivityFacts, type SettledFact } from "./activity-list.js";
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
+import type { ActivityFacts, SettledFact, WorkerFacts } from "./phase.js";
 import { ProgressLines } from "./progress.js";
-import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import { subagentInfos, type SubagentInfo } from "./roster.js";
@@ -38,7 +38,6 @@ export interface MasterSetup {
 interface CurrentTool {
 	tool: string;
 	args: unknown;
-	startedAt: number;
 }
 
 /**
@@ -92,7 +91,6 @@ export interface WorkerLive {
 	observed?: { session: AgentSession; sessionPath: string; unsubscribe: () => void };
 }
 
-const LIST_WIDGET_KEY = "firecode-master-list";
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
@@ -106,11 +104,6 @@ export class MasterRuntime {
 	readonly progress?: ProgressLines;
 	/** 最近取出的启动序；接着档案里已有的最大值，恢复后新 start 仍排在后面。 */
 	private launchSeq: number;
-	/** 全过程视图的草稿（名字 → 没发出的话）：活到会话结束，不持久化。 */
-	readonly viewDrafts = new Map<string, string>();
-	/** 全过程视图同一时刻只开一个。 */
-	viewOpen = false;
-	private list?: ActivityList;
 	private publishScheduled = false;
 	private closedValue = false;
 	private readonly stopReleaseWatch: () => void;
@@ -118,6 +111,8 @@ export class MasterRuntime {
 	private readonly sessionListeners = new Set<(name: string) => void>();
 	/** 子代理被移除（kill 或启动失败撤票）时通知：全过程视图据此显示已移除。 */
 	private readonly removedListeners = new Set<(name: string) => void>();
+	/** 事实变化时通知（活动列表重绘）。 */
+	private readonly changeListeners = new Set<() => void>();
 
 	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext) {
 		this.outbox = new Outbox(this);
@@ -135,11 +130,6 @@ export class MasterRuntime {
 			for (const live of this.live.values())
 				if (live.observed?.sessionPath === sessionPath) this.unobserve(live);
 		});
-		ctx.ui.setWidget(LIST_WIDGET_KEY, (tui, theme) => {
-			this.list = new ActivityList(tui, theme, () => this.activityFacts(),
-				() => visibleRows(tui.terminal?.rows), (name) => void openWorkerView(this, name));
-			return this.list;
-		}, { placement: "aboveEditor" });
 	}
 
 	get closed(): boolean {
@@ -150,12 +140,17 @@ export class MasterRuntime {
 		if (this.closedValue) throw new Error(msg.runtime.replaced);
 	}
 
-	/** 事实变化后的唯一重绘入口：在飞数、名册、边框身份与活动列表。 */
+	/** 事实变化后的唯一重绘入口：在飞数、名册、边框身份与 onChange 的订阅方（活动列表）。 */
 	render(): void {
 		if (this.closedValue) return;
 		this.schedulePublish();
 		this.ctx.ui.setStatus(STATUS_KEYS.master, MASTER_IDENTITY);
-		this.list?.sync();
+		for (const notify of this.changeListeners) notify();
+	}
+
+	onChange(listener: () => void): () => void {
+		this.changeListeners.add(listener);
+		return () => this.changeListeners.delete(listener);
 	}
 
 	/**
@@ -171,11 +166,6 @@ export class MasterRuntime {
 			this.setup.publishInFlight(this.outbox.inFlight());
 			this.setup.publishRoster(subagentInfos(this.activityFacts(), Date.now()));
 		});
-	}
-
-	/** 新的一轮（人类输入）开始：活动列表的展开收起。 */
-	collapseList(): void {
-		this.list?.collapse();
 	}
 
 	liveOf(name: string): WorkerLive {
@@ -310,8 +300,7 @@ export class MasterRuntime {
 		this.live.clear();
 		this.progress?.close();
 		this.outbox.close();
-		this.list?.dispose();
-		this.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
+		this.changeListeners.clear();
 		this.ctx.ui.setStatus(STATUS_KEYS.master, undefined);
 	}
 
@@ -327,26 +316,24 @@ export class MasterRuntime {
 		live.observed = undefined;
 	}
 
-	/** 活动列表的输入：档案加运行时事实的一次投影（全过程视图按同一顺序换子代理）。 */
+	/** 相位的输入：所有展示（活动列表、全过程视图、池查询、status、名册）与停摆唤醒都读这一份投影，按启动序。 */
 	activityFacts(): ActivityFacts {
-		const workers = this.store.workers;
-		const byPath = <T>(pick: (live: WorkerLive) => T | undefined) => new Map(workers.flatMap((worker) => {
-			const live = this.live.get(worker.name);
-			const value = live && pick(live);
-			return value === undefined ? [] : [[worker.sessionPath, value] as const];
-		}));
+		return { workers: this.store.workers.map((worker) => this.workerFacts(worker)), stallMs: this.setup.pool.timing.stallMs };
+	}
+
+	/** 一个子代理的档案加这次运行的运行时事实。 */
+	workerFacts(worker: WorkerRef): WorkerFacts {
+		const live = this.live.get(worker.name);
+		const tool = live && [...live.currentTools.values()].at(-1);
+		const progress = this.progress?.text(worker.name);
 		return {
-			workers,
-			currentTools: byPath((live) => (live.currentTools.size ? live.currentTools : undefined)),
-			reviewProgress: byPath((live) => live.reviewProgress),
-			runStartedAt: byPath((live) => live.runStartedAt),
-			quietSince: byPath((live) => live.quietSince),
-			progress: new Map(workers.flatMap((worker) => {
-				const text = this.progress?.text(worker.name);
-				return text ? [[worker.sessionPath, text] as const] : [];
-			})),
-			settled: byPath((live) => (live.outcome && live.idleAt !== undefined ? { ...live.outcome, at: live.idleAt } : undefined)),
-			stallMs: this.setup.pool.timing.stallMs,
+			worker,
+			...(tool ? { tool: { tool: tool.tool, args: tool.args } } : {}),
+			...(live?.reviewProgress ? { review: live.reviewProgress } : {}),
+			...(live?.runStartedAt === undefined ? {} : { startedAt: live.runStartedAt }),
+			...(live?.quietSince === undefined ? {} : { quietSince: live.quietSince }),
+			...(progress ? { progress } : {}),
+			...(live?.outcome && live.idleAt !== undefined ? { settled: { ...live.outcome, at: live.idleAt } } : {}),
 		};
 	}
 }

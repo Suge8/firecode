@@ -23,19 +23,15 @@ type Spec = {
 };
 
 function facts(specs: Spec[]) {
-	const workers = specs.map((spec) => ({
-		name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p",
-	}));
-	const byPath = <T>(pick: (spec: Spec) => T | undefined) =>
-		new Map(specs.flatMap((spec) => { const value = pick(spec); return value === undefined ? [] : [[`/s/${spec.name}`, value] as const]; }));
 	return {
-		workers,
-		currentTools: new Map(specs.flatMap((spec) => spec.tool ? [[`/s/${spec.name}`, new Map([["1", { tool: spec.tool, args: spec.args, startedAt: NOW }]])] as const] : [])),
-		reviewProgress: byPath((spec) => spec.review && { kind: "review" as const, round: spec.review[0], settled: spec.review[1], total: spec.review[2] }),
-		runStartedAt: byPath((spec) => spec.started ?? (spec.status === "idle" ? undefined : NOW - 10_000)),
-		quietSince: byPath((spec) => spec.output),
-		progress: new Map(),
-		settled: byPath((spec) => spec.settled && { at: spec.settled[0], kind: spec.settled[1], ...(spec.settled[2] ? { note: spec.settled[2] } : {}) }),
+		workers: specs.map((spec) => ({
+			worker: { name: spec.name, role: "工程师", status: spec.status ?? "working", sessionPath: `/s/${spec.name}`, cwd: "/p" },
+			tool: spec.tool ? { tool: spec.tool, args: spec.args } : undefined,
+			review: spec.review && { kind: "review" as const, round: spec.review[0], settled: spec.review[1], total: spec.review[2] },
+			startedAt: spec.started ?? (spec.status === "idle" ? undefined : NOW - 10_000),
+			quietSince: spec.output,
+			settled: spec.settled && { at: spec.settled[0], kind: spec.settled[1], ...(spec.settled[2] ? { note: spec.settled[2] } : {}) },
+		})),
 		stallMs: STALL_MS,
 	};
 }

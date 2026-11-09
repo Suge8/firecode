@@ -89,12 +89,10 @@ async function open(options: {
 	const sent: [string, string][] = [];
 	const interrupted: string[] = [];
 	let closed = 0;
-	const byPath = <T>(record: Record<string, T> | undefined) =>
-		new Map(Object.entries(record ?? {}).map(([name, value]) => [`/s/${name}.jsonl`, value]));
 	const port = {
 		facts: () => ({
-			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), quietSince: new Map(), progress: new Map(),
-			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled), stallMs: 30 * 60_000,
+			workers: options.workers.map((worker) => ({ worker, startedAt: options.facts?.started?.[worker.name], settled: options.facts?.settled?.[worker.name] })),
+			stallMs: 30 * 60_000,
 		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),
 		session: (target: Worker) => options.sessions[target.name],

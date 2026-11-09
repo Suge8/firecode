@@ -345,7 +345,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	s.complete(start, "worker started");
 	const list = s.tool("subagents_list", {});
 	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
-		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", currentAction: { kind: "tool", tool: "read", startedAt: Date.now() } }],
+		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", phase: { kind: "running", action: "读取 a.ts", startedAt: Date.now() } }],
 	} });
 	feed(s, false);
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
@@ -358,7 +358,7 @@ test("真实子代理调用与池查询纳入过程组，保留原生动作和�
 	const queryLine = s.lines().findIndex((line: string) => line.includes("查看"));
 	s.click(queryLine);
 	expect(s.lines().join("\n")).toContain("model/low");
-	expect(s.lines().join("\n")).toContain("read");
+	expect(s.lines().join("\n")).toContain("读取 a.ts");
 	s.click(queryLine);
 	expect(s.lines().filter(Boolean)).toHaveLength(4);
 	s.ui.setToolsExpanded(false);

@@ -44,7 +44,8 @@
 - **中间回复**（Interim Reply）→ `tools/group-view.ts` 的 `REPLY_LINES`；避免：中途正文
 - **活动列表**（Activity List）→ `master/activity-list.ts`；避免：任务面板、状态栏
 - **进展行**（Progress Line）→ `master/progress.ts`；后台模型据新输出写的一句“在做什么”，只给人看（终端与经名册的 CuePad）；避免：摘要、状态播报
-- **卡住**（Stalled）→ 活动列表的展示信号，不改子代理状态；避免：超时、挂起、失败
+- **相位**（Phase）→ `master/phase.ts`；子代理此刻的分组、在做什么与时刻，所有展示与停摆唤醒只读它；不是档案状态（working/idle/reviewing），也不是火苗动画的错位（`flame.ts` 的 `phaseOf`）；避免：行状态
+- **卡住**（Stalled）→ 相位的一种展示信号，不改子代理状态；避免：超时、挂起、失败
 - **展示标题**（Display Title）→ `statusbar/`；不等于用户设置的会话名；避免：自动重命名、会话名
 
 ## 配置

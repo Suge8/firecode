@@ -31,7 +31,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 
 调用方身份（指挥官的工具 / 全过程视图）是处理函数的独立参数 `origin`，不在模型能填的 `params` 里，所以模型无法冒充视图来源。
 
-`subagents_list` 是零参数查询：模型结果只返回池快照，界面展示由 `list-view.ts` 投影。
+`subagents_list` 是零参数查询：模型结果只返回池快照（档案事实）；界面的展开行与 `/fire-master status` 由 `list-view.ts` 从相位投影，与活动列表同一说法。
 
 同时 working/reviewing 的 Worker 最多 15 个（正在准备 send/review 的也算）：满额时 `start`、对空闲票的 `send` 与 `review` 直接拒绝并回报在飞清单，不排队；给在跑票的 steer 不受限，暂停后的自动续跑是已放行运行的接续，也不拦（可能短暂越过）。名字与 sessionPath 都必须唯一，start/send 的准备过程按 Worker 单飞，kill 赢过迟到的异步写回：await 之后的写回一律经 `commit` 重读最新档案再函数式更新，档案已被 kill 就释放热会话并放弃；启动回合的路径都经 `runWorker` 入口重读，准备期间被 kill 的 start 报错、不调模型、不留热会话；send 在开会话前先核对当前档案，review 先写档案再挂订阅，被 kill 的票不留热会话与订阅。steer 越过 await 后回合已落定时清掉滞留队列并报“未送达”，由指挥官重发。
 
@@ -42,11 +42,11 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 再是 `✓ N 个已完成`（kill 后才去掉）与 `N 个空闲`（resume 后池里还在的、已 ack 的）。在跑的行最多显示 `max(4, 终端高度/6)` 行，超出折成 `+N 个在跑`；
 三种折叠行的计数带一层浅灰底色表示可点，后面灰色列出被折叠的名字（放不下就少列）。点 `+N 个在跑` 展开全部、点“收起”折回，点 `✓ N 个已完成` 列出名字、结果首句与本次运行耗时，点 `N 个空闲` 列出空闲的子代理，再点收起；展开在你下一次发消息时自动收起。
 
-排序、折叠与行布局见 `activity-list.ts`、`activity.ts` 头注释。底栏只发布纯文字“指挥官”；列表的输入由 runtime 从档案加 live 表投影一次给出，落定事实（时刻、成败与说明）只在 live 里一份，reload 后不展示历史；列表冻结的耗时与 `subagents_list` 的“落定 X 前”共用这一份。`ctrl+o` 不展开活动列表的原因：它常驻输入框上方，再展开只会挤掉正文视口。
+排序、折叠与行布局见 `activity-list.ts`、`activity.ts` 头注释。相位（分组、在做什么与时刻）只在 `phase.ts` 判定：活动列表、全过程视图上横线、`subagents_list`、`/fire-master status`、名册与停摆唤醒都读它，状态词只有 `messages.ts` 的 `phase` 一张表。底栏只发布纯文字“指挥官”；相位的输入由 runtime 从档案加 live 表投影一次给出（`activityFacts`），落定事实（时刻、成败与说明）只在 live 里一份，reload 后哪里都不展示历史（池查询也不退回会话文件时间）；列表冻结的耗时与 `subagents_list` 的“落定 X 前”共用这一份。活动列表与全过程视图由 `index.ts` 挂到 runtime 上，runtime 不认识界面，只经 `onChange` 通知重绘。`ctrl+o` 不展开活动列表的原因：它常驻输入框上方，再展开只会挤掉正文视口。
 
 ## 进展行
 
-在跑（working）的子代理可以有一句“现在在做什么”，显示在活动列表的在跑行（替代工具动作，卡住行不替代；名册的“在做什么”同一条规则）与全过程视图头部；模型链取顶层 `background.model`（与压缩摘要共用，见根 AGENTS 的 `background/`），省略 `background` 即关闭（每次生成都是真实调用，不替用户选模型）。触发、输入边界与失败口径见 `progress.ts` 头注释，延迟与冷却走根级 `completeOnChain`（与 Worker 共用冷却表，输出被截断不冷却）。它只给人看：不进指挥官上下文，不发事件，名册与停摆事件仍读工具动作。以 stop 收尾的最终回复不触发生成（回合马上落定）。间隔在 `timing.ts`（首句 30 秒、之后至少 2 分钟）。实测（gpt-6-luna/low 与 claude-haiku-5-5/low 各 10 次，约 1.6k 字符输入）：luna p50 2.2s、每次约 $0.00009，haiku p50 3.0s、约 $0.00007，模板把 haiku 放在前面：同一条链也写压缩摘要，真实会话重放里 haiku 摘要保住后续要用的细节 46%、luna 33%；进展行因此慢约 0.8 秒，只给人看，可忽略。
+在跑（working）的子代理可以有一句“现在在做什么”，显示在活动列表的在跑行（替代工具动作，卡住行不替代；名册的“在做什么”同一条规则）与全过程视图头部；模型链取顶层 `background.model`（与压缩摘要共用，见根 AGENTS 的 `background/`），省略 `background` 即关闭（每次生成都是真实调用，不替用户选模型）。触发、输入边界与失败口径见 `progress.ts` 头注释，延迟与冷却走根级 `completeOnChain`（与 Worker 共用冷却表，输出被截断不冷却）。它只给人看：不进指挥官上下文，不发事件；停摆事件只在卡住时发，读到的总是工具动作。以 stop 收尾的最终回复不触发生成（回合马上落定）。间隔在 `timing.ts`（首句 30 秒、之后至少 2 分钟）。实测（gpt-6-luna/low 与 claude-haiku-5-5/low 各 10 次，约 1.6k 字符输入）：luna p50 2.2s、每次约 $0.00009，haiku p50 3.0s、约 $0.00007，模板把 haiku 放在前面：同一条链也写压缩摘要，真实会话重放里 haiku 摘要保住后续要用的细节 46%、luna 33%；进展行因此慢约 0.8 秒，只给人看，可忽略。
 
 ## 名册发布
 

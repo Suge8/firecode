@@ -1,6 +1,7 @@
 /**
  * /fire-master 的注册入口：激活与停用、命令、两个工具与生命周期。
- * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts。
+ * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts；
+ * 活动列表与全过程视图在这里挂到运行时上（运行时不认识界面）。
  */
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -9,20 +10,23 @@ import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
 import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
+import { ActivityList, visibleRows } from "./activity-list.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import {
-	compactWorker, currentWorkerAction, expandedWorkerList, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
+	compactWorker, expandedWorkerList, listedWorkers, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, MASTER_PROMPT, WORKER_PROMPT } from "./prompt.js";
 import { armInterruptReminder, armResume } from "./run.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
+import { openWorkerView } from "./worker-view.js";
 import type { InProcessSessionPool } from "../spawn.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
 const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
+const LIST_WIDGET_KEY = "firecode-master-list";
 
 export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): void {
 	const all = loadConfig();
@@ -75,6 +79,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		sessionSince: () => busyView(pi).since,
 	};
 	let runtime: MasterRuntime | undefined;
+	let activity: ReturnType<typeof mountActivity> | undefined;
 	registerMasterEventRenderer(pi);
 
 	const setTools = (active: boolean) => {
@@ -89,6 +94,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		if (startupError) throw new Error(startupError);
 		await prepareRoster(ctx);
 		const active = runtime = new MasterRuntime(setup, ctx);
+		activity = mountActivity(active);
 		setTools(true);
 		if (active.store.discardedLegacyVersion !== undefined)
 			ctx.ui.notify(msg.command.legacyPool(active.store.discardedLegacyVersion), "warning");
@@ -106,6 +112,8 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		const active = runtime;
 		runtime = undefined;
 		active?.close();
+		activity?.dispose();
+		activity = undefined;
 		// 遗弃在飞子代理不是歇下：带 teardown 归零，busy.ts 只结束本段。
 		publishInFlight(0, true);
 		publishRoster([]);
@@ -118,7 +126,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "status") {
-				ctx.ui.notify(runtime ? statusText(runtime.store.workers) : msg.command.notStarted, "info");
+				ctx.ui.notify(runtime ? statusText(listedWorkers(runtime.activityFacts(), Date.now())) : msg.command.notStarted, "info");
 				return;
 			}
 			if (input) {
@@ -143,7 +151,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	pi.on("agent_settled", () => runtime?.outbox.resumeIfStranded());
 
 	pi.on("input", (event) => {
-		if (event.source !== "extension") runtime?.collapseList();
+		if (event.source !== "extension") activity?.collapse();
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -168,12 +176,9 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		async execute() {
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_LIST_TOOL));
-			const workers = active.store.workers.map(compactWorker);
 			return {
-				content: [{ type: "text" as const, text: JSON.stringify({ workers }) }],
-				details: {
-					workers: workers.map((worker) => ({ ...worker, currentAction: currentWorkerAction(worker, active.live.get(worker.name)) })),
-				},
+				content: [{ type: "text" as const, text: JSON.stringify({ workers: active.store.workers.map(compactWorker) }) }],
+				details: { workers: listedWorkers(active.activityFacts(), Date.now()) },
 			};
 		},
 	});
@@ -216,6 +221,28 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	});
 
 	pi.on("session_shutdown", () => deactivate());
+}
+
+/**
+ * 输入框上方的活动列表与点行打开的全过程视图：读运行时的事实、随 onChange 重绘；视图草稿活到指挥官停用。
+ * 下一轮人类输入时收起展开（collapse）。
+ */
+function mountActivity(active: MasterRuntime): { collapse(): void; dispose(): void } {
+	const drafts = new Map<string, string>();
+	let list: ActivityList | undefined;
+	active.ctx.ui.setWidget(LIST_WIDGET_KEY, (tui, theme) => {
+		list = new ActivityList(tui, theme, () => active.activityFacts(), () => visibleRows(tui.terminal?.rows), (name) => void openWorkerView(active, name, drafts));
+		return list;
+	}, { placement: "aboveEditor" });
+	const stop = active.onChange(() => list?.sync());
+	return {
+		collapse: () => list?.collapse(),
+		dispose() {
+			stop();
+			list?.dispose();
+			active.ctx.ui.setWidget(LIST_WIDGET_KEY, undefined);
+		},
+	};
 }
 
 /** 关闭会中断在跑的子代理：有界面时先让用户确认；无界面（print、rpc）照旧直接关。 */

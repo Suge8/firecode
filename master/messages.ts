@@ -134,12 +134,9 @@ export const msg = defineMessages({
 			newerVersion: (path: string, version: number) => `Master Worker Pool 状态是更新版本（v${version}）写的，当前版本不能读，请升级 FireCode：${path}`,
 		},
 		list: {
-			status: { working: "工作", idle: "空闲", reviewing: "审查" },
 			verb: { start: "启动", list: "查看", kill: "移除", send: "发送", interrupt: "中断", review: "审查", tail: "近况", ack: "待命" },
 			running: (elapsed: string) => `已 ${elapsed}`,
 			settledAgo: (elapsed: string) => `落定 ${elapsed}前`,
-			settled: "已落定",
-			reviewRound: (round: number, settled: number, total: number) => `第 ${round} 轮 · 审查者 ${settled}/${total}`,
 			poolEmpty: "池 0",
 			pool: (count: number, summary: string) => `池 ${count}：${summary}`,
 			noWorkers: "没有子代理",
@@ -152,6 +149,8 @@ export const msg = defineMessages({
 			empty: "模型没有给出进展",
 			failing: (count: number, reason: string) => `子代理进展行连续 ${count} 次生成失败，先显示工具动作：${reason}`,
 		},
+		/** 相位的状态词（phase.ts 的 PhaseKind）：活动列表之外的所有展示（全过程视图上横线、池查询、status）只用这一张表。 */
+		phase: { running: "运行中", stuck: "卡住", review: "审查中", paused: "暂停", done: "完成", failed: "失败", interrupted: "被中断", idle: "空闲" },
 		activity: {
 			silentFull: (minutes: number) => `${minutes} 分钟无输出`,
 			silentShort: (minutes: number) => `${minutes}m 无输出`,
@@ -167,7 +166,6 @@ export const msg = defineMessages({
 			idle: (count: number) => `${count} 个空闲`,
 		},
 		view: {
-			status: { running: "运行中", review: "审查中", paused: "暂停", done: "完成", failed: "失败", interrupted: "被中断", idle: "空闲" },
 			hints: { tab: "Tab 换子代理", expand: "点摘要展开", expandAll: "ctrl+o 全部展开", interrupt: "ctrl+shift+x 中断", back: "esc 返回" },
 			placeholder: "补话给这个子代理，回车发送",
 			gone: (name: string) => `${name} 已不在池里`,
@@ -314,12 +312,9 @@ export const msg = defineMessages({
 			newerVersion: (path: string, version: number) => `The Master Worker Pool state was written by a newer version (v${version}) that this FireCode cannot read; upgrade FireCode: ${path}`,
 		},
 		list: {
-			status: { working: "working", idle: "idle", reviewing: "reviewing" },
 			verb: { start: "Start", list: "List", kill: "Remove", send: "Send", interrupt: "Interrupt", review: "Review", tail: "Trace", ack: "Ack" },
 			running: (elapsed: string) => `for ${elapsed}`,
 			settledAgo: (elapsed: string) => `settled ${elapsed} ago`,
-			settled: "settled",
-			reviewRound: (round: number, settled: number, total: number) => `round ${round} · reviewers ${settled}/${total}`,
 			poolEmpty: "Pool 0",
 			pool: (count: number, summary: string) => `Pool ${count}: ${summary}`,
 			noWorkers: "No Workers",
@@ -332,6 +327,7 @@ export const msg = defineMessages({
 			empty: "The model gave no progress line",
 			failing: (count: number, reason: string) => `Sub-agent progress lines failed ${count} times in a row; showing tool actions instead: ${reason}`,
 		},
+		phase: { running: "Running", stuck: "Stuck", review: "Reviewing", paused: "Paused", done: "Done", failed: "Failed", interrupted: "Interrupted", idle: "Idle" },
 		activity: {
 			silentFull: (minutes: number) => `${minutes} min no output`,
 			silentShort: (minutes: number) => `${minutes}m no output`,
@@ -347,7 +343,6 @@ export const msg = defineMessages({
 			idle: (count: number) => `${count} idle`,
 		},
 		view: {
-			status: { running: "Running", review: "Reviewing", paused: "Paused", done: "Done", failed: "Failed", interrupted: "Interrupted", idle: "Idle" },
 			hints: { tab: "Tab switch Worker", expand: "click summary to expand", expandAll: "ctrl+o expand all", interrupt: "ctrl+shift+x interrupt", back: "esc back" },
 			placeholder: "Say something to this Worker, Enter to send",
 			gone: (name: string) => `${name} is no longer in the pool`,

@@ -22,13 +22,11 @@ import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
 import { ACTION_HANDLERS } from "./actions.js";
-import { ANIMATING_KINDS, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { ANIMATING_KINDS, rowState } from "./activity-list.js";
 import { msg } from "./messages.js";
+import type { ActivityFacts } from "./phase.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
-
-/** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
-const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
 /**
@@ -69,21 +67,24 @@ interface WorkerViewSource {
 	drafts: Map<string, string>;
 }
 
-/** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。 */
-export async function openWorkerView(active: MasterRuntime, name: string): Promise<void> {
-	if (active.viewOpen) return;
-	active.viewOpen = true;
+/** 全过程视图同一时刻只开一个（一个进程只有一个交互界面）。 */
+let viewOpen = false;
+
+/** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。drafts 由挂载方持有，活到指挥官停用。 */
+export async function openWorkerView(active: MasterRuntime, name: string, drafts: Map<string, string>): Promise<void> {
+	if (viewOpen) return;
+	viewOpen = true;
 	try {
 		await active.ctx.ui.custom<void>(
-			(tui, theme, keybindings, done) => new WorkerView(runtimeSource(active), name, tui, theme, keybindings, done),
+			(tui, theme, keybindings, done) => new WorkerView(runtimeSource(active, drafts), name, tui, theme, keybindings, done),
 			{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" } },
 		);
 	} finally {
-		active.viewOpen = false;
+		viewOpen = false;
 	}
 }
 
-function runtimeSource(active: MasterRuntime): WorkerViewSource {
+function runtimeSource(active: MasterRuntime, drafts: Map<string, string>): WorkerViewSource {
 	return {
 		facts: () => active.activityFacts(),
 		worker: (name) => active.store.find(name),
@@ -96,7 +97,7 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 		interrupt: async (name) => {
 			await ACTION_HANDLERS.interrupt(active, { worker: name }, active.ctx, "master");
 		},
-		drafts: active.viewDrafts,
+		drafts,
 	};
 }
 
@@ -264,7 +265,7 @@ export class WorkerView implements Component, Focusable {
 	}
 
 	private names(): string[] {
-		return this.source.facts().workers.map((worker) => worker.name);
+		return this.source.facts().workers.map(({ worker }) => worker.name);
 	}
 
 	/** 换到某个子代理：草稿换成它的，记录与展开状态打开期间看过就原样接上。 */
@@ -333,7 +334,7 @@ export class WorkerView implements Component, Focusable {
 	render(width: number): string[] {
 		const worker = this.removed ? undefined : this.worker();
 		const facts = this.source.facts();
-		const index = worker ? facts.workers.findIndex((entry) => entry.name === worker.name) : -1;
+		const index = worker ? facts.workers.findIndex((entry) => entry.worker.name === worker.name) : -1;
 		const state = index < 0 ? undefined : rowState(facts, index, Date.now(), this.theme);
 		const queued = this.queued(width);
 		// 进展行（见 progress.ts）是视图头部的一行；没有就不占行。
@@ -388,7 +389,8 @@ export class WorkerView implements Component, Focusable {
 			return fitBorder(width, this.line, 0, [[status, name], [status, ""]]);
 		}
 		const { kind, row } = state;
-		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : STATUS_WORD[kind];
+		// 卡住用活动列表给的“N 分钟无输出”提醒代替状态词。
+		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : msg.phase[kind];
 		// 空闲的“·”标记紧挨状态词像个分隔符，不放。
 		const status = [kind === "idle" ? "" : row.mark, word, row.elapsed && this.theme.fg("muted", row.elapsed)].filter(Boolean).join(" ");
 		const role = this.theme.fg("muted", worker.role);

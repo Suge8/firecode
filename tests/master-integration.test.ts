@@ -89,7 +89,7 @@ test("autoActivate false 的新会话不注入，仍可手动启动", async () =
 	expect(harness.activeTools).toContain("subagents");
 });
 
-test("/fire-master status 每个子代理一行，以角色为主、模型短名次之", async () => {
+test("/fire-master status 每个子代理一行，以角色为主、模型短名次之，状态词与活动列表同一相位", async () => {
 	const harness = await setup();
 	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("完成")]);
 	for (const [worker, role] of [["scout", "工程师"], ["verify", "设计师"]]) {
@@ -98,7 +98,7 @@ test("/fire-master status 每个子代理一行，以角色为主、模型短名
 		await settled;
 	}
 	await harness.command("status");
-	expect(harness.notices.at(-1)).toBe("scout 工程师·空闲 worker\nverify 设计师·空闲 worker-2");
+	expect(harness.notices.at(-1)).toBe("scout 工程师·完成 worker\nverify 设计师·完成 worker-2");
 });
 
 test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），不写死家目录", async () => {
@@ -176,7 +176,7 @@ test("角色表提示词与 role 枚举都只来自已配置角色", async () =>
 	})).rejects.toThrow("start 必须指定 role");
 });
 
-test("list 展开投影 working 的当前工具，但模型正文不含动作", async () => {
+test("list 展开投影 working 的当前动作与本次运行耗时，但模型正文不含动作", async () => {
 	const harness = await setup();
 	let releaseResponse!: () => void;
 	const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
@@ -202,39 +202,34 @@ test("list 展开投影 working 的当前工具，但模型正文不含动作", 
 	const toolEventBefore = Date.now();
 	releaseResponse();
 	await toolStarted;
-	const toolEventAfter = Date.now();
 
 	const listed = await harness.list();
 	expect(JSON.parse(listed.content[0].text)).toEqual({ workers: [expect.objectContaining({ name: "observed", status: "working" })] });
-	expect(listed.content[0].text).not.toContain("currentAction");
-	const workingAction = (listed.details as any).workers[0].currentAction;
-	expect(workingAction).toMatchObject({ kind: "tool", tool: "read" });
-	expect(typeof workingAction.startedAt).toBe("number");
-	expect(workingAction.startedAt >= toolEventBefore).toBe(true);
-	expect(workingAction.startedAt <= toolEventAfter).toBe(true);
+	expect(listed.content[0].text).not.toContain("phase");
+	const workingPhase = (listed.details as any).workers[0].phase;
+	expect(workingPhase).toMatchObject({ kind: "running", action: "读取 AGENTS.md" });
+	expect(workingPhase.startedAt <= toolEventBefore).toBe(true);
 	const collapsed = harness.renderListLine(listed);
 	expect(collapsed).toHaveLength(1);
-	expect(collapsed[0]).toContain("池 1：observed 工程师·工作");
-	(listed.details as any).workers[0].currentAction.startedAt = Date.now() - 300;
+	expect(collapsed[0]).toContain("池 1：observed 工程师·运行中");
+	(listed.details as any).workers[0].phase.startedAt = Date.now() - 300;
 	const expanded = harness.renderResult(listed, true).join("\n");
 	expect(expanded).toContain("observed");
-	expect(expanded).toMatch(/工程师·工作 · read · 已 0\.[34]s/u);
+	expect(expanded).toMatch(/工程师·运行中 · 读取 AGENTS\.md · 已 0\.[34]s/u);
 
 	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const settledBefore = Date.now();
 	releaseTool();
 	await delivered;
 	const settledAfter = Date.now();
-	const idle = await harness.list();
-	const idleAction = (idle.details as any).workers[0].currentAction;
-	expect(idleAction).toMatchObject({ kind: "idle" });
-	expect(typeof idleAction.since).toBe("number");
-	expect(idleAction.since >= settledBefore).toBe(true);
-	expect(idleAction.since <= settledAfter).toBe(true);
-	expect((idle.details as any).workers[0].currentAction).not.toHaveProperty("tool");
-	(idle.details as any).workers[0].currentAction.since = Date.now() - 65_000;
-	const idleLine = harness.renderResult(idle, true).join("\n");
-	expect(idleLine).toContain("落定 1m5s前");
+	const done = await harness.list();
+	const donePhase = (done.details as any).workers[0].phase;
+	expect(donePhase).toMatchObject({ kind: "done", action: "完成" });
+	expect(donePhase.settledAt >= settledBefore).toBe(true);
+	expect(donePhase.settledAt <= settledAfter).toBe(true);
+	donePhase.settledAt = Date.now() - 65_000;
+	const doneLine = harness.renderResult(done, true).join("\n");
+	expect(doneLine).toContain("工程师·完成 · 完成 · 落定 1m5s前");
 });
 
 test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，停用时收口", async () => {
@@ -487,7 +482,7 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	const listed = await harness.list();
 	expect(JSON.parse(listed.content[0].text).workers).toEqual([{ ...worker, status: "idle" }]);
 	expect((listed.details as any).workers).toEqual([
-		{ ...worker, status: "idle", currentAction: expect.objectContaining({ kind: "idle" }) },
+		{ ...worker, status: "idle", phase: expect.objectContaining({ kind: "done" }) },
 	]);
 	expect(harness.messages[0]).toMatchObject({
 		message: { customType: "firecode-master-event", content: expect.stringMatching(/^<firecode_master_event>\ntrace 已返回\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
@@ -614,6 +609,14 @@ test("链上全部模型限流：按冷却到期续跑；期间指挥官收到�
 	expect(notice.message.content).toContain("自动续跑");
 	expect(notice.message.content).toContain("原因：429 Too Many Requests");
 	expect(notice.options).toEqual({ triggerTurn: false });
+	// 暂停中的子代理在池查询与 status 里与活动列表同一相位：暂停到续跑时刻，不是“落定”或“空闲”。
+	const paused = await harness.list();
+	const pausedPhase = (paused.details as any).workers[0].phase;
+	expect(pausedPhase.kind).toBe("paused");
+	expect(pausedPhase.action).toStartWith("暂停至 ");
+	expect(harness.renderResult(paused, true).join("\n")).toContain("工程师·暂停 · 暂停至");
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toStartWith("quota 工程师·暂停 ");
 	recovered = true;
 	await until(() => eventTitles(harness).includes("quota 已返回"));
 	// 换模型与暂停都只告知不唤醒；唯一唤醒指挥官的是最终落定。
@@ -625,6 +628,22 @@ test("链上全部模型限流：按冷却到期续跑；期间指挥官收到�
 	expect(models).toEqual(["worker", "worker-2", "worker-2"]);
 	await harness.command("");
 }, 20_000);
+
+test("指挥官关再开（reload）后池查询与 status 不展示上次运行的落定：与活动列表一样只剩空闲", async () => {
+	const harness = await setup(true);
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "old", prompt: "执行", role: "工程师" });
+	await delivered;
+	expect((await harness.list()).details.workers[0].phase.kind).toBe("done");
+	await harness.command("");
+	await harness.command("");
+	const listed = await harness.list();
+	expect(listed.details.workers[0].phase).toEqual({ kind: "idle", action: "" });
+	expect(harness.renderResult(listed, true).join("\n")).not.toContain("落定");
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toBe("old 工程师·空闲 worker");
+});
 
 test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次", async () => {
 	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
@@ -1531,13 +1550,10 @@ test("list 展开投影 reviewing 的轮次与审查者进度", async () => {
 	await harness.execute({ action: "review", worker: "under-review" });
 
 	const listed = await harness.list();
-	expect(listed.content[0].text).not.toContain("currentAction");
-	expect((listed.details as any).workers[0].currentAction).toEqual({
-		kind: "review", round: 1, settled: 0, total: 1,
-	});
+	expect(listed.content[0].text).not.toContain("phase");
+	expect((listed.details as any).workers[0].phase).toMatchObject({ kind: "review", action: "审查第 1 轮 · 0/1 通过" });
 	const expanded = harness.renderResult(listed, true).join("\n");
-	expect(expanded).toContain("第 1 轮");
-	expect(expanded).toContain("审查者 0/1");
+	expect(expanded).toContain("工程师·审查中 · 审查第 1 轮 · 0/1 通过");
 });
 
 test("审查义务只能经显式 review 履行，未履行拒绝 ack，kill 随票删除", async () => {

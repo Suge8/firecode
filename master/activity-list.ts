@@ -1,39 +1,14 @@
 /**
  * 输入框上方的子代理活动列表：需要处理的（失败、被中断、卡住）置顶，然后在跑、审查与暂停（到时自动续跑），再合计已完成与空闲。
- * 行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟；落定事实只在运行时，reload 后不展示历史。
+ * 分组与行上的文字读 phase.ts 的相位，行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type ActivityRow as Row, nameWidthFor, renderActivityRow, roleFits } from "./activity.js";
 import { flame, HEAT_COLORS, onFrame, paint, phaseOf, reviewMark } from "../flame.js";
-import { clip, clockText, formatDuration } from "../format.js";
-import { toolActionText } from "../tools/actions.js";
-import type { ReviewRoundProgress } from "../review/outcome.js";
-import { msg as toolsMsg } from "../tools/messages.js";
+import { clip, formatDuration } from "../format.js";
 import { msg } from "./messages.js";
-import type { WorkerRef } from "./state.js";
-
-/** 本次运行的落定事实：落定时刻、结局与行上的说明。失败与被中断留到 ack 或 kill，完成留到 kill。 */
-export interface SettledFact {
-	at: number;
-	/** 被中断不是失败：会话与义务都在，等指挥官续派或收口。 */
-	kind: "done" | "failed" | "interrupted";
-	note?: string;
-}
-
-export interface ActivityFacts {
-	workers: readonly Pick<WorkerRef, "name" | "role" | "model" | "thinking" | "status" | "sessionPath" | "cwd" | "resume">[];
-	currentTools: ReadonlyMap<string, ReadonlyMap<string, { tool: string; args: unknown }>>;
-	reviewProgress: ReadonlyMap<string, ReviewRoundProgress>;
-	runStartedAt: ReadonlyMap<string, number>;
-	/** 无输出计时的起点（本回合开始或最近一次输出）；卡住按它与本次运行起点中较晚者计算。 */
-	quietSince: ReadonlyMap<string, number>;
-	/** 在跑子代理的进展行（见 progress.ts）：一句现在时的“在做什么”，有就替代在跑行的工具动作。 */
-	progress: ReadonlyMap<string, string>;
-	settled: ReadonlyMap<string, SettledFact>;
-	/** working 子代理这么久没有任何输出就算卡住（Timing.stallMs）。 */
-	stallMs: number;
-}
+import { quietMinutes, workerPhase, type ActivityFacts, type PhaseKind } from "./phase.js";
 
 type Toggle = "running" | "done" | "idle";
 /** 一行输出：子代理行，或可点击的折叠行（计数可点，收起时附被折叠的名字）。 */
@@ -41,7 +16,6 @@ type Line = { row: Row } | { label: string; mark: string; toggle: Toggle; names:
 /** 点击命中：折叠行翻转展开，子代理行打开它的全过程视图。 */
 type Target = { toggle: Toggle } | { open: string };
 
-const MINUTE_MS = 60_000;
 const STUCK_GLYPH = "◌";
 const INTERRUPTED_GLYPH = "‖";
 const PAUSED_GLYPH = "‥";
@@ -79,68 +53,20 @@ interface Groups {
 	animating: boolean;
 }
 
-/** 一个子代理在活动列表里的分组（审查与暂停都与在跑同组展示）；全过程视图顶行读同一份。 */
-export type RowKind = "failed" | "interrupted" | "stuck" | "running" | "review" | "paused" | "done" | "idle";
-
 /** 有行在动（耗时仍在走）的分组：需要动画时钟。 */
-export const ANIMATING_KINDS: ReadonlySet<RowKind> = new Set(["stuck", "running", "review"]);
-
-/**
- * 一个子代理此刻的相位：所在分组、动作文字与时刻。纯事实不带着色——活动列表的行与 `subagentInfos`（外部扩展读的名册）共用这一处，
- * 停摆唤醒（run.ts 的 watchStall）也只认这里的“卡住”。`settledAt` 是落定时刻；`quietMs` 是 working 时这段无输出已持续多久。
- */
-interface WorkerPhase {
-	kind: RowKind;
-	action: string;
-	startedAt?: number;
-	settledAt?: number;
-	quietMs?: number;
-	/** working 且没卡住时的进展行（已替进 action）；全过程视图头部另外单独显示它。 */
-	summary?: string;
-}
-
-/** 卡住提醒里的整分钟数。 */
-export const quietMinutes = (quietMs: number) => Math.floor(quietMs / MINUTE_MS);
-
-export function workerPhase(facts: ActivityFacts, index: number, now: number): WorkerPhase {
-	const worker = facts.workers[index];
-	const path = worker.sessionPath;
-	const startedAt = facts.runStartedAt.get(path);
-	if (worker.status === "working") {
-		const quietMs = now - Math.max(startedAt ?? now, facts.quietSince.get(path) ?? 0);
-		const tool = [...(facts.currentTools.get(path)?.values() ?? [])].at(-1);
-		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
-		// 进展行有就替代工具动作，活动列表与名册同一条规则。卡住时照常显示工具（用户要知道卡在哪条命令上），只追加提醒；
-		// 停摆事件只在卡住时发，读到的总是工具动作。前台长命令同样按无输出计时。
-		const stuck = quietMs >= facts.stallMs;
-		const summary = stuck ? undefined : facts.progress.get(path);
-		return { kind: stuck ? "stuck" : "running", action: summary ?? action, startedAt, quietMs, ...(summary === undefined ? {} : { summary }) };
-	}
-	if (worker.status === "reviewing") {
-		const progress = facts.reviewProgress.get(path);
-		return { kind: "review", startedAt, action: progress ? msg.activity.reviewRound(progress.round, progress.settled, progress.total) : msg.activity.reviewing };
-	}
-	// 暂停读档案而不读运行时：reload 后照样显示，到时自动续跑，不需要指挥官处理。
-	if (worker.resume) return { kind: "paused", startedAt, action: msg.activity.paused(clockText(worker.resume.at, now)) };
-	const fact = facts.settled.get(path);
-	if (!fact) return { kind: "idle", action: "" };
-	const settled = { startedAt, settledAt: fact.at };
-	if (fact.kind === "done") return { kind: "done", action: fact.note ?? msg.activity.returned, ...settled };
-	if (fact.kind === "interrupted") return { kind: "interrupted", action: msg.activity.interrupted, ...settled };
-	return { kind: "failed", action: fact.note ?? msg.activity.failed, ...settled };
-}
+export const ANIMATING_KINDS: ReadonlySet<PhaseKind> = new Set(["stuck", "running", "review"]);
 
 /** 一个子代理的行状态：所在分组与这一行（标记、动作、耗时）。index 是它在 facts.workers 里的位置（决定火苗相位）。 */
-export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: RowKind; row: Row; summary?: string } {
-	const worker = facts.workers[index];
-	const phase = phaseOf(index);
-	const { kind, action, startedAt, settledAt, quietMs, summary } = workerPhase(facts, index, now);
+export function rowState(facts: ActivityFacts, index: number, now: number, theme: Theme): { kind: PhaseKind; row: Row; summary?: string } {
+	const { worker } = facts.workers[index];
+	const flamePhase = phaseOf(index);
+	const { kind, action, startedAt, settledAt, quietMs, summary } = workerPhase(facts.workers[index], facts.stallMs, now);
 	const base = { name: worker.name, role: worker.role, action, elapsed: startedAt === undefined ? "" : duration(now - startedAt) };
 	switch (kind) {
 		// 右侧不放总耗时：要看的是“多久没输出”，两个时长并排（“5m 无输出 5m13s”）只会看混。
 		case "stuck": return { kind, row: { ...base, elapsed: "", mark: theme.fg("warning", STUCK_GLYPH), note: silentNote(quietMinutes(quietMs!)) } };
-		case "running": return { kind, summary, row: { ...base, mark: flame(1, phase) } };
-		case "review": return { kind, row: { ...base, mark: reviewMark(phase), tone: "review" } };
+		case "running": return { kind, summary, row: { ...base, mark: flame(1, flamePhase) } };
+		case "review": return { kind, row: { ...base, mark: reviewMark(flamePhase), tone: "review" } };
 		// 静止的一行：没有在跑的耗时，等的是续跑时刻。
 		case "paused": return { kind, row: { ...base, elapsed: "", mark: theme.fg("dim", PAUSED_GLYPH), settled: true } };
 		// 组名已经说了“空闲”，展开行只列谁。
