@@ -7,7 +7,6 @@
  * 事件增量更新；打开期间看过的子代理各留一份记录与展开状态（切回原样），关闭时全部退订丢弃。草稿按子代理留在
  * 运行时内存里，到会话结束。
  */
-import { existsSync, readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE } from "../busy.js";
@@ -27,6 +26,7 @@ import { msg } from "./messages.js";
 import type { ActivityFacts } from "./phase.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
+import { readWorkerSession } from "./trace.js";
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
 /**
@@ -130,7 +130,7 @@ class WorkerRecord {
 			// 轮记录逐条经 roundFromEntry 读出，以零行标记放进聊天树，投影按它分轮（与主会话同一份记录格式）。
 			entryRenderer: (type) => (type === ROUND_ENTRY ? roundEntryRenderer : undefined),
 		});
-		const branch = session ? session.sessionManager.getBranch() as MirrorEntry[] : fileBranch(worker.sessionPath);
+		const branch = (session?.sessionManager ?? readWorkerSession(worker))?.getBranch() as MirrorEntry[] | undefined ?? [];
 		for (const entry of branch) this.mirror.replay(entry);
 		this.sync(session?.isStreaming === true);
 		if (session) this.unsubscribe = session.subscribe((event) => this.onEvent(event));
@@ -173,28 +173,6 @@ const roundEntryRenderer: EntryRenderer = (entry) => {
 	const round = roundFromEntry(entry);
 	return round && roundMarker(round);
 };
-
-/** 已释放的冷子代理：读一次会话文件，从最后一条沿 parentId 回到根，得到当前分支。 */
-function fileBranch(path: string): MirrorEntry[] {
-	if (!existsSync(path)) return []; // 第一条回复落盘之前还没有会话文件
-	type Line = MirrorEntry & { id?: string; parentId?: string | null };
-	const entries = new Map<string, Line>();
-	let leaf: Line | undefined;
-	for (const text of readFileSync(path, "utf8").split("\n")) {
-		if (!text.trim()) continue;
-		try {
-			const entry = JSON.parse(text) as Line;
-			if (!entry.id) continue;
-			entries.set(entry.id, entry);
-			leaf = entry;
-		} catch {
-			// 正在追加的尾行可能不完整。
-		}
-	}
-	const branch: Line[] = [];
-	for (let entry = leaf; entry; entry = entry.parentId ? entries.get(entry.parentId) : undefined) branch.unshift(entry);
-	return branch;
-}
 
 export class WorkerView implements Component, Focusable {
 	private readonly input = new Input({ prompt: "› ", placeholder: msg.view.placeholder });

@@ -25,7 +25,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 - `send`：working Worker 的普通 send 经宿主 `session.steer` 在句缝送达，不打断（仅回合确在流式时；steer 是子会话自己的消息队列，与根 AGENTS.md「硬约束」里主会话的唤醒问题无关，且只在流式中使用，不会唤起歇透会话）。切换 role、thinking 或 cwd 要求 Worker 空闲，working 时提示先 `interrupt`，reviewing 时等落定。省略 role 时沿用，显式传入时原地切换角色；thinking 可单独覆盖。带 cwd 时释放热会话并以新目录重开同一份 JSONL（不新建会话），档案记新 cwd；Worker 的 cwd 已不存在且未带 cwd 时明确报错并提示带 cwd。steer 入队后回合若以中断等方式结束，滞留队列的补充说明在落定时清出并作为事件回报指挥官重发，不留到下次 prompt。
 - `interrupt`：中止 working 回合，保留会话与义务；指挥官自己发起，所以不补发续跑提醒（只有会话重载打断的回合才提醒）。对 reviewing 的子代理：先在它的会话里执行 `review/outcome.ts` 的 `CANCEL_REVIEW_COMMAND`（与 esc 取消同一路径，审查以取消收场、终态 checkpoint 照写），再中止会话里可能在跑的修复/总结回合；审查监视看到取消的终态后按中断落定——回到 idle、带中断标记、审查义务保留（未履行，仍可再 review），指挥官收到“审查被中断”事件（不是失败）。取消没来得及生效、审查先以别的结局收场时（含已到总结相：取消只跳过总结、保留质量裁决），按那个结局落定。宿主 prompt 的前置阶段（input 处理器、鉴权）仍报空闲，落在那里的 abort 会被静默丢弃，所以档案进入 working 的同一同步段就挂上回合（`runtime.ts` 的 `Turn`），碰会话的 interrupt 与 steer 都先等它真正在飞：start 还在开会话、send 还在前置阶段时到达的 interrupt 只记意图，回合在飞后才中止，还没开回合就不调模型、直接按中断落定；补话等回合在飞再 steer，没开成报未送达。`start` 与 `send` 也等回合在飞（或没开成）才返回。
 - `review`：只对 idle Worker 显式发起 fire-review。
-- `tail`：最后一条外部输入（不是整条由 Master 信封构成的用户消息）之后的轨迹快照，不改变状态；格式与预算见 `trace.ts` 头注释。
+- `tail`：最后一条用户消息（指挥官派的活或视图补话；插件的事件与续跑提示是自定义消息，不算外部输入）之后的轨迹快照，不改变状态；格式与预算见 `trace.ts` 头注释。冷子代理的会话文件只经 `trace.ts` 的 `readWorkerSession` 读（全过程视图同用），文件不存在的规则也在那里。
 - `ack`：清掉失败与被中断的活动列表行并取消未发出的续跑提醒；审查义务未履行时拒绝。
 - `kill`：移除池引用；实现票完成收口或放弃整票时使用。
 
