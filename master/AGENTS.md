@@ -42,7 +42,7 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 再是 `✓ N 个已完成`（kill 后才去掉）与 `N 个空闲`（resume 后池里还在的、已 ack 的）。在跑的行最多显示 `max(4, 终端高度/6)` 行，超出折成 `+N 个在跑`；
 三种折叠行的计数带一层浅灰底色表示可点，后面灰色列出被折叠的名字（放不下就少列）。点 `+N 个在跑` 展开全部、点“收起”折回，点 `✓ N 个已完成` 列出名字、结果首句与本次运行耗时，点 `N 个空闲` 列出空闲的子代理，再点收起；展开在你下一次发消息时自动收起。
 
-排序、折叠与行布局见 `activity-list.ts`、`activity.ts` 头注释。相位（分组、在做什么与时刻）只在 `phase.ts` 判定：活动列表、全过程视图上横线、`subagents_list`、`/fire-master status`、名册与停摆唤醒都读它，状态词只有 `messages.ts` 的 `phase` 一张表。底栏只发布纯文字“指挥官”；相位的输入由 runtime 从档案加 live 表投影一次给出（`activityFacts`），落定事实（时刻、成败与说明）只在 live 里一份，reload 后哪里都不展示历史（池查询也不退回会话文件时间）；列表冻结的耗时与 `subagents_list` 的“落定 X 前”共用这一份。活动列表与全过程视图由 `index.ts` 挂到 runtime 上，runtime 不认识界面，只经 `onChange` 通知重绘。`ctrl+o` 不展开活动列表的原因：它常驻输入框上方，再展开只会挤掉正文视口。
+排序、折叠与行布局见 `activity-list.ts`、`activity.ts` 头注释。相位（分组、在做什么与时刻）只在 `phase.ts` 判定：活动列表、全过程视图上横线、`subagents_list`、`/fire-master status`、名册与停摆唤醒都读它，状态词只有 `messages.ts` 的 `phase` 一张表。底栏只发布纯文字“指挥官”；相位的输入由 runtime 从档案加 live 表投影一次给出（`activityFacts`），落定事实（时刻、成败与说明）只在 live 里一份，reload 后哪里都不展示历史（池查询也不退回会话文件时间）；列表冻结的耗时与 `subagents_list` 的“落定 X 前”共用这一份。活动列表与全过程视图由 `index.ts` 挂到 runtime 上，runtime 不认识界面，只经 `onChange` 通知重绘。master/ 内无依赖环、状态与调度文件不 import 界面文件（含只有类型的导入），由 `scripts/deps.ts` 随 `bun run typecheck` 检查，界面文件名单也在那里。`ctrl+o` 不展开活动列表的原因：它常驻输入框上方，再展开只会挤掉正文视口。
 
 ## 进展行
 

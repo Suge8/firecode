@@ -1,10 +1,12 @@
 /**
  * 类型检查：宿主类型取自 pi-mono 源码，定位与测试同源（scripts/pi-source.ts）。
  * tsconfig.json 继承 .pi-mono/tsconfig.json，因此这里把 .pi-mono 链到定位到的 pi-mono 根，并用它自带的 tsc。
+ * 同时检查 master/ 的依赖规则（deps.ts），两项都过才算通过。
  */
 import { lstatSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { FIRECODE_DIR, PI_PACKAGES } from "../tests/loader.ts";
+import { dependencyViolations } from "./deps.ts";
 
 const piRoot = dirname(PI_PACKAGES);
 const link = join(FIRECODE_DIR, ".pi-mono");
@@ -24,4 +26,6 @@ const tsc = Bun.spawnSync([join(piRoot, "node_modules", ".bin", "tsc"), "--noEmi
 	stdout: "inherit",
 	stderr: "inherit",
 });
-process.exit(tsc.exitCode);
+const violations = dependencyViolations(FIRECODE_DIR);
+for (const line of violations) console.error(line);
+process.exit(tsc.exitCode || (violations.length ? 1 : 0));
