@@ -543,6 +543,9 @@ test("首选额度用尽时同一回合切换到下一模型并返回", async ()
 	expect(worker).toMatchObject({ model: "test/worker-2", thinking: "off" });
 	const session = harness.pool.getSession((started.details as any).worker.session);
 	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
+	// 故障切换照常告知指挥官，带上原因。
+	const switched = harness.messages.map((entry: any) => String(entry.message.content)).find((content) => content.includes("chain 已切换模型"));
+	expect(switched).toContain("已切换 test/worker/off→test/worker-2/off（insufficient_quota）");
 });
 
 test("Claude 订阅 5 小时额度用尽（报错写明当地重置时刻）：子代理暂停到那一刻，指挥官只收到一条不唤醒的暂停说明，不是失败", async () => {
@@ -1754,10 +1757,25 @@ test("send 对冷 Worker 透明复活、省略角色沿用、显式角色原地�
 	});
 	await delivered;
 	listed = (await harness.list().then((result) => result.details as any)).workers[0];
-	expect(listed).toMatchObject({ status: "idle", role: "设计师" });
+	expect(listed).toMatchObject({ status: "idle", role: "设计师", model: "test/worker-2" });
 	const sessionText = await Bun.file(sessionPath).text();
 	expect(sessionText).toContain('"type":"model_change"');
 	expect(sessionText).toContain('"type":"thinking_level_change"');
+	// 换角色是指挥官自己的决定，不是故障切换：不发“已切换模型”。
+	expect(eventTitles(harness).filter((title: string) => title.includes("已切换模型"))).toEqual([]);
+});
+
+test("热会话里 send 换角色：档案记新角色实际用的模型，指挥官不收“已切换模型”", async () => {
+	const harness = await setup();
+	faux.setResponses([fauxAssistantMessage("第一轮"), fauxAssistantMessage("切换完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "swap", prompt: "第一轮", role: "工程师" });
+	await delivered;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "send", worker: "swap", prompt: "切换", role: "设计师" });
+	await delivered;
+	expect((await harness.list()).details.workers[0]).toMatchObject({ role: "设计师", model: "test/worker-2" });
+	expect(eventTitles(harness)).toEqual(["swap 已返回", "swap 已返回"]);
 });
 
 test("子会话不注册只属于交互主会话的功能：横幅、工具渲染、预设、重命名与用量命令", async () => {

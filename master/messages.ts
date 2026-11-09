@@ -65,7 +65,7 @@ export const msg = defineMessages({
 			stranded: "补充说明未送达",
 			strandedBody: (count: number) => `回合结束时有 ${count} 条补充说明未送达，请重发：`,
 			modelSwitched: "已切换模型",
-			modelSwitchedBody: (from: string, to: string, reason: string) => `已切换 ${from}→${to}${reason ? `（${reason}）` : ""}`,
+			modelSwitchedBody: (from: string, to: string, reason: string) => `已切换 ${from}→${to}（${reason}）`,
 			stalledAction: (action: string) => `正在跑：${action}`,
 			stalledElapsed: (elapsed: string) => `本次运行已跑 ${elapsed}`,
 			paused: "已暂停",
@@ -245,7 +245,7 @@ export const msg = defineMessages({
 			strandedBody: (count: number) =>
 				`${count} follow-up ${plural(count, "message was", "messages were")} not delivered when the turn ended; please resend:`,
 			modelSwitched: "model switched",
-			modelSwitchedBody: (from: string, to: string, reason: string) => `Switched ${from}→${to}${reason ? ` (${reason})` : ""}`,
+			modelSwitchedBody: (from: string, to: string, reason: string) => `Switched ${from}→${to} (${reason})`,
 			stalledAction: (action: string) => `Running: ${action}`,
 			stalledElapsed: (elapsed: string) => `This run has been going for ${elapsed}`,
 			paused: "paused",

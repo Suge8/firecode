@@ -162,24 +162,21 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		const cwd = await resolveSendCwd(target, requestedCwd);
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
 		const selectedRole = selection ?? resolveRole(roster, target.role);
-		const selected = await resolveRoleModel(active, selectedRole, thinkingOverride);
+		// 只核对角色此刻可用：档案的模型原子等路由选定后由 onModelChange 写（run.ts）。
+		await resolveRoleModel(active, selectedRole, thinkingOverride);
 		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
 		active.current(target);
-		const session = await openWorkerSession(active, { ...target, cwd, role: selectedRole.role, ...selected }, thinkingOverride);
+		const role = selectedRole.role;
+		const session = await openWorkerSession(active, { ...target, cwd, role }, thinkingOverride);
 		await session.waitForIdle();
 		active.assertOpen();
 		pool.configureRoute(target.sessionPath, selectedRole.models, thinkingOverride);
-		const role = selectedRole.role;
-		const model = target.model;
-		const thinking = target.thinking;
 		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 		const latest = active.current(target);
 		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
 		const working = active.commit(target, ({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...rest }) => ({
 			...rest,
 			role,
-			model,
-			thinking,
 			cwd,
 			status: "working",
 			...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),

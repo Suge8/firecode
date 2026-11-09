@@ -50,14 +50,15 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		cwd: worker.cwd ?? process.cwd(),
 		chain: role.models,
 		thinkingOverride: override,
+		// 档案的模型原子只由这里写：路由每次选定（新会话首选、换角色或思考档后重选、故障切换）都报到这里。
 		onModelChange: (atom, previous, reason) => active.detached(worker.name, () => {
 			const current = active.find(worker);
 			if (!current) return;
-			const from = previous ?? { model: current.model, thinking: current.thinking };
 			active.commit(current, (latest) => ({ ...latest, ...atom }));
-			// 只告知不唤醒：同一会话自动续跑，指挥官无事可做（断网时每次切换都唤醒它，只换来一串同样失败的指挥官回合）。
-			if (from.model !== atom.model)
-				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(from), modelAtomText(atom), reason ?? ""), worker.name, true);
+			// 只有故障切换才告知：首选与指挥官自己换角色、思考档不是新闻。只告知不唤醒：同一会话自动续跑，指挥官无事可做
+			// （断网时每次切换都唤醒它，只换来一串同样失败的指挥官回合）。
+			if (reason !== undefined && previous)
+				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(previous), modelAtomText(atom), reason), worker.name, true);
 		}),
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
