@@ -60,8 +60,8 @@ export type RunOrigin = "master" | "view";
 
 /**
  * 一个回合或一次审查：从开会话、宿主前置阶段到落定。档案进入 working/reviewing 的同一同步段挂上，落定回调只认自己这一个。
- * 宿主 prompt 的前置阶段（input 处理器、鉴权）里会话仍报空闲，落在那里的 abort 会被静默丢弃；所以碰会话的一方（interrupt、steer）
- * 先等 running：回合在飞时给出它的会话，没开成（开会话失败、准备期间被 kill、输入被处理器吃掉）给 undefined，此后也不会在飞。
+ * 宿主 prompt 的前置阶段（input 处理器、鉴权）里会话仍报空闲，落在那里的 abort 会被静默丢弃；所以碰会话的中止与补话（run.ts 的
+ * interruptTurn、steerTurn）在后台先等 running，动作本身不等：回合在飞时给出它的会话，没开成（开会话失败、准备期间被 kill、输入被处理器吃掉）给 undefined，此后也不会在飞。
  */
 export interface Turn {
 	readonly running: Promise<AgentSession | undefined>;

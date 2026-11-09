@@ -397,7 +397,7 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 // kitty 键盘协议里的 ctrl+shift+x。
 const INTERRUPT = "\x1b[120;6u";
 
-test("在跑与审查中的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已中断”；空闲的不提示也不响应；失败写原因", async () => {
+test("在跑与审查中的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已请求中断”（结局经落定事件告知）；空闲的不提示也不响应；失败写原因", async () => {
 	const failing = { fail: false };
 	const workers = [worker("busy", "working"), worker("quiet"), worker("judged", "reviewing")];
 	const interruptedNames: string[] = [];
@@ -412,7 +412,7 @@ test("在跑与审查中的子代理：底行提示中断键，按下走 interru
 	view.key(INTERRUPT);
 	await Bun.sleep(0);
 	expect(interruptedNames).toEqual(["busy"]);
-	expect(view.bottom()).toContain("已中断");
+	expect(view.bottom()).toContain("已请求中断");
 
 	failing.fail = true;
 	view.key(INTERRUPT);

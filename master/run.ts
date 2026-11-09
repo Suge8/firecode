@@ -13,7 +13,7 @@ import { type Delivery, wrapEnvelope } from "../deliver.js";
 import { clip, firstSentence, oneLine, textOf, tildeHome } from "../format.js";
 import { routePause, type ChainPause } from "../model-route.js";
 import { delayUntil } from "../timing.js";
-import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
+import { CANCEL_REVIEW_COMMAND, outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { quietMinutes, workerPhase } from "./phase.js";
 import { MASTER_EVENT_TYPE, masterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
@@ -226,6 +226,55 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, openin
 	} finally {
 		running.resolve(undefined);
 	}
+}
+
+/**
+ * interrupt 在跑或审查中的票：记下意图就返回，不等回合。宿主 prompt 的前置阶段（input 处理器、鉴权）里会话仍报空闲，
+ * 那里的 abort 会被静默丢弃，处理器卡住时也没有时限；所以中止等回合真正在飞再做：working 中止回合，reviewing 先在会话里
+ * 取消审查（review/outcome.ts 的 CANCEL_REVIEW_COMMAND，与 esc 同一路径）再中止可能在跑的修复/总结回合。
+ * 回合没开成就由 runWorker 按意图直接落定为中断、不调模型；结局都经落定事件告知。中止失败时撤回意图，回合按自己的结局落定。
+ */
+export function interruptTurn(active: MasterRuntime, worker: WorkerRef): void {
+	const live = active.liveOf(worker.name);
+	const turn = live.turn!;
+	if (turn.interrupted) return;
+	turn.interrupted = true;
+	active.detached(worker.name, async () => {
+		const session = await turn.running;
+		if (!session || active.live.get(worker.name) !== live || live.turn !== turn) return;
+		try {
+			if (worker.status === "reviewing") {
+				await session.prompt(CANCEL_REVIEW_COMMAND);
+				if (session.isStreaming) await session.abort();
+			} else await session.abort();
+		} catch (error) {
+			// 中止没成：回合照常跑完，按它自己的结局落定，不误记为中断；失败经 detached 报给用户。
+			turn.interrupted = undefined;
+			throw error;
+		}
+	});
+}
+
+/**
+ * 补话交给在跑的回合：在飞后经宿主 steer 在句缝送达，不打断，调用方不等。steer 会 await 子会话的 input 处理器，
+ * 期间回合可能落定或被 kill；送进时回合还是这一个才算送达（delivered 在此时写回）。没开成、已不在流式、已记下中断意图、或送进时回合已结束而
+ * 滞留在队列里的，作为“补充说明未送达”事件回报指挥官重发——与落定时清出的滞留补话同一条事件，回合落定后才进队列的由这里清出。
+ */
+export function steerTurn(active: MasterRuntime, worker: WorkerRef, prompt: string, delivered: () => void): void {
+	const live = active.liveOf(worker.name);
+	const turn = live.turn!;
+	const ours = () => active.live.get(worker.name) === live && live.turn === turn && active.find(worker)?.status === "working";
+	active.detached(worker.name, async () => {
+		const session = await turn.running;
+		let stranded = [prompt];
+		// 已记下中断意图的回合不再送进：它马上被中止，送进去的话随中断落定沉默。
+		if (session?.isStreaming && !turn.interrupted && ours()) {
+			await session.steer(prompt);
+			if (ours()) return delivered();
+			stranded = session.isStreaming ? [] : session.clearQueue().steering;
+		}
+		if (stranded.length && active.find(worker)) active.enqueue(masterEvent.stranded(worker.name, stranded), worker.name);
+	});
 }
 
 /** 被中断落定：回合被 interrupt 打断，或审查被 interrupt 取消（review）。两者都回到 idle 并带中断标记，审查义务保留。 */
