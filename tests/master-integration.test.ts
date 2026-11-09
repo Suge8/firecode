@@ -1445,11 +1445,12 @@ test("回合卡在宿主前置阶段时补话立即返回，开闸后在句缝�
 	await input.entered;
 	expect(await within(harness.execute({ action: "send", worker: "late", prompt: "顺便补一句" }))).toEqual({ queued: true });
 	expect(await within(harness.execute({ action: "interrupt", worker: "late" }))).toEqual({ interrupting: true });
-	const titles = () => harness.messages.map((entry: any) => titleOf(entry.message.content));
+	// 两条事件可能合并在同一次唤醒里：按每个信封的标题找。
+	const events = () => harness.messages.flatMap((entry: any) => String(entry.message.content).split("<firecode_master_event>\n").slice(1));
 	input.open();
 	await sending;
-	await until(() => titles().includes("late 被中断") && titles().includes("late 补充说明未送达"));
-	expect(harness.messages.find((entry: any) => titleOf(entry.message.content) === "late 补充说明未送达").message.content).toContain("顺便补一句");
+	await until(() => events().some((event: string) => event.startsWith("late 被中断\n")) && events().some((event: string) => event.startsWith("late 补充说明未送达\n")));
+	expect(events().find((event: string) => event.startsWith("late 补充说明未送达\n"))).toContain("顺便补一句");
 });
 
 test("补话越过 input 处理器后按最新档案写回：期间落定的作为未送达回报、不被改回 working、不挂审查义务，期间被 kill 不复活也不回报", async () => {
