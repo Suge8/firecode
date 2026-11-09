@@ -1340,6 +1340,23 @@ test("kill 赢过正在准备的 send/review，异步写回不会复活已删档
 	expect(harness.messages).toHaveLength(2);
 });
 
+test("审查终态在子代理的 agent_settled 处理器里写下、后面还有慢处理器时立刻 send：等处理器跑完再开回合，结果照常返回，不误报失败", async () => {
+	const harness = await setup(true, { review: true });
+	await writeFile(join(harness.agentDir, "extensions", "slow-review.ts"), slowSettleReviewExtension(300));
+	const events = () => harness.messages.flatMap((entry: any) => String(entry.message.content).split("<firecode_master_event>\n").slice(1));
+	faux.setResponses([fauxAssistantMessage("初始完成"), fauxAssistantMessage("修复回合完成"), fauxAssistantMessage("接着做完了")]);
+	await harness.execute({ action: "start", worker: "sl", prompt: "初始", role: "工程师" });
+	await until(() => events().some((event: string) => event.startsWith("sl 已返回")));
+	await harness.execute({ action: "review", worker: "sl" });
+	await until(() => events().some((event: string) => event.startsWith("sl 审查通过")));
+	expect((await harness.list()).details.workers[0].status).toBe("idle");
+	await harness.execute({ action: "send", worker: "sl", prompt: "立刻接着做" });
+	await until(() => events().length === 3);
+	expect(events()[2]).toStartWith("sl 已返回");
+	expect(events()[2]).toContain("接着做完了");
+	expect((await harness.list()).details.workers[0].status).toBe("idle");
+});
+
 test("start 准备期间被 kill：start 不报成功、不调模型、不留热会话", async () => {
 	const harness = await setup(true, { loadGate: true });
 	faux.setResponses([fauxAssistantMessage("被 kill 的子代理不应执行")]);
@@ -2636,6 +2653,35 @@ function mockReviewExtension(
 				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)}); pi.events.emit("firecode:review", { active: false });`}
 				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
 			},
+		});
+	}`;
+}
+
+/**
+ * 审查的修复回合在子代理里落定时，在 agent_settled 处理器里写终态 checkpoint 并放掉占用，之后处理器还要再跑 sleepMs：
+ * 复现指挥官看到审查落定、子代理会话已报空闲，宿主却还在跑 agent_settled 处理器的窗口。
+ */
+function slowSettleReviewExtension(sleepMs: number): string {
+	const base = { version: 9, runId: "slow-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1 };
+	const reviewing = { ...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1, slots: [{ result: null }] };
+	const settled = {
+		...base, phase: "settled", end: "passed", updatedAt: 2, rounds: 1,
+		last: { round: 1, result: "passed", elapsedMs: 1, reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "", details: "" }] },
+	};
+	return `export default function(pi) {
+		let armed = false;
+		pi.registerCommand("fire-review", { description: "slow settle review", handler: () => {
+			armed = true;
+			pi.events.emit("firecode:review", { active: true, progress: () => undefined });
+			pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
+			pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });
+		}});
+		pi.on("agent_settled", async () => {
+			if (!armed) return;
+			armed = false;
+			pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});
+			pi.events.emit("firecode:review", { active: false });
+			await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
 		});
 	}`;
 }

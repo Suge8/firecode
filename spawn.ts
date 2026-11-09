@@ -57,6 +57,8 @@ interface HeldSession {
 	timer?: NodeJS.Timeout;
 	releasing?: Promise<void>;
 	route?: Awaited<ReturnType<typeof createModelRoute>>;
+	/** 宿主发了 agent_start、还没把 agent_settled 发给订阅方的那次运行：idle 等它。 */
+	settling?: PromiseWithResolvers<void>;
 }
 
 export const CODEMODE_TOOL = "codemode";
@@ -219,6 +221,14 @@ export class InProcessSessionPool {
 
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
 		const held: HeldSession = { key, session: created, sessionPath, route };
+		// 建会话即挂上、随会话 dispose 失效，所以每次运行的开始与收尾都看得到（idle 的判据）。
+		created.subscribe((event) => {
+			if (event.type === "agent_start") held.settling ??= Promise.withResolvers();
+			else if (event.type === "agent_settled") {
+				held.settling?.resolve();
+				held.settling = undefined;
+			}
+		});
 		this.held.set(key, held);
 		if (codemode) trackCodemodeSession(key, true);
 		return {
@@ -240,6 +250,21 @@ export class InProcessSessionPool {
 		return this.runtime;
 	}
 
+	/**
+	 * 等池里的子会话真正空闲，再在它上面开回合（prompt 或 triggerTurn）。宿主的 waitForIdle 在 agent_settled 处理器还在跑时就返回
+	 * （那时 isIdle 已为 true），此刻的 prompt 与 triggerTurn 被宿主推迟到处理器跑完、调用当场返回而不开回合，回合就没人跟踪了。
+	 * 宿主没有“处理器还在跑”的公开状态，只在全部处理器跑完后才把 agent_settled 发给订阅方；所以真正空闲 = waitForIdle 返回，
+	 * 且最近一个 agent_start 已等到它的 agent_settled。处理器里又开了运行就再等一轮。
+	 */
+	async idle(session: AgentSession): Promise<void> {
+		for (;;) {
+			await session.waitForIdle();
+			const settling = [...this.held.values()].find((held) => held.session === session)?.settling;
+			if (!settling) return;
+			await settling.promise;
+		}
+	}
+
 	/** 纯查询：不改变释放计时（视图、steer、interrupt 只看不占）。 */
 	getSession(sessionPath: string): AgentSession | undefined {
 		return this.held.get(sessionPath)?.session;
@@ -253,7 +278,7 @@ export class InProcessSessionPool {
 		return held.session;
 	}
 
-	/** 空闲只由调用方判定：池不订阅会话事件自判空闲；超时后释放热会话，档案与 JSONL 保留。 */
+	/** 何时可释放只由调用方判定：池不按会话事件自判释放；超时后释放热会话，档案与 JSONL 保留。 */
 	markIdle(sessionPath: string): void {
 		const held = this.held.get(sessionPath);
 		if (!held) return;

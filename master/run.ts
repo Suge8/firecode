@@ -354,7 +354,7 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 		try {
 			if (resume.review) return await startReview(active, current, true);
 			const session = await openWorkerSession(active, current);
-			await session.waitForIdle();
+			await active.setup.pool.idle(session);
 			active.assertOpen();
 			if (superseded(active, current, resume)) return;
 			const working = active.commit(current, (latest) => transition.continued(latest, "working"));
@@ -387,7 +387,7 @@ function superseded(active: MasterRuntime, identity: WorkerRef, resume: NonNulla
  */
 export async function startReview(active: MasterRuntime, target: WorkerRef, resumed = false): Promise<void> {
 	const session = await openWorkerSession(active, target);
-	await session.waitForIdle();
+	await active.setup.pool.idle(session);
 	active.assertOpen();
 	if (resumed && superseded(active, target, target.resume!)) return;
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));

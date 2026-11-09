@@ -151,7 +151,7 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 		active.current(target);
 		const role = selectedRole.role;
 		const session = await openWorkerSession(active, { ...target, cwd, role }, thinkingOverride);
-		await session.waitForIdle();
+		await pool.idle(session);
 		active.assertOpen();
 		pool.configureRoute(target.sessionPath, selectedRole.models, thinkingOverride);
 		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
