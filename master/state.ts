@@ -15,7 +15,8 @@ export interface WorkerRef {
 	thinking: ThinkingLevelValue;
 	status: WorkerStatus;
 	sessionPath: string;
-	cwd?: string;
+	/** 工作目录：start 必写（realpath），send 带 cwd 时改写。 */
+	cwd: string;
 	interruptedAt?: number;
 	/**
 	 * 启动序：start 在同步段按到达先后取的单调序号，store 按它排序。必须持久化：并行 start 越过
@@ -35,6 +36,22 @@ export interface WorkerRef {
 	 */
 	resume?: WorkerResume;
 }
+
+/** 给模型的池快照（start 结果与 subagents_list 正文）：只有档案事实。 */
+export function compactWorker(worker: WorkerRef) {
+	return {
+		name: worker.name,
+		role: worker.role,
+		status: worker.status,
+		model: worker.model,
+		thinking: worker.thinking,
+		session: worker.sessionPath,
+		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
+		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
+		...(worker.resume ? { resume: worker.resume } : {}),
+	};
+}
+export type CompactWorker = ReturnType<typeof compactWorker>;
 
 export interface WorkerResume {
 	at: number;
@@ -214,7 +231,7 @@ function isWorker(value: unknown): value is WorkerRef {
 		(record.status !== "working" && record.status !== "idle" && record.status !== "reviewing") ||
 		typeof record.sessionPath !== "string" || !record.sessionPath
 	) return false;
-	if (record.cwd !== undefined && (typeof record.cwd !== "string" || !record.cwd)) return false;
+	if (typeof record.cwd !== "string" || !record.cwd) return false;
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;

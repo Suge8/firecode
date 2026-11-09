@@ -123,7 +123,7 @@ class WorkerRecord {
 	constructor(worker: WorkerRef, readonly session: AgentSession | undefined, tui: TUI, theme: Theme, private readonly changed: () => void) {
 		this.mirror = new ChatMirror({
 			ui: detachedTui(tui, changed),
-			cwd: worker.cwd ?? process.cwd(),
+			cwd: worker.cwd,
 			theme,
 			toolRenderers,
 			messageRenderer: (type) => session?.extensionRunner.getMessageRenderer(type),

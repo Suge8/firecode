@@ -8,11 +8,10 @@ import { dirname, isAbsolute } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "../config.js";
 import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
-import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
-import { openWorkerSession, prepare, resumeCheckPrompt, returnSession, runWorker, spawnWorker, startReview } from "./run.js";
+import { openWorkerSession, prepare, RESUME_CHECK_PROMPT, returnSession, runWorker, spawnWorker, startReview } from "./run.js";
 import type { MasterRuntime, RunOrigin } from "./runtime.js";
-import { transition, WORKER_NAME, type WorkerRef } from "./state.js";
+import { compactWorker, transition, WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
 
 export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const;
@@ -189,7 +188,7 @@ export async function send(active: MasterRuntime, name: string, input: ActionInp
 		}));
 		active.beginRun(target.name, fromView ? "view" : "master", prompt);
 		if (fromView) live.viewPrompts.push(prompt);
-		await runWorker(active, working, session, cutOff ? `${resumeCheckPrompt()}\n\n${prompt}` : prompt);
+		await runWorker(active, working, session, cutOff ? `${RESUME_CHECK_PROMPT}\n\n${prompt}` : prompt);
 		return { sent: true };
 	});
 }
@@ -283,7 +282,7 @@ function nameOf(params: Params): string {
 	return requiredString(params.worker, "worker");
 }
 
-function inputOf(params: Params): ActionInput {
+export function inputOf(params: Params): ActionInput {
 	const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 	return {
 		worker: text(params.worker), prompt: text(params.prompt), role: text(params.role), thinking: text(params.thinking), cwd: text(params.cwd),
@@ -314,7 +313,7 @@ async function resolveWorkerCwd(path: string): Promise<string> {
 	}
 }
 
-async function resolveSendCwd(worker: WorkerRef, requested: string | undefined): Promise<string | undefined> {
+async function resolveSendCwd(worker: WorkerRef, requested: string | undefined): Promise<string> {
 	if (requested) return resolveWorkerCwd(requested);
 	if (worker.cwd && !existsSync(worker.cwd))
 		throw new Error(msg.action.cwdGone(worker.name, worker.cwd));

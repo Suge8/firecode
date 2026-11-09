@@ -3,43 +3,28 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "../format.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
+import { type Action, inputOf } from "./actions.js";
 import { msg } from "./messages.js";
 import { workerPhase, type ActivityFacts, type WorkerPhase } from "./phase.js";
-import type { WorkerRef } from "./state.js";
+import { compactWorker, type CompactWorker } from "./state.js";
 
 export const renderSubagentsResult = makeResultRenderer(false);
-const ACTION_VERB: Record<string, string> = msg.list.verb;
+const ACTION_VERB: Record<Action | "list", string> = msg.list.verb;
 
+/** 工具行：参数与工具入口同一份解析（actions.ts 的 inputOf）。 */
 export function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
-	const parts: Part[] = [{ text: ACTION_VERB[action] ?? action, bold: true }];
-	const target = optionalText(args.worker);
-	if (target) parts.push({ text: ` ${target}`, color: "accent" });
-	const role = optionalText(args.role);
+	const { worker, role, prompt } = inputOf(args);
+	const parts: Part[] = [{ text: ACTION_VERB[action as Action] ?? action, bold: true }];
+	if (worker) parts.push({ text: ` ${worker}`, color: "accent" });
 	if ((action === "start" || action === "send") && role) parts.push({ text: ` · ${role}`, color: "muted" });
-	const prompt = optionalText(args.prompt)?.split("\n", 1)[0];
-	if (prompt && action === "start") parts.push({ text: ` — ${prompt}`, color: "muted" });
+	const brief = prompt?.split("\n", 1)[0];
+	if (brief && action === "start") parts.push({ text: ` — ${brief}`, color: "muted" });
 	return parts;
 }
 
-type CompactWorker = ReturnType<typeof compactWorker>;
 /** 池快照加上只给界面看的相位（模型正文不含）：列出那一刻的快照，展开时按它渲染。 */
 export type ListedWorker = CompactWorker & { phase: Pick<WorkerPhase, "kind" | "action" | "startedAt" | "settledAt"> };
-
-/** 给模型的池快照：只有档案事实。 */
-export function compactWorker(worker: WorkerRef) {
-	return {
-		name: worker.name,
-		role: worker.role,
-		status: worker.status,
-		model: worker.model,
-		thinking: worker.thinking,
-		session: worker.sessionPath,
-		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
-		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
-		...(worker.resume ? { resume: worker.resume } : {}),
-	};
-}
 
 /** 池查询的 details：每票带上此刻的相位。 */
 export function listedWorkers(facts: ActivityFacts, now: number): ListedWorker[] {
@@ -96,8 +81,4 @@ export function statusText(workers: readonly ListedWorker[]): string {
 /** 角色为主的状态投影：「工程师·运行中」。 */
 function roleStatusText(worker: ListedWorker): string {
 	return `${worker.role}·${msg.phase[worker.phase.kind]}`;
-}
-
-function optionalText(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

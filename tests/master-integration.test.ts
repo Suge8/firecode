@@ -1138,7 +1138,7 @@ test("会话重载打断的回合：恢复后补挂续跑提醒，提醒说清�
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, JSON.stringify({ version: 10, workers: [{
-		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"), launch: 1,
+		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"), cwd: harness.cwd, launch: 1,
 	}] }));
 	await harness.command("");
 	await until(() => harness.messages.length > 0);
@@ -1491,7 +1491,7 @@ test("恢复后按档案里的启动序列出子代理（并行 start 的落盘�
 	await mkdir(dirname(path), { recursive: true });
 	const archived = [["mid", 3], ["zeta", 1], ["alpha", 2]] as const;
 	await writeFile(path, JSON.stringify({ version: 10, workers: archived.map(([name, launch]) => ({
-		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), launch,
+		name, role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(harness.cwd, `${name}.jsonl`), cwd: harness.cwd, launch,
 	})) }));
 	await harness.command("");
 	harness.clickActivity("3 个空闲");
@@ -1888,7 +1888,7 @@ test("恢复会话时早已中断的子代理不再提醒；被会话重载打�
 	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
 	const path = masterStatePath(harness.agentDir, harness.sessionId);
 	await mkdir(dirname(path), { recursive: true });
-	const base = { role: "工程师", model: "test/worker", thinking: "medium", launch: 1 };
+	const base = { role: "工程师", model: "test/worker", thinking: "medium", cwd: harness.cwd, launch: 1 };
 	await writeFile(path, JSON.stringify({ version: 10, workers: [
 		{ ...base, name: "old", status: "idle", interruptedAt: Date.now() - 3_600_000, sessionPath: join(harness.cwd, "old.jsonl") },
 		{ ...base, name: "reloaded", status: "working", launch: 2, sessionPath: join(harness.cwd, "reloaded.jsonl") },

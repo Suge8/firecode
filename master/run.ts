@@ -46,7 +46,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 	const role = active.roles.require(worker.role);
 	active.assertOpen();
 	const spawned = await pool.spawn({
-		cwd: worker.cwd ?? process.cwd(),
+		cwd: worker.cwd,
 		chain: role.models,
 		thinkingOverride: override,
 		// 档案的模型原子只由这里写：路由每次选定（新会话首选、换角色或思考档后重选、故障切换）都报到这里。
@@ -61,7 +61,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		}),
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
-		systemPrompt: { mode: "append", text: assembleWorkerPrompt(active.setup.workerPrompt, worker.name) },
+		systemPrompt: { mode: "append", text: assembleWorkerPrompt(worker.name) },
 		contextFiles: true,
 		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume && existsSync(worker.sessionPath) ? { resume: true } : {}) },
 		onExtensionError: (error) => reportExtensionError(active, worker, error),
@@ -133,7 +133,7 @@ export function observeWorker(active: MasterRuntime, worker: WorkerRef, session:
 		}
 		if (event.type === "tool_execution_start") {
 			live.currentTools.set(event.toolCallId, { tool: event.toolName, args: event.args });
-			active.progress?.toolCall(worker.name, event.toolName, event.args, worker.cwd ?? "");
+			active.progress?.toolCall(worker.name, event.toolName, event.args, worker.cwd);
 		}
 		// 只记带工具调用的正文（边说边做）；以 stop 收尾的最终回复意味着回合马上落定，为它再调一次模型是白花。
 		if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "toolUse")
@@ -470,6 +470,4 @@ function lastAssistant<T extends { role: string }>(messages: readonly T[]): T | 
 }
 
 /** 首次续派前置的现场核对提示。 */
-export function resumeCheckPrompt(): string {
-	return wrapEnvelope("firecode_master_event", msg.run.resumeCheck);
-}
+export const RESUME_CHECK_PROMPT = wrapEnvelope("firecode_master_event", msg.run.resumeCheck);

@@ -62,7 +62,7 @@ export const quietMinutes = (quietMs: number) => Math.floor(quietMs / MINUTE_MS)
 export function workerPhase({ worker, tool, review, startedAt, quietSince, progress, settled }: WorkerFacts, stallMs: number, now: number): WorkerPhase {
 	if (worker.status === "working") {
 		const quietMs = now - Math.max(startedAt ?? now, quietSince ?? 0);
-		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd ?? "") : toolsMsg.activity.thinking;
+		const action = tool ? toolActionText(tool.tool, tool.args, worker.cwd) : toolsMsg.activity.thinking;
 		// 进展行有就替代工具动作，所有展示同一条规则。卡住时照常显示工具（用户要知道卡在哪条命令上），只追加提醒；
 		// 停摆事件只在卡住时发，读到的总是工具动作。前台长命令同样按无输出计时。
 		const stuck = quietMs >= stallMs;

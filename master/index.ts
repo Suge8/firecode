@@ -13,10 +13,11 @@ import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { ActivityList, visibleRows } from "./activity-list.js";
 import { registerMasterEventRenderer } from "./event-card.js";
 import {
-	compactWorker, expandedWorkerList, listedWorkers, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
+	expandedWorkerList, listedWorkers, listMeta, type ListedWorker, renderSubagentsResult, statusText, subagentsCallParts,
 } from "./list-view.js";
+import { compactWorker } from "./state.js";
 import { msg } from "./messages.js";
-import { assembleMasterPrompt, MASTER_PROMPT, WORKER_PROMPT } from "./prompt.js";
+import { assembleMasterPrompt, MASTER_PROMPT } from "./prompt.js";
 import { armInterruptReminder, armResume } from "./run.js";
 import { Roles } from "./roles.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
@@ -65,7 +66,6 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 		pool,
 		progress: all.config.background?.model ?? false,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
-		workerPrompt: WORKER_PROMPT,
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
 		publishInFlight,
 		publishRoster,

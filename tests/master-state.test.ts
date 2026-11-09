@@ -16,6 +16,7 @@ const worker: WorkerRef = {
 	thinking: "medium",
 	status: "working",
 	sessionPath: "/tmp/subagents/worker-1.jsonl",
+	cwd: "/tmp",
 	launch: 1,
 };
 const other = { ...worker, name: "worker-2", sessionPath: "/tmp/subagents/worker-2.jsonl", launch: 3 };
