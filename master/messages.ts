@@ -31,11 +31,11 @@ export const msg = defineMessages({
 			confirmOffTitle: "关闭指挥官模式？",
 			confirmOff: (count: number) => `还有 ${count} 个子代理在跑，关闭会中断它们（会话与审查义务保留，下次启用后可续派）。`,
 		},
-		roster: {
+		roles: {
 			entry: (role: string, use: string) => `${role}（${use}）`,
 			unavailable: (roles: string) => `角色没有可用模型：${roles}`,
 			join: "；",
-			prompt: (roster: string) => `角色表：${roster}。`,
+			prompt: (roles: string) => `角色表：${roles}。`,
 		},
 		event: {
 			obligation: "此票有审查义务，请显式 review。",
@@ -207,11 +207,11 @@ export const msg = defineMessages({
 			confirmOffTitle: "Turn off Master mode?",
 			confirmOff: (count: number) => `${count} ${plural(count, "Worker is", "Workers are")} still running; turning off interrupts ${plural(count, "it", "them")} (sessions and review obligations are kept and can be resumed after you turn Master back on).`,
 		},
-		roster: {
+		roles: {
 			entry: (role: string, use: string) => `${role} (${use})`,
 			unavailable: (roles: string) => `Roles have no available models: ${roles}`,
 			join: "; ",
-			prompt: (roster: string) => `Role roster: ${roster}.`,
+			prompt: (roles: string) => `Role roster: ${roles}.`,
 		},
 		event: {
 			obligation: "This ticket carries a review obligation; run review explicitly.",

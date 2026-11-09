@@ -4,7 +4,7 @@
  * 运行时事实只在进程内；档案与 JSONL 才是身份与续派的事实源。会话关闭后 closed 置位，迟到的异步续延一律作废。
  */
 import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { MasterRole, ModelChain } from "../config.js";
+import type { ModelChain } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewRoundProgress } from "../review/outcome.js";
 import { roundFromEntry } from "../round.js";
@@ -15,6 +15,7 @@ import type { ActivityFacts, SettledFact, WorkerFacts } from "./phase.js";
 import { ProgressLines } from "./progress.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
+import type { Roles } from "./roles.js";
 import { subagentInfos, type SubagentInfo } from "./roster.js";
 import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
 
@@ -32,7 +33,6 @@ export interface Landing {
 export interface MasterSetup {
 	pi: ExtensionAPI;
 	pool: InProcessSessionPool;
-	roster: MasterRole[];
 	/** 在跑子代理进展行的模型链（配置 background.model）；false 不生成。 */
 	progress: ModelChain | false;
 	exclusions: string[];
@@ -126,7 +126,8 @@ export class MasterRuntime {
 	/** 事实变化时通知（活动列表重绘）。 */
 	private readonly changeListeners = new Set<() => void>();
 
-	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext) {
+	/** roles：这次会话核对过的角色表（roles.ts）。 */
+	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext, readonly roles: Roles) {
 		this.outbox = new Outbox({ pi: setup.pi, ctx, timing: setup.pool.timing, changed: () => this.schedulePublish() });
 		if (setup.progress)
 			this.progress = new ProgressLines(setup.progress, {

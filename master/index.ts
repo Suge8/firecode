@@ -7,7 +7,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { busyView, WORKERS_CHANNEL, type WorkersPayload } from "../busy.js";
-import { loadConfig, type MasterRole, THINKING_LEVELS } from "../config.js";
+import { loadConfig, THINKING_LEVELS } from "../config.js";
 import { ToolLine } from "../tools/line.js";
 import { ACTION_HANDLERS, ACTIONS, type Action } from "./actions.js";
 import { ActivityList, visibleRows } from "./activity-list.js";
@@ -18,6 +18,7 @@ import {
 import { msg } from "./messages.js";
 import { assembleMasterPrompt, MASTER_PROMPT, WORKER_PROMPT } from "./prompt.js";
 import { armInterruptReminder, armResume } from "./run.js";
+import { Roles } from "./roles.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import { openWorkerView } from "./worker-view.js";
@@ -34,21 +35,15 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	// 配置有问题时拒绝激活：runtime 存在就意味着配置可用。
 	const startupError = "error" in loaded ? loaded.error : undefined;
 	const configuredRoles = "error" in loaded ? [] : loaded.config.roles;
-	const roster: MasterRole[] = [...configuredRoles];
 	const roleParameter = Type.Optional(StringEnum(configuredRoles.map((entry) => entry.role), { description: msg.tool.role }));
-	let rosterReady = false;
-	const prepareRoster = async (ctx: ExtensionContext) => {
-		if (rosterReady) return;
-		const checks = await Promise.all(configuredRoles.map(async (role) => !!(await pool.resolveChain(role.models))));
-		roster.splice(0, roster.length, ...configuredRoles.filter((_role, index) => checks[index]));
-		const missing = configuredRoles.filter((_role, index) => !checks[index]);
-		if (missing.length) {
-			const warning = msg.roster.unavailable(missing.map((role) => `${role.role}: ${role.models.map((atom) => atom.model).join(", ")}`).join("; "));
-			if (ctx.hasUI) ctx.ui.notify(warning, "warning");
-			else console.error(warning);
-		}
-		rosterReady = true;
-	};
+	/** 本次会话核对过的角色表：session_start 作废重核，激活与切换开关沿用（不可用角色只告警一次）。 */
+	let roles: Promise<Roles> | undefined;
+	const prepareRoles = (ctx: ExtensionContext): Promise<Roles> => roles ??= Roles.check(configuredRoles, pool).then((checked) => {
+		const { warning } = checked;
+		if (warning && ctx.hasUI) ctx.ui.notify(warning, "warning");
+		else if (warning) console.error(warning);
+		return checked;
+	});
 	const autoActivate = "error" in loaded ? false : loaded.config.autoActivate;
 	// 在飞子代理数的唯一发布者。
 	let publishedInFlight = 0;
@@ -68,7 +63,6 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	const setup: MasterSetup = {
 		pi,
 		pool,
-		roster,
 		progress: all.config.background?.model ?? false,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
 		workerPrompt: WORKER_PROMPT,
@@ -92,8 +86,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 	 */
 	const activate = async (ctx: ExtensionContext): Promise<void> => {
 		if (startupError) throw new Error(startupError);
-		await prepareRoster(ctx);
-		const active = runtime = new MasterRuntime(setup, ctx);
+		const active = runtime = new MasterRuntime(setup, ctx, await prepareRoles(ctx));
 		activity = mountActivity(active);
 		setTools(true);
 		if (active.store.discardedLegacyVersion !== undefined)
@@ -156,7 +149,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 
 	pi.on("before_agent_start", async (event) => {
 		if (!runtime || !pi.getActiveTools().includes(MASTER_TOOL)) return;
-		event.systemPromptOptions.sections.firecode_master = assembleMasterPrompt(MASTER_PROMPT, rosterText(roster));
+		event.systemPromptOptions.sections.firecode_master = assembleMasterPrompt(MASTER_PROMPT, runtime.roles.promptText);
 	});
 
 	pi.registerTool({
@@ -210,8 +203,8 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 
 	pi.on("session_start", async (_event, ctx) => {
 		await deactivate();
-		rosterReady = false;
-		if (!startupError) await prepareRoster(ctx);
+		roles = undefined;
+		if (!startupError) await prepareRoles(ctx);
 		if (!autoActivate) return;
 		try {
 			await activate(ctx);
@@ -249,8 +242,4 @@ function mountActivity(active: MasterRuntime): { collapse(): void; dispose(): vo
 async function confirmStop(active: MasterRuntime, ctx: ExtensionContext): Promise<boolean> {
 	const running = active.store.workers.filter((worker) => worker.status !== "idle").length;
 	return !running || !ctx.hasUI || ctx.ui.confirm(msg.command.confirmOffTitle, msg.command.confirmOff(running));
-}
-
-function rosterText(models: MasterRole[]): string {
-	return models.map((entry) => msg.roster.entry(entry.role, entry.use)).join(msg.roster.join);
 }

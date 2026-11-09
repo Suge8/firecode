@@ -1075,7 +1075,7 @@ test("子代理被 kill 时通知订阅方（全过程视图据此显示已移�
 		isIdle: () => true,
 	};
 	const pool = { onRelease: () => () => {}, dispose: async () => {}, markIdle() {}, getSession: () => undefined, timing: { stallMs: 30 * 60_000 } };
-	const active = new MasterRuntime({ pi: fakePi().pi, pool, roster: [], exclusions: [], publishInFlight() {}, publishRoster() {} }, ctx);
+	const active = new MasterRuntime({ pi: fakePi().pi, pool, exclusions: [], publishInFlight() {}, publishRoster() {} }, ctx);
 	active.store.upsert({
 		name: "quick", role: "哨兵", model: "test/worker", thinking: "low", status: "idle", sessionPath: join(directory, "quick.jsonl"), launch: 1,
 	});

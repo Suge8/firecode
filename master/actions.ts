@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { THINKING_LEVELS, type MasterRole, type ModelAtom, type ThinkingLevelValue } from "../config.js";
+import { THINKING_LEVELS } from "../config.js";
 import { CANCEL_REVIEW_COMMAND } from "../review/outcome.js";
 import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
@@ -118,7 +118,8 @@ async function interruptReview(active: MasterRuntime, target: WorkerRef): Promis
 }
 
 async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContext, origin: RunOrigin): Promise<ToolResult> {
-	const { reviewGate, pool, roster } = active.setup;
+	const { reviewGate, pool } = active.setup;
+	const { roles } = active;
 	if (params.review === true && reviewGate) throw new Error(reviewGate);
 	const target = targetOf(active, params);
 	const live = active.liveOf(target.name);
@@ -127,7 +128,7 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	const requestedThinking = optionalString(params.thinking);
 	const requestedCwd = optionalString(params.cwd);
 	const prompt = requiredString(params.prompt, "prompt");
-	const selection = requestedRole ? resolveRole(roster, requestedRole) : undefined;
+	const selection = requestedRole ? roles.require(requestedRole) : undefined;
 	// 子代理全过程视图的补话走同一入口，只多一个来源标记：视图起的运行指挥官不在等（见 RunOrigin），
 	// 落定事件注明是用户在视图里直接派的；视图补进别人起的运行只记原话，不改来源。
 	const fromView = origin === "view";
@@ -147,9 +148,9 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 	return prepare(active, target, async () => {
 		const cwd = await resolveSendCwd(target, requestedCwd);
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
-		const selectedRole = selection ?? resolveRole(roster, target.role);
+		const selectedRole = selection ?? roles.require(target.role);
 		// 只核对角色此刻可用：档案的模型原子等路由选定后由 onModelChange 写（run.ts）。
-		await resolveRoleModel(active, selectedRole, thinkingOverride);
+		await roles.resolve(selectedRole, thinkingOverride);
 		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
 		active.current(target);
 		const role = selectedRole.role;
@@ -192,7 +193,7 @@ async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, r
 }
 
 async function start(active: MasterRuntime, params: Params, ctx: ExtensionContext): Promise<ToolResult> {
-	const { reviewGate, roster } = active.setup;
+	const { reviewGate } = active.setup;
 	if (params.review === true && reviewGate) throw new Error(reviewGate);
 	if (typeof params.worker !== "string" || !params.worker.trim())
 		throw new Error(msg.action.needWorker);
@@ -204,11 +205,11 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 	const prompt = requiredString(params.prompt, "prompt");
 	const requestedRole = optionalString(params.role);
 	if (!requestedRole) throw new Error(msg.action.needRole);
-	const selectedRole = resolveRole(roster, requestedRole);
+	const selectedRole = active.roles.require(requestedRole);
 	const override = validThinking(optionalString(params.thinking));
 	const { live, launch } = active.reserve(name);
 	try {
-		const selected = await resolveRoleModel(active, selectedRole, override);
+		const selected = await active.roles.resolve(selectedRole, override);
 		const thinking = selected.thinking;
 		const cwd = await resolveWorkerCwd(optionalString(params.cwd) ?? ctx.cwd);
 		active.assertOpen();
@@ -274,22 +275,6 @@ function optionalString(value: unknown): string | undefined {
 function validThinking(value: string | undefined): WorkerRef["thinking"] | undefined {
 	if (value && !THINKING_LEVELS.includes(value as WorkerRef["thinking"])) throw new Error(msg.action.badThinking(value));
 	return value as WorkerRef["thinking"] | undefined;
-}
-
-async function resolveRoleModel(active: MasterRuntime, role: MasterRole, override?: ThinkingLevelValue): Promise<ModelAtom> {
-	const { pool, roster } = active.setup;
-	const selected = await pool.resolveChain(role.models, override);
-	if (selected) return selected;
-	const checks = await Promise.all(roster.map(async (candidate) => !!(await pool.resolveChain(candidate.models))));
-	const available = roster.filter((_candidate, index) => checks[index]).map((candidate) => candidate.role).join(", ");
-	throw new Error(msg.run.roleGone(role.role, available));
-}
-
-/** 宿主已按 schema 枚举校验过 role，这里只查表。 */
-function resolveRole(roles: MasterRole[], role: string): MasterRole {
-	const found = roles.find((candidate) => candidate.role === role);
-	if (!found) throw new Error(msg.run.roleGone(role, roles.map((candidate) => candidate.role).join(", ")));
-	return found;
 }
 
 function validateWorkerName(name: string): void {

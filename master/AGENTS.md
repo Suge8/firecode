@@ -1,6 +1,6 @@
 # master：进程内多 Agent 指挥官
 
-新会话按 `master.autoActivate` 注入七命令工具 `subagents` 与池快照查询 `subagents_list`；默认开启。裸 `/fire-master` 翻转当前会话（关闭时若有子代理在跑，有界面先 `ctx.ui.confirm` 确认；无界面照旧直接关），`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或角色表有误时拒绝激活，不用默认模型代替。
+新会话按 `master.autoActivate` 注入七命令工具 `subagents` 与池快照查询 `subagents_list`；默认开启。裸 `/fire-master` 翻转当前会话（关闭时若有子代理在跑，有界面先 `ctx.ui.confirm` 确认；无界面照旧直接关），`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或角色表有误时拒绝激活，不用默认模型代替。角色可用性每次会话开始核对一次（`roles.ts`），交给那一次的运行时：解析不出模型的角色告警一次、不进提示词，派发时报错并列出可用角色；派发前再按这份表核对一次模型链（凭据可能中途失效）。
 
 ## 运行时
 
