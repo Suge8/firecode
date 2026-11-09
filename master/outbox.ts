@@ -1,16 +1,23 @@
 /**
  * 事件发件箱：落定事件先以 pending entry 写进主会话，再经 deliver.ts 投递，成功后写 ack；reload 重投差集。
- * 同一节拍内的落定合并成一条消息。在飞子代理数也在这里算：指挥官在等的 working/reviewing 加上它们的事件还在队列
- * 或投递中的子代理，所以归零只发生在事件进入指挥官的回合之后（deliver 的回执，见 deliver.ts）。视图起的运行（见 RunOrigin）不算在飞，它的事件只告知不唤醒。
+ * 同一节拍内的落定合并成一条消息。只管持久化与投递：正文（含耗时）与是否只告知由运行时定好再交来，发件箱不读档案与子代理会话。
+ * 在飞子代理数由运行时汇总（runtime.ts 的 inFlight），这里只报哪些子代理的唤醒事件还在队列或投递中：归零只发生在事件进入指挥官的回合之后
+ * （deliver 的回执，见 deliver.ts）。
  */
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deliver, inform, wrapEnvelope } from "../deliver.js";
 import { retryAt, transientFailure } from "../model-route.js";
-import { delayUntil } from "../timing.js";
-import { roundFromEntry } from "../round.js";
-import { MASTER_EVENT_TYPE, masterEvent, withElapsed, type MasterEvent } from "./event-format.js";
+import { delayUntil, type Timing } from "../timing.js";
+import { MASTER_EVENT_TYPE, masterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
-import type { MasterRuntime } from "./runtime.js";
+
+/** 发件箱要的外部依赖：宿主接口、主会话、时限，以及队列变化的通知（在飞数据此重发布）。 */
+export interface OutboxHost {
+	pi: ExtensionAPI;
+	ctx: ExtensionContext;
+	timing: Timing;
+	changed(): void;
+}
 
 const PENDING_EVENT_TYPE = "firecode-master-pending-event";
 const EVENT_ACK_TYPE = "firecode-master-event-ack";
@@ -38,33 +45,37 @@ export class Outbox {
 	private retryScheduled = false;
 	/** 空闲合并窗口里第一条事件入队的时刻。 */
 	private firstQueuedAt?: number;
-	/** 发件箱收口时中止悬而未决的唤起：停用后不再确认旧事件。 */
+	/** 发件箱收口（随运行时关闭）：中止悬而未决的唤起，停用后不再确认旧事件，迟到的回调一律作废。 */
 	private readonly closing = new AbortController();
 	/** 指挥官回合瞬时失败后补唤醒的计时（resumeIfStranded）。 */
 	private resumeTimer?: NodeJS.Timeout;
 	/** 连续几次补唤醒的回合仍以瞬时失败收场：冷却阶梯的序号；一次正常收尾归零。 */
 	private resumeFailures = 0;
 
-	constructor(private readonly active: MasterRuntime) {}
+	constructor(private readonly host: OutboxHost) {}
+
+	private get closed(): boolean {
+		return this.closing.signal.aborted;
+	}
 
 	/**
-	 * 新产出的事件：追加耗时、持久化为 pending、排队投递。informOnly 只告知不唤醒（视图起的运行默认如此）。
+	 * 持久化为 pending、排队投递。informOnly 只告知不唤醒。
 	 * 返回 pending 是否落盘：没落盘的事件这次照样投，但 reload 不会重投，靠档案标记重新产出它的调用方据此决定清不清标记。
 	 */
-	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.active.live.get(worker)?.origin === "view"): boolean {
-		if (this.active.closed) return false;
+	enqueue(content: string, worker: string | undefined, informOnly: boolean): boolean {
+		if (this.closed) return false;
 		const event: PendingMasterEvent = {
 			id: crypto.randomUUID(),
-			content: this.withElapsed(produced, worker),
+			content,
 			...(worker ? { worker } : {}),
 			...(informOnly ? { inform: true as const } : {}),
 		};
 		let persisted = true;
 		try {
-			this.active.setup.pi.appendEntry(PENDING_EVENT_TYPE, event);
+			this.host.pi.appendEntry(PENDING_EVENT_TYPE, event);
 		} catch (error) {
 			persisted = false;
-			this.active.ctx.ui.notify(msg.outbox.persistFailed(String(error)), "warning");
+			this.host.ctx.ui.notify(msg.outbox.persistFailed(String(error)), "warning");
 		}
 		this.push(event);
 		return persisted;
@@ -75,14 +86,11 @@ export class Outbox {
 		for (const event of unackedEvents(ctx)) this.push(event);
 	}
 
-	/** 在飞 = working/reviewing + 已落定但结果事件还在队列或投递中（投递失败重试期间也算）。 */
-	inFlight(): number {
+	/** 唤醒事件还在队列或投递中（投递失败重试期间也算）的子代理。 */
+	awaited(): Set<string> {
 		const names = new Set<string>();
-		for (const worker of this.active.store.workers)
-			if ((worker.status === "working" || worker.status === "reviewing") && this.active.live.get(worker.name)?.origin !== "view")
-				names.add(worker.name);
 		for (const event of [...this.queued, ...this.delivering]) if (event.worker && !event.inform) names.add(event.worker);
-		return names.size;
+		return names;
 	}
 
 	close(): void {
@@ -99,28 +107,28 @@ export class Outbox {
 	resumeIfStranded(): void {
 		clearTimeout(this.resumeTimer);
 		this.resumeTimer = undefined;
-		const reason = strandedFailure(this.active.ctx);
+		const reason = strandedFailure(this.host.ctx);
 		if (reason === undefined) {
 			this.resumeFailures = 0;
 			return;
 		}
 		this.resumeFailures++;
-		this.wakeAt(retryAt(reason, this.resumeFailures, this.active.setup.pool.timing.cooldownMs), reason);
+		this.wakeAt(retryAt(reason, this.resumeFailures, this.host.timing.cooldownMs), reason);
 	}
 
 	/** 到 at 补唤醒：at 可能远超计时上限，提前触发就按同一个 at 重挂（不重算 retryAt，“N 分钟后重置”会随之后移）。 */
 	private wakeAt(at: number, reason: string): void {
 		this.resumeTimer = setTimeout(() => {
 			this.resumeTimer = undefined;
-			const { active } = this;
-			if (active.closed) return;
+			const { host } = this;
+			if (this.closed) return;
 			if (Date.now() < at) return this.wakeAt(at, reason);
 			// 忙着就不补：那个回合落定时会再判一次。
-			if (!active.ctx.isIdle() || strandedFailure(active.ctx) === undefined) return;
+			if (!host.ctx.isIdle() || strandedFailure(host.ctx) === undefined) return;
 			const content = wrapEnvelope("firecode_master_event", masterEvent.masterResume(reason).body);
-			deliver(active.setup.pi, active.ctx, { customType: MASTER_EVENT_TYPE, content }, this.closing.signal).catch((error) => {
-				if (active.closed) return;
-				active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
+			deliver(host.pi, host.ctx, { customType: MASTER_EVENT_TYPE, content }, this.closing.signal).catch((error) => {
+				if (this.closed) return;
+				host.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
 				this.resumeIfStranded();
 			});
 		}, delayUntil(at));
@@ -134,10 +142,10 @@ export class Outbox {
 	 */
 	private push(event: PendingMasterEvent): void {
 		this.queued.push(event);
-		this.active.schedulePublish();
+		this.host.changed();
 		if (this.retryScheduled) return;
-		const quiet = this.active.setup.pool.timing.wakeQuietMs;
-		if (!this.active.ctx.isIdle() || quiet <= 0) {
+		const quiet = this.host.timing.wakeQuietMs;
+		if (!this.host.ctx.isIdle() || quiet <= 0) {
 			if (!this.flushTimer || this.firstQueuedAt !== undefined) this.schedule(0);
 			return;
 		}
@@ -156,8 +164,8 @@ export class Outbox {
 	}
 
 	private flush(): void {
-		const { active } = this;
-		if (active.closed) return;
+		const { host } = this;
+		if (this.closed) return;
 		this.flushTimer = undefined;
 		this.retryScheduled = false;
 		this.firstQueuedAt = undefined;
@@ -169,47 +177,27 @@ export class Outbox {
 			content: batch.map((event) => wrapEnvelope("firecode_master_event", event.content)).join("\n\n"),
 		};
 		const sent = batch.every((event) => event.inform)
-			? (async () => inform(active.setup.pi, envelope))()
-			: deliver(active.setup.pi, active.ctx, envelope, this.closing.signal);
+			? (async () => inform(host.pi, envelope))()
+			: deliver(host.pi, host.ctx, envelope, this.closing.signal);
 		sent.then(() => {
-			if (active.closed) return;
+			if (this.closed) return;
 			this.failures = 0;
 			for (const event of batch) this.delivering.delete(event);
 			try {
-				active.setup.pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
+				host.pi.appendEntry(EVENT_ACK_TYPE, { ids: batch.map((event) => event.id) });
 			} catch (error) {
-				active.ctx.ui.notify(msg.outbox.ackFailed(String(error)), "warning");
+				host.ctx.ui.notify(msg.outbox.ackFailed(String(error)), "warning");
 			}
-			active.schedulePublish();
+			host.changed();
 		}, (error) => {
-			if (active.closed) return;
+			if (this.closed) return;
 			for (const event of batch) this.delivering.delete(event);
 			this.queued.unshift(...batch);
 			// 一串连续失败只提示一次；之后静默退避重试，直到送达。
-			if (!this.failures) active.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
+			if (!this.failures) host.ctx.ui.notify(msg.outbox.deliverFailed(String(error)), "warning");
 			this.retryScheduled = true;
-			this.schedule(Math.min(active.setup.pool.timing.eventRetryMs * 2 ** this.failures, EVENT_RETRY_MAX_MS));
+			this.schedule(Math.min(host.timing.eventRetryMs * 2 ** this.failures, EVENT_RETRY_MAX_MS));
 			this.failures++;
-		});
-	}
-
-	/**
-	 * 本次运行耗时 = 这次运行（start/send/review 起点之后）在子代理会话里写下的轮记录之和：模型切换或审查里的
-	 * 修复回合各自成段，合起来才是这次运行。子代理排除了 FireCode（没有轮记录器）或 reload 后起点丢失时省略。
-	 * 读得到：宿主在 prompt 结束前发 agent_settled，审查则先写终态 checkpoint 再释放占用，记录都早于这里的读取。
-	 */
-	private withElapsed(produced: MasterEvent, worker?: string): string {
-		const live = worker === undefined ? undefined : this.active.live.get(worker);
-		const since = live?.runStartedAt;
-		const branch = live?.observed?.session.sessionManager.getBranch() ?? [];
-		const rounds = since === undefined ? [] : branch.flatMap((entry) => {
-			const round = roundFromEntry(entry);
-			return round && round.at >= since ? [round] : [];
-		});
-		const sessionSince = this.active.setup.sessionSince();
-		return withElapsed(produced, {
-			...(rounds.length ? { run: rounds.reduce((total, round) => total + round.elapsed, 0) } : {}),
-			...(sessionSince === undefined ? {} : { task: Date.now() - sessionSince }),
 		});
 	}
 }

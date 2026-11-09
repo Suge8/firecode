@@ -7,6 +7,8 @@ import { getAgentDir, type AgentSession, type AgentSessionEvent, type ExtensionA
 import type { MasterRole, ModelChain } from "../config.js";
 import { HEAT_COLORS, paint } from "../flame.js";
 import type { ReviewRoundProgress } from "../review/outcome.js";
+import { roundFromEntry } from "../round.js";
+import { withElapsed, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import type { ActivityFacts, SettledFact, WorkerFacts } from "./phase.js";
@@ -15,6 +17,16 @@ import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import { subagentInfos, type SubagentInfo } from "./roster.js";
 import { MasterStore, masterStatePath, type WorkerRef } from "./state.js";
+
+/** 一次回到 idle（落定、被中断、暂停、续跑失败）：下一份档案、活动列表上的结局（暂停没有）、给指挥官的事件。 */
+export interface Landing {
+	worker: WorkerRef;
+	outcome?: Omit<SettledFact, "at">;
+	event?: MasterEvent;
+	/** 只告知不唤醒；省略按这次运行的来源。 */
+	informOnly?: boolean;
+	at?: number;
+}
 
 /** 注册时定下、跨会话不变的配置与依赖。 */
 export interface MasterSetup {
@@ -115,7 +127,7 @@ export class MasterRuntime {
 	private readonly changeListeners = new Set<() => void>();
 
 	constructor(readonly setup: MasterSetup, readonly ctx: ExtensionContext) {
-		this.outbox = new Outbox(this);
+		this.outbox = new Outbox({ pi: setup.pi, ctx, timing: setup.pool.timing, changed: () => this.schedulePublish() });
 		if (setup.progress)
 			this.progress = new ProgressLines(setup.progress, {
 				complete: (chain, context, options) => setup.pool.complete(chain, context, options),
@@ -163,7 +175,7 @@ export class MasterRuntime {
 		queueMicrotask(() => {
 			this.publishScheduled = false;
 			if (this.closedValue) return;
-			this.setup.publishInFlight(this.outbox.inFlight());
+			this.setup.publishInFlight(this.inFlight());
 			this.setup.publishRoster(subagentInfos(this.activityFacts(), Date.now()));
 		});
 	}
@@ -240,8 +252,16 @@ export class MasterRuntime {
 		return current?.sessionPath === identity.sessionPath ? current : undefined;
 	}
 
-	/** Worker 闲下来的唯一登记点：记落定时刻与结局，池据此起释放计时。 */
-	markIdle(worker: WorkerRef, outcome: WorkerLive["outcome"], at = Date.now()): void {
+	/**
+	 * 回到 idle 的唯一执行口：重读档案（票已不在、或 decide 不接就什么也不做），然后固定顺序写档、登记空闲、入队事件——
+	 * 先写档后入队，在飞数的合并发布才不会闪出一次归零。空闲登记记下落定时刻与结局、清掉这次运行的计时与动作，池据此起释放计时。
+	 */
+	settle(identity: Pick<WorkerRef, "name" | "sessionPath">, decide: (current: WorkerRef) => Landing | undefined): WorkerRef | undefined {
+		const current = this.find(identity);
+		const landing = current && decide(current);
+		if (!landing) return undefined;
+		const { worker, outcome, event, informOnly, at = Date.now() } = landing;
+		this.store.upsert(worker);
 		const live = this.liveOf(worker.name);
 		live.idleAt = at;
 		live.outcome = outcome;
@@ -253,6 +273,44 @@ export class MasterRuntime {
 		this.progress?.stop(worker.name);
 		this.setup.pool.markIdle(worker.sessionPath);
 		this.schedulePublish();
+		if (event) this.enqueue(event, worker.name, informOnly);
+		return worker;
+	}
+
+	/**
+	 * 给指挥官的事件：正文追加耗时、按运行来源定是否只告知（视图起的运行指挥官不在等），再交发件箱持久化与投递。
+	 * 返回 pending 是否落盘（见 Outbox.enqueue）。
+	 */
+	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.live.get(worker)?.origin === "view"): boolean {
+		return this.outbox.enqueue(this.withElapsed(produced, worker), worker, informOnly);
+	}
+
+	/** 在飞 = 指挥官在等的 working/reviewing，加上唤醒事件还在队列或投递中的子代理。 */
+	inFlight(): number {
+		const names = this.outbox.awaited();
+		for (const worker of this.store.workers)
+			if (worker.status !== "idle" && this.live.get(worker.name)?.origin !== "view") names.add(worker.name);
+		return names.size;
+	}
+
+	/**
+	 * 本次运行耗时 = 这次运行（start/send/review 起点之后）在子代理会话里写下的轮记录之和：模型切换或审查里的
+	 * 修复回合各自成段，合起来才是这次运行。子代理排除了 FireCode（没有轮记录器）或 reload 后起点丢失时省略。
+	 * 读得到：宿主在 prompt 结束前发 agent_settled，审查则先写终态 checkpoint 再释放占用，记录都早于这里的读取。
+	 */
+	private withElapsed(produced: MasterEvent, worker?: string): string {
+		const live = worker === undefined ? undefined : this.live.get(worker);
+		const since = live?.runStartedAt;
+		const branch = live?.observed?.session.sessionManager.getBranch() ?? [];
+		const rounds = since === undefined ? [] : branch.flatMap((entry) => {
+			const round = roundFromEntry(entry);
+			return round && round.at >= since ? [round] : [];
+		});
+		const sessionSince = this.setup.sessionSince();
+		return withElapsed(produced, {
+			...(rounds.length ? { run: rounds.reduce((total, round) => total + round.elapsed, 0) } : {}),
+			...(sessionSince === undefined ? {} : { task: Date.now() - sessionSince }),
+		});
 	}
 
 	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒与暂停续跑作废；给了工作说明就为它起进展行。 */
@@ -263,6 +321,12 @@ export class MasterRuntime {
 		live.viewPrompts = [];
 		live.origin = origin;
 		if (prompt !== undefined) this.progress?.begin(name, prompt);
+		this.schedulePublish();
+	}
+
+	/** 暂停后的自动续跑接着这次运行：起点、来源与视图原话沿用；reload 后起点已丢就从此刻算。 */
+	continueRun(name: string): void {
+		this.liveOf(name).runStartedAt ??= Date.now();
 		this.schedulePublish();
 	}
 

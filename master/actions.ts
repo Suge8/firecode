@@ -9,7 +9,7 @@ import { compactWorker } from "./list-view.js";
 import { msg } from "./messages.js";
 import { armResume, openWorkerSession, resumeCheckPrompt, runWorker, spawnWorker, startReview } from "./run.js";
 import type { MasterRuntime, RunOrigin } from "./runtime.js";
-import { WORKER_NAME, type WorkerRef } from "./state.js";
+import { transition, WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
 
 export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const;
@@ -51,10 +51,7 @@ async function ack(active: MasterRuntime, params: Params): Promise<ToolResult> {
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
 	// ack 清掉失败与被中断的行，并取消还没发出的续跑提醒与暂停后的自动续跑；完成的留在“✓ 已完成”里直到 kill。
 	// 先落档：写盘失败时报错，运行时事实也不动。
-	if (target.resume || target.reloadInterrupted) {
-		const { resume: _resume, reloadInterrupted: _reload, ...rest } = target;
-		active.store.upsert(rest);
-	}
+	if (target.resume || target.reloadInterrupted) active.store.upsert(transition.acked(target));
 	const live = active.live.get(target.name);
 	if (live) {
 		active.cancelTimers(live);
@@ -104,10 +101,8 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 async function interruptPause(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
 	if (active.live.get(target.name)?.transitioning) throw new Error(msg.action.switching(target.name));
 	active.cancelTimers(active.liveOf(target.name));
-	const { resume: _resume, ...rest } = target;
-	const interrupted: WorkerRef = { ...rest, interruptedAt: Date.now() };
-	active.store.upsert(interrupted);
-	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
+	const at = Date.now();
+	active.settle(target, (current) => ({ worker: transition.interrupted(current, at), outcome: { kind: "interrupted" }, at }));
 	return toolResult({ interrupted: true });
 }
 
@@ -174,12 +169,11 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 		const latest = active.current(target);
 		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
-		const working = active.commit(target, ({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...rest }) => ({
-			...rest,
+		const working = active.commit(target, (current) => ({
+			...transition.takeOver(current, "working"),
 			role,
 			cwd,
-			status: "working",
-			...(params.review === true || rest.reviewNeeded ? { reviewNeeded: true } : {}),
+			...(params.review === true ? { reviewNeeded: true } : {}),
 		}));
 		active.beginRun(target.name, fromView ? "view" : "master", prompt);
 		if (fromView) live.viewPrompts.push(prompt);

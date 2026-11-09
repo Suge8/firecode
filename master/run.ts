@@ -15,13 +15,13 @@ import { routePause, type ChainPause } from "../model-route.js";
 import { delayUntil } from "../timing.js";
 import { outcomeOfEntry, readReviewOutcome, reviewProgressOf, type ReviewOutcome } from "../review/outcome.js";
 import { quietMinutes, workerPhase } from "./phase.js";
-import { MASTER_EVENT_TYPE, masterEvent, type MasterEvent } from "./event-format.js";
+import { MASTER_EVENT_TYPE, masterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
 import { CODEMODE_TOOL } from "../spawn.js";
 import { assembleWorkerPrompt } from "./prompt.js";
 import type { MasterRuntime, Turn, WorkerLive } from "./runtime.js";
-import type { WorkerRef } from "./state.js";
+import { transition, type WorkerRef } from "./state.js";
 
 /** 指挥官开着 codemode 时 Worker 也开（on/only 读同一份 settings）；同进程共用的名额由池按子会话加开，见 spawn.ts。 */
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
@@ -58,7 +58,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 			// 只有故障切换才告知：首选与指挥官自己换角色、思考档不是新闻。只告知不唤醒：同一会话自动续跑，指挥官无事可做
 			// （断网时每次切换都唤醒它，只换来一串同样失败的指挥官回合）。
 			if (reason !== undefined && previous)
-				active.outbox.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(previous), modelAtomText(atom), reason), worker.name, true);
+				active.enqueue(masterEvent.modelSwitched(worker.name, modelAtomText(previous), modelAtomText(atom), reason), worker.name, true);
 		}),
 		tools: active.setup.pi.getActiveTools().includes(CODEMODE_TOOL) ? [...WORKER_TOOLS, CODEMODE_TOOL] : WORKER_TOOLS,
 		excludeExtensions: exclusions,
@@ -86,7 +86,7 @@ function reportExtensionError(active: MasterRuntime, worker: WorkerRef, error: E
 	const key = `${error.extensionPath}\n${error.event}\n${error.error}`;
 	if (live.reportedErrors.has(key)) return;
 	live.reportedErrors.add(key);
-	active.outbox.enqueue(masterEvent.extensionError(worker.name, tildeHome(error.extensionPath), error.event, error.error), worker.name);
+	active.enqueue(masterEvent.extensionError(worker.name, tildeHome(error.extensionPath), error.event, error.error), worker.name);
 }
 
 /** 投影当前动作、卡住判定与审查进度的唯一订阅。 */
@@ -135,7 +135,7 @@ function watchStall(active: MasterRuntime, identity: WorkerRef): void {
 			return;
 		}
 		live.stallReported = true;
-		active.outbox.enqueue(masterEvent.stalled(identity.name, quietMinutes(quietMs), action, startedAt === undefined ? undefined : now - startedAt), identity.name);
+		active.enqueue(masterEvent.stalled(identity.name, quietMinutes(quietMs), action, startedAt === undefined ? undefined : now - startedAt), identity.name);
 	};
 	check();
 }
@@ -168,7 +168,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, openin
 			unsubscribeTerminal();
 			if (!mine()) return;
 			const stranded = session.clearQueue().steering;
-			if (stranded.length) active.outbox.enqueue(masterEvent.stranded(worker.name, stranded), worker.name);
+			if (stranded.length) active.enqueue(masterEvent.stranded(worker.name, stranded), worker.name);
 			if (turn.interrupted) return settleInterrupted(active, worker);
 			const pause = error === undefined && terminal?.stopReason === "error" ? routePause(session.model) : undefined;
 			if (pause) return pauseWorker(active, worker, pause);
@@ -198,16 +198,16 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, openin
 
 /** 被中断落定：回合被 interrupt 打断，或审查被 interrupt 取消（review）。两者都回到 idle 并带中断标记，审查义务保留。 */
 function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = false): void {
-	const current = active.find(identity);
-	if (!current) return;
-	const interrupted: WorkerRef = { ...landed(current), interruptedAt: Date.now() };
-	active.store.upsert(interrupted);
-	active.markIdle(interrupted, { kind: "interrupted" }, interrupted.interruptedAt);
-	const obligation = current.reviewNeeded === true;
-	active.outbox.enqueue(
-		review ? masterEvent.reviewInterrupted(identity.name, obligation) : masterEvent.interrupted(identity.name, obligation, takeViewPrompts(active, identity)),
-		identity.name,
-	);
+	const at = Date.now();
+	active.settle(identity, (current) => {
+		const obligation = current.reviewNeeded === true;
+		return {
+			worker: transition.interrupted(current, at),
+			outcome: { kind: "interrupted" },
+			at,
+			event: review ? masterEvent.reviewInterrupted(identity.name, obligation) : masterEvent.interrupted(identity.name, obligation, takeViewPrompts(active, identity)),
+		};
+	});
 }
 
 /**
@@ -227,16 +227,10 @@ export function armInterruptReminder(active: MasterRuntime, worker: WorkerRef): 
 		const current = active.find(worker);
 		if (!current?.reloadInterrupted || current.interruptedAt !== worker.interruptedAt) return;
 		// pending 没落盘时 reload 不会重投这条提醒：标记留着，reload 后照常再提醒。
-		if (!active.outbox.enqueue(masterEvent.resumeReminder(worker.name), worker.name)) return;
-		const { reloadInterrupted: _reload, ...reminded } = current;
-		active.store.upsert(reminded);
+		if (!active.enqueue(masterEvent.resumeReminder(worker.name), worker.name)) return;
+		active.store.upsert(transition.reminded(current));
 	}), delay);
 	live.interruptTimer.unref?.();
-}
-
-/** 运行落定回到 idle：这次运行（含自动续跑）到此结束，续跑意图随之清掉。 */
-function landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
-	return { ...worker, status: "idle" };
 }
 
 /**
@@ -245,15 +239,11 @@ function landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
  * 所以暂停前档案已带 resume 就是同一次运行里的再次暂停。
  */
 function pauseWorker(active: MasterRuntime, identity: WorkerRef, pause: ChainPause, review = false): void {
-	const current = active.find(identity);
-	if (!current) return;
-	const paused: WorkerRef = { ...current, status: "idle", resume: { at: pause.until, reason: pause.reason, ...(review ? { review: true as const } : {}) } };
-	active.store.upsert(paused);
-	active.markIdle(paused, undefined);
-	if (!current.resume) {
-		active.outbox.enqueue(masterEvent.paused(identity.name, pause.until, pause.reason, review), identity.name, true);
-	}
-	armResume(active, paused);
+	const paused = active.settle(identity, (current) => ({
+		worker: transition.paused(current, { at: pause.until, reason: pause.reason, ...(review ? { review: true as const } : {}) }),
+		...(current.resume ? {} : { event: masterEvent.paused(identity.name, pause.until, pause.reason, review), informOnly: true }),
+	}));
+	if (paused) armResume(active, paused);
 }
 
 /** 按档案里的 resume.at 挂自动续跑（激活时对每个暂停中的票调用）；没有 resume 的票不挂。 */
@@ -290,20 +280,18 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 		await session.waitForIdle();
 		active.assertOpen();
 		if (resumeSuperseded(active, current, resume)) return;
-		// resume 留到落定：续跑中被 reload 打断时载入收敛回暂停再续（state.ts）。
-		const working = active.commit(current, (latest) => ({ ...latest, status: "working" }));
-		live.runStartedAt ??= Date.now();
+		const working = active.commit(current, (latest) => transition.continued(latest, "working"));
+		active.continueRun(identity.name);
 		active.progress?.resume(identity.name);
 		const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
 		await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
 	} catch (error) {
-		const latest = active.find(identity);
-		if (!latest?.resume) return;
-		const idle = landed(latest);
-		active.store.upsert(idle);
 		const failure = error instanceof Error ? error.message : String(error);
-		active.markIdle(idle, { kind: "failed", note: firstSentence(failure) });
-		active.outbox.enqueue(masterEvent.failed(identity.name, failure, idle.reviewNeeded === true, takeViewPrompts(active, identity)), identity.name);
+		active.settle(identity, (latest) => latest.resume && {
+			worker: transition.landed(latest),
+			outcome: { kind: "failed", note: firstSentence(failure) },
+			event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, takeViewPrompts(active, identity)),
+		});
 	} finally {
 		live.transitioning = undefined;
 	}
@@ -330,53 +318,49 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	active.assertOpen();
 	if (resumed && resumeSuperseded(active, target, target.resume!)) return;
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-	// 指挥官发起的审查接手了这票，清掉续跑意图；自动续审保留到落定（同 resumeWorker）。
-	active.commit(target, ({ interruptedAt: _interruptedAt, reloadInterrupted: _reload, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
+	active.commit(target, (latest) => (resumed ? transition.continued(latest, "reviewing") : transition.takeOver(latest, "reviewing")));
 	const turn: Turn = { running: Promise.resolve(session) };
 	active.liveOf(target.name).turn = turn;
 	observeWorker(active, target, session);
-	if (!resumed) active.beginRun(target.name);
-	else active.liveOf(target.name).runStartedAt ??= Date.now();
+	if (resumed) active.continueRun(target.name);
+	else active.beginRun(target.name);
 	monitorAndSettleReview(active, target, session, previousRunId, turn);
 }
 
 function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: WorkerTerminal | undefined, error?: unknown): void {
-	const current = active.find(identity);
-	if (!current) return;
 	const failure = error instanceof Error ? error.message : error === undefined ? terminalFailure(terminal) : String(error);
-	const idle = landed(current);
-	active.store.upsert(idle);
-	// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
-	active.markIdle(idle, failure ? { kind: "failed", note: firstSentence(failure) } : { kind: "done", note: firstSentence(terminal!.text) });
-	const obligation = current.reviewNeeded === true;
-	const event: MasterEvent = failure
-		? masterEvent.failed(identity.name, failure, obligation, takeViewPrompts(active, identity))
-		: masterEvent.returned(identity.name, terminal!.text, obligation, takeViewPrompts(active, identity));
-	active.outbox.enqueue(event, identity.name);
+	active.settle(identity, (current) => {
+		const obligation = current.reviewNeeded === true;
+		// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
+		return failure
+			? { worker: transition.landed(current), outcome: { kind: "failed", note: firstSentence(failure) }, event: masterEvent.failed(identity.name, failure, obligation, takeViewPrompts(active, identity)) }
+			: { worker: transition.landed(current), outcome: { kind: "done", note: firstSentence(terminal!.text) }, event: masterEvent.returned(identity.name, terminal!.text, obligation, takeViewPrompts(active, identity)) };
+	});
 }
 
 /** 起审：在原 Worker 会话里跑 /fire-review，终态经 review/outcome.ts 读取后落定并投递。 */
 function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef, session: AgentSession, previousRunId: string | undefined, turn: Turn): void {
-	const reviewing = () => (active.live.get(target.name)?.turn === turn ? active.find(target) : undefined);
+	// 只认自己这一次审查：期间被 kill 或换了回合的迟到结果作废。
+	const mine = () => active.live.get(target.name)?.turn === turn;
 	void monitorReview(session, target.sessionPath, previousRunId).then(
 		(outcome) => active.detached(target.name, () => {
-			const current = reviewing();
-			if (!current) return;
-			if (turn.interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
-			if (outcome.status === "failed" && outcome.retry) return pauseWorker(active, current, outcome.retry, true);
-			const { reviewNeeded: _needed, ...fulfilled } = current;
-			const idle = landed(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current);
-			active.store.upsert(idle);
-			active.markIdle(idle, reviewOutcomeRow(outcome));
-			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
+			if (!mine()) return;
+			if (turn.interrupted && outcome.status === "cancelled") return settleInterrupted(active, target, true);
+			if (outcome.status === "failed" && outcome.retry) return pauseWorker(active, target, outcome.retry, true);
+			const fulfilled = outcome.status === "passed" || outcome.status === "stopped";
+			active.settle(target, (current) => ({
+				worker: transition.landed(fulfilled ? transition.fulfilled(current) : current),
+				outcome: reviewOutcomeRow(outcome),
+				event: masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)),
+			}));
 		}),
 		(error) => active.detached(target.name, () => {
-			const current = reviewing();
-			if (!current) return;
-			const idle = landed(current);
-			active.store.upsert(idle);
-			active.markIdle(idle, { kind: "failed", note: msg.run.reviewIncomplete });
-			active.outbox.enqueue(masterEvent.reviewIncomplete(target.name, String(error)), target.name);
+			if (!mine()) return;
+			active.settle(target, (current) => ({
+				worker: transition.landed(current),
+				outcome: { kind: "failed", note: msg.run.reviewIncomplete },
+				event: masterEvent.reviewIncomplete(target.name, String(error)),
+			}));
 		}),
 	);
 }

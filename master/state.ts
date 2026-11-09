@@ -42,6 +42,54 @@ export interface WorkerResume {
 	review?: true;
 }
 
+/**
+ * 档案转移：每条规则只写在这里，调用方不手写解构去清标记。各标记的寿命见 WorkerRef 的字段注释：
+ * interruptedAt 到指挥官下次接手；reloadInterrupted 到提醒发出或指挥官接手；resume 到这次运行落定或指挥官接手。
+ */
+export const transition = {
+	/** 指挥官开新运行（send、review）：工作归它接手，中断、待提醒与续跑意图一并作废。 */
+	takeOver({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...worker }: WorkerRef, status: "working" | "reviewing"): WorkerRef {
+		return { ...worker, status };
+	},
+	/** 暂停后到时自动续跑：resume 留到落定，续跑中被 reload 打断时载入收敛回暂停、立即再续。 */
+	continued(worker: WorkerRef, status: "working" | "reviewing"): WorkerRef {
+		return { ...worker, status };
+	},
+	/** 运行落定回到 idle：这次运行（含自动续跑）到此结束，续跑意图随之清掉。 */
+	landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
+		return { ...worker, status: "idle" };
+	},
+	/** 被中断落定（回合、审查或暂停中被 interrupt）：会话与审查义务保留，等指挥官续派或收口。 */
+	interrupted(worker: WorkerRef, at: number): WorkerRef {
+		return { ...transition.landed(worker), interruptedAt: at };
+	},
+	/** 瞬时故障暂停：idle 且带 resume，到时自动续跑。 */
+	paused(worker: WorkerRef, resume: WorkerResume): WorkerRef {
+		return { ...worker, status: "idle", resume };
+	},
+	/** 审查通过或被停止：义务履行完毕。 */
+	fulfilled({ reviewNeeded: _needed, ...worker }: WorkerRef): WorkerRef {
+		return worker;
+	},
+	/** ack：取消还没发出的续跑提醒与暂停后的自动续跑。 */
+	acked({ resume: _resume, reloadInterrupted: _reload, ...worker }: WorkerRef): WorkerRef {
+		return worker;
+	},
+	/** 续跑提醒已发出（pending 已落盘）。 */
+	reminded({ reloadInterrupted: _reload, ...worker }: WorkerRef): WorkerRef {
+		return worker;
+	},
+	/**
+	 * 载入收敛：运行时不跨进程存活，在飞的票一律回到 idle。自动续跑中被打断的仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续；
+	 * 其余带 interruptedAt 与 reloadInterrupted（会话与审查义务保留，等指挥官续派）。
+	 */
+	converged(worker: WorkerRef, now: number): WorkerRef {
+		if (worker.status === "idle") return worker;
+		if (worker.resume) return { ...worker, status: "idle" };
+		return { ...worker, status: "idle", interruptedAt: now, reloadInterrupted: true };
+	},
+};
+
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
 export function masterStatePath(agentDir: string, sessionId: string): string {
 	const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/gu, "-");
@@ -50,8 +98,7 @@ export function masterStatePath(agentDir: string, sessionId: string): string {
 
 /**
  * 池档案的唯一所有者：每次变更先同步原子落盘（0600）、成功后才换内存列表，写盘失败照常抛错且内存不变，两者不分叉；池变空就删文件。
- * 构造即加载——运行时不跨进程存活，所以载入时在飞的 working/reviewing 一律收敛为带 interruptedAt 与 reloadInterrupted 的 idle
- * （会话与审查义务保留，等指挥官续派）。
+ * 构造即加载，载入时在飞的票按 transition.converged 收敛。
  * 列表始终按启动序（launch）排列，读者不再二次排序。
  * 旧版档案由所有者丢弃并记下版本，供上层告知；新版本（降级）与格式损坏明确失败，不删、不当作空池。
  */
@@ -63,12 +110,7 @@ export class MasterStore {
 		const loaded = load(path);
 		this.discardedLegacyVersion = loaded.legacyVersion;
 		const now = Date.now();
-		const list = loaded.workers.map((worker): WorkerRef => {
-			if (worker.status === "idle") return worker;
-			// 自动续跑中被打断：仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续。
-			if (worker.resume) return { ...worker, status: "idle" };
-			return { ...worker, status: "idle", interruptedAt: now, reloadInterrupted: true };
-		});
+		const list = loaded.workers.map((worker) => transition.converged(worker, now));
 		if (loaded.workers.some((worker) => worker.status !== "idle")) this.persist(list);
 		this.list = list;
 	}
