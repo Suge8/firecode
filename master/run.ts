@@ -236,7 +236,7 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, openin
  */
 export function interruptTurn(active: MasterRuntime, worker: WorkerRef): void {
 	const live = active.liveOf(worker.name);
-	const turn = live.turn!;
+	const turn = live.turn;
 	if (turn.interrupted) return;
 	turn.interrupted = true;
 	active.detached(worker.name, async () => {
@@ -262,7 +262,7 @@ export function interruptTurn(active: MasterRuntime, worker: WorkerRef): void {
  */
 export function steerTurn(active: MasterRuntime, worker: WorkerRef, prompt: string, delivered: () => void): void {
 	const live = active.liveOf(worker.name);
-	const turn = live.turn!;
+	const turn = live.turn;
 	const ours = () => active.live.get(worker.name) === live && live.turn === turn && active.find(worker)?.status === "working";
 	active.detached(worker.name, async () => {
 		const session = await turn.running;

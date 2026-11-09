@@ -75,8 +75,8 @@ export interface WorkerLive {
 	starting?: true;
 	/** send/review 的准备过程单飞。 */
 	transitioning?: true;
-	/** 最近一个回合或审查；working/reviewing 时就是在跑的那一个。 */
-	turn?: Turn;
+	/** 最近一个回合或审查；working/reviewing 时就是在跑的那一个。还没跑过时是一个从未在飞的回合。 */
+	turn: Turn;
 	interruptTimer?: NodeJS.Timeout;
 	/** 暂停后的自动续跑计时（档案里的 resume.at）：run.ts 的 armResume。 */
 	resumeTimer?: NodeJS.Timeout;
@@ -105,7 +105,9 @@ export interface WorkerLive {
 /** 边框身份：纯文字，子代理状态由输入框上方的活动列表承担。 */
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
-const newLive = (): WorkerLive => ({ currentTools: new Map(), reportedErrors: new Set(), viewPrompts: [], origin: "master" });
+const newLive = (): WorkerLive => ({
+	turn: { running: Promise.resolve(undefined) }, currentTools: new Map(), reportedErrors: new Set(), viewPrompts: [], origin: "master",
+});
 
 export class MasterRuntime {
 	readonly store: MasterStore;

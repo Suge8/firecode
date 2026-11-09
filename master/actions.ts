@@ -1,6 +1,6 @@
 /**
- * subagents 七个命令动作：每个动作是一个带类型的命令（名字加它真正用到的输入），工具处理表只把参数解析成命令输入再包成工具结果。
- * 全过程视图直接调 send 与 interrupt，不经工具参数。
+ * subagents 七个命令动作：每个动作是一个带类型的命令（名字加它真正用到的输入），只经 commands 调用；工具处理表只把参数解析成
+ * 命令输入再包成工具结果，全过程视图直接调 commands.send 与 commands.interrupt，不经工具参数。
  */
 import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
@@ -33,13 +33,13 @@ const MAX_IN_FLIGHT = 15;
 
 /** 工具入口：调用方身份（origin）不是模型能填的参数，工具发起的一律是指挥官。 */
 export const ACTION_HANDLERS: Record<Action, (active: MasterRuntime, params: Params) => Promise<ToolResult>> = {
-	start: async (active, params) => toolResult(await start(active, inputOf(params))),
-	send: async (active, params) => toolResult(await send(active, nameOf(params), inputOf(params), "master")),
-	interrupt: async (active, params) => toolResult(await interrupt(active, nameOf(params))),
-	review: async (active, params) => toolResult(await review(active, nameOf(params))),
-	tail: async (active, params) => ({ content: [{ type: "text", text: tail(active, nameOf(params)) }], details: undefined }),
-	ack: async (active, params) => toolResult(ack(active, nameOf(params))),
-	kill: async (active, params) => toolResult(await kill(active, nameOf(params))),
+	start: async (active, params) => toolResult(await commands.start(active, inputOf(params))),
+	send: async (active, params) => toolResult(await commands.send(active, nameOf(params), inputOf(params), "master")),
+	interrupt: async (active, params) => toolResult(await commands.interrupt(active, nameOf(params))),
+	review: async (active, params) => toolResult(await commands.review(active, nameOf(params))),
+	tail: async (active, params) => ({ content: [{ type: "text", text: await commands.tail(active, nameOf(params)) }], details: undefined }),
+	ack: async (active, params) => toolResult(await commands.ack(active, nameOf(params))),
+	kill: async (active, params) => toolResult(await commands.kill(active, nameOf(params))),
 };
 
 /** 为新子代理在主会话目录下的 subagents/ 预分配会话文件路径（不会出现在 /resume）；路径是档案身份的唯一事实源。 */
@@ -57,13 +57,13 @@ async function kill(active: MasterRuntime, name: string) {
 	return { killed: true };
 }
 
-function tail(active: MasterRuntime, name: string): string {
+async function tail(active: MasterRuntime, name: string): Promise<string> {
 	const target = active.store.require(name);
 	return workerTrace(target, active.setup.pool.getSession(target.sessionPath));
 }
 
 /** 动作名按模型先验取：曾叫 hold，被读成“暂停”而假成功。名字治误读，非 idle 报错治假成功。 */
-function ack(active: MasterRuntime, name: string) {
+async function ack(active: MasterRuntime, name: string) {
 	const target = active.store.require(name);
 	if (target.reviewNeeded) throw new Error(msg.action.ackObligation(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.ackStatus(target.name, target.status));
@@ -90,10 +90,10 @@ async function review(active: MasterRuntime, name: string) {
 }
 
 /**
- * 与 send 同为全过程视图直接调用的命令。暂停中的票当场按被中断落定（{ interrupted: true }）；在跑与审查中的票只记下意图就返回
+ * 暂停中的票当场按被中断落定（{ interrupted: true }）；在跑与审查中的票只记下意图就返回
  * （{ interrupting: true }），中止由 run.ts 的 interruptTurn 在回合真正在飞后做，结局经落定事件告知。
  */
-export async function interrupt(active: MasterRuntime, name: string) {
+async function interrupt(active: MasterRuntime, name: string) {
 	const target = active.store.require(name);
 	if (target.status === "idle" && target.resume) return interruptPause(active, target);
 	if (target.status === "idle") throw new Error(msg.action.interruptStatus(target.name, target.status));
@@ -111,7 +111,7 @@ async function interruptPause(active: MasterRuntime, target: WorkerRef) {
 }
 
 /** origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数。 */
-export async function send(active: MasterRuntime, name: string, input: ActionInput, origin: RunOrigin) {
+async function send(active: MasterRuntime, name: string, input: ActionInput, origin: RunOrigin) {
 	const { reviewGate, pool } = active.setup;
 	const { roles } = active;
 	if (input.review && reviewGate) throw new Error(reviewGate);
@@ -124,7 +124,7 @@ export async function send(active: MasterRuntime, name: string, input: ActionInp
 	// 落定事件注明是用户在视图里直接派的；视图补进别人起的运行只记原话，不改来源。
 	const fromView = origin === "view";
 	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
-		if (live.turn!.interrupted) throw new Error(msg.action.interrupting(target.name));
+		if (live.turn.interrupted) throw new Error(msg.action.interrupting(target.name));
 		// 指挥官补进视图起的运行：它从此在等结果（没送达的补话也经事件回报给它）。
 		if (!fromView && live.origin !== "master") {
 			live.origin = "master";
@@ -277,4 +277,17 @@ async function resolveSendCwd(worker: WorkerRef, requested: string | undefined):
 	if (worker.cwd && !existsSync(worker.cwd))
 		throw new Error(msg.action.cwdGone(worker.name, worker.cwd));
 	return worker.cwd;
+}
+
+/**
+ * 七个命令的唯一入口：已关闭的运行时（指挥官已关、会话已替换或 reload）一律拒绝。全过程视图可能在关闭后还握着旧运行时，
+ * 它的运行时事实已清空，放进去只会撞上半拆的状态。
+ */
+export const commands = guarded({ start, send, interrupt, review, tail, ack, kill });
+
+function guarded<T extends Record<string, (active: MasterRuntime, ...args: never[]) => Promise<unknown>>>(table: T): T {
+	return Object.fromEntries(Object.entries(table).map(([name, run]) => [name, async (active: MasterRuntime, ...args: never[]) => {
+		active.assertOpen();
+		return run(active, ...args);
+	}])) as T;
 }
