@@ -24,7 +24,7 @@ export interface Landing {
 	worker: WorkerRef;
 	outcome?: Omit<SettledFact, "at">;
 	event?: MasterEvent;
-	/** 只告知不唤醒；省略按这次运行的来源。 */
+	/** 只告知不唤醒；省略按这次运行的来源（落定前的档案）。 */
 	informOnly?: boolean;
 	at?: number;
 }
@@ -52,13 +52,6 @@ interface CurrentTool {
 }
 
 /**
- * 这次运行是谁派的。在飞数的定义是“指挥官在等结果的运行”：用户在全过程视图里直接派的运行指挥官并不在等，
- * 不计入在飞数（主会话不因它进入进行中、不产生主会话轮记录），落定事件只告知不唤醒；
- * 指挥官在这次运行中途又 send 给它时转为指挥官的（它从此在等）。
- */
-export type RunOrigin = "master" | "view";
-
-/**
  * 一个回合或一次审查：从开会话、宿主前置阶段到落定。档案进入 working/reviewing 的同一同步段挂上，落定回调只认自己这一个。
  * 宿主 prompt 的前置阶段（input 处理器、鉴权）里会话仍报空闲，落在那里的 abort 会被静默丢弃；所以碰会话的中止与补话（run.ts 的
  * interruptTurn、steerTurn）在后台先等 running，动作本身不等：回合在飞时给出它的会话，没开成（开会话失败、准备期间被 kill、输入被处理器吃掉）给 undefined，此后也不会在飞。
@@ -82,9 +75,6 @@ export interface WorkerLive {
 	resumeTimer?: NodeJS.Timeout;
 	/** 本次运行（start/send/review 投递）的起点：活动列表的实时耗时，以及从子代理会话里挑出属于这次运行的轮记录。 */
 	runStartedAt?: number;
-	/** 这次运行里用户在子代理全过程视图直接说的话；落定事件据此注明来源。 */
-	viewPrompts: string[];
-	origin: RunOrigin;
 	/** 无输出计时的起点：本回合开始（runWorker）或其后最近一次输出（模型 token 或工具事件），活动列表据此判卡住。 */
 	quietSince?: number;
 	/** 停摆检查计时：只在“卡住”可能成立的时刻看一眼（run.ts 的 watchStall）。 */
@@ -106,7 +96,7 @@ export interface WorkerLive {
 const MASTER_IDENTITY = paint(HEAT_COLORS.orange, msg.command.identity);
 
 const newLive = (): WorkerLive => ({
-	turn: { running: Promise.resolve(undefined) }, currentTools: new Map(), reportedErrors: new Set(), viewPrompts: [], origin: "master",
+	turn: { running: Promise.resolve(undefined) }, currentTools: new Map(), reportedErrors: new Set(),
 });
 
 export class MasterRuntime {
@@ -261,7 +251,7 @@ export class MasterRuntime {
 		const current = this.find(identity);
 		const landing = current && decide(current);
 		if (!landing) return undefined;
-		const { worker, outcome, event, informOnly, at = Date.now() } = landing;
+		const { worker, outcome, event, informOnly = current.origin === "view", at = Date.now() } = landing;
 		this.store.upsert(worker);
 		const live = this.liveOf(worker.name);
 		live.idleAt = at;
@@ -279,10 +269,10 @@ export class MasterRuntime {
 	}
 
 	/**
-	 * 给指挥官的事件：正文追加耗时、按运行来源定是否只告知（视图起的运行指挥官不在等），再交发件箱持久化与投递。
+	 * 给指挥官的事件：正文追加耗时、按档案里的运行来源定是否只告知（视图起的运行指挥官不在等），再交发件箱持久化与投递。
 	 * 返回 pending 是否落盘（见 Outbox.enqueue）。
 	 */
-	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.live.get(worker)?.origin === "view"): boolean {
+	enqueue(produced: MasterEvent, worker?: string, informOnly = worker !== undefined && this.store.find(worker)?.origin === "view"): boolean {
 		return this.outbox.enqueue(this.withElapsed(produced, worker), worker, informOnly);
 	}
 
@@ -290,7 +280,7 @@ export class MasterRuntime {
 	inFlight(): number {
 		const names = this.outbox.awaited();
 		for (const worker of this.store.workers)
-			if (worker.status !== "idle" && this.live.get(worker.name)?.origin !== "view") names.add(worker.name);
+			if (worker.status !== "idle" && worker.origin !== "view") names.add(worker.name);
 		return names.size;
 	}
 
@@ -314,18 +304,16 @@ export class MasterRuntime {
 		});
 	}
 
-	/** 开始一次运行（start/send/review）：起点与来源归这一次，旧的中断提醒与暂停续跑作废；给了工作说明就为它起进展行。 */
-	beginRun(name: string, origin: RunOrigin = "master", prompt?: string): void {
+	/** 开始一次运行（start/send/review）：起点归这一次（来源与视图原话在档案里，见 transition.takeOver），旧的中断提醒与暂停续跑作废；给了工作说明就为它起进展行。 */
+	beginRun(name: string, prompt?: string): void {
 		const live = this.liveOf(name);
 		this.cancelTimers(live);
 		live.runStartedAt = Date.now();
-		live.viewPrompts = [];
-		live.origin = origin;
 		if (prompt !== undefined) this.progress?.begin(name, prompt);
 		this.schedulePublish();
 	}
 
-	/** 暂停后的自动续跑接着这次运行：起点、来源与视图原话沿用；reload 后起点已丢就从此刻算。 */
+	/** 暂停后的自动续跑接着这次运行：起点沿用（来源与视图原话在档案里本就沿用）；reload 后起点已丢就从此刻算。 */
 	continueRun(name: string): void {
 		this.liveOf(name).runStartedAt ??= Date.now();
 		this.schedulePublish();

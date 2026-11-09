@@ -8,6 +8,13 @@ export const WORKER_NAME = /^[a-z][a-z0-9_-]{0,31}$/u;
 
 export type WorkerStatus = "working" | "idle" | "reviewing";
 
+/**
+ * 这次运行是谁派的。在飞数的定义是“指挥官在等结果的运行”：用户在全过程视图里直接派的运行指挥官并不在等，
+ * 不计入在飞数（主会话不因它进入进行中、不产生主会话轮记录），落定事件只告知不唤醒；
+ * 指挥官在这次运行中途又 send 给它时转为指挥官的（它从此在等）。
+ */
+export type RunOrigin = "master" | "view";
+
 export interface WorkerRef {
 	name: string;
 	role: string;
@@ -40,6 +47,12 @@ export interface WorkerRef {
 	 * 指挥官 send/review/interrupt/ack 会清掉它（工作归指挥官接手），所以同一次暂停只续跑一次；暂停时它已在就说明这次运行告知过“已暂停”。
 	 */
 	resume?: WorkerResume;
+	/**
+	 * 这次运行的来源（省略即指挥官）与用户在全过程视图里对它说过的话（落定事件据此注明来源、带上原话）。随运行持久化：
+	 * 暂停后的自动续跑可能跨 reload，续跑落定仍要按视图来源只告知、带原话。运行落定、被中断、ack 或指挥官接手时清掉。
+	 */
+	origin?: "view";
+	viewPrompts?: string[];
 }
 
 /** 给模型的池快照（start 结果与 subagents_list 正文）：只有档案事实。 */
@@ -69,17 +82,28 @@ export interface WorkerResume {
  * interruptedAt 到指挥官下次接手；reloadInterrupted 到提醒发出或指挥官接手；resume 到这次运行落定或指挥官接手。
  */
 export const transition = {
-	/** 指挥官开新运行（send、review）：工作归它接手，中断、待提醒与续跑意图一并作废。 */
-	takeOver({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...worker }: WorkerRef, status: "working" | "reviewing"): WorkerRef {
-		return { ...worker, status };
+	/**
+	 * 开新运行（send、review）：工作归派它的一方接手，中断、待提醒与续跑意图一并作废，上次运行的来源与原话不带过来。
+	 * 全过程视图派的带上来源与这句原话。
+	 */
+	takeOver({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...worker }: WorkerRef, status: "working" | "reviewing", viewPrompt?: string): WorkerRef {
+		return { ...endRun(worker), status, ...(viewPrompt === undefined ? {} : { origin: "view" as const, viewPrompts: [viewPrompt] }) };
+	},
+	/** 用户在全过程视图里对在跑的运行补的话（送达后记下）；不改来源。 */
+	viewSaid(worker: WorkerRef, prompt: string): WorkerRef {
+		return { ...worker, viewPrompts: [...worker.viewPrompts ?? [], prompt] };
+	},
+	/** 指挥官补进视图起的运行：它从此在等结果。 */
+	awaitedByMaster({ origin: _origin, ...worker }: WorkerRef): WorkerRef {
+		return worker;
 	},
 	/** 暂停后到时自动续跑：resume 留到落定，续跑中被 reload 打断时载入收敛回暂停、立即再续。 */
 	continued(worker: WorkerRef, status: "working" | "reviewing"): WorkerRef {
 		return { ...worker, status };
 	},
-	/** 运行落定回到 idle：这次运行（含自动续跑）到此结束，续跑意图随之清掉。 */
+	/** 运行落定回到 idle：这次运行（含自动续跑）到此结束，续跑意图、来源与原话随之清掉。 */
 	landed({ resume: _resume, ...worker }: WorkerRef): WorkerRef {
-		return { ...worker, status: "idle" };
+		return { ...endRun(worker), status: "idle" };
 	},
 	/** 被中断落定（回合、审查或暂停中被 interrupt）：会话与审查义务保留，等指挥官续派或收口。 */
 	interrupted(worker: WorkerRef, at: number): WorkerRef {
@@ -93,24 +117,29 @@ export const transition = {
 	fulfilled({ reviewNeeded: _needed, ...worker }: WorkerRef): WorkerRef {
 		return worker;
 	},
-	/** ack：取消还没发出的续跑提醒与暂停后的自动续跑。 */
+	/** ack：取消还没发出的续跑提醒与暂停后的自动续跑；暂停中的运行就此结束。 */
 	acked({ resume: _resume, reloadInterrupted: _reload, ...worker }: WorkerRef): WorkerRef {
-		return worker;
+		return endRun(worker);
 	},
 	/** 续跑提醒已发出（pending 已落盘）。 */
 	reminded({ reloadInterrupted: _reload, ...worker }: WorkerRef): WorkerRef {
 		return worker;
 	},
 	/**
-	 * 载入收敛：运行时不跨进程存活，在飞的票一律回到 idle。自动续跑中被打断的仍是插件自己的续跑，收敛回暂停，激活时按已过的 at 立即再续；
-	 * 其余带 interruptedAt 与 reloadInterrupted（会话与审查义务保留，等指挥官续派）。
+	 * 载入收敛：运行时不跨进程存活，在飞的票一律回到 idle。自动续跑中被打断的仍是插件自己的续跑，收敛回暂停（来源与原话随运行保留），
+	 * 激活时按已过的 at 立即再续；其余这次运行到此结束，带 interruptedAt 与 reloadInterrupted（会话与审查义务保留，等指挥官续派）。
 	 */
 	converged(worker: WorkerRef, now: number): WorkerRef {
 		if (worker.status === "idle") return worker;
 		if (worker.resume) return { ...worker, status: "idle" };
-		return { ...worker, status: "idle", interruptedAt: now, reloadInterrupted: true };
+		return { ...endRun(worker), status: "idle", interruptedAt: now, reloadInterrupted: true };
 	},
 };
+
+/** 一次运行结束：它的来源与视图原话不再有用。 */
+function endRun({ origin: _origin, viewPrompts: _prompts, ...worker }: WorkerRef): WorkerRef {
+	return worker;
+}
 
 /** 子代理池档案：与运行配置同一个 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），按主会话 id 分文件。 */
 export function masterStatePath(agentDir: string, sessionId: string): string {
@@ -243,5 +272,7 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (record.reviewNeeded !== undefined && typeof record.reviewNeeded !== "boolean") return false;
 	if (record.reloadInterrupted !== undefined && record.reloadInterrupted !== true) return false;
 	if (record.resume !== undefined && !isResume(record.resume)) return false;
+	if (record.origin !== undefined && record.origin !== "view") return false;
+	if (record.viewPrompts !== undefined && !(Array.isArray(record.viewPrompts) && record.viewPrompts.every((prompt) => typeof prompt === "string"))) return false;
 	return typeof record.launch === "number" && Number.isInteger(record.launch) && record.launch > 0;
 }

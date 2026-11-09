@@ -1030,6 +1030,29 @@ test("视图里直接派的运行指挥官并不在等：不计入在飞数（�
 	expect(options).toEqual({ triggerTurn: false });
 });
 
+test("视图派的运行暂停后 reload：续跑落定仍注明视图来源、带原话，只告知不唤醒指挥官", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	faux.setResponses([fauxAssistantMessage("初始完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "vv", prompt: "初始", role: "工程师" });
+	await delivered;
+	faux.setResponses([
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.4}` }),
+		fauxAssistantMessage("视图续跑完成"),
+	]);
+	await harness.viewSend("vv", "视图里说的");
+	await until(async () => (await harness.list()).details.workers[0]?.resume);
+	await harness.command("");
+	await harness.command("");
+	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("视图续跑完成")));
+	const { message, options } = harness.messages.find((entry: any) => String(entry.message.content).includes("视图续跑完成"));
+	expect(titleOf(message.content)).toBe("vv 已返回（你在子代理视图里直接派的）");
+	expect(message.content).toContain("你说：视图里说的");
+	expect(options).toEqual({ triggerTurn: false });
+	expect(inFlightCounts(harness).at(-1)).toBe(0);
+});
+
 test("视图派的运行进行中指挥官又 send 给同一子代理：来源转为指挥官，从此算在飞，落定照常唤醒指挥官", async () => {
 	const harness = await setup();
 	harness.idle = true;

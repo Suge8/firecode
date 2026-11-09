@@ -286,7 +286,7 @@ function settleInterrupted(active: MasterRuntime, identity: WorkerRef, review = 
 			worker: transition.interrupted(current, at),
 			outcome: { kind: "interrupted" },
 			at,
-			event: review ? masterEvent.reviewInterrupted(identity.name, obligation) : masterEvent.interrupted(identity.name, obligation, takeViewPrompts(active, identity)),
+			event: review ? masterEvent.reviewInterrupted(identity.name, obligation) : masterEvent.interrupted(identity.name, obligation, current.viewPrompts),
 		};
 	});
 }
@@ -367,7 +367,7 @@ async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: 
 			active.settle(identity, (latest) => latest.resume && {
 				worker: transition.landed(latest),
 				outcome: { kind: "failed", note: firstSentence(failure) },
-				event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, takeViewPrompts(active, identity)),
+				event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, latest.viewPrompts),
 			});
 		}
 	});
@@ -406,8 +406,8 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 		const obligation = current.reviewNeeded === true;
 		// 活动列表展开行显示结果首句（失败是错误首句），不是千篇一律的“已返回”。
 		return failure
-			? { worker: transition.landed(current), outcome: { kind: "failed", note: firstSentence(failure) }, event: masterEvent.failed(identity.name, failure, obligation, takeViewPrompts(active, identity)) }
-			: { worker: transition.landed(current), outcome: { kind: "done", note: firstSentence(terminal!.text) }, event: masterEvent.returned(identity.name, terminal!.text, obligation, takeViewPrompts(active, identity)) };
+			? { worker: transition.landed(current), outcome: { kind: "failed", note: firstSentence(failure) }, event: masterEvent.failed(identity.name, failure, obligation, current.viewPrompts) }
+			: { worker: transition.landed(current), outcome: { kind: "done", note: firstSentence(terminal!.text) }, event: masterEvent.returned(identity.name, terminal!.text, obligation, current.viewPrompts) };
 	});
 }
 
@@ -436,14 +436,6 @@ function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef, sessio
 			}));
 		}),
 	);
-}
-
-/** 这次运行里视图说过的话交给落定事件后清空：下一次运行另算。 */
-function takeViewPrompts(active: MasterRuntime, worker: WorkerRef): string[] {
-	const live = active.liveOf(worker.name);
-	const prompts = live.viewPrompts;
-	live.viewPrompts = [];
-	return prompts;
 }
 
 export function reviewRunId(outcome: ReviewOutcome): string | undefined {

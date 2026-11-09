@@ -9,8 +9,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "../config.js";
 import { msg } from "./messages.js";
 import { interruptTurn, openWorkerSession, prepare, RESUME_CHECK_PROMPT, returnSession, runWorker, spawnWorker, startReview, steerTurn } from "./run.js";
-import type { MasterRuntime, RunOrigin } from "./runtime.js";
-import { compactWorker, transition, WORKER_NAME, type WorkerRef } from "./state.js";
+import type { MasterRuntime } from "./runtime.js";
+import { compactWorker, type RunOrigin, transition, WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
 
 export const ACTIONS = ["start", "send", "interrupt", "review", "tail", "ack", "kill"] as const;
@@ -126,13 +126,13 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 	if (target.status === "working" && !requestedRole && !requestedThinking && !requestedCwd) {
 		if (live.turn.interrupted) throw new Error(msg.action.interrupting(target.name));
 		// 指挥官补进视图起的运行：它从此在等结果（没送达的补话也经事件回报给它）。
-		if (!fromView && live.origin !== "master") {
-			live.origin = "master";
-			active.render();
-		}
+		if (!fromView && target.origin === "view") active.store.upsert(transition.awaitedByMaster(target));
 		steerTurn(active, target, prompt, () => {
-			if (fromView) live.viewPrompts.push(prompt);
-			if (input.review) active.commit(target, (latest) => ({ ...latest, reviewNeeded: true }));
+			if (!fromView && !input.review) return;
+			active.commit(target, (latest) => {
+				const said = fromView ? transition.viewSaid(latest, prompt) : latest;
+				return input.review ? { ...said, reviewNeeded: true } : said;
+			});
 		});
 		return { queued: true };
 	}
@@ -160,11 +160,10 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 		const latest = active.current(target);
 		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
 		const working = active.commit(target, (current) => {
-			const { thinkingOverride: _previous, ...taken } = transition.takeOver(current, "working");
+			const { thinkingOverride: _previous, ...taken } = transition.takeOver(current, "working", fromView ? prompt : undefined);
 			return { ...taken, role: next.role, cwd, ...(next.thinkingOverride ? { thinkingOverride: next.thinkingOverride } : {}), ...(input.review ? { reviewNeeded: true } : {}) };
 		});
-		active.beginRun(target.name, fromView ? "view" : "master", prompt);
-		if (fromView) live.viewPrompts.push(prompt);
+		active.beginRun(target.name, prompt);
 		await runWorker(active, working, session, cutOff ? `${RESUME_CHECK_PROMPT}\n\n${prompt}` : prompt);
 		return { sent: true };
 	});
@@ -207,7 +206,7 @@ async function start(active: MasterRuntime, input: ActionInput) {
 		};
 		active.store.upsert(worker);
 		live.starting = undefined;
-		active.beginRun(name, "master", prompt);
+		active.beginRun(name, prompt);
 		try {
 			await runWorker(active, worker, spawnWorker(active, worker, false), prompt);
 		} finally {
