@@ -87,18 +87,15 @@ async function interrupt(active: MasterRuntime, params: Params): Promise<ToolRes
 	if (target.status === "reviewing") return interruptReview(active, target);
 	if (target.status === "idle" && target.resume) return interruptPause(active, target);
 	if (target.status !== "working") throw new Error(msg.action.interruptStatus(target.name, target.status));
-	const session = active.setup.pool.getSession(target.sessionPath);
-	if (!session) throw new Error(msg.action.sessionReleased(target.name));
-	const live = active.liveOf(target.name);
-	const run = live.run;
-	if (!run) throw new Error(msg.action.noRun(target.name));
-	live.interruptedRun = run;
+	// 先记意图、等回合真正在飞再中止：开会话与宿主前置阶段里的 abort 会被丢弃；没开成的回合按意图直接落定为中断。
+	const turn = active.liveOf(target.name).turn!;
+	turn.interrupted = true;
 	try {
-		await session.abort();
+		await (await turn.running)?.abort();
 		active.assertOpen();
 		return toolResult({ interrupted: true });
 	} catch (error) {
-		if (live.interruptedRun === run) live.interruptedRun = undefined;
+		turn.interrupted = undefined;
 		throw error;
 	}
 }
@@ -119,17 +116,16 @@ async function interruptPause(active: MasterRuntime, target: WorkerRef): Promise
  * 再中止会话里可能在跑的修复/总结回合。落定由审查监视（run.ts）看到取消的终态后按中断处理：回到 idle、带中断标记、审查义务保留。
  */
 async function interruptReview(active: MasterRuntime, target: WorkerRef): Promise<ToolResult> {
-	const session = active.setup.pool.getSession(target.sessionPath);
-	if (!session) throw new Error(msg.action.sessionReleased(target.name));
-	const live = active.liveOf(target.name);
-	live.interruptedReview = true;
+	const turn = active.liveOf(target.name).turn!;
+	const session = (await turn.running)!;
+	turn.interrupted = true;
 	try {
 		await session.prompt(CANCEL_REVIEW_COMMAND);
 		if (session.isStreaming) await session.abort();
 		active.assertOpen();
 		return toolResult({ interrupted: true });
 	} catch (error) {
-		live.interruptedReview = undefined;
+		turn.interrupted = undefined;
 		throw error;
 	}
 }
@@ -201,12 +197,14 @@ async function send(active: MasterRuntime, params: Params, _ctx: ExtensionContex
 }
 
 /**
- * working Worker 的普通 send 经宿主 steer 在句缝送达，不打断。steer 会 await 子会话的 input 处理器：
- * 期间可能落定或被 kill，写回只认重读后的档案；回合已结束时清掉滞留队列并报未送达。
+ * working Worker 的普通 send 经宿主 steer 在句缝送达，不打断。回合还在开会话或宿主前置阶段时先等它在飞；没开成就报未送达。
+ * steer 会 await 子会话的 input 处理器：期间可能落定或被 kill，写回只认重读后的档案；回合已结束时清掉滞留队列并报未送达。
  */
 async function steer(active: MasterRuntime, target: WorkerRef, prompt: string, review: boolean): Promise<ToolResult> {
-	const session = active.setup.pool.getSession(target.sessionPath);
-	if (!session?.isStreaming) throw new Error(msg.action.finishing(target.name));
+	const session = await active.liveOf(target.name).turn!.running;
+	active.current(target);
+	if (!session) throw new Error(msg.action.notDelivered(target.name));
+	if (!session.isStreaming) throw new Error(msg.action.finishing(target.name));
 	await session.steer(prompt);
 	if (active.current(target).status !== "working") {
 		session.clearQueue();
@@ -253,8 +251,7 @@ async function start(active: MasterRuntime, params: Params, ctx: ExtensionContex
 		active.store.upsert(worker);
 		live.starting = undefined;
 		active.beginRun(name, "master", prompt);
-		const session = await spawnWorker(active, worker, false, override);
-		await runWorker(active, worker, session, prompt);
+		await runWorker(active, worker, spawnWorker(active, worker, false, override), prompt);
 		return toolResult({ started: true, worker: compactWorker(worker) });
 	} catch (error) {
 		// 只撤自己这一票：kill 后同名重开的新票不受影响。

@@ -1317,6 +1317,66 @@ test("start 准备期间被 kill：start 不报成功、不调模型、不留热
 	expect((await harness.list()).details.workers).toEqual([]);
 });
 
+test("start 还在开会话时 interrupt：等会话开好、不调模型，直接落定为被中断", async () => {
+	const harness = await setup(true, { loadGate: true });
+	faux.setResponses([fauxAssistantMessage("被中断的子代理不应执行")]);
+	const gate = Promise.withResolvers<void>();
+	(globalThis as any).__loadGate = gate.promise;
+	const starting = harness.execute({ action: "start", worker: "slow", prompt: "做事", role: "工程师" });
+	await until(async () => (await harness.list()).details.workers[0]?.status === "working");
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const interrupting = harness.execute({ action: "interrupt", worker: "slow" });
+	gate.resolve();
+	expect((await interrupting).details).toEqual({ interrupted: true });
+	await starting;
+	await delivered;
+	expect(titleOf(harness.messages.at(-1).message.content)).toBe("slow 被中断");
+	expect(faux.getPendingResponseCount()).toBe(1);
+	expect((await harness.list()).details.workers[0]).toMatchObject({ status: "idle", interruptedAt: expect.any(Number) });
+});
+
+test("start 还在开会话时补话：等回合在飞后经 steer 送达，不报“正在收尾”", async () => {
+	const harness = await setup(true, { loadGate: true });
+	faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("read", { path: "AGENTS.md" }), { stopReason: "toolUse" }),
+		(context: any) => fauxAssistantMessage(userText(context).includes("补充要求") ? "收到补充" : "没收到"),
+	]);
+	const gate = Promise.withResolvers<void>();
+	(globalThis as any).__loadGate = gate.promise;
+	const starting = harness.execute({ action: "start", worker: "slow", prompt: "做事", role: "工程师" });
+	await until(async () => (await harness.list()).details.workers[0]?.status === "working");
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const steering = harness.execute({ action: "send", worker: "slow", prompt: "补充要求" });
+	gate.resolve();
+	expect((await steering).details).toEqual({ steered: true });
+	await starting;
+	await delivered;
+	expect(harness.messages.at(-1).message.content).toContain("收到补充");
+});
+
+test("回合还在宿主前置阶段时 interrupt：等回合在飞再中止，落定为被中断，任务没有被悄悄跑完", async () => {
+	const harness = await setup(true, { inputGate: true });
+	faux.setResponses([fauxAssistantMessage("初始化完成")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "pre", prompt: "初始化", role: "工程师" });
+	await delivered;
+	const entered = Promise.withResolvers<void>();
+	const open = Promise.withResolvers<void>();
+	(globalThis as any).__inputGate = { entered: entered.resolve, open: open.promise };
+	faux.setResponses([fauxAssistantMessage("不该完成")]);
+	const sending = harness.execute({ action: "send", worker: "pre", prompt: "INPUT-GATE 新任务" });
+	await entered.promise;
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	const interrupting = harness.execute({ action: "interrupt", worker: "pre" });
+	open.resolve();
+	expect((await interrupting).details).toEqual({ interrupted: true });
+	await sending;
+	await delivered;
+	expect(titleOf(harness.messages.at(-1).message.content)).toBe("pre 被中断");
+	const session = harness.pool.getSession((await harness.list()).details.workers[0].session);
+	expect(session.messages.filter((message: any) => message.role === "assistant").map((message: any) => JSON.stringify(message.content)).join("\n")).not.toContain("不该完成");
+});
+
 test("steer 越过 await 后按最新档案写回：期间落定不被改回 working，期间被 kill 不复活", async () => {
 	const harness = await setup(true, { review: true, inputGate: true });
 	const counts = () => harness.emitted.filter(([channel]) => channel === "firecode:workers").map(([, payload]) => payload.inFlight);

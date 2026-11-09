@@ -48,18 +48,25 @@ interface CurrentTool {
  */
 export type RunOrigin = "master" | "view";
 
+/**
+ * 一个回合或一次审查：从开会话、宿主前置阶段到落定。档案进入 working/reviewing 的同一同步段挂上，落定回调只认自己这一个。
+ * 宿主 prompt 的前置阶段（input 处理器、鉴权）里会话仍报空闲，落在那里的 abort 会被静默丢弃；所以碰会话的一方（interrupt、steer）
+ * 先等 running：回合在飞时给出它的会话，没开成（开会话失败、准备期间被 kill、输入被处理器吃掉）给 undefined，此后也不会在飞。
+ */
+export interface Turn {
+	readonly running: Promise<AgentSession | undefined>;
+	/** interrupt 记下的意图：回合落定时按中断处理；审查以取消收场时按中断落定（义务保留），而不是审查失败。 */
+	interrupted?: true;
+}
+
 /** 一个 Worker 名下的全部运行时事实；kill 时整条删除。 */
 export interface WorkerLive {
 	/** start 已占名但档案尚未落盘。 */
 	starting?: true;
 	/** send/review 的准备过程单飞。 */
 	transitioning?: true;
-	/** 当前回合的令牌；落定回调只认自己的令牌。 */
-	run?: symbol;
-	/** interrupt 标记的回合：它落定时按中断处理。 */
-	interruptedRun?: symbol;
-	/** interrupt 对审查中的子代理取消了审查：审查以取消收场时按中断落定（义务保留），而不是审查失败。 */
-	interruptedReview?: true;
+	/** 最近一个回合或审查；working/reviewing 时就是在跑的那一个。 */
+	turn?: Turn;
 	interruptTimer?: NodeJS.Timeout;
 	/** 暂停后的自动续跑计时（档案里的 resume.at）：run.ts 的 armResume。 */
 	resumeTimer?: NodeJS.Timeout;
@@ -263,7 +270,6 @@ export class MasterRuntime {
 		const live = this.liveOf(name);
 		this.cancelTimers(live);
 		live.runStartedAt = Date.now();
-		live.interruptedReview = undefined;
 		live.viewPrompts = [];
 		live.origin = origin;
 		if (prompt !== undefined) this.progress?.begin(name, prompt);

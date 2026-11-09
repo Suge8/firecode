@@ -20,7 +20,7 @@ import { msg } from "./messages.js";
 import { msg as commonMsg } from "../messages.js";
 import { CODEMODE_TOOL } from "../spawn.js";
 import { assembleWorkerPrompt } from "./prompt.js";
-import type { MasterRuntime, WorkerLive } from "./runtime.js";
+import type { MasterRuntime, Turn, WorkerLive } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
 
 /** 指挥官开着 codemode 时 Worker 也开（on/only 读同一份 settings）；同进程共用的名额由池按子会话加开，见 spawn.ts。 */
@@ -140,49 +140,59 @@ function watchStall(active: MasterRuntime, identity: WorkerRef): void {
 }
 
 /**
- * resolve 即回合已在飞。工作说明是用户消息，经宿主 prompt：它的前置阶段仍报空闲，期间 abort 会被丢弃，interrupt 必须晚于 preflight。
- * 插件自己的续跑提示是机器消息，以自定义消息 + triggerTurn 开回合：宿主同步置忙，开回合前的 abort 在回合开始时生效，发出即在飞。
+ * 起一个回合：同步挂上 Turn（与档案进入 working 同一同步段），再等会话（start 在这里等开会话）并经宿主开回合；
+ * resolve 即回合已在飞或没开成。工作说明是用户消息，经宿主 prompt：它的前置阶段仍报空闲，宿主报 started 才算在飞。
+ * 插件自己的续跑提示是机器消息，以自定义消息 + triggerTurn 开回合：宿主同步置忙，发出即在飞。
+ * 回合在飞之前到达的 interrupt 只记意图：还没开回合就直接按中断落定、不调模型，否则在飞后由 interrupt 自己中止。
  */
-export async function runWorker(active: MasterRuntime, worker: WorkerRef, session: AgentSession, input: string | Delivery): Promise<void> {
-	// 启动回合的路径都经这里：准备期间被 kill 的不调模型、不留热会话。
-	active.current(worker);
-	observeWorker(active, worker, session);
+export async function runWorker(active: MasterRuntime, worker: WorkerRef, opening: AgentSession | Promise<AgentSession>, input: string | Delivery): Promise<void> {
 	const live = active.liveOf(worker.name);
-	const run = Symbol(worker.name);
-	live.run = run;
-	// 静默从本回合开始算：自动续跑沿用暂停前的运行起点，暂停期不是无输出。
-	live.quietSince = Date.now();
-	watchStall(active, worker);
-	const mine = () => !active.closed && active.live.get(worker.name) === live && live.run === run;
-	let terminal: WorkerTerminal | undefined;
-	const unsubscribeTerminal = session.subscribe((event) => {
-		if (mine() && event.type === "agent_end") terminal = captureWorkerTerminal(event.messages);
-	});
-	const settle = (error?: unknown) => {
-		unsubscribeTerminal();
-		if (!mine()) return;
-		const stranded = session.clearQueue().steering;
-		if (stranded.length) active.outbox.enqueue(masterEvent.stranded(worker.name, stranded), worker.name);
-		live.run = undefined;
-		if (live.interruptedRun === run) {
-			live.interruptedRun = undefined;
-			settleInterrupted(active, worker);
+	const running = Promise.withResolvers<AgentSession | undefined>();
+	const turn: Turn = { running: running.promise };
+	live.turn = turn;
+	try {
+		const session = await opening;
+		// 启动回合的路径都经这里：准备期间被 kill 的不调模型、不留热会话。
+		active.current(worker);
+		observeWorker(active, worker, session);
+		// 静默从本回合开始算：自动续跑沿用暂停前的运行起点，暂停期不是无输出。
+		live.quietSince = Date.now();
+		watchStall(active, worker);
+		const mine = () => !active.closed && active.live.get(worker.name) === live && live.turn === turn;
+		let terminal: WorkerTerminal | undefined;
+		const unsubscribeTerminal = session.subscribe((event) => {
+			if (mine() && event.type === "agent_end") terminal = captureWorkerTerminal(event.messages);
+		});
+		const settle = (error?: unknown) => {
+			unsubscribeTerminal();
+			if (!mine()) return;
+			const stranded = session.clearQueue().steering;
+			if (stranded.length) active.outbox.enqueue(masterEvent.stranded(worker.name, stranded), worker.name);
+			if (turn.interrupted) return settleInterrupted(active, worker);
+			const pause = error === undefined && terminal?.stopReason === "error" ? routePause(session.model) : undefined;
+			if (pause) return pauseWorker(active, worker, pause);
+			settleWorker(active, worker, terminal, error);
+		};
+		const settled = (error?: unknown) => active.detached(worker.name, () => settle(error));
+		if (turn.interrupted) return settled();
+		if (typeof input !== "string") {
+			void session.sendCustomMessage({ ...input, display: true }, { triggerTurn: true }).then(() => settled(), settled);
+			running.resolve(session);
 			return;
 		}
-		const pause = error === undefined && terminal?.stopReason === "error" ? routePause(session.model) : undefined;
-		if (pause) return pauseWorker(active, worker, pause);
-		settleWorker(active, worker, terminal, error);
-	};
-	const settled = (error?: unknown) => active.detached(worker.name, () => settle(error));
-	if (typeof input !== "string") {
-		void session.sendCustomMessage({ ...input, display: true }, { triggerTurn: true }).then(() => settled(), settled);
-		return;
+		const preflight = Promise.withResolvers<void>();
+		void session.prompt(input, {
+			preflightResult: (disposition) => {
+				if (disposition === "started") running.resolve(session);
+				preflight.resolve();
+			},
+		})
+			.then(() => settled(), settled)
+			.finally(() => preflight.resolve());
+		await preflight.promise;
+	} finally {
+		running.resolve(undefined);
 	}
-	const inflight = Promise.withResolvers<void>();
-	void session.prompt(input, { preflightResult: () => inflight.resolve() })
-		.then(() => settled(), settled)
-		.finally(() => inflight.resolve());
-	await inflight.promise;
 }
 
 /** 被中断落定：回合被 interrupt 打断，或审查被 interrupt 取消（review）。两者都回到 idle 并带中断标记，审查义务保留。 */
@@ -321,10 +331,12 @@ export async function startReview(active: MasterRuntime, target: WorkerRef, resu
 	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 	// 指挥官发起的审查接手了这票，清掉续跑意图；自动续审保留到落定（同 resumeWorker）。
 	active.commit(target, ({ interruptedAt: _interruptedAt, reloadInterrupted: _reload, resume, ...rest }) => ({ ...rest, ...(resumed && resume ? { resume } : {}), status: "reviewing" }));
+	const turn: Turn = { running: Promise.resolve(session) };
+	active.liveOf(target.name).turn = turn;
 	observeWorker(active, target, session);
 	if (!resumed) active.beginRun(target.name);
 	else active.liveOf(target.name).runStartedAt ??= Date.now();
-	monitorAndSettleReview(active, target, session, previousRunId);
+	monitorAndSettleReview(active, target, session, previousRunId, turn);
 }
 
 function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: WorkerTerminal | undefined, error?: unknown): void {
@@ -343,19 +355,13 @@ function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: Work
 }
 
 /** 起审：在原 Worker 会话里跑 /fire-review，终态经 review/outcome.ts 读取后落定并投递。 */
-export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef, session: AgentSession, previousRunId: string | undefined): void {
-	const live = active.liveOf(target.name);
-	const reviewing = () => {
-		const current = active.live.get(target.name) !== live ? undefined : active.find(target);
-		return current?.status === "reviewing" ? current : undefined;
-	};
+function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef, session: AgentSession, previousRunId: string | undefined, turn: Turn): void {
+	const reviewing = () => (active.live.get(target.name)?.turn === turn ? active.find(target) : undefined);
 	void monitorReview(session, target.sessionPath, previousRunId).then(
 		(outcome) => active.detached(target.name, () => {
-			const interrupted = live.interruptedReview;
-			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
-			if (interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
+			if (turn.interrupted && outcome.status === "cancelled") return settleInterrupted(active, current, true);
 			if (outcome.status === "failed" && outcome.retry) return pauseWorker(active, current, outcome.retry, true);
 			const { reviewNeeded: _needed, ...fulfilled } = current;
 			const idle = landed(outcome.status === "passed" || outcome.status === "stopped" ? fulfilled : current);
@@ -364,7 +370,6 @@ export function monitorAndSettleReview(active: MasterRuntime, target: WorkerRef,
 			active.outbox.enqueue(masterEvent.review(target.name, outcome, textOf(lastAssistant<{ role: string; content?: unknown }>(session.messages)?.content)), target.name);
 		}),
 		(error) => active.detached(target.name, () => {
-			live.interruptedReview = undefined;
 			const current = reviewing();
 			if (!current) return;
 			const idle = landed(current);
