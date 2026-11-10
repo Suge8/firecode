@@ -3,13 +3,15 @@
  * 1. master/ 内无依赖环。
  * 2. 状态与调度文件不 import 界面文件：界面只在 index.ts 接线，运行时经 onChange 通知重绘（master/AGENTS.md）。
  *    界面文件是下面列出的这几个；新文件默认按状态与调度算，新加界面文件要登记进 UI_FILES。
+ * 3. 相对导入带 .js 扩展名（仓库约定，构建产物按它解析）。tsconfig 是 moduleResolution Bundler，tsc 接受无扩展名的
+ *    相对导入，挡不住；所以由这里报错。前两条按解析后的文件判定，无扩展名、.ts 或绕道 ../master/ 的写法同样算边。
  *
  * 只有类型的导入也算依赖：它同样把状态层绑在界面的类型上，环也常靠 import type 闭合。Bun.Transpiler.scanImports
  * 会丢掉只有类型的导入，所以先去掉 import/export 语句里的 type 修饰再扫。不用 dependency-cruiser：只为这两条规则加依赖不值；
  * 宿主自带的 TypeScript 7 不提供稳定的 JS 解析接口。
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UI_FILES = new Set(["activity-list.ts", "activity.ts", "list-view.ts", "worker-view.ts", "event-card.ts"]);
@@ -21,20 +23,25 @@ const withoutTypeModifiers = (source: string) => source
 	.replace(/^(\s*(?:import|export))\s+type\b(?=\s*(?:[{*]|[\w$]+\s+from\b))/gmu, "$1")
 	.replace(/([{,]\s*)type\s+(?=[\w$]+\s*(?:[,}]|as\b))/gu, "$1");
 
+type Import = { from: string; path: string; line: number };
 type Edge = { from: string; to: string; line: number };
 
-function masterEdges(root: string): Edge[] {
-	const dir = join(root, "master");
-	const files = new Set(readdirSync(dir).filter((name) => name.endsWith(".ts")));
+function masterImports(dir: string, files: ReadonlySet<string>): Import[] {
 	return [...files].flatMap((from) => {
 		const source = readFileSync(join(dir, from), "utf8");
 		const lines = source.split("\n");
-		return transpiler.scanImports(withoutTypeModifiers(source)).flatMap(({ path }) => {
-			const to = /^\.\/([^/]+)\.js$/u.exec(path)?.[1];
-			if (!to || !files.has(`${to}.ts`)) return [];
-			return [{ from, to: `${to}.ts`, line: lines.findIndex((text) => text.includes(`"${path}"`)) + 1 }];
-		});
+		return transpiler.scanImports(withoutTypeModifiers(source)).flatMap(({ path }) => path.startsWith(".")
+			? [{ from, path, line: lines.findIndex((text) => text.includes(`"${path}"`) || text.includes(`'${path}'`)) + 1 }]
+			: []);
 	});
+}
+
+/** 相对导入解析到的 master/ 内文件（去掉 .js/.ts 或无扩展名都按同一个 .ts 算）；指向别处时 undefined。 */
+function target(dir: string, files: ReadonlySet<string>, path: string): string | undefined {
+	const resolved = resolve(dir, path);
+	if (dirname(resolved) !== dir) return undefined;
+	const name = `${basename(resolved).replace(/\.(?:js|ts)$/u, "")}.ts`;
+	return files.has(name) ? name : undefined;
 }
 
 /** 每个强连通分量给一条具体的环路。 */
@@ -66,8 +73,16 @@ function cycles(edges: readonly Edge[]): string[][] {
 }
 
 export function dependencyViolations(root: string): string[] {
-	const edges = masterEdges(root);
+	const dir = resolve(root, "master");
+	const files = new Set(readdirSync(dir).filter((name) => name.endsWith(".ts")));
+	const imports = masterImports(dir, files);
+	const edges = imports.flatMap(({ from, path, line }) => {
+		const to = target(dir, files, path);
+		return to ? [{ from, to, line }] : [];
+	});
 	return [
+		...imports.filter(({ path }) => !path.endsWith(".js"))
+			.map(({ from, path, line }) => `相对导入缺 .js 扩展名：master/${from}:${line} → "${path}"`),
 		...cycles(edges).map((cycle) => `依赖环：${cycle.map((name) => `master/${name}`).join(" → ")}`),
 		...edges.filter(({ from, to }) => from !== WIRING && !UI_FILES.has(from) && UI_FILES.has(to))
 			.map(({ from, to, line }) => `状态与调度文件 import 界面文件：master/${from}:${line} → master/${to}`),
