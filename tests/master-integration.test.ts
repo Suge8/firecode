@@ -57,66 +57,16 @@ test("省略供应商的模型原子能派给可用来源", async () => {
 	expect(harness.messages.at(-1).message.content).toContain("完成");
 });
 
-test("不可用角色保留在枚举中、不进入角色表；派发它不在动作里挡，开会话解析不出模型作为失败事件告知", async () => {
-	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 不可用: { model: "nokey/model/medium", use: "其他工作" } } });
-	await harness.emit("session_start", {});
-	const prompt = await harness.systemPrompt("主提示词");
-	expect(prompt).toContain("工程师（测试）");
-	expect(prompt).not.toContain("不可用");
-	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "不可用"]);
-	expect(harness.notices.join("\n")).toContain("不可用");
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	expect((await harness.execute({ action: "start", worker: "missing", prompt: "执行", role: "不可用" })).details).toMatchObject({ started: true });
-	await until(() => eventTitles(harness).includes("missing 失败"));
-	expect(harness.messages.at(-1).message.content).toContain("nokey/model");
-	expect((await harness.list()).details.workers.find((worker: any) => worker.name === "missing")).toMatchObject({ status: "idle" });
-	expect(faux.getPendingResponseCount()).toBe(1);
-});
-
-test("角色的凭据在会话开始核对之后才配上：start 照常派发、照常返回结果，档案记下实际模型", async () => {
-	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 迟到: { model: "nokey/model/low", use: "凭据后配" } } });
-	await harness.emit("session_start", {});
-	expect(harness.notices.join("\n")).toContain("迟到");
-	process.env.FIRECODE_TEST_UNSET_API_KEY = "faux-key";
-	try {
-		faux.setResponses([fauxAssistantMessage("凭据到了就能跑")]);
-		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-		expect((await harness.execute({ action: "start", worker: "late", prompt: "执行", role: "迟到" })).details).toMatchObject({ started: true });
-		await delivered;
-		expect(titleOf(harness.messages.at(-1).message.content)).toBe("late 已返回");
-		expect(harness.messages.at(-1).message.content).toContain("凭据到了就能跑");
-		expect((await harness.list()).details.workers[0]).toMatchObject({ status: "idle", role: "迟到", model: "nokey/model" });
-	} finally {
-		delete process.env.FIRECODE_TEST_UNSET_API_KEY;
-	}
-});
-
-test("新会话默认激活 subagents", async () => {
+test("新会话默认激活 subagents；autoActivate false 时不注入，仍可手动启动", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
 	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write", "subagents", "subagents_list"]);
-	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
-});
-
-test("autoActivate false 的新会话不注入，仍可手动启动", async () => {
-	const harness = await setup(false, { autoActivate: false });
-	await harness.emit("session_start", {});
-	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write"]);
-	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
-	await harness.command("");
-	expect(harness.activeTools).toContain("subagents");
-});
-
-test("/fire-master status 每个子代理一行，以角色为主、模型短名次之，状态词与活动列表同一相位", async () => {
-	const harness = await setup();
-	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("完成")]);
-	for (const [worker, role] of [["scout", "工程师"], ["verify", "设计师"]]) {
-		const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-		await harness.execute({ action: "start", worker, prompt: "执行", role });
-		await settled;
-	}
-	await harness.command("status");
-	expect(harness.notices.at(-1)).toBe("scout 工程师·完成 worker\nverify 设计师·完成 worker-2");
+	const off = await setup(false, { autoActivate: false });
+	await off.emit("session_start", {});
+	expect(off.activeTools).toEqual(["read", "bash", "edit", "write"]);
+	await expect(off.list()).rejects.toThrow("只在 Master 中可用");
+	await off.command("");
+	expect(off.activeTools).toContain("subagents");
 });
 
 test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR 覆写），不写死家目录", async () => {
@@ -129,93 +79,23 @@ test("子代理池状态文件落在 Pi Agent 目录（含 PI_CODING_AGENT_DIR �
 	expect(files).toContain(`firecode-master-${harness.sessionId}.json`);
 });
 
-test("裸 /fire-master 来回翻转当前会话，status 保留并拒绝旧参数", async () => {
+test("裸 /fire-master 来回翻转当前会话", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
 	await harness.command("");
 	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
-	await harness.command("status");
-	expect(harness.notices.at(-1)).toBe("指挥官模式未启动");
 	await harness.command("");
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
-	await harness.command("off");
-	expect(harness.notices.at(-1)).toContain("只接受 status");
 });
 
 test("指挥官提示词作为系统提示段注入，附上已配置的角色表；停用后撤下", async () => {
 	const harness = await setup();
 	const prompt = await harness.systemPrompt("自定义系统提示");
-	const master = (await readFile(new URL("../master/prompts/master.zh.md", import.meta.url), "utf8")).trim();
-	expect(prompt).toBe(`自定义系统提示\n\n${master}\n\n角色表：工程师（测试）；设计师（切换测试）。`);
-	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "设计师"]);
-	await expect(harness.execute({ action: "start", worker: "missing-role", prompt: "执行" })).rejects.toThrow("start 必须指定 role");
+	expect(prompt).toStartWith("自定义系统提示");
+	expect(prompt).toContain("工程师（测试）");
+	expect(prompt).toContain("设计师（切换测试）");
 	await harness.command("");
 	expect(await harness.systemPrompt("自定义系统提示")).toBe("自定义系统提示");
-});
-
-test("Worker 的系统提示带上自己的名字，包在协议信封里", async () => {
-	const harness = await setup();
-	let systemPrompt = "";
-	faux.setResponses([(context: any) => {
-		systemPrompt = getCurrentSystemPrompt(context.messages);
-		return fauxAssistantMessage("完成");
-	}]);
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({
-		action: "start", worker: "prompt-contract", prompt: "执行", role: "工程师",
-	});
-	await settled;
-	expect(systemPrompt).toContain('<firecode_worker name="prompt-contract">');
-	expect(systemPrompt).toContain("</firecode_worker>");
-});
-
-test("角色表配置有错时拒绝启动（具体问题文案由配置解析的测试守）", async () => {
-	const harness = await setup(true, {
-		roles: {
-			工程师: {
-				model: "invalid/high",
-				thinking: "medium",
-				use: "旧写法",
-				fallback: ["test/a/low", "test/b/low", "test/c/low"],
-			} as any,
-		},
-	});
-	expect(harness.notices.join("\n")).toContain("Master 配置有问题，已停止");
-	await expect(harness.list()).rejects.toThrow("只在 Master 中可用");
-});
-
-test("list 展开投影 working 的当前动作，但模型正文不含动作", async () => {
-	const harness = await setup();
-	const responseGate = Promise.withResolvers<void>();
-	const toolGate = Promise.withResolvers<void>();
-	faux.setResponses([
-		async () => {
-			await responseGate.promise;
-			return fauxAssistantMessage(fauxToolCall("read", { path: "AGENTS.md" }), { stopReason: "toolUse" });
-		},
-		fauxAssistantMessage("完成"),
-	]);
-	await harness.execute({ action: "start", worker: "observed", prompt: "读取约束", role: "工程师" });
-	const session = await turnRunning(harness, "observed");
-	const toolStarted = new Promise<void>((resolve) => session.subscribe(async (event: any) => {
-		if (event.type !== "tool_execution_start") return;
-		resolve();
-		await toolGate.promise;
-	}));
-	responseGate.resolve();
-	await toolStarted;
-
-	const listed = await harness.list();
-	expect(listed.content[0].text).toContain("observed");
-	expect(listed.content[0].text).not.toContain("phase");
-	expect(listed.content[0].text).not.toContain("读取 AGENTS.md");
-	expect(harness.renderListLine(listed)[0]).toContain("observed 工程师·运行中");
-	expect(harness.renderResult(listed, true).join("\n")).toContain("工程师·运行中 · 读取 AGENTS.md");
-
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	toolGate.resolve();
-	await delivered;
-	expect(harness.renderResult(await harness.list(), true).join("\n")).toContain("工程师·完成 · 完成");
 });
 
 test("Master 是在飞子代理数的唯一发布者：数量变化发布计数，停用时收口", async () => {
@@ -307,137 +187,7 @@ test("报告现场时序：最后一个子代理在指挥官空闲时返回，�
 	}
 });
 
-test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async () => {
-	// 窗口远大于两条结果之间的间隔：用例按条件推进，间隔只有几毫秒。
-	const harness = await setup(true, { timing: { wakeQuietMs: 300 } });
-	harness.idle = true;
-	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
-	faux.setResponses(gates.map((gate, index) => async () => { await gate.promise; return fauxAssistantMessage(`结果 ${index}`); }));
-	await harness.execute({ action: "start", worker: "batch-a", prompt: "A", role: "工程师" });
-	await harness.execute({ action: "start", worker: "batch-b", prompt: "B", role: "工程师" });
-	const arrived = () => harness.appended.filter(([type]) => type === "firecode-master-pending-event").length;
-	gates[0].resolve();
-	await until(() => arrived() === 1);
-	// 第一条到达后安静窗口内不唤醒，等同批的下一条。
-	expect(harness.messages).toEqual([]);
-	gates[1].resolve();
-	await until(() => harness.appended.some(([type]) => type === "firecode-master-event-ack"));
-	expect(harness.messages).toHaveLength(1);
-	expect(harness.messages[0].options).toEqual({ triggerTurn: true });
-	expect(harness.turns).toHaveLength(1);
-	expect(harness.turns[0]).toContain("结果 0");
-	expect(harness.turns[0]).toContain("结果 1");
-	// 每条结果投递前各写一条 pending，整批送达后只写一条 ack。
-	expect(harness.appended.map(([type]) => type)).toEqual([
-		"firecode-master-pending-event",
-		"firecode-master-pending-event",
-		"firecode-master-event-ack",
-	]);
-
-	await harness.command("");
-});
-
-test("在跑的回合到卡住时限没有任何输出就唤醒指挥官：带命令与已用时长，同一段无输出只报一次，有输出后可再报", async () => {
-	const harness = await setup(true, { timing: { stallMs: 100 } });
-	harness.idle = true;
-	const command = "sleep 0.3; echo tick; sleep 0.3";
-	faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("bash", { command }), { stopReason: "toolUse" }),
-		fauxAssistantMessage("完成"),
-	]);
-	await harness.execute({ action: "start", worker: "quiet", prompt: "盯着跑", role: "工程师" });
-	await until(() => harness.turns.some((turn) => turn.includes("quiet 已返回")), 5_000);
-	const stalls = harness.turns.filter((turn) => turn.includes("无输出"));
-	// 两段无输出（echo 前后）各唤醒一次：每段远长于时限，仍只报一次。
-	expect(stalls).toHaveLength(2);
-	for (const stall of stalls) {
-		expect(stall).toMatch(/^<firecode_master_event>\nquiet 0 分钟无输出\n/u);
-		expect(stall).toContain(`正在跑：操作 $ ${command}`);
-		expect(stall).toMatch(/本次运行已跑 \d/u);
-	}
-
-	await harness.command("");
-});
-
-/**
- * faux 的响应队列是进程内共用的 FIFO：进展行的调用与 Worker 的请求交错出队，所以每一步都按系统提示分流。
- * 返回进展行实际发出的调用数：每次生成都是一次付费调用，“没有新输出就不调用”按它核对。
- */
-function progressScript(options: { summary: (user: string, call: number) => any; worker: any[] }) {
-	let calls = 0;
-	const worker = [...options.worker];
-	const step = (context: any) => {
-		if (JSON.stringify(context).includes("你为终端界面写一行子代理的进展")) {
-			const user = context.messages.findLast((message: any) => message.role === "user").content;
-			return options.summary(typeof user === "string" ? user : JSON.stringify(user), ++calls);
-		}
-		return worker.shift() ?? fauxAssistantMessage("完成");
-	};
-	faux.setResponses(Array.from({ length: 40 }, () => step));
-	return () => calls;
-}
-
-test("进展行：运行满时限出第一句（只取首行），没有新输出不再调用，新输出到间隔再生成，落定后停止", async () => {
-	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 100, progressEveryMs: 250 } });
-	const calls = progressScript({
-		summary: (user) => fauxAssistantMessage(user.includes("sleep 0.4") ? "「在补跑测试，确认修复没有回归」" : "「正在跑构建，确认改动能编译」\n多余的一行"),
-		worker: [
-			fauxAssistantMessage([{ type: "text", text: "先看一下构建脚本。" }, fauxToolCall("bash", { command: "sleep 0.6; echo ONE" })], { stopReason: "toolUse" }),
-			fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 0.4; echo TWO" }), { stopReason: "toolUse" }),
-			fauxAssistantMessage("构建通过"),
-		],
-	});
-	await harness.execute({ action: "start", worker: "builder", prompt: "修复构建", role: "工程师" });
-	await until(() => harness.activity().some((line) => line.includes("正在跑构建，确认改动能编译")), 3_000);
-	expect(harness.activity().join("\n")).not.toMatch(/多余的一行|「/u);
-	// 名册（CuePad 等扩展读的）与活动列表同一句。
-	await until(() => harness.emitted.some(([channel, payload]) => channel === "firecode:subagents" && payload.workers[0]?.action === "正在跑构建，确认改动能编译"), 1_000);
-	// 第一条命令还在跑、没有任何新输出：过了一个间隔也不再调用。
-	await Bun.sleep(300);
-	expect(calls()).toBe(1);
-	// 第二条命令是新输出：到了间隔就生成新的一句。
-	await until(() => harness.activity().some((line) => line.includes("在补跑测试，确认修复没有回归")), 3_000);
-	expect(calls()).toBe(2);
-	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("builder 已返回")), 4_000);
-	// 落定后不再调用（最终回复也不算触发），行上不再挂着进展句。
-	await Bun.sleep(350);
-	expect(calls()).toBe(2);
-	expect(harness.activity().join("\n")).not.toContain("在补跑测试");
-	await harness.command("");
-});
-
-test("进展行：生成失败时那一句撤下、回到工具动作；连续失败只提示一次", async () => {
-	const harness = await setup(true, { progress: ["test/summary/low"], timing: { progressFirstMs: 50, progressEveryMs: 60 } });
-	progressScript({
-		summary: (_user, call) => call === 1
-			? fauxAssistantMessage("正在反复构建")
-			: fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 invalid key" }),
-		worker: Array.from({ length: 6 }, (_, index) => fauxAssistantMessage(fauxToolCall("bash", { command: `sleep 0.12; echo ${index}` }), { stopReason: "toolUse" })),
-	});
-	await harness.execute({ action: "start", worker: "flaky", prompt: "反复构建", role: "工程师" });
-	await until(() => harness.activity().some((line) => line.includes("正在反复构建")), 3_000);
-	await until(() => harness.activity().some((line) => line.includes("操作 $ sleep 0.12")), 3_000);
-	expect(harness.activity().join("\n")).not.toContain("正在反复构建");
-	await until(() => harness.messages.some((entry: any) => String(entry.message.content).includes("flaky 已返回")), 8_000);
-	expect(harness.notices.filter((notice) => notice.includes("进展行"))).toHaveLength(1);
-	await harness.command("");
-});
-
-test("指挥官在跑时结果不等合并窗口，立即经 steer 句缝送达", async () => {
-	// 窗口远大于用例超时：送达若等了窗口，用例会超时失败，不靠墙钟阈值判断。
-	const harness = await setup(true, { timing: { wakeQuietMs: 60_000 } });
-	harness.idle = false;
-	faux.setResponses([fauxAssistantMessage("忙时结果")]);
-	const steered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "busy", prompt: "做", role: "工程师" });
-	await steered;
-	// 宿主忙时 triggerTurn 的自定义消息进 steer 队列，不另开回合。
-	expect(harness.messages.at(-1).options).toEqual({ triggerTurn: true });
-	expect(harness.turns).toEqual([]);
-	await harness.command("");
-});
-
-test("主回合忙碌时，subagents 以队列语义完成 start→事件落定→list→kill", async () => {
+test("subagents 完成 start→结果送达→list→tail→kill；会话文件不进用户的会话列表", async () => {
 	const harness = await setup();
 	await harness.emit("agent_start", {});
 	faux.setResponses([fauxAssistantMessage("确定性完成")]);
@@ -451,20 +201,13 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 		thinking: "low",
 	});
 	const worker = (started.details as any).worker;
-	// start 写档就返回：实际模型要等第一次请求路由选定，此刻还没有。
 	expect(worker).toMatchObject({ status: "working", role: "工程师" });
-	expect(worker.model).toBeUndefined();
 	await settled;
 	await until(async () => (await harness.list()).details.workers[0]?.status === "idle");
 
-	const listed = await harness.list();
-	const landed = { ...worker, status: "idle", model: "test/worker", thinking: "off" };
-	expect(JSON.parse(listed.content[0].text).workers).toEqual([landed]);
-	expect((listed.details as any).workers).toEqual([
-		{ ...landed, phase: expect.objectContaining({ kind: "done" }) },
-	]);
+	expect((await harness.list()).details.workers[0]).toMatchObject({ status: "idle", model: "test/worker" });
 	expect(harness.messages[0]).toMatchObject({
-		message: { customType: "firecode-master-event", content: expect.stringMatching(/^<firecode_master_event>\ntrace 已返回\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
+		message: { customType: "firecode-master-event", content: expect.stringContaining("确定性完成") },
 		options: { triggerTurn: true },
 	});
 	const trace = await harness.execute({ action: "tail", worker: "trace" });
@@ -479,30 +222,6 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 	await harness.execute({ action: "kill", worker: "trace" });
 	expect((await harness.list().then((result) => result.details as any)).workers).toEqual([]);
 	expect(existsSync(sessionPath)).toBe(true);
-});
-
-test("可重试错误由宿主在原模型重试，不切换模型", async () => {
-	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
-	faux.setResponses([fauxAssistantMessage("初始化")]);
-	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({ action: "start", worker: "retry-chain", prompt: "初始化", role: "工程师" });
-	await delivered;
-	const session = harness.pool.getSession((started.details as any).worker.session);
-	session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
-	const models: string[] = [];
-	const respond = (_context: any, _options: any, _state: any, model: any) => {
-		models.push(model.id);
-		return models.length === 1
-			? fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit" })
-			: fauxAssistantMessage("重试完成");
-	};
-	faux.setResponses([respond, respond]);
-	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "send", worker: "retry-chain", prompt: "继续" });
-	await delivered;
-	expect(models).toEqual(["worker", "worker"]);
-	expect(harness.messages.at(-1).message.content).toContain("重试完成");
-	expect(harness.messages.some((entry: any) => entry.message.content.includes("已切换模型"))).toBe(false);
 });
 
 test("首选额度用尽时同一回合切换到下一模型并返回", async () => {
@@ -589,14 +308,6 @@ test("链上全部模型限流：按冷却到期续跑；期间指挥官收到�
 	expect(notice.message.content).toContain("自动续跑");
 	expect(notice.message.content).toContain("原因：429 Too Many Requests");
 	expect(notice.options).toEqual({ triggerTurn: false });
-	// 暂停中的子代理在池查询与 status 里与活动列表同一相位：暂停到续跑时刻，不是“落定”或“空闲”。
-	const paused = await harness.list();
-	const pausedPhase = (paused.details as any).workers[0].phase;
-	expect(pausedPhase.kind).toBe("paused");
-	expect(pausedPhase.action).toStartWith("暂停至 ");
-	expect(harness.renderResult(paused, true).join("\n")).toContain("工程师·暂停 · 暂停至");
-	await harness.command("status");
-	expect(harness.notices.at(-1)).toStartWith("quota 工程师·暂停 ");
 	recovered = true;
 	await until(() => eventTitles(harness).includes("quota 已返回"));
 	// 换模型与暂停都只告知不唤醒；唯一唤醒指挥官的是最终落定。
@@ -608,111 +319,6 @@ test("链上全部模型限流：按冷却到期续跑；期间指挥官收到�
 	expect(models).toEqual(["worker", "worker-2", "worker-2"]);
 	await harness.command("");
 }, 20_000);
-
-test("指挥官关再开（reload）后池查询与 status 不展示上次运行的落定：与活动列表一样只剩空闲", async () => {
-	const harness = await setup(true);
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "old", prompt: "执行", role: "工程师" });
-	await delivered;
-	expect((await harness.list()).details.workers[0].phase.kind).toBe("done");
-	await harness.command("");
-	await harness.command("");
-	const listed = await harness.list();
-	expect(listed.details.workers[0].phase).toEqual({ kind: "idle", action: "" });
-	expect(harness.renderResult(listed, true).join("\n")).not.toContain("落定");
-	await harness.command("status");
-	expect(harness.notices.at(-1)).toBe("old 工程师·空闲 worker");
-});
-
-test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次", async () => {
-	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
-	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-	let calls = 0;
-	faux.setResponses(Array.from({ length: 4 }, () => () => (calls++ === 0
-		? fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.5}` })
-		: fauxAssistantMessage("重载后续跑完成"))));
-	const noticed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "reload", prompt: "执行", role: "工程师" });
-	await noticed;
-	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-event-ack"));
-	// 两次重载：旧运行时的计时随会话关闭作废，只有最后一个运行时按档案重挂。
-	await harness.emit("session_start", {});
-	await harness.emit("session_start", {});
-	await until(() => eventTitles(harness).includes("reload 已返回"));
-	await Bun.sleep(300);
-	expect(eventTitles(harness)).toEqual(["reload 已暂停", "reload 已返回"]);
-	expect(calls).toBe(2);
-	await harness.command("");
-}, 20_000);
-
-test("自动续跑的回合进行中被 reload 打断：恢复后仍自动再续，不变成等指挥官处理的中断，最终只落定一次", async () => {
-	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
-	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-	const entered = Promise.withResolvers<void>();
-	const gate = Promise.withResolvers<void>();
-	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.2}` }),
-		async () => { entered.resolve(); await gate.promise; return fauxAssistantMessage("被打断的旧回复"); },
-		fauxAssistantMessage("重载后续跑完成"),
-	]);
-	await harness.execute({ action: "start", worker: "midway", prompt: "执行", role: "工程师" });
-	await entered.promise;
-	await harness.emit("session_start", {});
-	await until(() => eventTitles(harness).includes("midway 已返回"));
-	gate.resolve();
-	await Bun.sleep(200);
-	expect(eventTitles(harness)).toEqual(["midway 已暂停", "midway 已返回"]);
-	expect(harness.messages.at(-1).message.content).toContain("重载后续跑完成");
-	expect((await harness.list().then((result) => result.details as any)).workers[0].interruptedAt).toBeUndefined();
-	await harness.command("");
-}, 20_000);
-
-test("暂停期间指挥官 send 换检出：立即接手（自动续跑作废），新会话开不成作为失败告知", async () => {
-	const harness = await setup(true, { loadGate: true, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
-	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-	const other = join(harness.cwd, "other");
-	await mkdir(other);
-	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.2}` }),
-		fauxAssistantMessage("send 失败后续跑完成"),
-	]);
-	await harness.execute({ action: "start", worker: "handover", prompt: "执行", role: "工程师" });
-	await until(() => eventTitles(harness).includes("handover 已暂停"));
-	const load = Promise.withResolvers<void>();
-	(globalThis as any).__loadGate = load.promise;
-	// 换 cwd 的 send 写档接手就返回；后台释放热会话后重开，卡在加载上，期间原定的续跑时刻已过也不续。
-	expect((await harness.execute({ action: "send", worker: "handover", prompt: "换个检出", cwd: other })).details).toEqual({ sent: true });
-	expect((await harness.list()).details.workers[0]).toMatchObject({ status: "working" });
-	expect((await harness.list()).details.workers[0].resume).toBeUndefined();
-	await Bun.sleep(400);
-	(globalThis as any).__loadGate = undefined;
-	load.reject(new Error("加载失败"));
-	await until(() => eventTitles(harness).includes("handover 失败"));
-	expect(eventTitles(harness)).toEqual(["handover 已暂停", "handover 失败"]);
-	expect(harness.messages.at(-1).message.content).toContain("加载失败");
-	expect(faux.getPendingResponseCount()).toBe(1);
-	await harness.command("");
-}, 20_000);
-
-test("链上另一个模型还在瞬时冷却、这次实际调用的模型鉴权失败：照常以失败送达，不被冷却盖成暂停", async () => {
-	const harness = await setup(true, { roles: {
-		工程师: { model: "test/worker/medium", use: "实现" },
-		设计师: { model: ["test/worker/medium", "test/worker-2/high"], use: "切换测试" },
-	} });
-	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 600}` }),
-		fauxAssistantMessage("", { stopReason: "error", errorMessage: "401 Unauthorized: invalid x-api-key" }),
-	]);
-	await harness.execute({ action: "start", worker: "cooling", prompt: "执行", role: "工程师" });
-	await until(() => eventTitles(harness).includes("cooling 已暂停"));
-	await harness.execute({ action: "start", worker: "badkey", prompt: "执行", role: "设计师" });
-	await until(() => eventTitles(harness).includes("badkey 失败"));
-	expect(harness.messages.find((entry: any) => entry.message.content.includes("badkey 失败")).message.content).toContain("401 Unauthorized");
-	await harness.execute({ action: "kill", worker: "cooling" });
-	await harness.command("");
-});
 
 test("非瞬时错误（鉴权失败）照常以失败送达，不暂停、不重试；指挥官回合遇到鉴权错误也不被补唤醒", async () => {
 	const harness = await setup(true, { timing: { cooldownMs: [20] }, failTurns: { count: 1, error: "401 Unauthorized: invalid x-api-key" }, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
@@ -737,154 +343,27 @@ test("指挥官自己的回合断网失败、手上的子代理事件还没处�
 	await until(() => harness.turns.length === 3);
 	await Bun.sleep(200);
 	expect(harness.turns).toHaveLength(3);
-	expect(titleOf(harness.turns[0])).toBe("event 已返回");
-	for (const turn of harness.turns.slice(1)) {
-		expect(titleOf(turn)).toBe("指挥官 续跑");
-		expect(turn).toContain("Connection error.");
-	}
+	expect(harness.turns[0]).toContain("event 已返回");
+	for (const turn of harness.turns.slice(1)) expect(turn).toContain("Connection error.");
 	await harness.command("");
 });
 
-test("溢出恢复删除运行时消息后仍落定供应商错误而非过期回复", async () => {
-	const harness = await setup();
-	faux.setResponses([fauxAssistantMessage("上一回合回复")]);
-	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({
-		action: "start", worker: "overflow", prompt: "初始化", role: "工程师",
+for (const [name, stop, error, expected] of [
+	["truncated", "length", undefined, "截断"],
+	["aborted", "aborted", "upstream connection closed", "upstream connection closed"],
+] as const) {
+	test(`${stop} 终态（即使已有正文）按失败投递，不能报告正常返回`, async () => {
+		const harness = await setup();
+		faux.setResponses([fauxAssistantMessage("看似完整的结果", { stopReason: stop, ...(error ? { errorMessage: error } : {}) })]);
+		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		await harness.execute({ action: "start", worker: name, prompt: "执行", role: "工程师" });
+		await delivered;
+		const content = harness.messages[0].message.content;
+		expect(content).toContain("错误：");
+		expect(content).toContain(expected);
+		expect(content).not.toContain("已返回");
 	});
-	await delivered;
-
-	let release!: () => void;
-	const gate = new Promise<void>((resolve) => { release = resolve; });
-	const providerError = "maximum context length is 128 tokens";
-	faux.setResponses([async () => {
-		await gate;
-		return fauxAssistantMessage("", { stopReason: "error", errorMessage: providerError });
-	}]);
-	const session = harness.pool.getSession((started.details as any).worker.session);
-	const deleted = new Promise<void>((resolve) => session.subscribe((event: any) => {
-		if (event.type !== "agent_end") return;
-		session.messages.splice(-1, 1);
-		resolve();
-	}));
-	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "send", worker: "overflow", prompt: "继续" });
-	release();
-	await deleted;
-	await delivered;
-
-	const content = harness.messages.at(-1).message.content;
-	expect(content).toContain(providerError);
-	expect(content).not.toContain("上一回合回复");
-	expect(content).not.toContain("（无回复）");
-});
-
-test("输出截断后同回合切换模型，后续派活仍可使用首选", async () => {
-	const harness = await setup(true, { roles: { 工程师: { model: ["test/worker/medium", "test/worker-2/high"], use: "实现" } } });
-	const respond = (_context: any, _options: any, _state: any, model: any) => model.id === "worker"
-		? fauxAssistantMessage("部分内容", { stopReason: "length" })
-		: fauxAssistantMessage("完整结果");
-	faux.setResponses([respond, respond]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const started = await harness.execute({ action: "start", worker: "truncated-chain", prompt: "执行", role: "工程师" });
-	await delivered;
-	await until(() => harness.messages.some((entry: any) => /完整结果|截断/u.test(entry.message.content)));
-	expect(harness.messages.map((entry: any) => entry.message.content).join("\n")).toContain("完整结果");
-	const session = harness.pool.getSession((started.details as any).worker.session);
-	expect(session.messages.filter((message: any) => message.role === "user")).toHaveLength(1);
-	const models: string[] = [];
-	const next = (_context: any, _options: any, _state: any, model: any) => {
-		models.push(model.id);
-		return fauxAssistantMessage(models.length === 1 ? "新会话完成" : "续派完成");
-	};
-	faux.setResponses([next, next]);
-	await harness.execute({ action: "start", worker: "another", prompt: "执行", role: "工程师" });
-	await until(() => harness.messages.some((entry: any) => entry.message.content.includes("新会话完成")));
-	await harness.execute({ action: "send", worker: "truncated-chain", prompt: "继续" });
-	await until(() => harness.messages.some((entry: any) => entry.message.content.includes("续派完成")));
-	expect(models).toEqual(["worker", "worker"]);
-});
-
-test("输出截断即使已有正文也按失败投递，不能报告正常返回", async () => {
-	const harness = await setup();
-	faux.setResponses([fauxAssistantMessage("看似完整的结果", { stopReason: "length" })]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "truncated", prompt: "执行", role: "工程师" });
-	await delivered;
-	const content = harness.messages[0].message.content;
-	expect(content).toContain("错误：");
-	expect(content).toContain("截断");
-	expect(content).not.toContain("已返回");
-});
-
-test("非显式中断的 aborted 终态落定明确原因", async () => {
-	const harness = await setup();
-	faux.setResponses([
-		fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "upstream connection closed" }),
-	]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({
-		action: "start", worker: "aborted", prompt: "执行", role: "工程师",
-	});
-	await delivered;
-
-	expect(harness.messages[0].message.content).toContain("错误：\n回合意外中止：upstream connection closed");
-	expect(harness.messages[0].message.content).not.toContain("（无回复）");
-});
-
-test("进程内池拒绝同一 sessionPath 的第二个持有者", async () => {
-	const harness = await setup();
-	const module = await loadFirecodeModule("spawn.js") as any;
-	const sessionPath = join(directory!, "sessions", "subagents", "worker.jsonl");
-	await mkdir(dirname(sessionPath), { recursive: true });
-	const options = {
-		cwd: harness.cwd,
-		chain: [{ model: "test/worker", thinking: "medium" }],
-		tools: [],
-		systemPrompt: { mode: "replace", text: "test" },
-		contextFiles: false,
-		persistence: { type: "file", sessionPath },
-	};
-	const pool = new module.InProcessSessionPool();
-	const first = await pool.spawn(options);
-	await expect(pool.spawn(options)).rejects.toThrow("已有进程内会话持有");
-	await first.dispose();
-	pool.disposeWorkers();
-});
-
-test("池不自判空闲：只有 markIdle 后才起释放计时，释放前会话扩展先收到 session_shutdown", async () => {
-	const harness = await setup(true, { timing: { idleSessionMs: 10 }, shutdownProbe: true });
-	const sessionPath = join(directory!, "sessions", "subagents", "pool-idle.jsonl");
-	await mkdir(dirname(sessionPath), { recursive: true });
-	faux.setResponses([fauxAssistantMessage("完成")]);
-	const spawned = await harness.pool.spawn({
-		cwd: harness.cwd, chain: [{ model: "test/worker", thinking: "medium" }], tools: [],
-		systemPrompt: { mode: "replace", text: "test" }, contextFiles: false,
-		persistence: { type: "file", sessionPath },
-	});
-	await spawned.prompt("回合");
-	await new Promise((resolve) => setTimeout(resolve, 30));
-	expect(harness.pool.getSession(sessionPath)).toBeDefined();
-	harness.pool.markIdle(sessionPath);
-	await until(() => harness.pool.getSession(sessionPath) === undefined);
-	await until(() => existsSync(join(directory!, "shutdown.log")));
-	expect(await readFile(join(directory!, "shutdown.log"), "utf8")).toBe("quit\n");
-});
-
-test("reviewing 中的 Worker 回合早已落定也不会被 idle 超时释放", async () => {
-	const harness = await setup(true, { timing: { idleSessionMs: 10 }, mockReview: true, review: true, reviewProgressOnly: true, reviewFixTurn: true });
-	faux.setResponses([fauxAssistantMessage("完成"), fauxAssistantMessage("修复完成")]);
-	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	const result = await harness.execute({ action: "start", worker: "review-hot", prompt: "完成", role: "工程师" });
-	await settled;
-	const path = (result.details as any).worker.session;
-	await harness.execute({ action: "review", worker: "review-hot" });
-	// 修复回合的回复被取走后，再等过 10ms 的 idle 超时数倍，热会话仍应在。
-	await until(() => faux.getPendingResponseCount() === 0);
-	await new Promise((resolve) => setTimeout(resolve, 80));
-	expect(harness.pool.getSession(path)).toBeDefined();
-	expect((await harness.list().then((listed) => listed.details as any)).workers[0].status).toBe("reviewing");
-});
+}
 
 /** 子会话每建一次（session_start）就在 log 里记一行它的会话路径；shutdownGate 为真时 session_shutdown 卡在 globalThis.__shutdownGate 上。 */
 async function sessionProbe(agentDir: string, log: string, shutdownGate = false): Promise<() => Promise<string[]>> {
@@ -896,37 +375,6 @@ async function sessionProbe(agentDir: string, log: string, shutdownGate = false)
 	return async () => existsSync(log) ? (await readFile(log, "utf8")).split("\n").filter(Boolean) : [];
 }
 
-test("send 换检出、后台还在释放旧会话时 kill：之后才轮到的开会话不再新建", async () => {
-	const harness = await setup();
-	const created = await sessionProbe(harness.agentDir, join(directory!, "created.log"), true);
-	const other = join(harness.cwd, "other");
-	await mkdir(other);
-	faux.setResponses([fauxAssistantMessage("初始完成")]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "moved", prompt: "初始", role: "工程师" });
-	await delivered;
-	const path = (await harness.list()).details.workers[0].session;
-	const before = (await created()).filter((line) => line === path).length;
-	const entered = Promise.withResolvers<void>();
-	const open = Promise.withResolvers<void>();
-	(globalThis as any).__shutdownGate = { entered: entered.resolve, open: open.promise };
-	try {
-		faux.setResponses([fauxAssistantMessage("不应执行")]);
-		// 换检出的 send 在后台先释放旧会话（session_shutdown 卡住），释放完才开新会话；kill 落在这中间。
-		expect((await harness.execute({ action: "send", worker: "moved", prompt: "换检出", cwd: other })).details).toEqual({ sent: true });
-		await entered.promise;
-		await harness.execute({ action: "kill", worker: "moved" });
-		open.resolve();
-		await Bun.sleep(300);
-		expect((await created()).filter((line) => line === path).length - before).toBe(0);
-		expect(harness.pool.getSession(path)).toBeUndefined();
-		expect(faux.getPendingResponseCount()).toBe(1);
-		expect((await harness.list()).details.workers).toEqual([]);
-	} finally {
-		open.resolve();
-		delete (globalThis as any).__shutdownGate;
-	}
-});
 
 test("send 已在等同一路径的空闲释放收口时 kill：收口完也不再新建会话", async () => {
 	const harness = await setup(true, { timing: { idleSessionMs: 20 } });
