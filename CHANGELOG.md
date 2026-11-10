@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Master actions no longer block. `start`, `send`, `review` and `kill` return as soon as the Worker record is written; opening the session and starting the turn happen in the background, and a failure arrives as the usual "failed" event. A failed `start` leaves the Worker idle in the pool: retry with `send` or remove it with `kill`. `interrupt` records the intent and returns `{ interrupting: true }`; the turn is stopped once it is actually running, and the outcome arrives as the "interrupted" event. A follow-up `send` to a running Worker returns `{ queued: true }`.
+- Dispatch only checks that the role exists in the config. Model and credential resolution happen when the turn's first request is routed, so credentials added mid-session work right away, and a role with no usable model fails as a "failed" event.
+- In the `firecode:subagents` roster, `model` and `thinking` are absent until the Worker's model has been picked.
+- `subagents_list`, `/fire-master status` and the activity list show the same state; a paused Worker shows as paused instead of idle.
+
+### Fixed
+
+- An `interrupt` or follow-up sent while a Worker is still starting, or while its turn is still in the host's pre-prompt stage, is no longer dropped.
+- Switching a Worker's role no longer sends a "model switched" notice without a reason, and a failed role switch no longer shows the previous role's model.
+- A `thinking` override survives a pause followed by a cold auto-resume.
+- A run started from the Worker view stays inform-only after a reload, instead of waking the master when it lands.
+- A `send` right after a review lands is no longer reported as a failure while the real turn runs untracked.
+- Opening the full-process view of a released Worker no longer rewrites its session file.
+- Turning the master off and on while a Worker session is still opening no longer fails with "already held".
+- A killed Worker's session path is never opened again.
+- `ack` on a Worker whose auto-resume has already started now says to use `interrupt`.
+
 ## [1.10.1] - 2026-11-06
 
 ### Fixed
