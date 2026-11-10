@@ -13,13 +13,11 @@ import {
 	firecodeModulePath,
 	loadFirecodeModule,
 	PI_AI_COMPAT_URL,
-	PI_AI_URL,
 	PI_CODING_AGENT_URL,
 	TEST_REVIEW_CONFIG,
 } from "./loader.ts";
 
 const { fauxAssistantMessage, fauxToolCall } = await import(PI_AI_COMPAT_URL) as any;
-const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 const TEST_ROLES = {
 	工程师: { model: "test/worker/medium", use: "测试" },
 	设计师: { model: "test/worker-2/high", use: "切换测试" },
@@ -35,9 +33,6 @@ afterEach(async () => {
 	stopSentenceBreaks?.();
 	stopSentenceBreaks = undefined;
 	setSystemTime();
-	delete (globalThis as any).__reviewTick;
-	delete (globalThis as any).__loadGate;
-	delete (globalThis as any).__inputGate;
 	delete (globalThis as any).__masterActive;
 	delete (globalThis as any).__pool;
 	faux?.unregister();
@@ -980,32 +975,17 @@ async function setup(activate = true, options: {
 	mockReview?: boolean;
 	/** 子会话里装真实的 review，用这份顶层配置（含 review 节）加载：复现真实配置问题下的命令入口。 */
 	workerReview?: Record<string, unknown>;
-	reviewProgressOnly?: boolean;
-	/** mock 审查停在 reviewing 相并唤起一个修复回合：复现审查期间 Worker 自己落定的现场。 */
-	reviewFixTurn?: boolean;
 	/** mock 审查以超时终态落定：复现基础设施故障轮次。 */
 	reviewTimeout?: boolean;
-	/** 在子会话里装一个慢速 session_shutdown 探针：收口完成才把 reason 追加到 shutdown.log。 */
-	shutdownProbe?: boolean;
-	/** 在子会话里装一个 input 闸门：含 INPUT-GATE 的输入卡在 globalThis.__inputGate 上，复现 steer 越过 await 的现场。 */
-	inputGate?: boolean;
 	autoActivate?: boolean;
-	/** 子会话加载扩展时卡在 globalThis.__loadGate 上：复现 start 准备期间被 kill 的现场。 */
-	loadGate?: boolean;
-	/** 后台模型链（background.model），进展行用它；省略即关闭。 */
-	progress?: string[];
 	/** 有界面：/fire-master 关闭时会弹确认，返回值由 confirmAnswer 决定。 */
 	confirmAnswer?: boolean;
-	/** 在子会话里装一个事件处理器抛错的扩展：复现子代理扩展出错。 */
-	throwingExtension?: boolean;
 	/** 唤起的回合不自动开始：宿主已置忙，agent_start 由测试 wake() 发出，回合何时结束也由测试决定。 */
 	holdWake?: boolean;
 	/** 前 n 次 sendMessage 抛错：复现事件投递失败、等待重试的现场。 */
 	failDeliveries?: number;
 	/** 前 n 个被唤起的指挥官回合以这条供应商错误收场（宿主自动重试已用完）：复现指挥官自己的回合断网。 */
 	failTurns?: { count: number; error: string };
-	/** 子会话加载 FireCode 的轮记录器（与真实安装一致）；false 复现 Worker 排除了 FireCode 扩展。 */
-	workerRecorder?: boolean;
 	roles?: Record<string, { model: string | string[]; use: string; fallback?: string[] }>;
 	/** 指挥官会话激活前的工具集。 */
 	activeTools?: string[];
@@ -1017,36 +997,15 @@ async function setup(activate = true, options: {
 	await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
 	const extensions = join(agentDir, "extensions");
 	await mkdir(extensions);
-	if (options.workerRecorder !== false)
-		await writeFile(join(extensions, "round-recorder.ts"),
-			`export { registerRoundRecorder as default } from ${JSON.stringify(await firecodeModulePath("round.ts"))};`);
-	if (options.inputGate)
-		await writeFile(join(extensions, "input-gate.ts"), `export default function(pi) {
-			pi.on("input", async (event) => {
-				if (!event.text.includes("INPUT-GATE")) return;
-				globalThis.__inputGate.entered();
-				await globalThis.__inputGate.open;
-			});
-		}`);
+	await writeFile(join(extensions, "round-recorder.ts"),
+		`export { registerRoundRecorder as default } from ${JSON.stringify(await firecodeModulePath("round.ts"))};`);
 	if (options.mockReview)
-		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension({
-			progressOnly: options.reviewProgressOnly === true,
-			fixTurn: options.reviewFixTurn === true,
-			timeout: options.reviewTimeout === true,
-		}));
+		await writeFile(join(extensions, "mock-review.ts"), mockReviewExtension(options.reviewTimeout === true));
 	if (options.workerReview) {
 		const configJsonc = JSON.stringify({ features: await featuresOnly("review"), ...options.workerReview });
 		await writeFile(join(extensions, "real-review.ts"),
 			`import { registerReview } from ${JSON.stringify(await firecodeModulePath("review/index.ts", { configJsonc }))};\nexport default function(pi) { registerReview(pi, globalThis.__pool); }`);
 	}
-	if (options.throwingExtension)
-		await writeFile(join(extensions, "throwing.ts"), `export default function(pi) {
-			pi.on("agent_start", () => { throw new Error("扩展炸了"); });
-		}`);
-	if (options.shutdownProbe)
-		await writeFile(join(extensions, "shutdown-probe.ts"), shutdownProbeExtension(join(directory, "shutdown.log")));
-	if (options.loadGate)
-		await writeFile(join(extensions, "load-gate.ts"), "export default async function() { await globalThis.__loadGate; }");
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	faux = await installFaux(agentDir, ["test/worker", "test/worker-2", "test/thinker", "test/reviewer", "test/advisor", "test/summary", "nokey/model"], ["nokey"], {}, ["test/thinker"]);
 	const { SessionManager } = await import(PI_CODING_AGENT_URL) as any;
@@ -1062,7 +1021,6 @@ async function setup(activate = true, options: {
 				workerExcludeExtensions: [],
 				...(options.autoActivate === undefined ? {} : { autoActivate: options.autoActivate }),
 			},
-			...(options.progress ? { background: { model: options.progress, idleCompaction: false } } : {}),
 		}),
 	};
 	const module = await loadFirecodeModule("master/index.js", moduleOptions) as any;
@@ -1147,17 +1105,15 @@ async function setup(activate = true, options: {
 		await fake.fire("agent_end", { messages: [reply] }, ctx);
 		await fake.fire("agent_settled", {}, ctx);
 	};
-	const statuses = new Map<string, string>();
 	const widgets = new Map<string, any>();
 	const components = new Map<any, any>();
-	let toolsExpanded = false;
 	const activityList = () => {
 		const factory = [...widgets.values()][0];
 		if (!factory) return undefined;
 		if (!components.has(factory)) components.set(factory, factory({ requestRender() {}, terminal: { rows: 24 } }, ctx.ui.theme));
 		return components.get(factory);
 	};
-	let sessionId = crypto.randomUUID();
+	const sessionId = crypto.randomUUID();
 	const main = SessionManager.create(cwd, sessionDir);
 	const ctx = {
 		cwd,
@@ -1174,9 +1130,9 @@ async function setup(activate = true, options: {
 		ui: {
 			notify: (message: string) => notices.push(message),
 			confirm: async (title: string, message: string) => { confirmations.push([title, message]); return options.confirmAnswer === true; },
-			setStatus: (key: string, text: string | undefined) => { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
+			setStatus: () => {},
 			setWidget: (key: string, factory: any) => { if (factory) widgets.set(key, factory); else widgets.delete(key); },
-			getToolsExpanded: () => toolsExpanded,
+			getToolsExpanded: () => false,
 			theme: {
 				fg: (_color: string, text: string) => text,
 				bg: (_color: string, text: string) => text,
@@ -1191,11 +1147,10 @@ async function setup(activate = true, options: {
 	if (activate) await command("");
 	return {
 		cwd,
-		get sessionId() { return sessionId; },
+		sessionId,
 		get activeTools() { return [...activeTools]; },
 		notices,
 		confirmations,
-		statuses,
 		messages,
 		turns,
 		emitted,
@@ -1204,62 +1159,23 @@ async function setup(activate = true, options: {
 		pool,
 		/** 输入框上方活动列表当前的纯文本行（与宿主一致：组件只建一次，点击状态保留）。 */
 		activity: () => activityList()?.render(80).map((line: string) => stripVTControlCharacters(line)) as string[] ?? [],
-		/** 点活动列表里含 label 的那一行。 */
-		clickActivity: (label: string) => {
-			const list = activityList();
-			const y = list.render(80).findIndex((line: string) => stripVTControlCharacters(line).includes(label));
-			return list.handleMouse({ type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width: 80, height: 20, shift: false, alt: false, ctrl: false });
-		},
-		set toolsExpanded(value: boolean) { toolsExpanded = value; },
 		set onMessage(value: (() => void) | undefined) { onMessage = value; },
 		set idle(value: boolean) { idle = value; },
 		/** 歇透时的投递已让宿主置忙、回合尚未 agent_start。 */
 		turnRequested: turnRequested.promise,
 		wake,
 		pi,
-		ctx,
 		command,
 		emit: (name: string, event: any) => fake.fire(name, event, ctx),
-		replaceSession: async () => {
-			sessionId = crypto.randomUUID();
-			entries.length = 0;
-			await fake.fire("session_start", {}, ctx);
-		},
 		agentDir,
-		commandTool: tools.get("subagents"),
-		listTool: tools.get("subagents_list"),
 		systemPrompt: (initial: string) => fake.systemPrompt(initial, ctx),
-		renderResult: (result: any, expanded: boolean) => tools.get("subagents_list").renderResult(
-			result,
-			{ expanded },
-			ctx.ui.theme,
-			{ state: {}, cwd, toolCallId: "list", isPartial: false, isError: false, expanded },
-		).render(120),
-		renderListLine: (result: any) => {
-			const context = { state: {}, cwd, toolCallId: "list", isPartial: false, isError: false, expanded: false };
-			tools.get("subagents_list").renderResult(result, { expanded: false }, ctx.ui.theme, context);
-			return tools.get("subagents_list").renderCall({}, ctx.ui.theme, context).render(120);
-		},
 		viewSend: (worker: string, prompt: string) => actionCommands.send((globalThis as any).__masterActive, worker, { prompt }, "view"),
-		viewInterrupt: (worker: string) => actionCommands.interrupt((globalThis as any).__masterActive, worker),
 		list: () => tools.get("subagents_list").execute("list", {}, undefined, undefined, ctx),
 		execute: (params: Record<string, unknown>) => tools.get("subagents").execute("call", params, undefined, undefined, ctx),
 	};
 }
 
-function shutdownProbeExtension(logPath: string): string {
-	return `import { appendFileSync } from "node:fs";
-	export default function(pi) {
-		pi.on("session_shutdown", async (event) => {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			appendFileSync(${JSON.stringify(logPath)}, event.reason + "\\n");
-		});
-	}`;
-}
-
-function mockReviewExtension(
-	{ progressOnly, fixTurn, timeout }: { progressOnly: boolean; fixTurn: boolean; timeout: boolean },
-): string {
+function mockReviewExtension(timeout: boolean): string {
 	const base = {
 		version: 9, runId: "mock-review-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1,
 	};
@@ -1280,52 +1196,11 @@ function mockReviewExtension(
 				// 与真实 review 一致：审查期间持有占用，会话因此算进行中，审查时长计入子代理的轮记录。
 				pi.events.emit("firecode:review", { active: true, progress: () => undefined });
 				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
-				globalThis.__reviewTick?.();
-				${progressOnly ? "" : `pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)}); pi.events.emit("firecode:review", { active: false });`}
-				${fixTurn ? `pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });` : ""}
+				pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});
+				pi.events.emit("firecode:review", { active: false });
 			},
 		});
 	}`;
-}
-
-/**
- * 审查的修复回合在子代理里落定时，在 agent_settled 处理器里写终态 checkpoint 并放掉占用，之后处理器还要再跑 sleepMs：
- * 复现指挥官看到审查落定、子代理会话已报空闲，宿主却还在跑 agent_settled 处理器的窗口。
- */
-function slowSettleReviewExtension(sleepMs: number): string {
-	const base = { version: 9, runId: "slow-run", round: 1, focus: "", consecutiveFailures: 0, startedAt: 1, roundStartedAt: 1 };
-	const reviewing = { ...base, phase: "reviewing", rounds: 0, last: null, updatedAt: 1, slots: [{ result: null }] };
-	const settled = {
-		...base, phase: "settled", end: "passed", updatedAt: 2, rounds: 1,
-		last: { round: 1, result: "passed", elapsedMs: 1, reviewers: [{ index: 0, model: "test/reviewer", thinking: "high", status: "passed", summary: "", details: "" }] },
-	};
-	return `export default function(pi) {
-		let armed = false;
-		pi.registerCommand("fire-review", { description: "slow settle review", handler: () => {
-			armed = true;
-			pi.events.emit("firecode:review", { active: true, progress: () => undefined });
-			pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(reviewing)});
-			pi.sendMessage({ customType: "mock-fix", content: "修复", display: false }, { triggerTurn: true });
-		}});
-		pi.on("agent_settled", async () => {
-			if (!armed) return;
-			armed = false;
-			pi.appendEntry("firecode-review-checkpoint", ${JSON.stringify(settled)});
-			pi.events.emit("firecode:review", { active: false });
-			await new Promise((resolve) => setTimeout(resolve, ${sleepMs}));
-		});
-	}`;
-}
-
-/** start/send 写档就返回，会话与回合在后台开：要碰在跑回合（中止、看会话事件）的用例先等它真正在飞。 */
-async function turnRunning(harness: any, name: string): Promise<any> {
-	let session: any;
-	await until(async () => {
-		const worker = (await harness.list()).details.workers.find((candidate: any) => candidate.name === name);
-		session = worker && harness.pool.getSession(worker.session);
-		return session?.isStreaming;
-	});
-	return session;
 }
 
 function userText(context: any): string {
