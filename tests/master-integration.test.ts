@@ -155,6 +155,8 @@ test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async
 	await harness.execute({ action: "start", worker: "batch-b", prompt: "B", role: "工程师" });
 	gates[0].resolve();
 	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-pending-event"));
+	// 第一条到达后安静窗口内不唤醒：等一小段确认没有发生。
+	await Bun.sleep(50);
 	expect(harness.messages).toEqual([]);
 	gates[1].resolve();
 	await until(() => harness.turns.length === 1);
