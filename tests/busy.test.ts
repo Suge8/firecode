@@ -38,21 +38,14 @@ test("普通回合：agent_settled 且无子代理在飞，歇下一次", async 
 	expect(h.settled).toBe(1);
 });
 
-test("等待期不歇下：指挥官回合结束而子代理仍在飞，直到在飞数归零才歇下", async () => {
+test.each([
+	["指挥官回合结束而子代理仍在飞", false],
+	["闲时唤醒回合先于投递完成而结束", true],
+])("%s：在飞数在 agent_settled 之后才归零，归零那一刻才歇下一次", async (_case, inFlightFirst) => {
 	const h = await harness();
+	if (inFlightFirst) h.inFlight(1);
 	h.agentStart();
-	h.inFlight(2);
-	h.agentSettled();
-	h.inFlight(1);
-	expect(h.settled).toBe(0);
-	h.inFlight(0);
-	expect(h.settled).toBe(1);
-});
-
-test("闲时唤醒回合先于投递完成而结束：在飞数在 agent_settled 之后才归零，仍只歇下一次", async () => {
-	const h = await harness();
-	h.inFlight(1);
-	h.agentStart();
+	if (!inFlightFirst) h.inFlight(1);
 	h.agentSettled();
 	expect(h.settled).toBe(0);
 	h.inFlight(0);

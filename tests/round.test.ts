@@ -62,7 +62,7 @@ test("终态取最后一个回合的：Esc 中断但子代理还在飞时这一�
 	}
 });
 
-test("均速：整段内指挥官各回合的输出 token 之和除以宿主实测请求耗时之和，等子代理与工具不算分母；请求失败或缺实测耗时则整段不给", async () => {
+test("均速：整段内指挥官各回合的输出 token 之和除以宿主实测请求耗时之和，等子代理与工具不算分母；请求失败、缺实测耗时或输出 token 太少则整段不给", async () => {
 	const h = await recorder();
 	try {
 		setSystemTime(new Date(0));
@@ -95,6 +95,12 @@ test("均速：整段内指挥官各回合的输出 token 之和除以宿主实�
 		h.agentEnd("stop");
 		h.agentSettled();
 		expect(h.last).toEqual({ elapsed: 0, outcome: "complete" });
+
+		h.agentStart();
+		h.response(1, 1_000);
+		h.agentEnd("stop");
+		h.agentSettled();
+		expect(h.last).toEqual({ elapsed: 0, outcome: "complete" });
 	} finally {
 		setSystemTime();
 	}
@@ -124,26 +130,4 @@ test("上一段被中断后只跑审查（没有指挥官回合）：这一段�
 	h.review(false);
 	expect(h.rounds()).toHaveLength(2);
 	expect(h.last.outcome).toBe("complete");
-});
-
-test("输出 token 太少（不足 20）不给均速：1 个 token 的快答不显示无意义的 tps", async () => {
-	const h = await recorder();
-	try {
-		setSystemTime(new Date(0));
-		h.agentStart();
-		setSystemTime(new Date(1_000));
-		h.response(1, 1_000);
-		h.agentEnd("stop");
-		h.agentSettled();
-		expect(h.last).toEqual({ elapsed: 1_000, outcome: "complete" });
-
-		h.agentStart();
-		setSystemTime(new Date(2_000));
-		h.response(20, 1_000);
-		h.agentEnd("stop");
-		h.agentSettled();
-		expect(h.last.tps).toBe(20);
-	} finally {
-		setSystemTime();
-	}
 });

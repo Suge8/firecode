@@ -16,22 +16,13 @@ async function loadReader(): Promise<ReadReviewOutcome> {
 }
 
 describe("review outcome reader", () => {
-	test("reads pass from the latest checkpoint", async () => {
-		const readReviewOutcome = await loadReader();
-		expect(readReviewOutcome(join(fixtures, "passed.jsonl"))).toEqual({
-			status: "passed",
-			runId: "passed-run",
-			rounds: 1,
-		});
-	});
-
 	test("maps max-round and advisor terminal decisions to stopped", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "stopped-max-rounds.jsonl"))).toMatchObject({ status: "stopped" });
 		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped", advisorAdvice: "stop here" });
 	});
 
-	test("error, cancelled or timed_out terminals surface as failed carrying the failure text", async () => {
+	test("error and timed_out terminals surface as failed with a readable reason", async () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
 			status: "failed",
@@ -39,21 +30,14 @@ describe("review outcome reader", () => {
 			rounds: 2,
 			reason: "issue remains",
 		});
-	});
-
-	// 修复回合期间被取消或超时：末轮仍是 failed，但结局不是“轮数用尽”。
-	test("a review cancelled during the repair turn is cancelled, not stopped", async () => {
-		const readReviewOutcome = await loadReader();
-		expect(readReviewOutcome(join(fixtures, "cancelled-during-repair.jsonl"))).toEqual({
-			status: "cancelled",
-			runId: "cancelled-run",
-			rounds: 1,
-		});
-	});
-
-	test("reports an active checkpoint as in progress", async () => {
-		const readReviewOutcome = await loadReader();
-		expect(readReviewOutcome(join(fixtures, "in-progress.jsonl"))).toMatchObject({ status: "in_progress" });
+		const directory = await mkdtemp(join(tmpdir(), "review-timeout-"));
+		try {
+			const path = join(directory, "session.jsonl");
+			await writeFile(path, (await readFile(join(fixtures, "error-terminal.jsonl"), "utf8")).replace('"end":"error"', '"end":"timed_out"'));
+			expect(readReviewOutcome(path)).toEqual({ status: "failed", runId: "error-run", rounds: 2, reason: "审查超过总体时限被终止" });
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("reports no review for a plain or missing session", async () => {

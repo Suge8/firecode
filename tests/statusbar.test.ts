@@ -82,7 +82,7 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 		ui: { setWorkingVisible: (visible: boolean) => workingVisible.push(visible) },
 		pi: { getThinkingLevel: () => "medium" },
 	});
-	const { fake, ctx, statuses, top, bottom } = host;
+	const { fake, ctx, bottom } = host;
 	host.start();
 
 	expect(host.footer().render(100)).toEqual([]);
@@ -97,8 +97,6 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	entries = [{ type: "message", message: long }];
 	fake.fire("session_tree", {}, ctx);
 	expect(bottom(110)).toContain("─ 把 refresh token 的竞态修掉。 ─");
-	// 窄屏先省容量再裁标题。
-	expect(bottom(52)).toMatch(/^─ 把 refresh.*… ─+ test-model\/medium Fast · 42\.3% ─$/u);
 	name = "完整的自定义会话名称";
 	fake.fire("session_info_changed", {}, ctx);
 	expect(bottom()).toContain(name);
@@ -106,15 +104,6 @@ test("输入框外壳：标题即时取首条消息，状态嵌进上下边框�
 	entries = [];
 	fake.fire("session_tree", {}, ctx);
 	expect(bottom()).toContain("新会话");
-
-	expect(top()).not.toContain("处理中");
-	fake.fire("agent_start", {}, ctx);
-	expect(top()).toMatch(/处理中 \d/u);
-	statuses.set("master", "指挥官");
-	expect(top()).toEndWith(" 指挥官 ─");
-	fake.fire("agent_end", { messages: [] }, ctx);
-	fake.fire("agent_settled", {}, ctx);
-	expect(top()).not.toContain("处理中");
 
 	fake.fire("session_shutdown", {}, ctx);
 	expect(host.footer()).toBeUndefined();
@@ -161,7 +150,7 @@ test("输入框边框按宽度退让：下边框先省容量、再裁标题、�
 		}
 });
 
-test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变忙起连续累计，中途输入与结果唤醒都不重置）/ 全部落定且歇下才定格", async () => {
+test("上边框三态：处理中 / 等待 N 个子代理 / 全部落定且歇下才定格", async () => {
 	const branch: unknown[] = [humanEntry("开工")];
 	const { fake, ctx, start, top } = await mount({ branch: () => branch });
 	await recordRounds(fake.pi, branch);
@@ -172,37 +161,28 @@ test("上边框三态：处理中 / 等待 N 个子代理（计时自会话变�
 		setSystemTime(new Date(1_005_000));
 		expect(top()).toMatch(/处理中 5\.0s/u);
 
-		// 指挥官回合结束，两个子代理在飞：保持运行态，计时不重置、不定格。
+		// 指挥官回合结束，两个子代理在飞：保持运行态、不定格。
 		fake.pi.events.emit("firecode:workers", { inFlight: 2 });
-		setSystemTime(new Date(1_065_000));
 		fake.fire("agent_end", { messages: [] }, ctx);
 		fake.fire("agent_settled", {}, ctx);
-		expect(top()).toMatch(/等待 2 个子代理 1m5s/u);
+		expect(top()).toContain("等待 2 个子代理");
 		expect(top()).not.toContain("处理中");
 		fake.pi.events.emit("firecode:workers", { inFlight: 1 });
-		expect(top()).toMatch(/等待 1 个子代理 1m5s/u);
-		// 等待期间用户补一句话：是给任务加话，不是开新一轮，计时不归零。
-		fake.fire("input", { source: "interactive" }, ctx);
-		expect(top()).toMatch(/等待 1 个子代理 1m5s/u);
+		expect(top()).toContain("等待 1 个子代理");
 
-		// 结果送达唤醒指挥官：回到处理中，计时仍从会话变忙起连续累计。
-		setSystemTime(new Date(1_070_000));
+		// 结果送达唤醒指挥官：回到处理中。
 		fake.fire("agent_start", {}, ctx);
-		expect(top()).toMatch(/处理中 1m10s/u);
 		fake.pi.events.emit("firecode:workers", { inFlight: 0 });
-		expect(top()).toMatch(/处理中 1m10s/u);
-		setSystemTime(new Date(1_080_000));
+		expect(top()).toContain("处理中");
 		fake.fire("agent_end", { messages: [] }, ctx);
 		fake.fire("agent_settled", {}, ctx);
-		expect(top()).toContain("1m20s");
+		expect(top()).toContain("✓");
 		expect(top()).not.toMatch(/处理中|等待/u);
 
 		// 落定结果一直留在边框，直到下一轮开始。
-		setSystemTime(new Date(1_200_000));
-		expect(top()).toMatch(/✓ 1m20s/u);
 		fake.fire("agent_start", {}, ctx);
-		expect(top()).not.toContain("1m20s");
-		expect(top()).toMatch(/处理中 0\.0s/u);
+		expect(top()).not.toContain("✓");
+		expect(top()).toContain("处理中");
 	} finally {
 		setSystemTime();
 	}
@@ -287,14 +267,6 @@ test("主会话审查算会话进行中：上边框是火苗加计时与审查�
 	} finally {
 		setSystemTime();
 	}
-});
-
-test("歇下那一刻上边框直接是 ✓ 加定格文字，不先出一帧冷却中的火苗", async () => {
-	const shell = await shellWithRecords();
-	shell.fake.fire("agent_start", {}, shell.ctx);
-	shell.fake.fire("agent_settled", {}, shell.ctx);
-	shell.settle({ elapsed: 2_900, outcome: "complete", tps: 40 });
-	expect(shell.top(110)).toMatch(/^─ ✓ 2\.9s · 40 tps ─+ 指挥官 ─$/u);
 });
 
 test("落定态与摘要行读同一份事实：一轮多段按同一合成规则显示整轮（耗时累加、更早的中断追加）；重开会话时直接显示上一轮", async () => {

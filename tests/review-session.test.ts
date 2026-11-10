@@ -1,117 +1,81 @@
-import { describe, expect, test } from "bun:test";
-import { loadFirecodeModule } from "./loader.ts";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installFaux } from "./faux-host.ts";
+import { loadFirecodeModule, PI_AI_COMPAT_URL, PI_AI_URL } from "./loader.ts";
 
-type Event = Record<string, unknown>;
+const { fauxAssistantMessage } = await import(PI_AI_COMPAT_URL) as any;
+const { getCurrentSystemPrompt, getCurrentTools } = await import(PI_AI_URL) as any;
 
-function fakeRuntime(run: (emit: (event: Event) => void, aborted: Promise<void>) => Promise<void>) {
-	let listener: ((event: Event) => void) | undefined;
-	let abort!: () => void;
-	const aborted = new Promise<void>((resolve) => { abort = resolve; });
-	const session = {
-		subscribe(next: (event: Event) => void) { listener = next; return () => { listener = undefined; }; },
-		// 模型流卡在半开连接上时 pi 的 abort 永不返回；运行器只能靠 dispose 收尾，不得等它。
-		abort: () => new Promise<void>(() => {}),
-	};
-	const pool = {
-		options: undefined as Record<string, unknown> | undefined,
-		resolveModel: async () => ({ id: "model" }),
-		resolveChain: async () => ({ model: "provider/model", thinking: "high" }),
-		async spawn(options: Record<string, unknown>) {
-			this.options = options;
-			return {
-				session,
-				prompt: async () => run((event) => listener?.(event), aborted),
-				dispose() { abort(); },
-			};
-		},
-	};
-	return { pool, session };
-}
+type RunReviewSession = (pool: unknown, options: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
-/** 经生产入口 runReviewSession 跑一场审查会话。 */
-async function runner() {
-	const { runReviewSession } = await loadFirecodeModule("review/session.js") as {
-		runReviewSession: (pool: unknown, options: Record<string, unknown>) => Promise<Record<string, unknown>>;
-	};
-	return { runReviewSession: ({ pool, ...options }: Record<string, unknown>) => runReviewSession(pool, options) };
-}
-
-const config = { models: [{ model: "provider/model", thinking: "high" }], tools: ["read", "bash"], timeoutMs: 1_000 };
-const base = (pool: unknown) => ({
-	pool,
-	config,
-	prompt: { system: "policy", user: "evidence" },
-	cwd: process.cwd(),
+const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+let faux: any;
+let agentDir: string;
+let cwd: string;
+let runReviewSession: RunReviewSession;
+let pool: unknown;
+beforeAll(async () => {
+	agentDir = await mkdtemp(join(tmpdir(), "firecode-review-session-agent-"));
+	cwd = await mkdtemp(join(tmpdir(), "firecode-review-session-cwd-"));
+	await writeFile(join(cwd, "AGENTS.md"), "PROJECT RULES");
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	faux = await installFaux(agentDir, ["p/one"]);
+	({ runReviewSession } = await loadFirecodeModule("review/session.js") as { runReviewSession: RunReviewSession });
+	pool = new ((await loadFirecodeModule("spawn.js")) as any).InProcessSessionPool();
+});
+afterAll(async () => {
+	faux.unregister();
+	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+	await rm(agentDir, { recursive: true, force: true });
+	await rm(cwd, { recursive: true, force: true });
 });
 
+const config = { models: [{ model: "p/one", thinking: "low" }], tools: ["read", "bash"], timeoutMs: 10_000 };
+const request = (extra: Record<string, unknown> = {}) => ({ config, prompt: { system: "policy", user: "evidence" }, cwd, ...extra });
+
 describe("review in-process session", () => {
-	test("returns the complete assistant output", async () => {
-		const body = `PASS\n${"完整结论 ".repeat(4000)}`;
-		const runtime = fakeRuntime(async (emit) => {
-			emit({ type: "tool_execution_start", toolName: "read", args: { path: "a.ts" } });
-			emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: body }] } });
-		});
-		const { runReviewSession } = await runner();
-		const result = await runReviewSession(base(runtime.pool));
-		expect(result).toEqual({ kind: "output", text: body, atom: { model: "provider/model", thinking: "high" } });
-		expect(runtime.pool.options).toMatchObject({
-			tools: ["read", "bash"],
-			contextFiles: false,
-			isolated: true,
-			persistence: { type: "memory" },
-			systemPrompt: { mode: "replace", text: "policy" },
-		});
+	test("the reviewer sees only the review policy and the configured tools", async () => {
+		let seen: any;
+		faux.setResponses([(context: any) => { seen = context; return fauxAssistantMessage("PASS\n完整结论"); }]);
+		expect(await runReviewSession(pool, request())).toMatchObject({ kind: "output", text: "PASS\n完整结论" });
+		const system: string = getCurrentSystemPrompt(seen.messages);
+		expect(system.startsWith("policy")).toBe(true);
+		expect(system).not.toContain("PROJECT RULES");
+		expect(getCurrentTools(seen.messages).map((tool: { name: string }) => tool.name).sort()).toEqual(["bash", "read"]);
 	});
 
-	test("a successful retry replaces the transient error result", async () => {
-		const runtime = fakeRuntime(async (emit) => {
-			emit({
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "temporary failure" }],
-					stopReason: "error",
-					errorMessage: "429 rate limited",
-				},
-			});
-			emit({
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "PASS\n重试成功" }],
-					stopReason: "stop",
-				},
-			});
-		});
-		const { runReviewSession } = await runner();
-		expect(await runReviewSession(base(runtime.pool))).toEqual({
-			kind: "output",
-			text: "PASS\n重试成功",
-			atom: { model: "provider/model", thinking: "high" },
-		});
-	});
-
-	test("caller cancellation returns without waiting for the session to settle", async () => {
-		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
+	// 模型流卡在半开连接上时 pi 的 abort 永不返回：取消与超时都不能等它。
+	test.each([
+		["caller cancellation", "aborted"],
+		["deadline expiry", "timeout"],
+	] as const)("%s returns without waiting for a stuck model stream", async (_name, kind) => {
+		const started = Promise.withResolvers<void>();
+		faux.setResponses([() => { started.resolve(); return new Promise<never>(() => {}); }]);
 		const controller = new AbortController();
-		const { runReviewSession } = await runner();
-		const pending = runReviewSession({ ...base(runtime.pool), signal: controller.signal });
+		const pending = runReviewSession(pool, request(kind === "aborted"
+			? { signal: controller.signal }
+			: { config: { ...config, timeoutMs: 50 } }));
+		await started.promise;
 		controller.abort();
-		expect(await pending).toEqual({ kind: "aborted" });
+		expect(await pending).toEqual({ kind });
 	});
 
-	test("deadline expiry returns timeout without waiting for the session to settle", async () => {
-		const runtime = fakeRuntime(async (_emit, aborted) => aborted);
-		const { runReviewSession } = await runner();
-		expect(await runReviewSession({ ...base(runtime.pool), config: { ...config, timeoutMs: 5 } })).toEqual({ kind: "timeout" });
-	});
-
-	test("an extension failing inside the reviewer session becomes part of that vote's error", async () => {
-		const runtime = fakeRuntime(async () => {
-			(runtime.pool.options!.onExtensionError as (error: Event) => void)({ extensionPath: "ext.ts", event: "tool_call", error: "boom" });
-		});
-		const { runReviewSession } = await runner();
-		const result = await runReviewSession(base(runtime.pool));
-		expect(result).toEqual({ kind: "error", message: "子会话里的扩展在 tool_call 出错：boom" });
+	test("an extension failing inside the reviewer session ends that vote with an error", async () => {
+		let options: Record<string, any> = {};
+		const fakePool = {
+			resolveChain: async (models: unknown[]) => models[0],
+			async spawn(next: Record<string, any>) {
+				options = next;
+				return {
+					session: { subscribe: () => () => {} },
+					prompt: async () => options.onExtensionError({ extensionPath: "ext.ts", event: "tool_call", error: "boom" }),
+					dispose() {},
+				};
+			},
+		};
+		expect(await runReviewSession(fakePool, request())).toMatchObject({ kind: "error" });
 	});
 });

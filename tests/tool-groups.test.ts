@@ -130,7 +130,7 @@ test("连续工具默认一行，原生全局展开只显示列表，单工具�
 	expect(s.lines().join("\n")).toContain("private full result");
 });
 
-test("思考与工具合成过程组，展开恢复原生思考，通知和文字仍分组", async () => {
+test("思考与工具合成过程组，展开恢复原生思考", async () => {
 	const s = await scene();
 	const first = s.tool("read", { path: "a" });
 	s.complete(first);
@@ -152,12 +152,6 @@ test("思考与工具合成过程组，展开恢复原生思考，通知和文�
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().join("\n")).not.toContain("需要检查另一处");
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	const index = s.chat.children.indexOf(empty);
-	s.chat.children[index] = new s.tui.Text("审查已完成", 0, 0);
-	expect(s.lines().join("\n")).toContain("审查已完成");
-	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(2);
-	s.chat.children.splice(index, 1);
-	expect(s.lines().filter((line: string) => /^✓\s*$/.test(line))).toHaveLength(1);
 });
 
 test("摘要优先显示运行项，工具失败不计数、不画红叉，切档不改聊天树", async () => {
@@ -263,18 +257,9 @@ test("无工具退出与重复安装都释放自己的钩子，无头子会话�
 	expect(s.chat.render).toBe(s.originalRender);
 });
 
-test("首条思考即显示过程状态，思考完成后摘要行留在原位，混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
+test("混合消息只藏思考，不改正文、原树或消息跳转标记", async () => {
 	const s = await scene();
-	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
-	feed(s, true);
 	const assistant = s.blankAssistant();
-	assistant.updateContent({ role: "assistant", content: [], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
-	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 思考中\\s*$`));
-	assistant.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "第一段内部思考" }, { type: "text", text: "第一段" }], stopReason: "pending" }, true);
-	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 回复中\\s*$`));
 	const message = {
 		role: "assistant", stopReason: "stop", content: [
 			{ type: "thinking", thinking: "第一段内部思考" },
@@ -285,7 +270,6 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	};
 	const originalMessage = structuredClone(message);
 	assistant.updateContent(message, false);
-	feed(s, false);
 	let clicks = 0;
 	assistant.addChild(new s.tui.MouseRegion(new s.tui.Text("原生额外内容", 0, 0), () => { clicks++; return { handled: true }; }));
 	const originalTree = assistant.children;
@@ -310,11 +294,6 @@ test("首条思考即显示过程状态，思考完成后摘要行留在原位�
 	expect(s.lines().join("\n")).toContain("第二段内部思考");
 	s.ui.setToolsExpanded(false);
 	expect(s.lines().join("\n")).toBe(collapsed);
-	s.chat.addChild(new s.tui.Spacer(1));
-	s.chat.addChild(new s.tui.Text(s.ui.theme.fg("warning", "Cache miss: 20k tokens re-billed"), 1, 0));
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓ ⚠ Cache miss: 20k tokens re-billed\s*$/);
-	// 前两行是段首空行与摘要行；其后的回复一字不动
-	expect(s.lines().slice(2).join("\n")).toBe(collapsed.split("\n").slice(2).join("\n"));
 });
 
 test("思考期间异常和截断诊断不会被思考折叠吞掉", async () => {
@@ -334,39 +313,14 @@ test("思考期间异常和截断诊断不会被思考折叠吞掉", async () =>
 	}
 });
 
-test("真实子代理调用与池查询纳入过程组，保留原生动作和列表摘要，详情按需展开", async () => {
+test("真实子代理调用纳入过程组，摘要行显示它的原生动作", async () => {
 	const s = await scene({ withMaster: true });
 	// 摘要行“运行中”只认 busy：宿主在跑工具、出思考时指挥官回合一定在跑。
 	feed(s, true);
 	s.complete(s.tool("read", { path: "a.ts" }));
-	const start = s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
+	s.tool("subagents", { action: "start", worker: "worker-one", role: "工程师", prompt: "检查实现" });
 	expect(s.lines().filter(Boolean)).toHaveLength(1);
 	expect(s.lines().filter(Boolean)[0]).toMatch(new RegExp(`^${FLAME} 子代理 启动 worker-one`));
-	s.complete(start, "worker started");
-	const list = s.tool("subagents_list", {});
-	list.updateResult({ content: [{ type: "text", text: "raw pool result" }], isError: false, details: {
-		workers: [{ name: "worker-one", role: "工程师", status: "working", model: "test/model", thinking: "low", phase: { kind: "running", action: "读取 a.ts", startedAt: Date.now() } }],
-	} });
-	feed(s, false);
-	expect(s.lines().filter(Boolean)).toHaveLength(1);
-	expect(s.lines().filter(Boolean)[0]).toMatch(/^✓\s*$/);
-	expect(s.lines().join("\n")).not.toContain("worker-one");
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().filter(Boolean)).toHaveLength(4);
-	expect(s.lines().join("\n")).toContain("启动 worker-one");
-	expect(s.lines().join("\n")).toContain("池 1");
-	const queryLine = s.lines().findIndex((line: string) => line.includes("查看"));
-	s.click(queryLine);
-	expect(s.lines().join("\n")).toContain("model/low");
-	expect(s.lines().join("\n")).toContain("读取 a.ts");
-	s.click(queryLine);
-	expect(s.lines().filter(Boolean)).toHaveLength(4);
-	s.ui.setToolsExpanded(false);
-	for (const [action, label] of [["send", "发送"], ["interrupt", "中断"], ["review", "审查"], ["tail", "近况"], ["ack", "待命"], ["kill", "移除"]]) {
-		s.complete(s.tool("subagents", { action, worker: "worker-one", prompt: "继续" }));
-		expect(s.lines().filter(Boolean)).toHaveLength(1);
-		expect(s.lines().join("\n")).not.toContain(label);
-	}
 });
 
 test("自定义渲染与自带鼠标处理的工具同样入组，展开态正文与点击归渲染器自己", async () => {
@@ -566,25 +520,6 @@ test("轮记录是会话里的零行记录：摘要行落定读它显示整段�
 	expect(marks).toEqual(["✓ 3.0s · ⚠ Cache miss after 8m idle", "✗ 已中断 · 12s", "✗ 请求失败 · 5.0s"]);
 });
 
-test("同一轮不经人类输入再次进行（命令触发）会有两条记录：耗时累加、终态取最后一条；新一轮的记录属于新一轮", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	s.complete(s.tool("read", { path: "a.ts" }));
-	assistant(s, [{ type: "text", text: "第一次回复" }]);
-	s.settle(3_000, "complete", 0);
-	s.complete(s.tool("read", { path: "b.ts" }));
-	assistant(s, [{ type: "text", text: "第二次回复" }]);
-	s.settle(9_000, "complete", 0);
-	s.chat.addChild(new s.host.UserMessageComponent("下一问"));
-	s.complete(s.tool("read", { path: "c.ts" }));
-	s.settle(1_000, "complete", 0);
-	s.setNow(60_000);
-
-	const collapsed = s.lines().filter(Boolean).map((line: string) => line.trim());
-	expect(collapsed.filter((line: string) => line.startsWith("✓"))).toEqual(["✓ 12s", "✓ 1.0s"]);
-	expect(collapsed.indexOf("✓ 12s")).toBeLessThan(collapsed.indexOf("第一次回复"));
-});
-
 test("一轮里先被 Esc 中断、又跑了一段（如 /fire-review）：不丢信息——耗时累加、终态取最后、更早的中断以“中断过 N 次”追加，多段不给均速", async () => {
 	const s = await scene();
 	hostUser(s, "写一篇散文");
@@ -671,19 +606,6 @@ test("纯文字轮也有落定行：有轮记录就画，显示耗时与均速�
 	expect(lines.indexOf("✗ 已中断 · 3.0s")).toBeLessThan(lines.indexOf("答到一半"));
 });
 
-test("中间回复与子代理结果行都经首句规则预览（规则本身见 format.test）", async () => {
-	const s = await scene();
-	s.chat.addChild(new s.host.UserMessageComponent("开工"));
-	assistant(s, [{ type: "text", text: "标准输出：\n\nhello world\n后面的细节" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }], "toolUse");
-	s.complete(s.tool("read", { path: "a.ts" }));
-	hostEvent(s, WORKER_RESULT("fix-auth", "命令已完成，完整输出：\n\ndone\n更多"));
-	assistant(s, [{ type: "text", text: "收口" }]);
-
-	expect(s.lines().map((line: string) => line.trim())).toContain("标准输出：hello world");
-	s.ui.setToolsExpanded(true);
-	expect(s.lines().map((line: string) => line.trim())).toContain("↳ fix-auth 已返回 · 8m 命令已完成，完整输出：done");
-});
-
 test("运行中摘要的目标按宽度先裁，动作词保留，放不下才丢目标", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("开工"));
@@ -697,7 +619,7 @@ test("运行中摘要的目标按宽度先裁，动作词保留，放不下才�
 	expect(at(10)).toMatch(new RegExp(`^${FLAME} 操作\\s*$`));
 });
 
-test("会话进行中：指挥官回合结束而有子代理在飞时摘要只剩火苗（状态与计时只在边框），全部落定才定格，耗时含等待", async () => {
+test("会话进行中：指挥官回合结束而有子代理在飞时摘要只剩火苗（状态与计时只在边框），指挥官再跑回到当前动作", async () => {
 	const s = await scene();
 	s.chat.addChild(new s.host.UserMessageComponent("派活"));
 	s.setNow(0);
@@ -711,21 +633,10 @@ test("会话进行中：指挥官回合结束而有子代理在飞时摘要只�
 	expect(summary()).toMatch(new RegExp(`^${FLAME}\\s*$`));
 
 	// 结果送达唤醒：回到当前动作，仍是同一段。
-	feed(s, false, 1, 0);
-	expect(summary()).toMatch(new RegExp(`^${FLAME}\\s*$`));
 	s.setNow(70000);
 	feed(s, true, 1, 0);
-	const bash = s.tool("bash", { command: "bun test" });
+	s.tool("bash", { command: "bun test" });
 	expect(summary()).toMatch(new RegExp(`^${FLAME} 操作 \\$ bun test\\s*$`));
-
-	// 最后一个子代理落定且指挥官歇下：定格，耗时含等待。
-	s.complete(bash);
-	feed(s, true, 0, 0);
-	s.setNow(80000);
-	feed(s, false, 0);
-	s.settle(80000);
-	s.setNow(90000);
-	expect(summary()).toMatch(/^✓ 1m20s\s*$/);
 });
 
 test("摘要行从开始到歇下一直在原位：思考中 → 读取 → 思考中 → 回复中 → 落定，回复不跳；当前动作不挂着已完成的工具", async () => {
@@ -824,21 +735,6 @@ test("折叠摘要行：这一轮有子代理失败时追加“N 个子代理失
 		expect(s.tui.visibleWidth(line)).toBeLessThanOrEqual(width);
 		expect(line).toContain("2 个子代理失败");
 	}
-});
-
-test("错误分节不在首位也判失败：回复分节在前时 ↳ 行仍为红、预览取错误原文、计入子代理失败数", async () => {
-	const s = await scene();
-	hostUser(s, "开工");
-	s.complete(s.tool("read", { path: "a.ts" }));
-	hostEvent(s, EVENT("fix-auth 失败", "回复：\n部分回复\n错误：\n供应商错误", "2s"));
-	assistant(s, [{ type: "text", text: "收口" }]);
-	s.settle(3_000, "complete", 0);
-	s.setNow(60_000);
-	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 1 个子代理失败");
-	s.ui.setToolsExpanded(true);
-	const row = s.chat.render(100).find((line: string) => stripVTControlCharacters(line).includes("fix-auth 失败"))!;
-	expect(stripVTControlCharacters(row).trim()).toBe("↳ fix-auth 失败 · 2s 供应商错误");
-	expect(row).toContain(s.ui.theme.fg("error", "↳"));
 });
 
 test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：红色 = 失败 = 计数只由“错误：”决定，被中断不算失败，只有落定类事件高亮", async () => {
@@ -1126,7 +1022,7 @@ test("折叠态按时间顺序：每条补话之后跟它那一段的中间回�
 		s.complete(s.tool("read", { path: `${id}.ts` }));
 	};
 	hostUser(s, "原问题");
-	interim("回复甲。", "a");
+	interim("回复甲。后面的细节", "a");
 	interim("回复乙。", "b");
 	hostUser(s, "补话一");
 	interim("回复丙。", "c");

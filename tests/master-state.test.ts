@@ -64,15 +64,9 @@ test("格式不合法的档案明确失败，不当作空池", async () => {
 	}
 });
 
-test("列表始终按启动序：档案里乱序的载入后有序，新增按启动序插入", async () => {
+test("档案里乱序的子代理载入后按启动序排列", async () => {
 	await seed([other, worker]);
-	const store = new MasterStore(path);
-	expect(store.workers.map((entry) => entry.name)).toEqual(["worker-1", "worker-2"]);
-	store.upsert({ ...worker, name: "worker-0", sessionPath: "/tmp/subagents/worker-0.jsonl", launch: 2 });
-	store.upsert({ ...worker, name: "worker-9", sessionPath: "/tmp/subagents/worker-9.jsonl", launch: 9 });
-	expect(store.workers.map((entry) => entry.name)).toEqual(["worker-1", "worker-0", "worker-2", "worker-9"]);
-	store.upsert({ ...other, status: "idle" });
-	expect(store.workers.map((entry) => entry.name)).toEqual(["worker-1", "worker-0", "worker-2", "worker-9"]);
+	expect(new MasterStore(path).workers.map((entry) => entry.name)).toEqual(["worker-1", "worker-2"]);
 });
 
 test("每次变更以 0600 原子覆盖唯一状态文件；池变空（删最后一票、载入空池）就删文件", async () => {

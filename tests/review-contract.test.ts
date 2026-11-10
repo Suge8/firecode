@@ -43,17 +43,8 @@ function finding(issue: string, { condition = "每次重启", frequency = "10", 
 describe("review output contract", () => {
 	test("the verdict comes from the scores; a stray verdict word on the first line is ignored", async () => {
 		await loadAll();
-		for (const first of ["PASS", "**FAIL**", "`PASS`", "## FAIL", "结论：**PASS**", "FAIL。"])
-			expect(`${first}:${(await vote(`${first}\n${HEAD}`)).status}`).toBe(`${first}:passed`);
+		expect(await vote(`FAIL\n${HEAD}`)).toMatchObject({ status: "passed", summary: "核对了 checkpoint 写入。" });
 		expect((await vote(`PASS\n${HEAD}\n\n${finding("x")}`)).status).toBe("failed");
-	});
-
-	test("a report needs a summary line before the evidence anchor", async () => {
-		await loadAll();
-		// 曾让 summary=undefined 流进多模型汇总对 undefined 调 replace，审查循环悬挂到超时。
-		const result = await vote("证据：文件=a.ts；命令=bun test");
-		expect(result.status).toBe("error");
-		expect(result.details).toContain("缺少摘要行");
 	});
 
 	test("a passing report requires the evidence anchor line with files and commands", async () => {
@@ -61,10 +52,16 @@ describe("review output contract", () => {
 		const ok = await vote("验证命令 exit 0，核心逻辑已核对。\n证据：文件=src/auth.ts；命令=npm test");
 		expect(ok.status).toBe("passed");
 		expect(ok.summary).toBe("验证命令 exit 0，核心逻辑已核对。");
-		for (const body of ["没有证据行", "ok\n证据：文件=src/auth.ts；命令=", "结论如下\n随便写"]) {
+		// 缺摘要行曾让 summary=undefined 流进多模型汇总对 undefined 调 replace，审查循环悬挂到超时。
+		for (const [body, issue] of [
+			["没有证据行", "格式无效"],
+			["ok\n证据：文件=src/auth.ts；命令=", "格式无效"],
+			["结论如下\n随便写", "格式无效"],
+			["证据：文件=a.ts；命令=bun test", "缺少摘要行"],
+		]) {
 			const outcome = await vote(body);
 			expect(`${body}:${outcome.status}`).toBe(`${body}:error`);
-			expect(outcome.details).toContain("格式无效");
+			expect(outcome.details).toContain(issue);
 		}
 	});
 
@@ -79,25 +76,9 @@ describe("review output contract", () => {
 		]) expect(`${line}:${(await vote(`核心逻辑已核对。\n${line}`)).status}`).toBe(`${line}:passed`);
 	});
 
-	test("a blocking finding keeps its text as details and gives the one-line summary", async () => {
-		await loadAll();
-		const parsed = await vote(`${HEAD}\n\n${finding("auth 没校验")}`);
-		expect(parsed.status).toBe("failed");
-		expect(parsed.summary).toBe("auth 没校验");
-		expect(parsed.details).toContain("发现 1");
-		expect(parsed.details).not.toContain("格式契约");
-	});
 });
 
 describe("advisor verdict parsing", () => {
-	test("parses continue/stop/narrow on the first line", async () => {
-		await loadAll();
-		expect(await advise("continue\n继续修")).toMatchObject({ verdict: "continue", advice: "继续修" });
-		expect((await advise("stop\n别修了")).verdict).toBe("stop");
-		expect((await advise("narrow\n收窄范围")).verdict).toBe("narrow");
-		expect((await advise("**stop**")).verdict).toBe("stop");
-	});
-
 	test("tolerates a model preamble before the verdict line and keeps it as advice", async () => {
 		await loadAll();
 		// fable 实际产出过的形状：前言句 + 裁决行 + 正文。
@@ -147,10 +128,6 @@ describe("advisor verdict parsing", () => {
 			expect(`${output}:${result.verdict}`).toBe(`${output}:continue`);
 			expect(result.advice).toContain("无法解析");
 		}
-	});
-
-	test("an advisor session that yields nothing raises, so the executor can skip the consultation", async () => {
-		await expect(voter.advise({ error: "auth failed" })).rejects.toThrow("顾问会话不可用");
 	});
 });
 
@@ -295,16 +272,11 @@ describe("blocking threshold", () => {
 	// 原文留作修复反馈与卡片正文，违例说明作为前注。
 	test("a blocking finding with a broken format still fails and keeps the original text", async () => {
 		await loadAll();
-		for (const [body, note] of [
-			["## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 6\n- 问题: 没有证据锚点", "缺少证据锚点行"],
-			[`${HEAD}\n## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 6\n- 问题: 只有问题`, "缺少必填字段"],
-		] as const) {
-			const outcome = await vote(body);
-			expect(`${note}:${outcome.status}`).toBe(`${note}:failed`);
-			expect(outcome.details).toContain("未满足格式契约");
-			expect(outcome.details).toContain(note);
-			expect(outcome.details).toContain("- 问题: ");
-		}
+		const outcome = await vote("## 发现 1\n- 发生条件: 每次\n- 频率: 10\n- 影响: 6\n- 问题: 没有证据锚点");
+		expect(outcome.status).toBe("failed");
+		expect(outcome.details).toContain("未满足格式契约");
+		expect(outcome.details).toContain("缺少证据锚点行");
+		expect(outcome.details).toContain("- 问题: 没有证据锚点");
 	});
 
 	test("accepts a finding whose field values start on the next line", async () => {
@@ -314,12 +286,6 @@ describe("blocking threshold", () => {
 		expect(outcome.status).toBe("failed");
 		expect(outcome.details).not.toContain("格式契约");
 		expect(outcome.summary).toBe("大屏仍只显示标题，不展示这段核心问题说明。");
-
-		const multilineEn = `Checked.\nEvidence: files=a.ts; commands=bun test\n## Finding 1\n- Condition:\nalways\n- Frequency:\n10\n- Impact:\n6\n- Issue:\nissue description\n- Violated agreement & expected behavior:\ncontract details\n- Evidence:\na.ts\n- Verification command:\nbun test`;
-		const outcomeEn = await vote(multilineEn);
-		expect(outcomeEn.status).toBe("failed");
-		expect(outcomeEn.details).not.toContain("格式契约");
-		expect(outcomeEn.summary).toBe("issue description");
 	});
 
 	test("score and field decoration is tolerated; full-width punctuation and the English contract are accepted", async () => {

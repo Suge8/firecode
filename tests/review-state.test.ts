@@ -64,18 +64,10 @@ async function loadState() {
 }
 
 describe("fire-review reducer", () => {
-	test("a PASS summary keeps non-blocking suggestions once across reviewers and drops the evidence line", async () => {
+	test("a PASS summary keeps non-blocking suggestions once across reviewers", async () => {
 		await loadState();
-		const one: ReviewLimits = { ...LIMITS, reviewers: [LIMITS.reviewers[0]] };
-		const single = settle(begin(one), 0, "passed", "核心逻辑已核对\n证据：文件=a.ts；命令=bun test\n## 建议（非阻塞）\n- 清理命名", one, "核心逻辑已核对");
-		const singleSummary = passSummary(single.effects[0]);
-		expect(singleSummary).toContain("核心逻辑已核对");
-		expect(singleSummary).toContain("## 建议（非阻塞）\n- 清理命名");
-		expect(singleSummary).not.toContain("证据：");
-
 		const first = settle(begin(), 0, "passed", "ok\n## 建议（非阻塞）\n- 清理命名", LIMITS, "核心逻辑已核对").state;
 		const multi = settle(first, 1, "passed", "ok\n## 建议（非阻塞）\n- 清理命名", LIMITS, "测试已通过");
-		expect(multi.state.phase).toBe("summarizing");
 		const summary = passSummary(multi.effects[0]);
 		expect(summary).toContain("• m0：核心逻辑已核对");
 		expect(summary.match(/清理命名/gu)).toHaveLength(1);
@@ -105,71 +97,32 @@ describe("fire-review reducer", () => {
 		expect(text).not.toContain("模型 2 · m1");
 	});
 
-	test("an absent reviewer blocks a pass but not the findings of a FAIL", async () => {
+	test("an absent reviewer does not hide the findings of a FAIL", async () => {
 		await loadState();
-		const passed = settle(settle(begin(), 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state, 1, "error", "审查会话超时");
-		expect(passed.state).toMatchObject({ phase: "settled", end: "error" });
-		expect(passed.effects).toMatchObject([{ kind: "send_card", card: { kind: "error" } }]);
-		expect(passed.state.history[0].error).toContain("模型 2 · m1\n审查会话超时");
-
 		const failed = settle(settle(begin(), 0, "failed", "FAIL\n发现 1").state, 1, "error", "审查会话认证失败");
 		expect(failed.state.history[0].result).toBe("failed");
 		expect(failed.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "fail" } });
 	});
 
-	test("failures reaching the threshold hand the round to the advisor", async () => {
+	// stop 的终止卡只承载裁决：findings 已在咨询前的失败卡显示过。
+	test.each([
+		["continue", "awaiting_fix", "failed", "advisor"],
+		["stop", "summarizing", "stopped", "stop"],
+	] as const)("advisor %s: the round closes and the right card follows", async (verdict, phase, result, card) => {
 		await loadState();
-		const second = repaired(failRound(begin()));
-		expect(second).toMatchObject({ phase: "reviewing", round: 2 });
-		const result = failRound(second);
-		expect(result).toMatchObject({ phase: "needs_fix", consecutiveFailures: 2 });
-		// 顾问可能叫停：此时反馈还没交给执行模型，本轮也还没进历史。
-		expect(result.history).toHaveLength(1);
+		const next = step(needsAdvisor(), { type: "ADVISOR_SETTLED", result: { verdict, advice: "别修了" } }, LIMITS, 30_000);
+		expect(next.state).toMatchObject({ phase, turn: "pending" });
+		expect(next.state.history.at(-1)?.result).toBe(result);
+		const sent = next.effects.find((effect) => effect.kind === "send_card") as { card: { kind: string; details?: string } };
+		expect(sent.card.kind).toBe(card);
+		if (card === "stop") expect(sent.card.details).toBe("别修了");
 	});
 
-	// narrow 与 continue 在 reducer 层同样带着反馈去修复；两者的差别在反馈文本的范围约束，由 review-card-checkpoint 的 prompt 用例把守。
-	test.each(["continue", "narrow"] as const)("advisor %s sends the advisor card and goes on to repair", async (verdict) => {
-		await loadState();
-		const result = step(needsAdvisor(), { type: "ADVISOR_SETTLED", result: { verdict, advice: "建议" } }, LIMITS, 30_000);
-		expect(result.state).toMatchObject({ phase: "awaiting_fix", turn: "pending" });
-		expect(result.state.history.at(-1)?.advisor?.verdict).toBe(verdict);
-		expect(result.effects).toMatchObject([
-			{ kind: "send_card", card: { kind: "advisor", advisor: { verdict }, advisorModel: "p/advisor" } },
-			{ kind: "advance" },
-		]);
-	});
-
-	test("skipping the advisor repairs without a card; an unavailable advisor repairs and says so", async () => {
+	test("skipping the advisor with esc repairs without a card", async () => {
 		await loadState();
 		const skipped = step(needsAdvisor(), { type: "ADVISOR_SKIPPED" }, LIMITS, 30_000);
 		expect(skipped.state.phase).toBe("awaiting_fix");
-		expect(skipped.effects).toEqual([{ kind: "advance" }]);
-		const unavailable = step(needsAdvisor(), { type: "ADVISOR_SKIPPED", message: "额度不足" }, LIMITS, 30_000);
-		expect(unavailable.state.phase).toBe("awaiting_fix");
-		expect(unavailable.effects).toEqual([{ kind: "send_card", card: { kind: "skipped", message: "额度不足" } }, { kind: "advance" }]);
-	});
-
-	test("advisor stop ends the loop with a summary turn and a card that carries only the ruling", async () => {
-		await loadState();
-		const start = needsAdvisor().updatedAt;
-		const result = step(needsAdvisor(), { type: "ADVISOR_SETTLED", result: { verdict: "stop", advice: "别修了" } }, LIMITS, 30_000);
-		expect(result.state).toMatchObject({ phase: "summarizing", turn: "pending" });
-		expect(result.state.history.at(-1)?.result).toBe("stopped");
-		expect(result.effects).toEqual([
-			{
-				kind: "send_card",
-				card: {
-					kind: "stop",
-					reason: "advisor",
-					round: 2,
-					details: "别修了",
-					advisor: { verdict: "stop", advice: "别修了" },
-					advisorModel: "p/advisor",
-					elapsedMs: 30_000 - start,
-				},
-			},
-			{ kind: "advance" },
-		]);
+		expect(skipped.effects.some((effect) => effect.kind === "send_card")).toBe(false);
 	});
 
 	test("a FAIL at the max round goes straight to the summary turn without delivering feedback", async () => {

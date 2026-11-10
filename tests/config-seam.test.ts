@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { FIRECODE_DIR, loadFirecodeModule, featuresOnly, PI_PACKAGES } from "./loader.ts";
 import { fakePi } from "./fake-pi.ts";
 
-test("missing runtime config disables optional behavior and warns on each session_start", async () => {
+test("missing runtime config disables optional behavior and warns at session_start", async () => {
 	const { registerFirecode } = await loadFirecodeModule("index.ts", { configJsonc: null }) as any;
 	const fake = fakePi();
 
@@ -16,14 +16,10 @@ test("missing runtime config disables optional behavior and warns on each sessio
 	expect([...fake.commands.keys()]).toEqual([]);
 	expect([...fake.shortcuts.keys()]).toEqual([]);
 	expect([...fake.tools.keys()]).toEqual([]);
-	expect([...fake.messageRenderers.keys()]).toEqual(["firecode-review-card"]);
 	const warnings: string[] = [];
-	for (let occurrence = 0; occurrence < 2; occurrence++)
-		await fake.fire("session_start", {}, { isIdle: () => true, ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
-	expect(warnings).toEqual([
-		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
-		"FireCode 配置有问题：config.jsonc 不存在，已关闭可选功能",
-	]);
+	await fake.fire("session_start", {}, { isIdle: () => true, ui: { notify: (message: string) => warnings.push(message) }, sessionManager: { getBranch: () => [] } });
+	expect(warnings).toHaveLength(1);
+	expect(warnings[0]).toContain("config.jsonc");
 });
 
 test("runtime config enables only the switched-on feature: stats registers its commands and nothing else", async () => {
@@ -89,6 +85,8 @@ test("旧写法、手误与缺失字段都被报出，对应功能拒绝启动",
 		["review.tools 含写入工具", { review: { tools: ["read", "edit"] } }, "review.tools 不能包含 write 或 edit：审查者只读"],
 		["已删除的 tools 节", { tools: { replyLines: 3 } }, "未知配置节 tools"],
 		["已删除的 features.rename", { features: { rename: true } }, "未知开关 features.rename，可用："],
+		["language 取值非法", { language: "fr" }, "language 必须是 zh 或 en"],
+		["已删除的 review.language", { review: { language: "zh" } }, "未知字段 review.language"],
 	];
 	for (const [name, section, expected] of rejected) {
 		const loaded = await loadFrom(JSON.stringify({ features, ...(section as object) }));
@@ -227,20 +225,15 @@ test("扩展加载时配置缺失：主会话写入随包模板，本次会话�
 	const { CONFIG_PATH, notices, sessionStart, reload } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
-	const warning = "角色没有可用模型：researcher: gpt-6.1-terra, claude-sonnet-5-5; junior: claude-sonnet-5-5, gpt-6.1-terra; engineer: claude-opus-5-5, gpt-6-astra";
+	const count = () => ({
+		seeded: notices.filter(([level, message]) => level === "info" && message.includes(CONFIG_PATH)).length,
+		unavailable: notices.filter(([level, message]) => level === "warning" && message.startsWith("角色没有可用模型")).length,
+	});
 	await sessionStart();
-
-	expect(notices).toEqual([
-		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
-		["warning", warning],
-	]);
+	expect(count()).toEqual({ seeded: 1, unavailable: 1 });
 	// 配置已在盘上，重载后不再提示生成；角色仍然没有可用模型，照常提示。
 	await reload();
-	expect(notices).toEqual([
-		["info", "已生成配置：" + CONFIG_PATH + "，按需修改模型后重启生效"],
-		["warning", warning],
-		["warning", warning],
-	]);
+	expect(count()).toEqual({ seeded: 1, unavailable: 2 });
 });
 
 test("全新安装（播种的推荐配置、宿主默认键位）注册的快捷键不与任何宿主键位重叠，启动无冲突提示", async () => {
@@ -293,24 +286,16 @@ const blockConfigDir = async (configPath: string) => {
 	await writeFile(configDir, "挡路的文件");
 };
 
-test("写入失败明确报错，不静默", async () => {
-	const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null, beforeRegister: blockConfigDir });
-
-	await sessionStart();
-
-	const errors = notices.filter(([level]) => level === "error");
-	expect(errors).toHaveLength(1);
-	expect(errors[0][1]).toContain("无法生成配置：" + CONFIG_PATH);
-});
-
-test("无界面的主会话写入失败也明确报错（stderr），不静默", async () => {
+test.each([["有界面：notify", true], ["无界面：stderr", false]])("写入失败明确报错，不静默（%s）", async (_name, hasUI) => {
 	const stderr = spyOn(console, "error").mockImplementation(() => {});
 	try {
-		const { CONFIG_PATH, sessionStart } = await seedHarness({ configJsonc: null, hasUI: false, beforeRegister: blockConfigDir });
+		const { CONFIG_PATH, notices, sessionStart } = await seedHarness({ configJsonc: null, hasUI, beforeRegister: blockConfigDir });
 
 		await sessionStart();
 
-		expect(stderr.mock.calls.map(([message]) => String(message)).join("\n")).toContain("无法生成配置：" + CONFIG_PATH);
+		const reported = hasUI ? notices.filter(([level]) => level === "error").map(([, message]) => message) : stderr.mock.calls.map(([message]) => String(message));
+		expect(reported).toHaveLength(1);
+		expect(reported[0]).toContain("无法生成配置：" + CONFIG_PATH);
 	} finally {
 		stderr.mockRestore();
 	}

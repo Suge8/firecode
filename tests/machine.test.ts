@@ -22,6 +22,12 @@ test("↳ 预览只取给人看的分节；非落定通知与被中断只显示�
 	]) expect(entry(produced).preview).toBe("");
 });
 
+test("“错误：”分节不在首位也判失败，预览取错误原文", async () => {
+	const { machine, wrapEnvelope } = await modules();
+	const [entry] = machine.machineEntries(wrapEnvelope("firecode_master_event", "fix-auth 失败\n回复：\n部分回复\n错误：\n供应商错误"));
+	expect(entry).toMatchObject({ failed: true, alarm: true, preview: "供应商错误" });
+});
+
 test("审查通过卡的预览不带模型名：多审查者汇总的“• 模型：结论”只取结论", async () => {
 	const { machine, wrapEnvelope } = await modules();
 	const { msg } = await loadFirecodeModule("review/messages.ts") as any;
