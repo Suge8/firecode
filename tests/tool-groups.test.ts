@@ -54,6 +54,7 @@ async function scene(options: { scroll?: boolean } = {}) {
 		row.updateResult({ content: [{ type: "text", text }], isError });
 	const lines = (width = 100) => chat.render(width).map(stripVTControlCharacters);
 	const click = (y: number, width = 100) => chat.handleMouse({ type: "click", button: "left", x: 5, y, width, height: chat.render(width).length, shift: false, alt: false, ctrl: false });
+	const originalRender = chat.render;
 	dispose = module.installGroupPatch(ui, groupOptions);
 	const setNow = (value: number) => setSystemTime(new Date(value));
 	/** 宿主的整行单色文本（提示、状态行）：前面先插一个 Spacer。 */
@@ -76,7 +77,7 @@ async function scene(options: { scroll?: boolean } = {}) {
 		chat.addChild(entry);
 		root.requestRender();
 	};
-	return { feedBusy, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click };
+	return { feedBusy, setNow, note, blankAssistant, settle, host, tui, chat, root, scroll, ui, tool, complete, lines, click, originalRender };
 }
 
 test("连续工具默认一行，原生全局展开只显示列表，单工具仍可点击查看正文", async () => {
@@ -636,4 +637,12 @@ test("用户消息的 OSC 133 语义提示标记始终在行首：终端把行�
 	const marked = s.chat.render(60).filter((line: string) => line.includes("\x1b]133;"));
 	expect(marked.length).toBeGreaterThan(0);
 	for (const line of marked) expect(line).toMatch(/^(?:\x1b\]133;[ABC]\x07)+/);
+});
+
+test("宿主组件形状不符时不安装过程分组：提示后聊天树保持原生渲染", async () => {
+	const s = await scene();
+	const message = new s.host.AssistantMessageComponent(undefined, true, s.host.getMarkdownTheme());
+	delete (message as any).isStreaming;
+	expect(() => s.chat.addChild(message)).toThrow(/isStreaming/u);
+	expect(s.chat.render).toBe(s.originalRender);
 });
