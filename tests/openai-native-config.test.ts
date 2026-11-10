@@ -28,7 +28,9 @@ const read = (path: string) => readFileSync(path, "utf8");
 test("toggling fast flips the provider's priority and leaves everything else in the file alone", async () => {
 	const fast = await fastCommand(`{
 	// keep me
+	// "openai": { "providers": { "old": {} } }
 	"keys": { "fast": "ctrl+shift+s" },
+	"note": "see \\"openai\\": { below",
 	"openai": {
 		"nativeCompaction": true,
 		"experimental": 1,
@@ -42,9 +44,11 @@ test("toggling fast flips the provider's priority and leaves everything else in 
 	await fast.toggle("openai-codex");
 	const afterOn = read(fast.path);
 	expect(afterOn).toContain("// keep me");
+	expect(afterOn).toContain('// "openai": { "providers": { "old": {} } }');
 	expect(afterOn).toContain("/* trailing note */");
 	expect(parseJsonc(afterOn)).toEqual({
 		keys: { fast: "ctrl+shift+s" },
+		note: 'see "openai": { below',
 		openai: {
 			nativeCompaction: true,
 			experimental: 1,
@@ -55,24 +59,6 @@ test("toggling fast flips the provider's priority and leaves everything else in 
 
 	await fast.toggle("openai-codex");
 	expect((parseJsonc(read(fast.path)) as any).openai.providers["openai-codex"]).toEqual({ textVerbosity: "low", priority: false });
-});
-
-test("an \"openai\": { inside a comment or a string is not the openai section", async () => {
-	const fast = await fastCommand(`{
-	// "openai": { "providers": { "old": {} } }
-	"master": { "note": "see \\"openai\\": { below" },
-	"openai": { "providers": { "openai-codex": { "priority": false } } }
-}
-`);
-
-	await fast.toggle("openai-codex");
-
-	const after = read(fast.path);
-	expect(after).toContain('// "openai": { "providers": { "old": {} } }');
-	expect(parseJsonc(after)).toMatchObject({
-		master: { note: 'see "openai": { below' },
-		openai: { providers: { "openai-codex": { priority: true } } },
-	});
 });
 
 test("without an openai section one is added at the end and the comments stay", async () => {

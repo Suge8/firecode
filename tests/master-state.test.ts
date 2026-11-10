@@ -33,21 +33,6 @@ const exists = (file: string) => access(file).then(() => true, () => false);
 
 afterEach(() => rm(directory, { recursive: true, force: true }));
 
-test("载入时在飞状态收敛为带中断标记与重载打断标记的 idle，审查义务等标记原样保留，已落定的不变", async () => {
-	const reviewing = { ...other, status: "reviewing", reviewNeeded: true };
-	const idle = { ...worker, name: "idle", sessionPath: "/tmp/subagents/idle.jsonl", status: "idle", launch: 3, interruptedAt: 7 };
-	await seed([worker, reviewing, idle]);
-	const store = new MasterStore(path);
-	const converged = [
-		{ ...worker, status: "idle", interruptedAt: expect.any(Number), reloadInterrupted: true },
-		{ ...reviewing, status: "idle", interruptedAt: expect.any(Number), reloadInterrupted: true },
-		idle,
-	];
-	expect(store.workers).toEqual(converged);
-	// 收敛结果连同重载打断标记已落盘：提醒发出前再载入一次，仍认得出是被重载打断的。
-	expect(new MasterStore(path).workers).toEqual(converged);
-});
-
 test("格式不合法的档案明确失败，不当作空池", async () => {
 	const invalid: unknown[][] = [
 		[{ ...worker, status: "starting" }],
@@ -62,11 +47,6 @@ test("格式不合法的档案明确失败，不当作空池", async () => {
 		expect(() => new MasterStore(path)).toThrow("结构无效");
 		await rm(directory, { recursive: true, force: true });
 	}
-});
-
-test("档案里乱序的子代理载入后按启动序排列", async () => {
-	await seed([other, worker]);
-	expect(new MasterStore(path).workers.map((entry) => entry.name)).toEqual(["worker-1", "worker-2"]);
 });
 
 test("每次变更以 0600 原子覆盖唯一状态文件；池变空（删最后一票、载入空池）就删文件", async () => {

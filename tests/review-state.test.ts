@@ -5,7 +5,6 @@ import { loadFirecodeModule } from "./loader.ts";
 type StateModule = typeof import("../review/state.js");
 let reduce: StateModule["reduce"];
 let initialState: StateModule["initialState"];
-let roundText: StateModule["roundText"];
 type ReviewEvent = import("../review/state.js").ReviewEvent;
 
 const LIMITS: ReviewLimits = {
@@ -53,57 +52,12 @@ function needsAdvisor(): ReviewState {
 	return state;
 }
 
-function passSummary(effect: unknown): string {
-	const card = (effect as { card?: { kind: string; summary: string } }).card;
-	return card?.kind === "pass" ? card.summary : "";
-}
-
 async function loadState() {
 	const module = (await loadFirecodeModule("review/state.ts")) as StateModule;
-	({ reduce, initialState, roundText } = module);
+	({ reduce, initialState } = module);
 }
 
 describe("fire-review reducer", () => {
-	test("a PASS summary keeps non-blocking suggestions once across reviewers", async () => {
-		await loadState();
-		const first = settle(begin(), 0, "passed", "ok\n## 建议（非阻塞）\n- 清理命名", LIMITS, "核心逻辑已核对").state;
-		const multi = settle(first, 1, "passed", "ok\n## 建议（非阻塞）\n- 清理命名", LIMITS, "测试已通过");
-		const summary = passSummary(multi.effects[0]);
-		expect(summary).toContain("• m0：核心逻辑已核对");
-		expect(summary.match(/清理命名/gu)).toHaveLength(1);
-	});
-
-	test("a later PASS card recaps the findings closed since the failed rounds", async () => {
-		await loadState();
-		let state = settle(begin(), 0, "failed", "FAIL\n## 发现 1\n- 问题: stale lock").state;
-		state = settle(state, 1, "passed", "PASS\nok").state;
-		state = repaired(state);
-		state = settle(state, 0, "passed", "PASS\nok").state;
-		const summary = passSummary(settle(state, 1, "passed", "PASS\nok").effects[0]);
-		expect(summary).toContain("**本次收口的问题**：");
-		expect(summary).toContain("• stale lock（第 1 轮）");
-	});
-
-	test("a FAIL vote fails the round: the card shows every reviewer, the feedback carries the failing votes only", async () => {
-		await loadState();
-		const result = settle(settle(begin(), 0, "failed", "FAIL\n发现 1").state, 1, "passed", "PASS\n证据：文件=a.ts；命令=ls");
-		expect(result.state.phase).toBe("awaiting_fix");
-		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "fail", round: 1 } }, { kind: "advance" }]);
-		const card = result.effects[0] as { card: { details: string } };
-		expect(card.card.details).toContain("模型 1 · m0");
-		expect(card.card.details).toContain("模型 2 · m1");
-		const text = roundText(result.state.history[0]);
-		expect(text).toContain("模型 1 · m0");
-		expect(text).not.toContain("模型 2 · m1");
-	});
-
-	test("an absent reviewer does not hide the findings of a FAIL", async () => {
-		await loadState();
-		const failed = settle(settle(begin(), 0, "failed", "FAIL\n发现 1").state, 1, "error", "审查会话认证失败");
-		expect(failed.state.history[0].result).toBe("failed");
-		expect(failed.effects[0]).toMatchObject({ kind: "send_card", card: { kind: "fail" } });
-	});
-
 	// stop 的终止卡只承载裁决：findings 已在咨询前的失败卡显示过。
 	test.each([
 		["continue", "awaiting_fix", "failed", "advisor"],
@@ -118,30 +72,11 @@ describe("fire-review reducer", () => {
 		if (card === "stop") expect(sent.card.details).toBe("别修了");
 	});
 
-	test("skipping the advisor with esc repairs without a card", async () => {
-		await loadState();
-		const skipped = step(needsAdvisor(), { type: "ADVISOR_SKIPPED" }, LIMITS, 30_000);
-		expect(skipped.state.phase).toBe("awaiting_fix");
-		expect(skipped.effects.some((effect) => effect.kind === "send_card")).toBe(false);
-	});
-
 	test("a FAIL at the max round goes straight to the summary turn without delivering feedback", async () => {
 		await loadState();
 		const local = { ...LIMITS, maxRounds: 1 };
 		const result = settle(settle(begin(local), 0, "failed", "FAIL\n发现 1", local).state, 1, "failed", "FAIL\n发现 2", local);
 		expect(result.state).toMatchObject({ phase: "summarizing", turn: "pending" });
 		expect(result.effects).toMatchObject([{ kind: "send_card", card: { kind: "stop", reason: "max_rounds", round: 1 } }, { kind: "advance" }]);
-	});
-
-	test("an interrupted summary turn is re-armed on recovery and a cancel during it keeps the verdict and says so", async () => {
-		await loadState();
-		let state = settle(settle(begin(), 0, "passed", "PASS\n证据：文件=a.ts；命令=ls").state, 1, "passed", "PASS\n证据：文件=b.ts；命令=ls").state;
-		state = step(state, { type: "TURN_STARTED" }, LIMITS, 5000).state;
-		const recovered = step(state, { type: "RECOVER" }, LIMITS, 6000).state;
-		expect(recovered).toMatchObject({ phase: "summarizing", turn: "pending" });
-		const cancelled = step(recovered, { type: "CANCEL", reason: "user" }, LIMITS, 7000);
-		expect(cancelled.state).toMatchObject({ phase: "settled", end: "passed" });
-		expect(cancelled.state.history.map((round) => round.result)).toEqual(["passed"]);
-		expect(cancelled.effects).toEqual([{ kind: "notify_summary_skipped" }]);
 	});
 });

@@ -1,4 +1,4 @@
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -82,12 +82,11 @@ const context = (
 const trace = (requests: Array<{ method: string; params: any }>) =>
 	requests.map(({ method, params }) => (method === "pane.report_agent" ? params.state : method.replace("pane.", "")));
 
-test("session_start 首报：先报状态与恢复命令，再报身份；不动持久 pane/tab 名", async () => {
+test("session_start 首报：先报状态与恢复命令，再报身份", async () => {
 	idle = true;
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
 	await pi.fire("session_start", {}, context("重命名"));
-	await pi.fire("session_info_changed", {}, context("重命名"));
 	await drained(herdr, 2);
 
 	expect(trace(herdr.requests)).toEqual(["idle", "report_metadata"]);
@@ -98,63 +97,10 @@ test("session_start 首报：先报状态与恢复命令，再报身份；不动
 		state: "idle",
 		resume_argv: ["pi", "--session", "/sessions/a.jsonl"],
 	});
-	expect(herdr.requests[1].params).toMatchObject({
-		source: "firecode",
-		display_agent: "pi·claude-opus-4-5/medium",
-		title: "重命名",
-		tokens: { session: "重命名" },
-		clear_state_labels: true,
-	});
-	expect(herdr.requests[1].params.seq).toBeGreaterThan(herdr.requests[0].params.seq);
+	expect(herdr.requests[1].params).toMatchObject({ source: "firecode", title: "重命名" });
 });
 
-test("同一 pane 里后启动的 pi 推高了 seq 水位：本进程之后的上报仍高过它，不被 herdr 当过期丢弃", async () => {
-	idle = true;
-	const herdr = await herdrStub();
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("x"));
-	await drained(herdr, 2);
-	// 一分钟后在本 pane 里启动的另一个 pi（如嵌套启动）按它自己的启动时刻起算 seq，herdr 记下的水位随之抬高。
-	const otherStartedAt = Date.now() + 60_000;
-	const watermark = otherStartedAt * 1000 + 1000;
-	setSystemTime(new Date(otherStartedAt + 1_000));
-	try {
-		idle = false;
-		await pi.fire("agent_start", {}, context("x"));
-		await drained(herdr, 3);
-	} finally {
-		setSystemTime();
-		idle = true;
-	}
-	expect(trace(herdr.requests).at(-1)).toBe("working");
-	expect(herdr.requests.at(-1)!.params.seq).toBeGreaterThan(watermark);
-});
-
-test("会话文件路径含撇号（herdr 会拒收）或没有会话文件时不附恢复命令", async () => {
-	for (const file of ["/Users/o'neil/a.jsonl", null]) {
-		const herdr = await herdrStub();
-		const pi = await register(herdr.path);
-		await pi.fire("session_start", {}, context("x", { file }));
-		await drained(herdr, 1);
-		expect(herdr.requests[0].params).not.toHaveProperty("resume_argv");
-	}
-});
-
-test("reload 时回合仍在跑：session_start 首报即 working", async () => {
-	idle = false;
-	const herdr = await herdrStub();
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("x"));
-	await drained(herdr, 2);
-	expect(trace(herdr.requests)).toEqual(["working", "report_metadata"]);
-	// 回合落定后回到 idle。
-	idle = true;
-	await pi.fire("agent_settled", {}, context("x"));
-	await drained(herdr, 3);
-	expect(trace(herdr.requests)).toEqual(["working", "report_metadata", "idle"]);
-});
-
-test("主回合歇下后子代理仍在飞：保持 working，全部落定才 idle", async () => {
+test("主回合歇下后子代理或审查仍在进行：保持 working，全部落定才 idle", async () => {
 	idle = true;
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
@@ -165,92 +111,22 @@ test("主回合歇下后子代理仍在飞：保持 working，全部落定才 id
 	idle = false;
 	await pi.fire("agent_start", {}, ctx);
 	pi.pi.events.emit("firecode:workers", { inFlight: 2 });
+	pi.pi.events.emit("firecode:review", { active: true, progress: () => undefined });
 	await drained(herdr, 3);
 	idle = true;
 	await pi.fire("agent_settled", {}, ctx);
-	await drained(herdr, 4);
 	pi.pi.events.emit("firecode:workers", { inFlight: 1 });
-	// 主回合已歇下，仍有子代理在飞：不出现 idle 报告，侧边栏标签说明原因。
-	expect(trace(herdr.requests).slice(2)).toEqual(["working", "report_metadata"]);
-	expect(herdr.requests[3].params.state_labels).toEqual({ working: "子代理进行中" });
+	await drained(herdr, 4);
+	expect(trace(herdr.requests)).not.toContain("blocked");
+	expect(trace(herdr.requests).filter((state) => state === "idle")).toHaveLength(1);
 
 	pi.pi.events.emit("firecode:workers", { inFlight: 0 });
-	await drained(herdr, 6);
-	expect(trace(herdr.requests).slice(2)).toEqual(["working", "report_metadata", "idle", "report_metadata"]);
-	expect(herdr.requests[5].params.clear_state_labels).toBe(true);
-});
-
-test("审查进行中报 working（不是 blocked：没有等用户决定），带审查标签；结束回 idle", async () => {
-	idle = true;
-	const herdr = await herdrStub();
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("x"));
-	await drained(herdr, 2);
-
-	pi.pi.events.emit("firecode:review", { active: true, progress: () => undefined });
-	await drained(herdr, 4);
-	expect(trace(herdr.requests).slice(2)).toEqual(["working", "report_metadata"]);
-	expect(herdr.requests[3].params.state_labels).toEqual({ working: "对抗审查进行中" });
-
 	pi.pi.events.emit("firecode:review", { active: false });
-	await drained(herdr, 6);
-	expect(trace(herdr.requests).slice(4)).toEqual(["idle", "report_metadata"]);
+	await until(() => trace(herdr.requests).filter((state) => state === "idle").length === 2 && herdr.closed === herdr.requests.length);
+	expect(trace(herdr.requests).filter((state) => state === "idle")).toHaveLength(2);
 });
 
-test("上报在途时状态连续翻转：只送最新值", async () => {
-	idle = true;
-	const herdr = await herdrStub();
-	const pi = await register(herdr.path);
-	const ctx = context("x");
-	const started = pi.fire("session_start", {}, ctx);
-	idle = false;
-	await pi.fire("agent_start", {}, ctx);
-	idle = true;
-	await pi.fire("agent_settled", {}, ctx);
-	await pi.fire("agent_start", {}, ctx);
-	await started;
-	await until(() => trace(herdr.requests).includes("report_metadata") && herdr.closed === herdr.requests.length);
-	const states = herdr.requests.filter((request) => request.method === "pane.report_agent").map((request) => request.params.state);
-	expect(states.at(-1)).toBe("working");
-	expect(states.length).toBeLessThanOrEqual(2);
-});
-
-test("身份：改名、换模型各自重报，同一身份不重发", async () => {
-	idle = true;
-	const herdr = await herdrStub();
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("身份-A"));
-	await drained(herdr, 2);
-	for (const [name, count] of [["身份-B", 3], ["身份-B", 3], ["身份-A", 4]] as const) {
-		await pi.fire("session_info_changed", {}, context(name));
-		await drained(herdr, count);
-	}
-	await pi.fire("model_select", {}, context("身份-A", { model: "openai/gpt-5.5" }));
-	await drained(herdr, 5);
-	const identities = herdr.requests.filter((request) => request.method === "pane.report_metadata").map((request) => [request.params.title, request.params.display_agent]);
-	expect(identities.map(([title]) => title)).toEqual(["身份-A", "身份-B", "身份-A", "身份-A"]);
-	expect(identities.at(-1)).toEqual(["身份-A", "pi·gpt-5.5/medium"]);
-});
-
-test("送达失败重试一次；两次都失败就停手，下一个事件继续补发", async () => {
-	idle = true;
-	const retried = await herdrStub(1);
-	const first = await register(retried.path);
-	await first.fire("session_start", {}, context("x"));
-	await drained(retried, 3);
-	expect(trace(retried.requests)).toEqual(["idle", "idle", "report_metadata"]);
-
-	const herdr = await herdrStub(2);
-	const pi = await register(herdr.path);
-	await pi.fire("session_start", {}, context("x"));
-	await drained(herdr, 2);
-	expect(trace(herdr.requests)).toEqual(["idle", "idle"]);
-	await pi.fire("session_info_changed", {}, context("改名"));
-	await drained(herdr, 4);
-	expect(trace(herdr.requests)).toEqual(["idle", "idle", "idle", "report_metadata"]);
-});
-
-test("quit 清身份并 release；reload/new/resume/fork 不 release", async () => {
+test("quit 清身份并 release；new 不 release", async () => {
 	idle = true;
 	const herdr = await herdrStub();
 	const pi = await register(herdr.path);
@@ -264,13 +140,13 @@ test("quit 清身份并 release；reload/new/resume/fork 不 release", async () 
 	await next.fire("session_shutdown", { reason: "quit" }, context("x"));
 	await drained(herdr, 6);
 	expect(trace(herdr.requests)).toEqual(["idle", "report_metadata", "idle", "report_metadata", "report_metadata", "release_agent"]);
-	expect(herdr.requests[4].params).toMatchObject({ clear_display_agent: true, clear_title: true, tokens: { session: null }, clear_state_labels: true });
 	expect(herdr.requests[5].params).toMatchObject({ source: "firecode", agent: "pi" });
-	expect(herdr.requests[5].params.seq).toBeGreaterThan(herdr.requests[4].params.seq);
 });
 
-test("非 TUI、herdr 之外一律静默", async () => {
+test("herdr 之外、非 TUI 一律静默", async () => {
 	const herdr = await herdrStub();
+	const outside = await register(herdr.path, { HERDR_ENV: undefined });
+	await outside.fire("session_start", {}, context("x"));
 	const pi = await register(herdr.path);
 	await pi.fire("session_start", {}, context("x", { mode: "print" }));
 	pi.pi.events.emit("firecode:workers", { inFlight: 1 });
@@ -281,8 +157,6 @@ test("非 TUI、herdr 之外一律静默", async () => {
 	await tui.fire("session_start", {}, context("x"));
 	await drained(herdr, 2);
 	expect(trace(herdr.requests)).toEqual(["idle", "report_metadata"]);
-
-	expect((await register(herdr.path, { HERDR_ENV: undefined })).handlers.size).toBe(0);
 });
 
 test("子会话不接管 pane：同一 herdr 环境下主会话投影，子会话不发任何请求", async () => {

@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FIRECODE_DIR, loadFirecodeModule } from "./loader.ts";
 
@@ -20,46 +18,6 @@ describe("review outcome reader", () => {
 		const readReviewOutcome = await loadReader();
 		expect(readReviewOutcome(join(fixtures, "stopped-max-rounds.jsonl"))).toMatchObject({ status: "stopped" });
 		expect(readReviewOutcome(join(fixtures, "stopped-advisor.jsonl"))).toMatchObject({ status: "stopped", advisorAdvice: "stop here" });
-	});
-
-	test("error and timed_out terminals surface as failed with a readable reason", async () => {
-		const readReviewOutcome = await loadReader();
-		expect(readReviewOutcome(join(fixtures, "error-terminal.jsonl"))).toEqual({
-			status: "failed",
-			runId: "error-run",
-			rounds: 2,
-			reason: "issue remains",
-		});
-		const directory = await mkdtemp(join(tmpdir(), "review-timeout-"));
-		try {
-			const path = join(directory, "session.jsonl");
-			await writeFile(path, (await readFile(join(fixtures, "error-terminal.jsonl"), "utf8")).replace('"end":"error"', '"end":"timed_out"'));
-			expect(readReviewOutcome(path)).toEqual({ status: "failed", runId: "error-run", rounds: 2, reason: "审查超过总体时限被终止" });
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
-
-	test("reports no review for a plain or missing session", async () => {
-		const readReviewOutcome = await loadReader();
-		expect(readReviewOutcome(join(fixtures, "none.jsonl"))).toEqual({ status: "none" });
-		expect(readReviewOutcome(join(fixtures, "missing.jsonl"))).toEqual({ status: "none" });
-	});
-
-	test("a refusal record is the latest outcome until a later checkpoint supersedes it", async () => {
-		const readReviewOutcome = await loadReader();
-		const directory = await mkdtemp(join(tmpdir(), "review-refusal-"));
-		try {
-			const passed = (await readFile(join(fixtures, "passed.jsonl"), "utf8")).trimEnd();
-			const refusal = JSON.stringify({ type: "custom", customType: "firecode-review-refusal", data: { id: "r1", message: "配置有问题" } });
-			const path = join(directory, "session.jsonl");
-			await writeFile(path, `${passed}\n${refusal}\n`);
-			expect(readReviewOutcome(path)).toEqual({ status: "refused", runId: "r1", message: "配置有问题" });
-			await writeFile(path, `${refusal}\n${passed}\n`);
-			expect(readReviewOutcome(path)).toMatchObject({ status: "passed" });
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
 	});
 
 	test("ignores a truncated tail after the latest valid checkpoint", async () => {

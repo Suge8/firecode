@@ -21,12 +21,17 @@ function packedPaths(): string[] {
 	return (built = (packed[0].files as Array<{ path: string }>).map(({ path }) => path));
 }
 
-test("npm pack ships only the build output and user-facing files", async () => {
-	const manifest = await Bun.file(join(FIRECODE_DIR, "package.json")).json();
+test("npm pack ships only the build output and user-facing files, no sources", () => {
 	const packed = packedPaths();
 
 	expect(packed.filter((path) => !path.startsWith("dist/") && !/^README(\.[\w-]+)?\.md$/.test(path) && !["LICENSE", "THIRD_PARTY_NOTICES.md", "package.json"].includes(path))).toEqual([]);
 	expect(packed.filter((path) => path.endsWith(".ts"))).toEqual([]);
+});
+
+test("npm pack ships every extension entry, prompt and the config template", async () => {
+	const manifest = await Bun.file(join(FIRECODE_DIR, "package.json")).json();
+	const packed = packedPaths();
+
 	const entries = (manifest.pi.extensions as string[]).map((entry) => entry.replace(/^\.\//, ""));
 	expect(entries.filter((entry) => !packed.includes(entry))).toEqual([]);
 	const prompts = PROMPT_DIRS.flatMap((dir) => readdirSync(join(FIRECODE_DIR, dir)).map((name) => `dist/${dir}/${name}`));
