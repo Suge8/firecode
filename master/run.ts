@@ -9,7 +9,6 @@
  * 档案记 idle + resume（到时刻与原因），只告知指挥官一次不唤醒，到时在原会话自动续跑；续跑结束才是这次运行唯一的落定事件。
  * 非瞬时失败（鉴权、参数、模型不存在）照常作为失败落定。
  */
-import { existsSync } from "node:fs";
 import type { AgentSession, ExtensionError } from "@earendil-works/pi-coding-agent";
 import { modelAtomText } from "../config.js";
 import { type Delivery, wrapEnvelope } from "../deliver.js";
@@ -44,7 +43,7 @@ interface WorkerTerminal {
  * 恢复时文件不存在只可能是子代理在第一条回复落盘之前就被中断或释放（宿主此前没写文件），没有任何上下文可恢复，
  * 就在同一路径上新开；这也包括文件被人删掉的情形，那时同样没有东西可恢复。
  */
-export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resume: boolean): Promise<AgentSession> {
+export async function spawnWorker(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	const { pool, exclusions } = active.setup;
 	const role = active.roles.require(worker.role);
 	active.assertOpen();
@@ -66,7 +65,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		excludeExtensions: exclusions,
 		systemPrompt: { mode: "append", text: assembleWorkerPrompt(worker.name) },
 		contextFiles: true,
-		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume && existsSync(worker.sessionPath) ? { resume: true } : {}) },
+		persistence: { type: "file", sessionPath: worker.sessionPath },
 		onExtensionError: (error) => reportExtensionError(active, worker, error),
 		// 票身份：会话路径是档案身份的唯一事实源（每次 start 预分配一条），kill 后同名重开的新票路径不同。
 		claim: () => void active.owned(worker),
@@ -80,7 +79,7 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
  */
 export async function reopen(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	active.assertOpen();
-	const session = active.setup.pool.hold(worker.sessionPath) ?? await spawnWorker(active, worker, true);
+	const session = active.setup.pool.hold(worker.sessionPath) ?? await spawnWorker(active, worker);
 	await active.setup.pool.idle(session);
 	active.assertOpen();
 	return session;

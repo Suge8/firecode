@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { type Api, clampThinkingLevel, type Context, type Model } from "@earendil-works/pi-ai";
 import {
@@ -25,7 +24,7 @@ import { DEFAULT_TIMING, type Timing } from "./timing.js";
 
 type SessionPersistence =
 	| { type: "memory" }
-	| { type: "file"; sessionPath: string; resume?: boolean };
+	| { type: "file"; sessionPath: string };
 
 interface SpawnSessionOptions {
 	cwd: string;
@@ -180,8 +179,6 @@ export class InProcessSessionPool {
 	}
 
 	private async create(options: SpawnSessionOptions, sessionPath: string | undefined): Promise<SpawnedSession> {
-		if (options.persistence.type === "file" && options.persistence.resume && !existsSync(sessionPath!))
-			throw new Error(msg.spawn.missingFile(sessionPath!));
 		if (sessionPath) SESSION_WRITERS.add(sessionPath);
 
 		const codemode = options.tools.includes(CODEMODE_TOOL);
