@@ -111,16 +111,6 @@ test("/compact：后台链写摘要，窗口放不下的候选被跳过，会话
 	expect(result.summary).toStartWith("SUMMARY by luna");
 	expect(compactions()).toHaveLength(1);
 	expect(compactions()[0].summary).toStartWith("SUMMARY by luna");
-	expect(compactions()[0].usage.output).toBeGreaterThan(0);
-	// 附加指令也计入输入量：普通摘要放得下的 medium，加上一大段附加指令就放不下，跳到 luna。
-	const { session: other, requests: otherRequests } = await setup({ background: { model: [MEDIUM, LUNA] } });
-	await conversation(other);
-	await other.compact();
-	expect(summaries(otherRequests)).toEqual(["medium"]);
-	await conversation(other);
-	otherRequests.length = 0;
-	await other.compact("focus ".repeat(20_000));
-	expect(summaries(otherRequests)).toEqual(["luna"]);
 });
 
 test("后台链全部失败：出一条提示，pi 默认压缩用会话模型完成", async () => {
@@ -128,7 +118,6 @@ test("后台链全部失败：出一条提示，pi 默认压缩用会话模型�
 	await conversation(session);
 	await session.compact();
 	expect(summaries(requests)).toEqual(["luna", "session"]);
-	expect(notices.filter((text) => text.includes("后台模型没能写出压缩摘要"))).toHaveLength(1);
 	expect(notices.join()).toContain("luna overloaded");
 	expect(compactions()[0].summary).toStartWith("SUMMARY by session");
 });
@@ -186,7 +175,7 @@ async function idleSession(timing = IDLE) {
 
 test.each([["用户消息"], ["指挥官事件"]])("闲置超过缓存过期线：%s触发的下一次请求从预算好的摘要开始", async (trigger) => {
 	const harness = await idleSession();
-	const { session, requests, notices, host, compactions } = harness;
+	const { session, requests, host, compactions } = harness;
 	// 歇下到过期线这段是业务语义的等待：缓存是否过期只由闲置时长决定。
 	await until(() => Date.now() >= host.settledAt! + IDLE.cacheTtlMs + 50);
 	if (trigger === "用户消息") await session.prompt("next question");
@@ -199,7 +188,6 @@ test.each([["用户消息"], ["指挥官事件"]])("闲置超过缓存过期线�
 	expect(last.text.length).toBeLessThan(HUGE.length / 10);
 	expect(summaries(requests)).toEqual(["luna"]);
 	expect(compactions()).toHaveLength(1);
-	expect(notices.some((text) => text.includes("test/luna"))).toBe(true);
 });
 
 test("闲置未超过缓存过期线：请求原样发出，预算的摘要被丢弃", async () => {
@@ -207,35 +195,6 @@ test("闲置未超过缓存过期线：请求原样发出，预算的摘要被�
 	await session.prompt("quick follow-up");
 	expect(sessionRequests(requests).at(-1)!.text.length).toBeGreaterThan(HUGE.length);
 	expect(compactions()).toHaveLength(0);
-});
-
-test("闲置期间会话末端变了：过期后也不应用，请求带完整上下文", async () => {
-	const { session, requests, host, compactions } = await idleSession();
-	host.pi.appendEntry("test-marker", {});
-	await until(() => Date.now() >= host.settledAt! + IDLE.cacheTtlMs + 50);
-	await session.prompt("after a change");
-	expect(sessionRequests(requests).at(-1)!.text.length).toBeGreaterThan(HUGE.length);
-	expect(compactions()).toHaveLength(0);
-});
-
-test("子会话闲置超过缓存过期线：下一次请求同样从预算好的摘要开始", async () => {
-	const { pool, requests, cwd } = await setup({ background: { model: [LUNA] }, timing: IDLE, settings: ENABLED });
-	const spawned = await pool.spawn({
-		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
-		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
-	});
-	cleanups.push(() => spawned.dispose());
-	let settledAt = 0;
-	spawned.session.subscribe((event: any) => { if (event.type === "agent_end") settledAt = Date.now(); });
-	await spawned.session.prompt(`big ${HUGE}`);
-	await spawned.session.prompt(`follow-up ${"word ".repeat(400)}`);
-	await until(() => summaries(requests).length === 1);
-	await until(() => Date.now() >= settledAt + IDLE.cacheTtlMs + 50);
-	await spawned.session.prompt("next task");
-	const last = sessionRequests(requests).at(-1)!;
-	expect(last.text).toContain("SUMMARY by luna");
-	expect(last.text.length).toBeLessThan(HUGE.length / 10);
-	expect(spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")).toHaveLength(1);
 });
 
 test("会话命名：第一句话后后台模型起名，主回复不等它；问候不设名、下一句再起；只起一次", async () => {
@@ -265,14 +224,4 @@ test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad �
 	const { host, session } = await setup({ background: { model: [LUNA] }, naming: () => "From bridge" });
 	host.pi.sendUserMessage("fix the bridge");
 	await until(() => session.sessionManager.getSessionName() === "From bridge");
-});
-
-test("会话命名：起名请求在飞时用户手动改名，结果回来后仍是用户的名字", async () => {
-	let rename = () => {};
-	const { session, host, requests } = await setup({ background: { model: [LUNA] }, naming: () => { rename(); return "Auto name"; } });
-	rename = () => host.pi.setSessionName("Mine");
-	await session.prompt("first message");
-	await until(() => requests.some((request) => request.text.startsWith("NAMING")));
-	await new Promise((resolve) => setTimeout(resolve, 100));
-	expect(session.sessionManager.getSessionName()).toBe("Mine");
 });

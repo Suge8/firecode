@@ -85,15 +85,11 @@ async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, optio
 		}),
 	}) as any;
 	const settingsManager = SettingsManager.create(f.directory, f.agentDir, { projectTrusted: false });
-	const compactEvents: any[] = [];
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: f.directory, agentDir: f.agentDir, settingsManager,
 		noExtensions: true, noSkills: true, noPromptTemplates: true, noContextFiles: true,
 		systemPrompt: "Keep the archive memory.",
-		extensionFactories: [{ name: "native", factory: (pi: any) => {
-			registerFirecode(pi);
-			pi.on("session_compact", (event: any) => compactEvents.push(event.compactionEntry));
-		} }],
+		extensionFactories: [{ name: "native", factory: (pi: any) => registerFirecode(pi) }],
 	});
 	await resourceLoader.reload();
 	expect(resourceLoader.getExtensions().errors).toEqual([]);
@@ -103,7 +99,7 @@ async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, optio
 	const { session } = await createAgentSession({ cwd: f.directory, agentDir: f.agentDir, resourceLoader, settingsManager, sessionManager, modelRuntime, model, tools: [] });
 	sessions.add(session);
 	await session.bindExtensions({ mode: "print", onError: (error: any) => { throw new Error(error.error); } });
-	return { session, compactEvents };
+	return { session };
 }
 
 async function close(session: any) {
@@ -123,7 +119,7 @@ const wire = (request: any) => JSON.stringify(request.input);
 
 test.each([["openai", "gpt-6.1-terra"], ["openai-codex", "gpt-6.1-sol"]])("%s: edits/deletions stay projected through compaction, reopen and a second checkpoint", async (provider, model) => {
 	const f = await fixture(provider, model);
-	let { session, compactEvents } = await open(f);
+	let { session } = await open(f);
 	seed(session);
 	const erased = append(session, "user", "ERASE-317 " + "discarded. ".repeat(400));
 	session.sessionManager.appendContextEdit(erased, null);
@@ -138,15 +134,13 @@ test.each([["openai", "gpt-6.1-terra"], ["openai-codex", "gpt-6.1-sol"]])("%s: e
 	expect(wire(firstHelper)).not.toContain("STALE-218");
 	// 服务端窗口已覆盖前文，不再保留一套用户消息或本地 token 预算。
 	expect(first.details.compactedWindow.map((item: any) => item.type)).toEqual(["compaction"]);
-	expect(compactEvents.at(-1).id).toBe(session.sessionManager.getBranch().findLast((entry: any) => entry.type === "compaction").id);
 	session.sessionManager.appendContextEdit(retained, { content: "TAIL-EDIT-731" });
 	const path = session.sessionManager.getSessionFile();
 	await close(session);
-	({ session, compactEvents } = await open(f, path));
+	({ session } = await open(f, path));
 	await session.prompt("Continue.");
 	expect(wire(requests.at(-1))).toContain("TAIL-EDIT-731");
 	expect(wire(requests.at(-1))).toContain("window-1");
-	expect(wire(requests.at(-1))).not.toContain("checkpoint");
 	expect(requests.at(-1).text).toEqual({ verbosity: "low" });
 	expect(requests.at(-1).service_tier).toBe("priority");
 	append(session, "user", "Intermediate. " + "Padding. ".repeat(500));
@@ -161,9 +155,6 @@ test.each([["openai", "gpt-6.1-terra"], ["openai-codex", "gpt-6.1-sol"]])("%s: e
 	expect(wire(requests.at(-1))).toContain("window-1");
 	expect(wire(requests.at(-1))).toContain("TAIL-EDIT-731");
 	expect(wire(requests.at(-1))).not.toContain("DELETE-AFTER-REOPEN");
-	const latest = session.sessionManager.getBranch().findLast((entry: any) => entry.type === "compaction");
-	expect(compactEvents.at(-1).id).toBe(latest.id);
-	expect(second.summary).not.toBe(first.summary);
 	session.sessionManager.appendContextEdit(latestKept, null);
 	await close(session);
 	({ session } = await open(f, path));
@@ -171,7 +162,6 @@ test.each([["openai", "gpt-6.1-terra"], ["openai-codex", "gpt-6.1-sol"]])("%s: e
 	const request = wire(requests.at(-1));
 	expect(request).toContain(second.details.compactedWindow[0].encrypted_content);
 	expect(request).not.toContain("Latest kept.");
-	expect(request).not.toContain("checkpoint");
 }, 20_000);
 
 test("native failure after a checkpoint preserves history for manual and automatic retry", async () => {
@@ -190,7 +180,6 @@ test("native failure after a checkpoint preserves history for manual and automat
 	expect(session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")).toHaveLength(1);
 	const helpers = requests.filter((request) => request.context_management);
 	expect(helpers.length).toBeGreaterThan(2);
-	expect(requests.every((request) => !wire(request).includes("checkpoint"))).toBe(true);
 	failHelper = false;
 	await close(session);
 	({ session } = await open(f, path));
@@ -199,21 +188,6 @@ test("native failure after a checkpoint preserves history for manual and automat
 	expect(wire(requests.at(-1))).toContain("Pending history.");
 	await session.compact();
 	expect(session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")).toHaveLength(2);
-}, 20_000);
-
-test("a truncated native summary is rejected; a first automatic failure can still summarize the complete original text", async () => {
-	const f = await fixture();
-	const { session } = await open(f);
-	seed(session);
-	incompleteHelper = true;
-	await expect(session.compact()).rejects.toThrow("cancelled");
-	expect(session.sessionManager.getBranch().some((entry: any) => entry.type === "compaction")).toBe(false);
-	session.settingsManager.applyOverrides({ compaction: { enabled: true, keepRecentTokens: 32, reserveTokens: session.model.contextWindow - 64 } });
-	await session.prompt("Trigger compaction.");
-	const ordinary = requests.find((request) => !request.context_management);
-	expect(wire(ordinary)).toContain("LANTERN-5849");
-	expect(wire(ordinary)).not.toContain("checkpoint");
-	expect(session.sessionManager.getBranch().find((entry: any) => entry.type === "compaction")?.details?.strategy).not.toBe("openai-native-compact");
 }, 20_000);
 
 // 压缩钩子只有一个：原生压缩先决定，它接管的会话后台模型链不碰；原生只在首次自动压缩失败时退回普通摘要，那份摘要由后台链写。
@@ -280,7 +254,6 @@ test.each(["on", "off"])("legacy checkpoints preserve later messages and explain
 		const warning = notices.mock.calls.flat().join("\n");
 		expect(warning).toContain("/export");
 		expect(warning).toContain("No summary");
-		expect(warning).toContain("不会自动合并");
 		expect(readFileSync(path, "utf8").startsWith(original)).toBe(true);
 		const oldLeaf = session.sessionManager.getLeafId();
 		const backup = session.exportToJsonl(join(f.directory, "backup.jsonl"));

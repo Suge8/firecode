@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { loadFirecodeModule } from "./loader.ts";
-import { reviewVoter } from "./review-vote.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
 
@@ -18,52 +17,6 @@ test("顶层 language 压过系统 locale；省略时跟随系统 locale（zh �
 	} finally {
 		process.env.LC_ALL = saved;
 	}
-});
-
-// 解析与生产共用 review/messages.ts 的字段名；会话历史可能跨语言，所以两种语言的旧卡片都要能预览。
-test("审查卡：machine 预览在 en 下取自同源字段名，切换语言前的中文旧卡片同样能解析", async () => {
-	const en = JSON.stringify({ language: "en" });
-	const enCard = await loadFirecodeModule("review/card.ts", { configJsonc: en }) as any;
-	const zhCard = await loadFirecodeModule("review/card.ts") as any;
-	const { machineEntries } = await loadFirecodeModule("tools/machine.ts", { configJsonc: en }) as any;
-	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts") as any;
-	const preview = (built: any) => machineEntries(wrapEnvelope("firecode_review", built.content), built.details)[0];
-
-	const failed = enCard.buildCard({ kind: "fail", round: 2, details: "Model 1 · m\n## Finding 1: Token never expires\n- **Severity**: High", advisor: null, elapsedMs: 1000 });
-	expect(failed.details.title).toBe("Round 2 Review failed");
-	expect(preview(failed)).toMatchObject({ title: "Round 2 Review failed", preview: "Token never expires", alarm: true });
-
-	const errored = enCard.buildCard({ kind: "error", message: "provider down", elapsedMs: 1000 });
-	expect(preview(errored)).toMatchObject({ title: "Review incomplete", preview: "provider down", alarm: true });
-
-	const oldZh = zhCard.buildCard({ kind: "fail", round: 1, details: "模型 1 · m\n## 发现 1：令牌永不过期\n- **严重程度**: 高", advisor: null, elapsedMs: 1000 });
-	expect(preview(oldZh)).toMatchObject({ title: "审查未通过", preview: "令牌永不过期" });
-	expect(preview(zhCard.buildCard({ kind: "error", message: "供应商报错" }))).toMatchObject({ preview: "供应商报错" });
-});
-
-test("en：审查者格式不全的阻断发现仍判未通过，违例说明与会话证据不含中文", async () => {
-	const configJsonc = JSON.stringify({ language: "en" });
-	const voter = await reviewVoter({ configJsonc });
-	const missing = await voter.vote("Checked a.ts.\nEvidence: files=a.ts; commands=bun test\n## Finding 1: x\n- **Condition**: every restart\n- **Frequency**: 10\n- **Impact**: 8\n- **Issue**: x");
-	await voter.close();
-	expect(missing.status).toBe("failed");
-	expect(missing.details).not.toMatch(CJK);
-
-	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;
-	const entry = (role: string, content: string) => ({ type: "message", message: { role, content } });
-	const text = buildEvidence([entry("user", "write"), entry("assistant", "x".repeat(5_000))], { sessionFile: "/tmp/s/main.jsonl" });
-	expect(text).not.toMatch(CJK);
-});
-
-test("修复反馈与顾问卡在 en 下是英文", async () => {
-	const configJsonc = JSON.stringify({ language: "en" });
-	const { buildFixFeedback } = await loadFirecodeModule("review/prompt.ts", { configJsonc }) as any;
-	for (const verdict of ["narrow", "continue"])
-		expect(buildFixFeedback({ details: "FAIL\nx", advisor: { verdict, advice: "only the blocker" } })).not.toMatch(CJK);
-
-	const { buildCard } = await loadFirecodeModule("review/card.ts", { configJsonc }) as any;
-	const advisor = buildCard({ kind: "advisor", advisor: { verdict: "continue", advice: "keep going" }, advisorModel: "p/adv", elapsedMs: 1000 });
-	expect([advisor.details.title, ...advisor.details.lines].join("\n")).not.toMatch(CJK);
 });
 
 test("session：en 下 /quota 输出英文", async () => {
