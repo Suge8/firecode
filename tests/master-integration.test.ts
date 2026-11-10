@@ -964,6 +964,46 @@ test("在飞 send 拒绝；指挥官 interrupt 落中断标记但不补发“待
 	expect(listed.interruptedAt).toBeUndefined();
 });
 
+test("视图里直接派的运行落定后：事件注明视图来源并带原话，只告知不唤醒指挥官", async () => {
+	const harness = await setup();
+	harness.idle = true;
+	faux.setResponses([fauxAssistantMessage("初始完成"), fauxAssistantMessage("按你说的改好了")]);
+	let delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "viewed", prompt: "初始化", role: "工程师" });
+	await delivered;
+	await Bun.sleep(20);
+	const wakes = harness.turns.length;
+
+	delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.viewSend("viewed", "把标题改短");
+	await delivered;
+	const { message, options } = harness.messages.at(-1);
+	expect(message.content).toContain("你在子代理视图里直接派的");
+	expect(message.content).toContain("你说：把标题改短");
+	expect(message.content).toContain("按你说的改好了");
+	expect(options).toEqual({ triggerTurn: false });
+	await Bun.sleep(20);
+	expect(harness.turns).toHaveLength(wakes);
+});
+
+test("会话重载时在跑的子代理：恢复后指挥官收到一次提醒，ack 后不再来", async () => {
+	const harness = await setup(false, { timing: { interruptResumeMs: 10 } });
+	const { masterStatePath } = await loadFirecodeModule("master/state.js") as any;
+	const path = masterStatePath(harness.agentDir, harness.sessionId);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, JSON.stringify({ version: 10, workers: [{
+		name: "reloaded", role: "工程师", model: "test/worker", thinking: "medium", status: "working", sessionPath: join(harness.cwd, "w.jsonl"), cwd: harness.cwd, launch: 1,
+	}] }));
+	await harness.command("");
+	await until(() => harness.messages.length > 0);
+	expect(harness.messages).toHaveLength(1);
+	expect(harness.messages[0].message.content).toContain("reloaded");
+	await harness.execute({ action: "ack", worker: "reloaded" });
+	await Bun.sleep(50);
+	expect(harness.messages).toHaveLength(1);
+	await harness.command("");
+});
+
 test("向 working Worker 的普通 send 经 steer 在句缝送达，不打断也不报错", async () => {
 	const harness = await setup();
 	let release!: () => void;
