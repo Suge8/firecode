@@ -5,6 +5,12 @@
 export interface Timing {
 	/** 热会话空闲这么久后释放（档案与 JSONL 保留）。 */
 	idleSessionMs: number;
+	/**
+	 * 释放会话时，中止在跑的回合后最多等这么久让它落定，再发 session_shutdown（顺序的理由见 spawn.ts 的 release）。
+	 * 正常的中止在流读到信号后立刻落定；模型流卡在半开连接上时永不落定（Bun fetch 在网络切换后不保证响应 AbortSignal），
+	 * 这类会话到点照旧收口。取 2 秒：远大于正常落定，又不至于让关会话、退出明显变慢。
+	 */
+	abortSettleMs: number;
 	/** 会话重载打断的回合，恢复后这么久仍未续派就提醒指挥官。 */
 	interruptResumeMs: number;
 	/**
@@ -52,6 +58,7 @@ export interface Timing {
 
 export const DEFAULT_TIMING: Timing = {
 	idleSessionMs: 10 * 60_000,
+	abortSettleMs: 2_000,
 	interruptResumeMs: 5 * 60_000,
 	wakeQuietMs: 1_500,
 	eventRetryMs: 5_000,

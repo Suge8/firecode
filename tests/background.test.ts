@@ -251,3 +251,23 @@ test("关掉还在跑的子代理：会话内的扩展先收到这一轮落定�
 	await running;
 	expect(seen).toEqual(["agent_settled", "session_shutdown"]);
 });
+
+test("模型流卡死、不理会中止时，关会话等过宽限照常收口", async () => {
+	const seen: string[] = [];
+	const { pool, cwd } = await setup({ timing: { abortSettleMs: 50 }, child: (pi) => {
+		for (const event of ["agent_settled", "session_shutdown"]) pi.on(event, () => { seen.push(event); });
+	} });
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([() => {
+		entered.resolve();
+		return new Promise(() => {});
+	}]);
+	const spawned = await pool.spawn({
+		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
+		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
+	});
+	void spawned.prompt("stuck").catch(() => undefined);
+	await entered.promise;
+	await spawned.dispose();
+	expect(seen).toEqual(["session_shutdown"]);
+});

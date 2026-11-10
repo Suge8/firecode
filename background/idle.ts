@@ -4,10 +4,12 @@
  * 闲置已超过缓存过期线且摘要仍成立，就经宿主 ctx.compact 把它作为一次压缩应用（压缩钩子交出这份摘要，持久化与事件仍是宿主的），
  * 再发请求；否则丢弃。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
  *
- * 摘要仍成立 = 预算时的末端还在当前分支上、其后没有压缩。摘要只覆盖切点之前，之后追加的条目都落在保留段里：投递前先落盘的
- * 待投递事件、换模型或思考档的记录不作废它；/tree 换了分支或手动 /compact 之后，它的切点才不再成立。
+ * 摘要仍成立 = 预算时的末端还在当前分支上、其后没有压缩，也没有 context_edit。摘要只覆盖切点之前，之后追加的条目都落在保留段里：
+ * 投递前先落盘的待投递事件、换模型或思考档的记录不作废它；/tree 换了分支或手动 /compact 之后，它的切点才不再成立；
+ * context_edit 改写的是更早的条目，可能落在摘要已经写进去的那一段。
  *
- * 子会话不做：热会话闲置 Timing.idleSessionMs 就释放，早于预算点，重开的是新实例，没有预算好的摘要。
+ * 子会话不做：热会话闲置 Timing.idleSessionMs 就释放，早于预算点，重开的是新实例，没有预算好的摘要；只有审查中的 Worker 不起释放计时，
+ * 为这一种情形不值得留一条路（实测 5 天里子会话闲置过期 11 次，摘要一次没用上）。
  * 宿主设置 compaction.enabled=false 的会话不碰（预算与应用都不做）：用户关掉压缩就是要保留原文。
  *
  * 不当场算：进程重启后没有预算好的摘要就照常走；请求到达时预算还在飞，作废预算。上下文不到 MIN_CONTEXT_TOKENS 不预算。
@@ -132,10 +134,10 @@ export class IdleCompaction {
 	}
 }
 
-/** 预算时的末端还在分支上、其后没有压缩（理由见头注释）。 */
+/** 预算时的末端还在分支上、其后没有压缩与 context_edit（理由见头注释）。 */
 function stillHolds(branch: SessionEntry[], leafId: string | null): boolean {
 	const at = branch.findIndex((entry) => entry.id === leafId);
-	return at >= 0 && branch.slice(at + 1).every((entry) => entry.type !== "compaction");
+	return at >= 0 && branch.slice(at + 1).every((entry) => entry.type !== "compaction" && entry.type !== "context_edit");
 }
 
 function notify(ctx: ExtensionContext, text: string): void {
