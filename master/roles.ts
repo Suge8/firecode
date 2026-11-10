@@ -37,9 +37,12 @@ export class Roles {
 		return found;
 	}
 
-	/** 派发前核对角色此刻仍能解析出模型（凭据可能在会话中途失效），返回链上选中的模型原子。 */
-	async resolve(role: MasterRole, override?: ThinkingLevelValue): Promise<ModelAtom> {
-		const selected = await this.pool.resolveChain(role.models, override);
+	/**
+	 * 派发前核对角色按最近一次取到的可用模型仍能解析出模型，返回链上选中的模型原子。同步：动作不等供应商鉴权（没有时限）；
+	 * 凭据在会话中途失效由开会话时的路由发现，作为失败落定。
+	 */
+	resolve(role: MasterRole, override?: ThinkingLevelValue): ModelAtom {
+		const selected = this.pool.resolveChainNow(role.models, override);
 		if (!selected) throw this.gone(role.role);
 		return selected;
 	}

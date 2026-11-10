@@ -1,14 +1,17 @@
 /**
  * subagents 七个命令动作：每个动作是一个带类型的命令（名字加它真正用到的输入），只经 commands 调用；工具处理表只把参数解析成
  * 命令输入再包成工具结果，全过程视图直接调 commands.send 与 commands.interrupt，不经工具参数。
+ *
+ * 动作不无界阻塞：返回路径上不 await 宿主或扩展的回调（开会话、input/agent_settled/session_shutdown 处理器、供应商鉴权都没有时限）。
+ * 校验与写档在同一同步段里做完就返回（只碰本地文件系统的同步调用），开会话、开回合、释放会话都在后台，结局经落定事件告知。
+ * 同一同步段也让同一 Worker 上的并发动作不必另设单飞：后到的动作看到的已是写好的档案。
  */
-import { existsSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "../config.js";
 import { msg } from "./messages.js";
-import { interruptTurn, openWorkerSession, prepare, RESUME_CHECK_PROMPT, returnSession, runWorker, spawnWorker, startReview, steerTurn } from "./run.js";
+import { interruptTurn, reopen, RESUME_CHECK_PROMPT, runWorker, spawnWorker, startReview, steerTurn } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
 import { compactWorker, type RunOrigin, transition, WORKER_NAME, type WorkerRef } from "./state.js";
 import { workerTrace } from "./trace.js";
@@ -51,9 +54,10 @@ function preallocateWorkerSession(mainSessionPath: string, cwd: string): string 
 
 async function kill(active: MasterRuntime, name: string) {
 	const target = active.store.require(name);
-	// 同步段内删档案与运行时事实，迟到的异步写回据此全部作废；随后等 session_shutdown 收口释放热会话。
+	// 同步段内删档案与运行时事实，迟到的异步写回据此全部作废；热会话在后台先发 session_shutdown 让扩展收口再释放
+	// （处理器没有时限，kill 不等；同一路径不会再被开，收口失败报给用户）。
 	active.remove(target.name);
-	await active.setup.pool.dispose(target.sessionPath);
+	active.detached(target.name, () => active.setup.pool.dispose(target.sessionPath).then(() => undefined));
 	return { killed: true };
 }
 
@@ -79,13 +83,13 @@ async function ack(active: MasterRuntime, name: string) {
 	return { acked: true };
 }
 
+/** 写档进 reviewing 就返回；开会话与起审在后台，结局经审查落定事件告知。 */
 async function review(active: MasterRuntime, name: string) {
 	if (active.setup.reviewGate) throw new Error(active.setup.reviewGate);
 	const target = active.store.require(name);
-	const live = active.liveOf(target.name);
-	if (target.status !== "idle" || live.transitioning) throw new Error(msg.action.reviewBusy(target.name));
+	if (target.status !== "idle") throw new Error(msg.action.reviewBusy(target.name));
 	admit(active);
-	await prepare(active, target, () => startReview(active, target));
+	startReview(active, target);
 	return { reviewing: true };
 }
 
@@ -103,14 +107,16 @@ async function interrupt(active: MasterRuntime, name: string) {
 
 /** 暂停中的子代理：取消自动续跑，按被中断落定（会话与审查义务保留，等指挥官续派或收口）。 */
 async function interruptPause(active: MasterRuntime, target: WorkerRef) {
-	if (active.live.get(target.name)?.transitioning) throw new Error(msg.action.switching(target.name));
 	active.cancelTimers(active.liveOf(target.name));
 	const at = Date.now();
 	active.settle(target, (current) => ({ worker: transition.interrupted(current, at), outcome: { kind: "interrupted" }, at }));
 	return { interrupted: true };
 }
 
-/** origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数。 */
+/**
+ * 在跑的票：补话交给回合，立即返回 { queued: true }。空闲的票：写档进 working 就返回 { sent: true }，开会话（换 cwd 时先释放旧会话）、
+ * 等子会话真正空闲、重配路由与开回合都在后台。origin 是调用方（指挥官的工具 / 全过程视图）的身份，不是模型能填的参数。
+ */
 async function send(active: MasterRuntime, name: string, input: ActionInput, origin: RunOrigin) {
 	const { reviewGate, pool } = active.setup;
 	const { roles } = active;
@@ -138,37 +144,32 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 	}
 	if (target.status === "working") throw new Error(msg.action.workingSwitch(target.name));
 	if (target.status !== "idle") throw new Error(msg.action.reviewingSend(target.name));
-	if (live.transitioning) throw new Error(msg.action.switching(target.name));
 	const thinkingOverride = validThinking(requestedThinking);
 	admit(active);
-	return prepare(active, target, async () => {
-		const cwd = await resolveSendCwd(target, requestedCwd);
+	const cwd = resolveSendCwd(target, requestedCwd);
+	const selectedRole = selection ?? roles.require(target.role);
+	// 只核对角色按最近取到的可用模型可解析：档案的模型原子等路由选定后由 onModelChange 写（run.ts）。
+	roles.resolve(selectedRole, thinkingOverride);
+	// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
+	const cutOff = target.interruptedAt !== undefined || target.resume !== undefined;
+	// 接手后的档案（角色、目录、思考档）：开会话与路由都从它取。
+	const { thinkingOverride: _previous, ...taken } = transition.takeOver(target, "working", fromView ? prompt : undefined);
+	const working = { ...taken, role: selectedRole.role, cwd, ...(thinkingOverride ? { thinkingOverride } : {}), ...(input.review ? { reviewNeeded: true } : {}) };
+	active.store.upsert(working);
+	active.beginRun(target.name, prompt);
+	runWorker(active, working, async () => {
 		if (cwd !== target.cwd) await pool.dispose(target.sessionPath);
-		const selectedRole = selection ?? roles.require(target.role);
-		// 只核对角色此刻可用：档案的模型原子等路由选定后由 onModelChange 写（run.ts）。
-		await roles.resolve(selectedRole, thinkingOverride);
-		// 上面的 await 期间票可能已被 kill：先核对当前档案，再开会话，不为已删的票起热会话。
-		active.current(target);
-		// 这次 send 之后的档案（角色、目录、思考档）：开会话与路由都从它取，接手时原样写进档案。
-		const { thinkingOverride: _previous, ...base } = target;
-		const next = { ...base, cwd, role: selectedRole.role, ...(thinkingOverride ? { thinkingOverride } : {}) };
-		const session = await openWorkerSession(active, next);
-		await pool.idle(session);
-		active.assertOpen();
-		pool.configureRoute(target.sessionPath, selectedRole.models, next.thinkingOverride);
-		// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
-		const latest = active.current(target);
-		const cutOff = latest.interruptedAt !== undefined || latest.resume !== undefined;
-		const working = active.commit(target, (current) => {
-			const { thinkingOverride: _previous, ...taken } = transition.takeOver(current, "working", fromView ? prompt : undefined);
-			return { ...taken, role: next.role, cwd, ...(next.thinkingOverride ? { thinkingOverride: next.thinkingOverride } : {}), ...(input.review ? { reviewNeeded: true } : {}) };
-		});
-		active.beginRun(target.name, prompt);
-		await runWorker(active, working, session, cutOff ? `${RESUME_CHECK_PROMPT}\n\n${prompt}` : prompt);
-		return { sent: true };
-	});
+		const session = await reopen(active, working);
+		pool.configureRoute(target.sessionPath, selectedRole.models, working.thinkingOverride);
+		return session;
+	}, cutOff ? `${RESUME_CHECK_PROMPT}\n\n${prompt}` : prompt);
+	return { sent: true };
 }
 
+/**
+ * 校验后写档进 working 就返回 { started, worker }；新会话在后台开、回合在后台开，开不成（鉴权、路由、扩展加载）按失败落定。
+ * 档案里的模型原子先按最近取到的可用模型解析，开会话时路由选定后由 onModelChange 改写。
+ */
 async function start(active: MasterRuntime, input: ActionInput) {
 	const { reviewGate } = active.setup;
 	const { ctx } = active;
@@ -176,61 +177,39 @@ async function start(active: MasterRuntime, input: ActionInput) {
 	const name = input.worker;
 	if (!name) throw new Error(msg.action.needWorker);
 	validateWorkerName(name);
-	if (active.store.find(name) || active.live.get(name)?.starting)
-		throw new Error(msg.action.exists(name));
+	if (active.store.find(name)) throw new Error(msg.action.exists(name));
 	admit(active);
 	const prompt = requiredString(input.prompt, "prompt");
 	const requestedRole = input.role;
 	if (!requestedRole) throw new Error(msg.action.needRole);
 	const selectedRole = active.roles.require(requestedRole);
 	const override = validThinking(input.thinking);
-	const { live, launch } = active.reserve(name);
-	try {
-		const selected = await active.roles.resolve(selectedRole, override);
-		const thinking = selected.thinking;
-		const cwd = await resolveWorkerCwd(input.cwd ?? ctx.cwd);
-		active.assertOpen();
-		const mainSessionPath = ctx.sessionManager.getSessionFile();
-		if (!mainSessionPath) throw new Error(msg.action.mainNotSaved);
-		const worker: WorkerRef = {
-			name,
-			role: selectedRole.role,
-			model: selected.model,
-			thinking,
-			status: "working",
-			sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
-			cwd,
-			launch,
-			...(override ? { thinkingOverride: override } : {}),
-			...(input.review ? { reviewNeeded: true } : {}),
-		};
-		active.store.upsert(worker);
-		live.starting = undefined;
-		active.beginRun(name, prompt);
-		try {
-			await runWorker(active, worker, spawnWorker(active, worker, false), prompt);
-		} finally {
-			// 开会话期间被 kill：新开的会话没人要了，在这里释放。
-			returnSession(active, worker);
-		}
-		return { started: true, worker: compactWorker(worker) };
-	} catch (error) {
-		// 只撤自己这一票：kill 后同名重开的新票不受影响。
-		if (!active.closed && active.live.get(name) === live) active.remove(name, live);
-		throw error;
-	}
+	const selected = active.roles.resolve(selectedRole, override);
+	const cwd = resolveWorkerCwd(input.cwd ?? ctx.cwd);
+	const mainSessionPath = ctx.sessionManager.getSessionFile();
+	if (!mainSessionPath) throw new Error(msg.action.mainNotSaved);
+	const worker: WorkerRef = {
+		name,
+		role: selectedRole.role,
+		model: selected.model,
+		thinking: selected.thinking,
+		status: "working",
+		sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
+		cwd,
+		launch: active.nextLaunch(),
+		...(override ? { thinkingOverride: override } : {}),
+		...(input.review ? { reviewNeeded: true } : {}),
+	};
+	active.store.upsert(worker);
+	active.beginRun(name, prompt);
+	runWorker(active, worker, () => spawnWorker(active, worker, false), prompt);
+	return { started: true, worker: compactWorker(worker) };
 }
 
-/**
- * 在飞上限：数 working/reviewing 的票、还没落档的 start，以及正在准备 send/review 的票（越过准备段的 await 后才写 working，
- * 不算进去的话并行 send 能一起越过上限）。暂停后的自动续跑是已放行的那次运行接着跑，不经这里，可能短暂越过上限。
- */
+/** 在飞上限：数 working/reviewing 的票。暂停后的自动续跑是已放行的那次运行接着跑，不经这里，可能短暂越过上限。 */
 function admit(active: MasterRuntime): void {
-	const busy = active.store.workers.flatMap((worker) =>
-		worker.status !== "idle" || active.live.get(worker.name)?.transitioning ? [worker.name] : []);
-	const starting = [...active.live].flatMap(([name, live]) => (live.starting ? [name] : []));
-	if (busy.length + starting.length >= MAX_IN_FLIGHT)
-		throw new Error(msg.action.limit(MAX_IN_FLIGHT, [...busy, ...starting]));
+	const busy = active.store.workers.flatMap((worker) => (worker.status !== "idle" ? [worker.name] : []));
+	if (busy.length >= MAX_IN_FLIGHT) throw new Error(msg.action.limit(MAX_IN_FLIGHT, busy));
 }
 
 function toolResult(value: unknown): ToolResult {
@@ -263,16 +242,16 @@ function validateWorkerName(name: string): void {
 	if (!WORKER_NAME.test(name)) throw new Error(msg.action.badName);
 }
 
-async function resolveWorkerCwd(path: string): Promise<string> {
+function resolveWorkerCwd(path: string): string {
 	if (!isAbsolute(path)) throw new Error(msg.action.cwdAbsolute);
 	try {
-		return await realpath(path);
+		return realpathSync(path);
 	} catch {
 		throw new Error(msg.action.cwdMissing(path));
 	}
 }
 
-async function resolveSendCwd(worker: WorkerRef, requested: string | undefined): Promise<string> {
+function resolveSendCwd(worker: WorkerRef, requested: string | undefined): string {
 	if (requested) return resolveWorkerCwd(requested);
 	if (worker.cwd && !existsSync(worker.cwd))
 		throw new Error(msg.action.cwdGone(worker.name, worker.cwd));

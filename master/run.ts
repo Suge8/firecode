@@ -1,6 +1,9 @@
 /**
  * 回合编排：打开 Worker 会话、跑一个回合、按终态落定（成功/失败/中断/暂停）、审查监视、中断续跑提醒与暂停后的自动续跑。
- * 所有 await 之后的写回经 runtime.current/commit 重读档案：kill 赢过迟到的异步写回。
+ * 开一次运行（start、send、review、暂停后的自动续跑）都是同一个形状：调用方在一个同步段里把档案写进 working/reviewing、
+ * 挂上回合（Turn）；开会话、等子会话真正空闲、经宿主开回合都在后台（runWorker、startReview），因为这些都会进宿主与扩展的回调
+ * （session_start、input、agent_settled、session_shutdown 处理器，供应商鉴权），没有时限。开不成按失败落定，结局经落定事件告知。
+ * 所有 await 之后的写回经 runtime.find/commit 重读档案：kill 赢过迟到的异步写回。
  *
  * 暂停：回合或审查因瞬时故障（模型路由判定整条链暂时不可用，见 model-route.ts 的 routePause）收场时不报失败，
  * 档案记 idle + resume（到时刻与原因），只告知指挥官一次不唤醒，到时在原会话自动续跑；续跑结束才是这次运行唯一的落定事件。
@@ -65,50 +68,29 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		contextFiles: true,
 		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume && existsSync(worker.sessionPath) ? { resume: true } : {}) },
 		onExtensionError: (error) => reportExtensionError(active, worker, error),
+		accept: () => active.assertOpen(),
 	});
-	if (active.closed) {
-		await spawned.dispose();
-		active.assertOpen();
-	}
 	return spawned.session;
 }
 
-/** 准备段里打开要开回合的会话：热的经 hold 取消释放计时，冷的重开；归还由 prepare 负责。 */
-export async function openWorkerSession(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
+/**
+ * 在已有会话上开回合前（send、review、自动续跑）：热的经 hold 取消释放计时，冷的重开；再等宿主真正空闲（见池的 idle）。
+ * 释放计时由这次运行落定（runtime.settle）补回。
+ */
+export async function reopen(active: MasterRuntime, worker: WorkerRef): Promise<AgentSession> {
 	active.assertOpen();
-	return active.setup.pool.hold(worker.sessionPath) ?? spawnWorker(active, worker, true);
+	const session = active.setup.pool.hold(worker.sessionPath) ?? await spawnWorker(active, worker, true);
+	await active.setup.pool.idle(session);
+	active.assertOpen();
+	return session;
 }
 
-/**
- * 准备段（send、review 与暂停后的自动续跑）：按 Worker 单飞（transitioning）跑 work，结束（含失败）后归还会话。
- * 准备期间到期的自动续跑见 transitioning 就让路，所以归还时还要补回它。
- */
-export async function prepare<T>(active: MasterRuntime, target: WorkerRef, work: () => Promise<T>): Promise<T> {
-	const live = active.liveOf(target.name);
-	live.transitioning = true;
-	try {
-		return await work();
-	} finally {
-		live.transitioning = undefined;
-		returnSession(active, target);
-	}
-}
-
-/**
- * 准备段或 start 结束后归还会话：hold 取消了池的释放计时，没开成回合就得补回，否则这个热会话不再释放。
- * 票已不在（期间被 kill 或同名换票）就释放它；仍是 idle（准备失败、续跑让路、回合已落定）就补回释放计时与暂停续跑；
- * 进了 working/reviewing 由那次运行落定（runtime.settle）归还。
- */
-export function returnSession(active: MasterRuntime, target: WorkerRef): void {
-	if (active.closed) return;
-	const current = active.find(target);
-	if (!current) {
-		void active.setup.pool.dispose(target.sessionPath);
-		return;
-	}
-	if (current.status !== "idle") return;
-	active.setup.pool.markIdle(target.sessionPath);
-	armResume(active, current);
+/** 后台开会话：开好时票已被 kill（或同名换票）就释放这个没人要的会话，返回 undefined；开不成照常抛出。 */
+async function openFor(active: MasterRuntime, worker: WorkerRef, open: () => Promise<AgentSession>): Promise<AgentSession | undefined> {
+	const session = await open();
+	if (active.find(worker)) return session;
+	if (!active.closed) active.detached(worker.name, () => active.setup.pool.dispose(worker.sessionPath).then(() => undefined));
+	return undefined;
 }
 
 /** 子代理会话里的扩展出错：同一处错误只告知指挥官一次（事件处理器每次触发都会再抛）。 */
@@ -173,25 +155,36 @@ function watchStall(active: MasterRuntime, identity: WorkerRef): void {
 }
 
 /**
- * 起一个回合：同步挂上 Turn（与档案进入 working 同一同步段），再等会话（start 在这里等开会话）并经宿主开回合；
- * resolve 即回合已在飞或没开成。工作说明是用户消息，经宿主 prompt：它的前置阶段仍报空闲，宿主报 started 才算在飞。
+ * 起一个回合：调用方已把档案写进 working，这里同步挂上 Turn（与之同一同步段），其余全在后台，调用方不等：开会话（open）、
+ * 经宿主开回合。工作说明是用户消息，经宿主 prompt：它的前置阶段仍报空闲，宿主报 started 才算在飞。
  * 插件自己的续跑提示是机器消息，以自定义消息 + triggerTurn 开回合：宿主同步置忙，发出即在飞。
+ * 开不成（会话打不开、鉴权或路由失败、扩展加载出错）按失败落定；开会话期间被 kill 的不调模型、不留热会话。
  * 回合在飞之前到达的 interrupt 只记意图：还没开回合就直接按中断落定、不调模型，否则在飞后由 interrupt 自己中止。
  */
-export async function runWorker(active: MasterRuntime, worker: WorkerRef, opening: AgentSession | Promise<AgentSession>, input: string | Delivery): Promise<void> {
+export function runWorker(active: MasterRuntime, worker: WorkerRef, open: () => Promise<AgentSession>, input: string | Delivery): void {
 	const live = active.liveOf(worker.name);
 	const running = Promise.withResolvers<AgentSession | undefined>();
 	const turn: Turn = { running: running.promise };
 	live.turn = turn;
-	try {
-		const session = await opening;
-		// 启动回合的路径都经这里：准备期间被 kill 的不调模型、不留热会话。
-		active.current(worker);
+	const mine = () => !active.closed && active.live.get(worker.name) === live && live.turn === turn;
+	active.detached(worker.name, async () => {
+		try {
+			await turnOn(await openFor(active, worker, open));
+		} catch (error) {
+			if (!mine()) return;
+			if (turn.interrupted) return settleInterrupted(active, worker);
+			settleWorker(active, worker, undefined, error);
+		} finally {
+			running.resolve(undefined);
+		}
+	});
+
+	async function turnOn(session: AgentSession | undefined): Promise<void> {
+		if (!session || !mine()) return;
 		observeWorker(active, worker, session);
 		// 静默从本回合开始算：自动续跑沿用暂停前的运行起点，暂停期不是无输出。
 		live.quietSince = Date.now();
 		watchStall(active, worker);
-		const mine = () => !active.closed && active.live.get(worker.name) === live && live.turn === turn;
 		let terminal: WorkerTerminal | undefined;
 		const unsubscribeTerminal = session.subscribe((event) => {
 			if (mine() && event.type === "agent_end") terminal = captureWorkerTerminal(event.messages);
@@ -223,8 +216,6 @@ export async function runWorker(active: MasterRuntime, worker: WorkerRef, openin
 			.then(() => settled(), settled)
 			.finally(() => preflight.resolve());
 		await preflight.promise;
-	} finally {
-		running.resolve(undefined);
 	}
 }
 
@@ -343,61 +334,55 @@ export function armResume(active: MasterRuntime, worker: WorkerRef): void {
 }
 
 /**
- * 到时续跑：档案仍是这次暂停（指挥官没有 send/review/interrupt/ack 接手）才续；任务在原会话里以续跑提示开回合，
- * 审查则重新发起 fire-review。本次运行的起点与来源沿用暂停前的，落定事件只有续跑结束的那一条。
- * 续跑准备失败（会话打不开、角色已删）不是瞬时故障，照常作为失败交给指挥官；那时 resume 已被接手清掉就不再报。
+ * 到时续跑：档案仍是这次暂停（指挥官没有 send/review/interrupt/ack 接手）才续；与指挥官开运行同一形状，同步段内写档进
+ * working/reviewing，开会话在后台。任务在原会话里以续跑提示开回合，审查则重新发起 fire-review。本次运行的起点与来源沿用暂停前的，
+ * 落定事件只有续跑结束的那一条。续跑开不成（会话打不开、角色已删）不是瞬时故障，照常作为失败交给指挥官。
  */
-async function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): Promise<void> {
+function resumeWorker(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): void {
 	const current = active.find(identity);
-	if (current?.status !== "idle" || current.resume?.at !== resume.at || active.liveOf(identity.name).transitioning) return;
-	await prepare(active, current, async () => {
-		try {
-			if (resume.review) return await startReview(active, current, true);
-			const session = await openWorkerSession(active, current);
-			await active.setup.pool.idle(session);
-			active.assertOpen();
-			if (superseded(active, current, resume)) return;
-			const working = active.commit(current, (latest) => transition.continued(latest, "working"));
-			active.continueRun(identity.name);
-			active.progress?.resume(identity.name);
-			const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
-			await runWorker(active, working, session, { customType: MASTER_EVENT_TYPE, content: prompt });
-		} catch (error) {
-			const failure = error instanceof Error ? error.message : String(error);
-			active.settle(identity, (latest) => latest.resume && {
-				worker: transition.landed(latest),
-				outcome: { kind: "failed", note: firstSentence(failure) },
-				event: masterEvent.failed(identity.name, failure, latest.reviewNeeded === true, latest.viewPrompts),
-			});
-		}
-	});
+	if (current?.status !== "idle" || current.resume?.at !== resume.at) return;
+	if (resume.review) return startReview(active, current, true);
+	const working = active.commit(current, (latest) => transition.continued(latest, "working"));
+	active.continueRun(identity.name);
+	active.progress?.resume(identity.name);
+	const prompt = wrapEnvelope("firecode_master_event", msg.run.resumeAfterPause(clip(oneLine(resume.reason), RESUME_REASON_WIDTH)));
+	runWorker(active, working, () => reopen(active, working), { customType: MASTER_EVENT_TYPE, content: prompt });
 }
 
 /**
- * 续跑准备越过 await 后的核对：档案已不是这次暂停（准备期间指挥官 ack 清掉了 resume）就放弃续跑，会话由 prepare 归还。
- * ack 不等准备结束、也不拒绝：取消还没开跑的续跑正是它的承诺，写回方让路。票被 kill 时 current 抛错，由调用方的失败路径放弃。
+ * 在原 Worker 会话里发起 fire-review（review 动作与暂停后的续审共用）：同步段内写档进 reviewing 并挂上回合，开会话与起审在后台，
+ * 调用方不等。续审沿用暂停前的运行起点与来源。开不成按审查未完成落定；开好前到达的 interrupt 不起审、直接按审查被中断落定。
  */
-function superseded(active: MasterRuntime, identity: WorkerRef, resume: NonNullable<WorkerRef["resume"]>): boolean {
-	return active.current(identity).resume?.at !== resume.at;
-}
-
-/**
- * 在原 Worker 会话里发起 fire-review（review 动作与暂停后的续审共用）。续审沿用暂停前的运行起点与来源。
- * 先写档案再挂订阅：kill 或会话关闭时 commit 抛错，不会给已删的票留下订阅。
- */
-export async function startReview(active: MasterRuntime, target: WorkerRef, resumed = false): Promise<void> {
-	const session = await openWorkerSession(active, target);
-	await active.setup.pool.idle(session);
-	active.assertOpen();
-	if (resumed && superseded(active, target, target.resume!)) return;
-	const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
-	active.commit(target, (latest) => (resumed ? transition.continued(latest, "reviewing") : transition.takeOver(latest, "reviewing")));
-	const turn: Turn = { running: Promise.resolve(session) };
-	active.liveOf(target.name).turn = turn;
-	observeWorker(active, target, session);
+export function startReview(active: MasterRuntime, target: WorkerRef, resumed = false): void {
+	const reviewing = active.commit(target, (latest) => (resumed ? transition.continued(latest, "reviewing") : transition.takeOver(latest, "reviewing")));
+	const live = active.liveOf(target.name);
+	const running = Promise.withResolvers<AgentSession | undefined>();
+	const turn: Turn = { running: running.promise };
+	live.turn = turn;
 	if (resumed) active.continueRun(target.name);
 	else active.beginRun(target.name);
-	monitorAndSettleReview(active, target, session, previousRunId, turn);
+	const mine = () => !active.closed && active.live.get(target.name) === live && live.turn === turn;
+	active.detached(target.name, async () => {
+		try {
+			const session = await openFor(active, reviewing, () => reopen(active, reviewing));
+			if (!session || !mine()) return;
+			if (turn.interrupted) return settleInterrupted(active, target, true);
+			const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
+			observeWorker(active, target, session);
+			running.resolve(session);
+			monitorAndSettleReview(active, target, session, previousRunId, turn);
+		} catch (error) {
+			if (!mine()) return;
+			if (turn.interrupted) return settleInterrupted(active, target, true);
+			active.settle(target, (current) => ({
+				worker: transition.landed(current),
+				outcome: { kind: "failed", note: msg.run.reviewIncomplete },
+				event: masterEvent.reviewIncomplete(target.name, error instanceof Error ? error.message : String(error)),
+			}));
+		} finally {
+			running.resolve(undefined);
+		}
+	});
 }
 
 function settleWorker(active: MasterRuntime, identity: WorkerRef, terminal: WorkerTerminal | undefined, error?: unknown): void {

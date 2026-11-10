@@ -123,7 +123,12 @@ function nextWallClock(now: number, zone: string, hour: number, minute: number):
 }
 
 export async function candidates(runtime: ModelRuntime, chain: ModelChain): Promise<Candidate[]> {
-	const available = (await runtime.getAvailable()).filter((model) => model.api !== "pi-virtual");
+	return candidatesOf(await runtime.getAvailable(), chain);
+}
+
+/** 按给定的可用模型表排链上候选（不取可用模型，见 candidates）。 */
+export function candidatesOf(models: readonly Model<Api>[], chain: ModelChain): Candidate[] {
+	const available = models.filter((model) => model.api !== "pi-virtual");
 	const seen = new Set<string>();
 	return chain.flatMap((atom) => matchModels(available, atom.model).flatMap((model) => {
 		const name = key(model);

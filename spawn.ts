@@ -18,7 +18,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
-import { type Candidate, candidates, type ChainCompletion, completeOnChain, createModelRoute, followRoute, tryOnChain } from "./model-route.js";
+import { type Candidate, candidates, candidatesOf, type ChainCompletion, completeOnChain, createModelRoute, followRoute, tryOnChain } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -41,6 +41,11 @@ interface SpawnSessionOptions {
 	isolated?: boolean;
 	/** 子会话里的扩展出错（加载后的事件处理抛错）时通知；不给就不接线，宿主丢弃这些错误。 */
 	onExtensionError?: (error: ExtensionError) => void;
+	/**
+	 * 会话建好、交出之前调用：抛错即调用方已不要它（如所属的指挥官会话已关闭），池先释放它再原样抛出。在池里做而不是交出后再释放，
+	 * 同一路径的下一次 spawn 等到的就是这一次的最终去向（持有或已在释放），不会撞上一个马上就要被释放的登记。
+	 */
+	accept?: () => void;
 }
 
 interface SpawnedSession {
@@ -112,7 +117,11 @@ export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
 	/** 已摘出 held、session_shutdown 还在收口的落盘会话：同一路径的 spawn 等它落定（单写者登记此时才放开）。 */
 	private readonly releasing = new Map<string, Promise<void>>();
+	/** 还在建的落盘会话：同一路径的 spawn 等它有了去向（持有、释放或失败）再判单写者。 */
+	private readonly opening = new Map<string, Promise<unknown>>();
 	private runtime?: Promise<ModelRuntime>;
+	/** 已建好的模型运行时：同步解析（resolveChainNow）读它最近一次取到的可用模型。 */
+	private loaded?: ModelRuntime;
 	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
 	readonly timing: Timing;
 
@@ -120,9 +129,17 @@ export class InProcessSessionPool {
 		this.timing = { ...DEFAULT_TIMING, ...environment.timing };
 	}
 
+	/** 刷新可用模型后解析链首选（会跑供应商鉴权，没有时限，不放在动作的返回路径上）。 */
 	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom | undefined> {
-		const first = (await candidates(await this.modelRuntime(), chain))[0];
-		return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
+		return firstAtom(await candidates(await this.modelRuntime(), chain), override);
+	}
+
+	/**
+	 * 按最近一次取到的可用模型同步解析链首选，不刷新、不跑鉴权：给不能等宿主回调的动作用。凭据此后变了由开会话时的路由发现，
+	 * 作为失败落定。还没取过可用模型时（模型运行时没建好）当作解析不出。
+	 */
+	resolveChainNow(chain: ModelChain, override?: ThinkingLevelValue): ModelAtom | undefined {
+		return this.loaded && firstAtom(candidatesOf(this.loaded.getAvailableSnapshot(), chain), override);
 	}
 
 	/** 实际用的物理模型（provider/id）是不是这条链首选原子匹配到的模型；匹配规则与路由选候选同一份。 */
@@ -154,10 +171,22 @@ export class InProcessSessionPool {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
 		// 空闲释放收口期间重开同一会话（send、自动续跑）是正当的接续：等那次释放落定（成败都行，登记在 finally 里放开），
 		// 而不是撞上还没放开的单写者登记报“已持有”。落定后的登记检查与占位仍在同一同步段，并发 spawn 照样只放行一个。
-		const releasing = sessionPath && this.releasing.get(sessionPath);
-		if (releasing) await releasing.then(() => undefined, () => undefined);
+		// 还在建的同一路径同理：建它的一方可能已不要它（所属的指挥官会话关闭后才建好），等它有了去向再判。
+		for (let earlier; sessionPath && (earlier = this.opening.get(sessionPath) ?? this.releasing.get(sessionPath));)
+			await earlier.then(() => undefined, () => undefined);
 		if (sessionPath && SESSION_WRITERS.has(sessionPath))
 			throw new Error(msg.spawn.held(sessionPath));
+		if (!sessionPath) return this.create(options, undefined);
+		const created = this.create(options, sessionPath);
+		this.opening.set(sessionPath, created);
+		const settled = () => {
+			if (this.opening.get(sessionPath) === created) this.opening.delete(sessionPath);
+		};
+		void created.then(settled, settled);
+		return created;
+	}
+
+	private async create(options: SpawnSessionOptions, sessionPath: string | undefined): Promise<SpawnedSession> {
 		if (options.persistence.type === "file" && options.persistence.resume && !existsSync(sessionPath!))
 			throw new Error(msg.spawn.missingFile(sessionPath!));
 		if (sessionPath) SESSION_WRITERS.add(sessionPath);
@@ -231,6 +260,12 @@ export class InProcessSessionPool {
 		});
 		this.held.set(key, held);
 		if (codemode) trackCodemodeSession(key, true);
+		try {
+			options.accept?.();
+		} catch (error) {
+			await this.release(held);
+			throw error;
+		}
 		return {
 			session: created,
 			prompt: (text) => created.prompt(text),
@@ -246,7 +281,8 @@ export class InProcessSessionPool {
 
 	private modelRuntime(): Promise<ModelRuntime> {
 		const agentDir = getAgentDir();
-		this.runtime ??= ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
+		this.runtime ??= ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` })
+			.then((runtime) => this.loaded = runtime);
 		return this.runtime;
 	}
 
@@ -355,4 +391,9 @@ function makeSessionManager(persistence: SessionPersistence, cwd: string): Sessi
 
 function matchesExtension(path: string, exclusions: string[]): boolean {
 	return exclusions.some((excluded) => excluded === path || excluded === basename(path));
+}
+
+function firstAtom(list: readonly Candidate[], override: ThinkingLevelValue | undefined): ModelAtom | undefined {
+	const first = list[0];
+	return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
 }

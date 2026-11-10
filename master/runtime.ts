@@ -64,10 +64,6 @@ export interface Turn {
 
 /** 一个 Worker 名下的全部运行时事实；kill 时整条删除。 */
 export interface WorkerLive {
-	/** start 已占名但档案尚未落盘。 */
-	starting?: true;
-	/** send/review 的准备过程单飞。 */
-	transitioning?: true;
 	/** 最近一个回合或审查；working/reviewing 时就是在跑的那一个。还没跑过时是一个从未在飞的回合。 */
 	turn: Turn;
 	interruptTimer?: NodeJS.Timeout;
@@ -178,11 +174,9 @@ export class MasterRuntime {
 		return live;
 	}
 
-	/** start 同步段占名并取启动序（并发 start 越过后续 await 的先后不定，序号必须在此取）。 */
-	reserve(name: string): { live: WorkerLive; launch: number } {
-		const live: WorkerLive = { ...newLive(), starting: true };
-		this.live.set(name, live);
-		return { live, launch: ++this.launchSeq };
+	/** 取下一个启动序（start 写档时）。 */
+	nextLaunch(): number {
+		return ++this.launchSeq;
 	}
 
 	/**
@@ -221,17 +215,14 @@ export class MasterRuntime {
 		}
 	}
 
-	/** await 之后的唯一重读点：档案已被 kill（或同名换票）就放弃本次动作；准备段占住的会话由 run.ts 的 returnSession 归还。 */
-	current(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef {
+	/**
+	 * await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖；档案已被 kill（或同名换票）就报错放弃。
+	 */
+	commit(identity: Pick<WorkerRef, "name" | "sessionPath">, update: (current: WorkerRef) => WorkerRef): WorkerRef {
 		this.assertOpen();
 		const current = this.find(identity);
-		if (current) return current;
-		throw new Error(msg.runtime.killed(identity.name));
-	}
-
-	/** await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖。 */
-	commit(identity: Pick<WorkerRef, "name" | "sessionPath">, update: (current: WorkerRef) => WorkerRef): WorkerRef {
-		const next = update(this.current(identity));
+		if (!current) throw new Error(msg.runtime.killed(identity.name));
+		const next = update(current);
 		this.store.upsert(next);
 		return next;
 	}
