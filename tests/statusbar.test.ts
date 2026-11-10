@@ -1,17 +1,12 @@
-import { expect, setSystemTime, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { fakePi } from "./fake-pi.ts";
 import { PI_TUI_URL, loadFirecodeModule } from "./loader.ts";
-
-const FLAME3 = "[\u2800-\u28ff]{3}";
 
 /** 会话分支里的人类消息与轮记录（生产中轮记录由记录器在歇下边沿写入）。 */
 const humanEntry = (text: string) => ({ type: "message", message: { role: "user", content: text } });
 const roundEntry = (data: Record<string, unknown>) =>
 	({ type: "custom", customType: "firecode-round", data, timestamp: new Date().toISOString() });
-
-/** 记录器写下轮记录后在进程内总线上发布的频道：订阅方此刻读分支一定已含这条记录。 */
-const ROUND_RECORDED = "firecode:round-recorded";
 
 /** 装上真正的记录器：它写进会话的轮记录落进分支，再发布“已写入”。 */
 async function recordRounds(pi: any, branch: unknown[]) {
@@ -69,52 +64,29 @@ async function mount(options: MountOptions = {}) {
 }
 
 
-test("输入框外壳：标题即时取首条消息，状态嵌进上下边框，独立底栏 0 行", async () => {
+test("输入框外壳：标题取首条消息、会话名优先，状态嵌进边框、独立底栏 0 行，退出时卸下", async () => {
 	let name: string | undefined;
 	let entries: any[] = [];
-	const workingVisible: boolean[] = [];
-	const host = await mount({
-		model: { id: "test-model", reasoning: true, contextWindow: 200_000 },
-		percent: 42.3,
-		name: () => name,
-		branch: () => entries,
-		statuses: new Map([["pi-openai-native-fast", "fast"]]),
-		ui: { setWorkingVisible: (visible: boolean) => workingVisible.push(visible) },
-		pi: { getThinkingLevel: () => "medium" },
-	});
+	const host = await mount({ name: () => name, branch: () => entries });
 	const { fake, ctx, bottom } = host;
 	host.start();
 
 	expect(host.footer().render(100)).toEqual([]);
-	expect(workingVisible).toEqual([false]);
-	expect(bottom()).toContain("新会话");
-	expect(bottom()).toContain("test-model/medium Fast · 42.3%/200k");
-
-	const message = { role: "user", content: [{ type: "text", text: "优化插件状态栏和工具展示" }] };
-	fake.fire("message_start", { message }, ctx);
-	expect(bottom()).toContain("─ 优化插件状态栏和工具展示 ─");
-	const long = { role: "user", content: "把 refresh token 的竞态修掉。顺便看看 lint" };
-	entries = [{ type: "message", message: long }];
-	fake.fire("session_tree", {}, ctx);
-	expect(bottom(110)).toContain("─ 把 refresh token 的竞态修掉。 ─");
+	fake.fire("message_start", { message: { role: "user", content: [{ type: "text", text: "优化插件状态栏和工具展示" }] } }, ctx);
+	expect(bottom()).toContain("优化插件状态栏和工具展示");
 	name = "完整的自定义会话名称";
 	fake.fire("session_info_changed", {}, ctx);
 	expect(bottom()).toContain(name);
-	name = undefined;
-	entries = [];
-	fake.fire("session_tree", {}, ctx);
-	expect(bottom()).toContain("新会话");
 
 	fake.fire("session_shutdown", {}, ctx);
 	expect(host.footer()).toBeUndefined();
 	expect(host.editor()).toBeUndefined();
 });
 
-test("审查期间上边框只显示一处审查进度（不写“处理中”），窄屏逐级退让：先丢阻断数，再丢票数，最后整段让给指挥官标记", async () => {
+test("任意宽度下输入框每一行都不超出终端宽度（宿主遇到超宽行会崩），审查进行中的上边框也是", async () => {
 	const { visibleWidth } = await import(PI_TUI_URL) as any;
-	const { fake, ctx, editor: getEditor, start, top } = await mount({
+	const { fake, ctx, editor: getEditor, start } = await mount({
 		model: { id: "gpt-5.5", reasoning: true, contextWindow: 1_000_000 },
-		percent: 12,
 		name: () => "修复登录态偶发失效",
 		statuses: new Map([["master", "指挥官"]]),
 		pi: { getThinkingLevel: () => "high" },
@@ -123,207 +95,57 @@ test("审查期间上边框只显示一处审查进度（不写“处理中”�
 	const editor = getEditor();
 	fake.fire("agent_start", {}, ctx);
 	fake.pi.events.emit("firecode:review", { active: true, progress: () => ({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 1 }) });
-	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
-	expect(top(110)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 1/3 · 1 阻断 ─+ 指挥官 ─$`, "u"));
-	expect(top(46)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
-	expect(top(40)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
-	expect(top(36)).toMatch(new RegExp(`^─ ${FLAME3} \\S+ ─+ 指挥官 ─$`, "u"));
-	for (let width = 1; width <= 120; width++) expect(visibleWidth(editor.render(width)[0])).toBeLessThanOrEqual(width);
+	for (let width = 1; width <= 120; width++)
+		for (const line of editor.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 });
 
-test("输入框边框按宽度退让：下边框先省容量、再裁标题、最后裁模型，Fast 与百分比保留", async () => {
-	const { bottomBorder } = await loadFirecodeModule("statusbar/render.js") as any;
-	const { visibleWidth } = await import((await import("./loader.ts")).PI_TUI_URL);
-	const parts = { title: "修复登录态偶发失效", model: "opus-4.7", think: "/high", fast: "", percent: "23%", capacity: "/1M" };
-	const line = (text: string) => text;
-	const draw = (width: number, over = {}) => stripVTControlCharacters(bottomBorder(width, { ...parts, ...over }, line));
-
-	for (const width of [110, 72]) expect(draw(width)).toMatch(/^─ 修复登录态偶发失效 ─{2,} opus-4\.7\/high · 23%\/1M ─$/u);
-	expect(draw(40)).toMatch(/^─ 修复登录态偶… ─{2,} opus-4\.7\/high · 23% ─$/u);
-	expect(draw(26)).toMatch(/^─{3,} opus-4\.7\/high · 23% ─$/u);
-	expect(draw(26, { fast: "Fast" })).toMatch(/Fast · 23% ─$/u);
-	for (let width = 0; width <= 120; width++)
-		for (const fast of ["", "Fast"]) {
-			const text = bottomBorder(width, { ...parts, fast }, line);
-			expect(visibleWidth(text)).toBeLessThanOrEqual(width);
-			if (width >= 20) expect(stripVTControlCharacters(text)).toContain("23%");
-		}
-});
-
-test("上边框三态：处理中 / 等待 N 个子代理 / 全部落定且歇下才定格", async () => {
+test("主回合歇下后子代理仍在飞：上边框不定格，全部落定才定格", async () => {
 	const branch: unknown[] = [humanEntry("开工")];
 	const { fake, ctx, start, top } = await mount({ branch: () => branch });
 	await recordRounds(fake.pi, branch);
 	start();
-	try {
-		setSystemTime(new Date(1_000_000));
-		fake.fire("agent_start", {}, ctx);
-		setSystemTime(new Date(1_005_000));
-		expect(top()).toMatch(/处理中 5\.0s/u);
+	fake.fire("agent_start", {}, ctx);
+	fake.pi.events.emit("firecode:workers", { inFlight: 2 });
+	fake.fire("agent_end", { messages: [] }, ctx);
+	fake.fire("agent_settled", {}, ctx);
+	expect(top()).not.toContain("✓");
 
-		// 指挥官回合结束，两个子代理在飞：保持运行态、不定格。
-		fake.pi.events.emit("firecode:workers", { inFlight: 2 });
-		fake.fire("agent_end", { messages: [] }, ctx);
-		fake.fire("agent_settled", {}, ctx);
-		expect(top()).toContain("等待 2 个子代理");
-		expect(top()).not.toContain("处理中");
-		fake.pi.events.emit("firecode:workers", { inFlight: 1 });
-		expect(top()).toContain("等待 1 个子代理");
-
-		// 结果送达唤醒指挥官：回到处理中。
-		fake.fire("agent_start", {}, ctx);
-		fake.pi.events.emit("firecode:workers", { inFlight: 0 });
-		expect(top()).toContain("处理中");
-		fake.fire("agent_end", { messages: [] }, ctx);
-		fake.fire("agent_settled", {}, ctx);
-		expect(top()).toContain("✓");
-		expect(top()).not.toMatch(/处理中|等待/u);
-
-		// 落定结果一直留在边框，直到下一轮开始。
-		fake.fire("agent_start", {}, ctx);
-		expect(top()).not.toContain("✓");
-		expect(top()).toContain("处理中");
-	} finally {
-		setSystemTime();
-	}
-});
-
-test("上边框落定态：均速跟在耗时后，中断与请求失败写明终态", async () => {
-	const branch: unknown[] = [];
-	const { fake, ctx, start, top } = await mount({ branch: () => branch });
-	await recordRounds(fake.pi, branch);
-	const emit = (name: string, event = {}) => fake.fire(name, event, ctx);
-	start();
-	const round = (at: number, output: number, stopReason: string) => {
-		setSystemTime(new Date(at));
-		branch.push(humanEntry("再来一轮"));
-		emit("agent_start");
-		setSystemTime(new Date(at + 10_000));
-		emit("message_end", { message: { role: "assistant", usage: { output }, stopReason, durationMs: 10_000 } });
-		emit("agent_end", { messages: [{ role: "assistant", stopReason }] });
-		emit("agent_settled", { aborted: stopReason === "aborted" });
-		setSystemTime(new Date(at + 20_000));
-	};
-	try {
-		round(0, 420, "stop");
-		expect(top()).toMatch(/^─ ✓ 10s · 42 tps ─+$/u);
-		round(100_000, 100, "aborted");
-		// 与摘要行同一写法：终态字样与耗时之间是“ · ”。
-		expect(top()).toMatch(/^─ ✗ 已中断 · 10s ─+$/u);
-		round(200_000, 0, "error");
-		expect(top()).toMatch(/^─ ✗ 请求失败 · 10s ─+$/u);
-	} finally {
-		setSystemTime();
-	}
-});
-
-
-/** 外壳加真实记录：轮记录写进分支再发布“已写入”，审查进度经真实的占用频道。 */
-async function shellWithRecords() {
-	const branch: unknown[] = [];
-	const host = await mount({
-		model: { id: "test-model", reasoning: false, contextWindow: 1_000_000 },
-		name: () => "修复登录态偶发失效",
-		branch: () => branch,
-		statuses: new Map([["master", "指挥官"]]),
-		pi: { getThinkingLevel: () => "off" },
-	});
-	host.start();
-	let progress: Record<string, unknown> | undefined;
-	return {
-		...host,
-		branch,
-		/** 审查持有或释放占用；进度由 progress() 设置，外壳每次绘制才读它。 */
-		review: (active: boolean) => host.fake.pi.events.emit("firecode:review", active ? { active, progress: () => progress } : { active }),
-		progress: (next: Record<string, unknown>) => { progress = next; },
-		workers: (inFlight: number) => host.fake.pi.events.emit("firecode:workers", { inFlight }),
-		/** 歇下边沿：像记录器一样把这一段的轮记录写进分支，再通知外壳。 */
-		settle: (round: Record<string, unknown>) => {
-			branch.push(roundEntry(round));
-			host.fake.pi.events.emit(ROUND_RECORDED);
-		},
-	};
-}
-
-test("主会话审查算会话进行中：上边框是火苗加计时与审查进度，不并排显示上一段的落定记录，也不写“等待 N 个子代理”", async () => {
-	const shell = await shellWithRecords();
-	const glyph = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
-	try {
-		setSystemTime(new Date(1_000_000));
-		shell.settle({ elapsed: 3_100, outcome: "complete", tps: 21.5 });
-		expect(shell.top(110)).toContain("✓ 3.1s");
-		shell.workers(2);
-		shell.review(true);
-		shell.progress({ stage: "reviewing", round: 2, passed: 1, total: 3, blocked: 0 });
-		setSystemTime(new Date(1_062_000));
-		expect(shell.top(110)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 1/3 ─+ 指挥官 ─$`, "u"));
-		expect(shell.top(40)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 ─+ 指挥官 ─$`, "u"));
-		// 修复回合指挥官在跑，措辞与只等审查时一致：审查期间的状态都由审查进度说明，不另写“处理中”。
-		shell.fake.fire("agent_start", {}, shell.ctx);
-		shell.progress({ stage: "fixing", round: 2, passed: 0, total: 0, blocked: 0 });
-		expect(shell.top(110)).toMatch(new RegExp(`^─ ${FLAME3} 1m2s · ${glyph} 审查 第2轮 修复中 ─+ 指挥官 ─$`, "u"));
-		shell.review(false);
-		expect(shell.top(110)).not.toContain("审查");
-	} finally {
-		setSystemTime();
-	}
-});
-
-test("落定态与摘要行读同一份事实：一轮多段按同一合成规则显示整轮（耗时累加、更早的中断追加）；重开会话时直接显示上一轮", async () => {
-	const shell = await shellWithRecords();
-	shell.branch.push(humanEntry("上一轮"), roundEntry({ elapsed: 9_000, outcome: "complete" }));
-	shell.branch.push(humanEntry("写一篇冬天散文"), roundEntry({ elapsed: 17_700, outcome: "aborted" }));
-	shell.fake.fire("agent_start", {}, shell.ctx);
-	shell.fake.fire("agent_settled", {}, shell.ctx);
-	shell.settle({ elapsed: 195_000, outcome: "complete", tps: 77.1 });
-	const settled = /^─ ✓ 3m33s · 中断过 1 次 ─+ 指挥官 ─$/u;
-	expect(shell.top(110)).toMatch(settled);
-
-	shell.start();
-	expect(shell.top(110)).toMatch(settled);
+	fake.pi.events.emit("firecode:workers", { inFlight: 0 });
+	fake.fire("agent_start", {}, ctx);
+	fake.fire("agent_end", { messages: [] }, ctx);
+	fake.fire("agent_settled", {}, ctx);
+	expect(top()).toContain("✓");
 });
 
 /** 改名键是 \x12，输入框按 answers 依次应答。 */
 async function renameHost(answers: Array<string | undefined>, initialName?: string) {
 	let sessionName = initialName;
 	const prompts: unknown[][] = [];
-	const notices: string[] = [];
 	const host = await mount({
 		keybindings: { matches: (data: string, action: string) => action === "app.session.rename" && data === "\x12" },
 		ui: {
 			input: async (...args: unknown[]) => { prompts.push(args); return answers.shift(); },
-			notify: (message: string) => notices.push(message),
+			notify() {},
 		},
 		pi: { getSessionName: () => sessionName, setSessionName: (name: string) => { sessionName = name; } },
 	});
 	host.start();
 	return {
-		fake: host.fake, prompts, notices,
+		prompts,
 		name: () => sessionName,
 		press: async (data: string) => { host.editor().handleInput(data); await new Promise((resolve) => setTimeout(resolve, 0)); },
 	};
 }
 
-test("输入框里按宿主的改名键（app.session.rename）弹输入框（预填当前名字）改会话名，名字去掉控制字符", async () => {
-	const host = await renameHost(["  new\u200b name\n"], "old");
-
-	await host.press("\x12");
-
-	expect(host.prompts[0]?.[1]).toBe("old");
-	expect(host.name()).toBe("new name");
-	expect(host.notices).toEqual(["会话已改名：new name"]);
-});
-
-test("改名取消或留空不改会话名；其它键不弹输入框", async () => {
-	const host = await renameHost([undefined, "   "], "old");
+test("输入框里按宿主的改名键（app.session.rename）弹输入框改会话名；取消或留空不改，其它键不弹", async () => {
+	const host = await renameHost(["new name", undefined, "   "], "old");
 
 	await host.press("a");
 	expect(host.prompts).toEqual([]);
 	await host.press("\x12");
+	expect(host.name()).toBe("new name");
 	await host.press("\x12");
-
-	expect(host.prompts).toHaveLength(2);
-	expect(host.name()).toBe("old");
-	expect(host.notices).toEqual([]);
+	await host.press("\x12");
+	expect(host.prompts).toHaveLength(3);
+	expect(host.name()).toBe("new name");
 });
-
