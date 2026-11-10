@@ -197,7 +197,7 @@ async function start(active: MasterRuntime, input: ActionInput) {
 	};
 	active.store.upsert(worker);
 	active.beginRun(name, prompt);
-	runWorker(active, worker, () => spawnWorker(active, worker, false), prompt);
+	runWorker(active, worker, () => spawnWorker(active, worker), prompt);
 	return { started: true, worker: compactWorker(worker) };
 }
 
