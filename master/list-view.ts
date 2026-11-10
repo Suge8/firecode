@@ -56,7 +56,7 @@ export function expandedWorkerList(
 				value: [
 					{ text: roleStatusText(worker), color: "accent" },
 					...actionParts(worker.phase),
-					{ text: ` · ${worker.model.split("/").pop()}/${worker.thinking}`, color: "muted" },
+					...(worker.model ? [{ text: ` · ${worker.model.split("/").pop()}/${worker.thinking}`, color: "muted" as const }] : []),
 				],
 				clip: "end",
 				theme,
@@ -74,7 +74,7 @@ export function listMeta(workers: ListedWorker[]): Part[] {
 
 export function statusText(workers: readonly ListedWorker[]): string {
 	return workers.length
-		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
+		? workers.map((worker) => [worker.name, roleStatusText(worker), worker.model?.split("/").pop()].filter(Boolean).join(" ")).join("\n")
 		: msg.list.noWorkers;
 }
 

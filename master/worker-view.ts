@@ -392,7 +392,7 @@ export class WorkerView implements Component, Focusable {
 		if (position >= 0) this.index = position;
 		const lead = position >= 0 ? `${position + 1}/${names.length}` : "";
 		const notice = this.notice && (this.notice.until === undefined || Date.now() < this.notice.until) ? this.notice.text : undefined;
-		const model = worker ? modelAtomText(worker) : "";
+		const model = worker?.model ? modelAtomText(worker) : "";
 		const dim = (text: string) => this.theme.fg("dim", text);
 		function* candidates(): Generator<BorderParts> {
 			if (notice) {

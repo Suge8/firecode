@@ -57,7 +57,7 @@ test("省略供应商的模型原子能派给可用来源", async () => {
 	expect(harness.messages.at(-1).message.content).toContain("完成");
 });
 
-test("不可用角色保留在枚举中，但不进入角色表且派发时报出可用角色", async () => {
+test("不可用角色保留在枚举中、不进入角色表；派发它不在动作里挡，开会话解析不出模型作为失败事件告知", async () => {
 	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 不可用: { model: "nokey/model/medium", use: "其他工作" } } });
 	await harness.emit("session_start", {});
 	const prompt = await harness.systemPrompt("主提示词");
@@ -65,12 +65,30 @@ test("不可用角色保留在枚举中，但不进入角色表且派发时报�
 	expect(prompt).not.toContain("不可用");
 	expect(harness.commandTool.parameters.properties.role.enum).toEqual(["工程师", "不可用"]);
 	expect(harness.notices.join("\n")).toContain("不可用");
-	await expect(harness.execute({ action: "start", worker: "missing", prompt: "执行", role: "不可用" })).rejects.toThrow(/不可用.*工程师/u);
 	faux.setResponses([fauxAssistantMessage("完成")]);
-	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
-	await harness.execute({ action: "start", worker: "valid", prompt: "执行", role: "工程师" });
-	await delivered;
-	await expect(harness.execute({ action: "send", worker: "valid", prompt: "继续", role: "不可用" })).rejects.toThrow(/不可用.*工程师/u);
+	expect((await harness.execute({ action: "start", worker: "missing", prompt: "执行", role: "不可用" })).details).toMatchObject({ started: true });
+	await until(() => eventTitles(harness).includes("missing 失败"));
+	expect(harness.messages.at(-1).message.content).toContain("nokey/model");
+	expect((await harness.list()).details.workers.find((worker: any) => worker.name === "missing")).toMatchObject({ status: "idle" });
+	expect(faux.getPendingResponseCount()).toBe(1);
+});
+
+test("角色的凭据在会话开始核对之后才配上：start 照常派发、照常返回结果，档案记下实际模型", async () => {
+	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 迟到: { model: "nokey/model/low", use: "凭据后配" } } });
+	await harness.emit("session_start", {});
+	expect(harness.notices.join("\n")).toContain("迟到");
+	process.env.FIRECODE_TEST_UNSET_API_KEY = "faux-key";
+	try {
+		faux.setResponses([fauxAssistantMessage("凭据到了就能跑")]);
+		const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+		expect((await harness.execute({ action: "start", worker: "late", prompt: "执行", role: "迟到" })).details).toMatchObject({ started: true });
+		await delivered;
+		expect(titleOf(harness.messages.at(-1).message.content)).toBe("late 已返回");
+		expect(harness.messages.at(-1).message.content).toContain("凭据到了就能跑");
+		expect((await harness.list()).details.workers[0]).toMatchObject({ status: "idle", role: "迟到", model: "nokey/model" });
+	} finally {
+		delete process.env.FIRECODE_TEST_UNSET_API_KEY;
+	}
 });
 
 test("新会话默认激活 subagents", async () => {
@@ -475,14 +493,17 @@ test("主回合忙碌时，subagents 以队列语义完成 start→事件落定�
 		thinking: "low",
 	});
 	const worker = (started.details as any).worker;
-	expect(worker).toMatchObject({ status: "working", role: "工程师", model: "test/worker", thinking: "off" });
+	// start 写档就返回：实际模型要等第一次请求路由选定，此刻还没有。
+	expect(worker).toMatchObject({ status: "working", role: "工程师" });
+	expect(worker.model).toBeUndefined();
 	await settled;
 	await until(async () => (await harness.list()).details.workers[0]?.status === "idle");
 
 	const listed = await harness.list();
-	expect(JSON.parse(listed.content[0].text).workers).toEqual([{ ...worker, status: "idle" }]);
+	const landed = { ...worker, status: "idle", model: "test/worker", thinking: "off" };
+	expect(JSON.parse(listed.content[0].text).workers).toEqual([landed]);
 	expect((listed.details as any).workers).toEqual([
-		{ ...worker, status: "idle", phase: expect.objectContaining({ kind: "done" }) },
+		{ ...landed, phase: expect.objectContaining({ kind: "done" }) },
 	]);
 	expect(harness.messages[0]).toMatchObject({
 		message: { customType: "firecode-master-event", content: expect.stringMatching(/^<firecode_master_event>\ntrace 已返回\n回复：\n确定性完成\n耗时：[^\n]+\n<\/firecode_master_event>$/u) },
@@ -2408,16 +2429,18 @@ test("看过一眼（getSession）不改变空闲释放：空闲会话照常到�
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
-test("send 准备失败时空闲票的释放计时补回：失败后热会话仍按时释放", async () => {
+test("send 换到解析不出模型的角色：立即返回，作为失败事件告知，失败后热会话仍按时释放", async () => {
 	const harness = await setup(true, { timing: { idleSessionMs: 60 }, roles: { ...TEST_ROLES, 无密钥: { model: "nokey/model/low", use: "没有认证" } } });
 	faux.setResponses([fauxAssistantMessage("完成")]);
 	const settled = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
 	const started = await harness.execute({ action: "start", worker: "prep", prompt: "执行", role: "工程师" });
 	await settled;
 	const sessionPath = (started.details as any).worker.session;
-	// 换到没有认证的 provider：热会话已被 hold 住，setModel 才失败。
-	await expect(harness.execute({ action: "send", worker: "prep", prompt: "换角色", role: "无密钥" })).rejects.toThrow();
-	expect((await harness.list().then((result) => result.details as any)).workers[0]).toMatchObject({ status: "idle", role: "工程师" });
+	// 换到没有认证的 provider：热会话已被 hold 住，第一次请求路由才发现解析不出模型。
+	expect((await harness.execute({ action: "send", worker: "prep", prompt: "换角色", role: "无密钥" })).details).toEqual({ sent: true });
+	await until(() => eventTitles(harness).includes("prep 失败"));
+	expect(harness.messages.at(-1).message.content).toContain("nokey/model");
+	expect((await harness.list().then((result) => result.details as any)).workers[0]).toMatchObject({ status: "idle", role: "无密钥" });
 	await until(() => harness.pool.getSession(sessionPath) === undefined);
 });
 

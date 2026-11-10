@@ -15,11 +15,15 @@ export type WorkerStatus = "working" | "idle" | "reviewing";
  */
 export type RunOrigin = "master" | "view";
 
-export interface WorkerRef {
+/**
+ * 实际原子（model 与 thinking 同有同无）：只由路由回调写（run.ts 的 onModelChange），回合的第一次请求路由到具体模型时才有；
+ * start 之后、选定之前都没有。
+ */
+export type WorkerRef = WorkerFields & (ModelAtom | { model?: undefined; thinking?: undefined });
+
+interface WorkerFields {
 	name: string;
 	role: string;
-	model: string;
-	thinking: ThinkingLevelValue;
 	/**
 	 * 指挥官在 start/send 指定的思考档（覆盖角色链各原子的档）；省略按原子。开会话与重配路由都只从这里取，热会话与冷启动（含暂停后的
 	 * 自动续跑、续审）一致；send 每次按自己的 thinking 改写，不带就清掉。thinking 是路由按它选出的实际档，两者不是同一件事。
@@ -61,8 +65,7 @@ export function compactWorker(worker: WorkerRef) {
 		name: worker.name,
 		role: worker.role,
 		status: worker.status,
-		model: worker.model,
-		thinking: worker.thinking,
+		...(worker.model ? { model: worker.model, thinking: worker.thinking } : {}),
 		session: worker.sessionPath,
 		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
 		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
@@ -260,12 +263,14 @@ function isWorker(value: unknown): value is WorkerRef {
 	if (
 		typeof record.name !== "string" || !WORKER_NAME.test(record.name) ||
 		typeof record.role !== "string" || !record.role ||
-		typeof record.model !== "string" || !record.model ||
-		typeof record.thinking !== "string" || !THINKING_LEVELS.includes(record.thinking as ThinkingLevelValue) ||
 		(record.status !== "working" && record.status !== "idle" && record.status !== "reviewing") ||
 		typeof record.sessionPath !== "string" || !record.sessionPath
 	) return false;
 	if (typeof record.cwd !== "string" || !record.cwd) return false;
+	if (record.model !== undefined || record.thinking !== undefined) {
+		if (typeof record.model !== "string" || !record.model) return false;
+		if (!THINKING_LEVELS.includes(record.thinking as ThinkingLevelValue)) return false;
+	}
 	if (record.interruptedAt !== undefined && (typeof record.interruptedAt !== "number" || record.interruptedAt <= 0))
 		return false;
 	if (record.thinkingOverride !== undefined && !THINKING_LEVELS.includes(record.thinkingOverride as ThinkingLevelValue)) return false;

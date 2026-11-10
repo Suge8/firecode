@@ -9,7 +9,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { THINKING_LEVELS } from "../config.js";
+import { THINKING_LEVELS, type ThinkingLevelValue } from "../config.js";
 import { msg } from "./messages.js";
 import { interruptTurn, reopen, RESUME_CHECK_PROMPT, runWorker, spawnWorker, startReview, steerTurn } from "./run.js";
 import type { MasterRuntime } from "./runtime.js";
@@ -148,8 +148,6 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 	admit(active);
 	const cwd = resolveSendCwd(target, requestedCwd);
 	const selectedRole = selection ?? roles.require(target.role);
-	// 只核对角色按最近取到的可用模型可解析：档案的模型原子等路由选定后由 onModelChange 写（run.ts）。
-	roles.resolve(selectedRole, thinkingOverride);
 	// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 	const cutOff = target.interruptedAt !== undefined || target.resume !== undefined;
 	// 接手后的档案（角色、目录、思考档）：开会话与路由都从它取。
@@ -167,8 +165,8 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 }
 
 /**
- * 校验后写档进 working 就返回 { started, worker }；新会话在后台开、回合在后台开，开不成（鉴权、路由、扩展加载）按失败落定。
- * 档案里的模型原子先按最近取到的可用模型解析，开会话时路由选定后由 onModelChange 改写。
+ * 校验后写档进 working 就返回 { started, worker }；新会话在后台开、回合在后台开，开不成（模型解析不出、鉴权、扩展加载）按失败落定。
+ * 档案里还没有模型原子：第一次请求路由选定模型后由 onModelChange 写（run.ts）。
  */
 async function start(active: MasterRuntime, input: ActionInput) {
 	const { reviewGate } = active.setup;
@@ -184,15 +182,12 @@ async function start(active: MasterRuntime, input: ActionInput) {
 	if (!requestedRole) throw new Error(msg.action.needRole);
 	const selectedRole = active.roles.require(requestedRole);
 	const override = validThinking(input.thinking);
-	const selected = active.roles.resolve(selectedRole, override);
 	const cwd = resolveWorkerCwd(input.cwd ?? ctx.cwd);
 	const mainSessionPath = ctx.sessionManager.getSessionFile();
 	if (!mainSessionPath) throw new Error(msg.action.mainNotSaved);
 	const worker: WorkerRef = {
 		name,
 		role: selectedRole.role,
-		model: selected.model,
-		thinking: selected.thinking,
 		status: "working",
 		sessionPath: preallocateWorkerSession(mainSessionPath, cwd),
 		cwd,
@@ -233,9 +228,9 @@ function requiredString(value: unknown, field: string): string {
 	return value.trim();
 }
 
-function validThinking(value: string | undefined): WorkerRef["thinking"] | undefined {
-	if (value && !THINKING_LEVELS.includes(value as WorkerRef["thinking"])) throw new Error(msg.action.badThinking(value));
-	return value as WorkerRef["thinking"] | undefined;
+function validThinking(value: string | undefined): ThinkingLevelValue | undefined {
+	if (value && !THINKING_LEVELS.includes(value as ThinkingLevelValue)) throw new Error(msg.action.badThinking(value));
+	return value as ThinkingLevelValue | undefined;
 }
 
 function validateWorkerName(name: string): void {

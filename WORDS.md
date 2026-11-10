@@ -57,4 +57,4 @@
 - **后台模型**（Background Model）→ 配置 `background.model`；进展行、压缩摘要与闲置压缩共用的便宜模型链，与角色、审查独立；避免：小模型配置、辅助模型、side model
 - **闲置压缩**（Idle Compaction）→ `background/idle.ts`；闲置到缓存过期前预算摘要，过期后的下一次请求前应用；避免：保温、续期、定时压缩
 - **模型原子**（Model Atom）→ `config.ts` 的 `parseModelAtom`；避免：模型 ID、模型对、`{ model, thinking }`
-- **角色表**（Role Roster）→ 配置 `master.roles`，运行时核对后的可用部分在 `master/roles.ts`；避免：选型表、花名册、模型清单
+- **角色表**（Role Roster）→ 配置 `master.roles`，会话开始核对出的可用部分（只定提示词里的角色表）在 `master/roles.ts`；避免：选型表、花名册、模型清单

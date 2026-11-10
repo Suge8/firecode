@@ -17,9 +17,9 @@ export interface SubagentInfo {
 	name: string;
 	/** 派发角色，取自角色表。 */
 	role: string;
-	/** 实际使用的模型原子（`provider/model`）与思考档。 */
-	model: string;
-	thinking: string;
+	/** 实际使用的模型原子（`provider/model`）与思考档；start 后、第一次请求选定模型之前没有。 */
+	model?: string;
+	thinking?: string;
 	state: SubagentState;
 	/** 在做什么的一句话（界面语言）：在跑时是进展行，没有就是当前工具（与活动列表的在跑行同一条规则）；审查进度；落定后是结果首句或失败原因；空闲为空串。 */
 	action: string;
@@ -41,8 +41,7 @@ export function subagentInfos(facts: ActivityFacts, now: number): SubagentInfo[]
 		return {
 			name: worker.name,
 			role: worker.role,
-			model: worker.model,
-			thinking: worker.thinking,
+			...(worker.model ? { model: worker.model, thinking: worker.thinking } : {}),
 			state: kind === "stuck" ? "running" : kind,
 			action,
 			...(startedAt === undefined ? {} : { startedAt }),

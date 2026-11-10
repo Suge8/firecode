@@ -18,7 +18,7 @@ import {
 	type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelAtom, ModelChain, ThinkingLevelValue } from "./config.js";
-import { type Candidate, candidates, candidatesOf, type ChainCompletion, completeOnChain, createModelRoute, followRoute, tryOnChain } from "./model-route.js";
+import { type Candidate, candidates, type ChainCompletion, completeOnChain, createModelRoute, followRoute, tryOnChain } from "./model-route.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
 import { DEFAULT_TIMING, type Timing } from "./timing.js";
@@ -120,8 +120,6 @@ export class InProcessSessionPool {
 	/** 还在建的落盘会话：同一路径的 spawn 等它有了去向（持有、释放或失败）再判单写者。 */
 	private readonly opening = new Map<string, Promise<unknown>>();
 	private runtime?: Promise<ModelRuntime>;
-	/** 已建好的模型运行时：同步解析（resolveChainNow）读它最近一次取到的可用模型。 */
-	private loaded?: ModelRuntime;
 	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
 	readonly timing: Timing;
 
@@ -131,15 +129,8 @@ export class InProcessSessionPool {
 
 	/** 刷新可用模型后解析链首选（会跑供应商鉴权，没有时限，不放在动作的返回路径上）。 */
 	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom | undefined> {
-		return firstAtom(await candidates(await this.modelRuntime(), chain), override);
-	}
-
-	/**
-	 * 按最近一次取到的可用模型同步解析链首选，不刷新、不跑鉴权：给不能等宿主回调的动作用。凭据此后变了由开会话时的路由发现，
-	 * 作为失败落定。还没取过可用模型时（模型运行时没建好）当作解析不出。
-	 */
-	resolveChainNow(chain: ModelChain, override?: ThinkingLevelValue): ModelAtom | undefined {
-		return this.loaded && firstAtom(candidatesOf(this.loaded.getAvailableSnapshot(), chain), override);
+		const first = (await candidates(await this.modelRuntime(), chain))[0];
+		return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
 	}
 
 	/** 实际用的物理模型（provider/id）是不是这条链首选原子匹配到的模型；匹配规则与路由选候选同一份。 */
@@ -281,8 +272,7 @@ export class InProcessSessionPool {
 
 	private modelRuntime(): Promise<ModelRuntime> {
 		const agentDir = getAgentDir();
-		this.runtime ??= ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` })
-			.then((runtime) => this.loaded = runtime);
+		this.runtime ??= ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
 		return this.runtime;
 	}
 
@@ -391,9 +381,4 @@ function makeSessionManager(persistence: SessionPersistence, cwd: string): Sessi
 
 function matchesExtension(path: string, exclusions: string[]): boolean {
 	return exclusions.some((excluded) => excluded === path || excluded === basename(path));
-}
-
-function firstAtom(list: readonly Candidate[], override: ThinkingLevelValue | undefined): ModelAtom | undefined {
-	const first = list[0];
-	return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
 }
