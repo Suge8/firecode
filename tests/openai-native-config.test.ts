@@ -28,7 +28,9 @@ const read = (path: string) => readFileSync(path, "utf8");
 test("toggling fast flips the provider's priority and leaves everything else in the file alone", async () => {
 	const fast = await fastCommand(`{
 	// keep me
+	// "openai": { "providers": { "old": {} } }
 	"keys": { "fast": "ctrl+shift+s" },
+	"note": "see \\"openai\\": { below",
 	"openai": {
 		"nativeCompaction": true,
 		"experimental": 1,
@@ -42,9 +44,11 @@ test("toggling fast flips the provider's priority and leaves everything else in 
 	await fast.toggle("openai-codex");
 	const afterOn = read(fast.path);
 	expect(afterOn).toContain("// keep me");
+	expect(afterOn).toContain('// "openai": { "providers": { "old": {} } }');
 	expect(afterOn).toContain("/* trailing note */");
 	expect(parseJsonc(afterOn)).toEqual({
 		keys: { fast: "ctrl+shift+s" },
+		note: 'see "openai": { below',
 		openai: {
 			nativeCompaction: true,
 			experimental: 1,
