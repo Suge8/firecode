@@ -151,8 +151,8 @@ async function send(active: MasterRuntime, name: string, input: ActionInput, ori
 	// 被中断或暂停中（回合断在半路）的票，首次续派前置现场核对。
 	const cutOff = target.interruptedAt !== undefined || target.resume !== undefined;
 	// 接手后的档案（角色、目录、思考档）：开会话与路由都从它取。
-	const { thinkingOverride: _previous, ...taken } = transition.takeOver(target, "working", fromView ? prompt : undefined);
-	const working = { ...taken, role: selectedRole.role, cwd, ...(thinkingOverride ? { thinkingOverride } : {}), ...(input.review ? { reviewNeeded: true } : {}) };
+	const taken = transition.reassigned(transition.takeOver(target, "working", fromView ? prompt : undefined), selectedRole.role, thinkingOverride);
+	const working: WorkerRef = { ...taken, cwd, ...(input.review ? { reviewNeeded: true } : {}) };
 	active.store.upsert(working);
 	active.beginRun(target.name, prompt);
 	runWorker(active, working, async () => {

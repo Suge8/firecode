@@ -323,5 +323,6 @@ export async function createModelRoute(
 			return { entries: [...event.entries, { type: "context_edit", targetId: failure.id, replacement: null }], continue: true };
 		});
 	};
-	return { model, extension, configure: (next, level) => { chain = next; override = level; }, dispose: () => { routes.delete(`${provider}/${id}`); runtime.unregisterVirtualModel(provider, id); } };
+	// 重配（换角色或思考档）后忘掉上一次选定：下一次选定一定报给 onChange，即使选回同一个原子——调用方在重配时清掉了它记的原子。
+	return { model, extension, configure: (next, level) => { chain = next; override = level; state.current = undefined; }, dispose: () => { routes.delete(`${provider}/${id}`); runtime.unregisterVirtualModel(provider, id); } };
 }

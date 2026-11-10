@@ -2499,6 +2499,23 @@ test("看过一眼（getSession）不改变空闲释放：空闲会话照常到�
 	expect(existsSync(sessionPath)).toBe(true);
 });
 
+test("乙角色跑完后 send 换到解析不出模型的甲角色：档案没有模型，list 与 status 不再显示乙的模型", async () => {
+	const harness = await setup(true, { roles: { 乙: { model: "test/worker-2/high", use: "先跑" }, 甲: { model: "nokey/model/low", use: "没有认证" } } });
+	faux.setResponses([fauxAssistantMessage("乙完成")]);
+	await harness.execute({ action: "start", worker: "swap", prompt: "执行", role: "乙" });
+	await until(() => eventTitles(harness).includes("swap 已返回"));
+	expect((await harness.list()).details.workers[0]).toMatchObject({ role: "乙", model: "test/worker-2" });
+	expect((await harness.execute({ action: "send", worker: "swap", prompt: "换甲", role: "甲" })).details).toEqual({ sent: true });
+	await until(() => eventTitles(harness).includes("swap 失败"));
+	const worker = (await harness.list()).details.workers[0];
+	expect(worker).toMatchObject({ status: "idle", role: "甲" });
+	expect(worker.model).toBeUndefined();
+	expect(worker.thinking).toBeUndefined();
+	await harness.command("status");
+	expect(harness.notices.at(-1)).toContain("swap");
+	expect(harness.notices.at(-1)).not.toContain("worker-2");
+});
+
 test("send 换到解析不出模型的角色：立即返回，作为失败事件告知，失败后热会话仍按时释放", async () => {
 	const harness = await setup(true, { timing: { idleSessionMs: 60 }, roles: { ...TEST_ROLES, 无密钥: { model: "nokey/model/low", use: "没有认证" } } });
 	faux.setResponses([fauxAssistantMessage("完成")]);

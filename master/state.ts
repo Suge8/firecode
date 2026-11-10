@@ -92,6 +92,15 @@ export const transition = {
 	takeOver({ interruptedAt: _interrupted, reloadInterrupted: _reload, resume: _resume, ...worker }: WorkerRef, status: "working" | "reviewing", viewPrompt?: string): WorkerRef {
 		return { ...endRun(worker), status, ...(viewPrompt === undefined ? {} : { origin: "view" as const, viewPrompts: [viewPrompt] }) };
 	},
+	/**
+	 * send 定下这次运行的角色与思考档覆盖。实际原子由二者经路由选出：任何一个变了，旧原子就不再属于这张票，同一处清掉，
+	 * 路由选定后由 onModelChange 写回；选不出（换到没有凭据的角色）就一直没有，不会显示上一个角色的模型。
+	 */
+	reassigned(worker: WorkerRef, role: string, thinkingOverride: ThinkingLevelValue | undefined): WorkerRef {
+		const { model: _model, thinking: _thinking, thinkingOverride: previous, ...rest } = worker;
+		const kept = role === worker.role && thinkingOverride === previous && worker.model ? { model: worker.model, thinking: worker.thinking } : {};
+		return { ...rest, ...kept, role, ...(thinkingOverride ? { thinkingOverride } : {}) };
+	},
 	/** 用户在全过程视图里对在跑的运行补的话（送达后记下）；不改来源。 */
 	viewSaid(worker: WorkerRef, prompt: string): WorkerRef {
 		return { ...worker, viewPrompts: [...worker.viewPrompts ?? [], prompt] };
