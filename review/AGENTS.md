@@ -6,7 +6,7 @@
 
 状态机（相、判别联合、不变量）见 `state.ts` 头注释。修复回合与总结回合共用同一条 `turn` 生命周期（`pending → running → done`，总结回合结束直接落 settled）；总结类型与修复反馈都由 `history` 末轮推出，不另存。已收口轮的全文只存在 `reviewers[].details` 一处，其余文本经 `roundText` / `findingsOf` 推出。
 
-分工见 `run.ts`、`index.ts` 头注释。命令入口的 START 一律先排队，开审只经 `advance` 在 idle 门里发生，没有“直接开审”的第二条路径；用户取消是 `notify_cancelled` 通知效果，不是卡。对外中止入口是命令 `/fire-review --cancel`（常量在 `outcome.ts`，Master 的 interrupt 用它）：与 esc 同一个 CANCEL 事件，顾问阶段也整场取消而不是只跳过咨询；已到总结相时（裁决已出）取消与超时只跳过总结、保留质量裁决，此时的取消命令另有一条“已停止等待总结、结论保留”的提示（总结相不接管编辑器，esc 归宿主中止回合）；没有进行中的审查时只提示，不留拒绝记录，配置坏掉时同样可用。
+分工见 `run.ts`、`index.ts` 头注释。开审入口只有一个（`index.ts` 的 `startReview`）：命令调它，`registerReview` 也把它返回给入口，Master 的 `self_review` 工具经它在主会话开审。START 一律先排队，开审只经 `advance` 在 idle 门里发生，没有“直接开审”的第二条路径；用户取消是 `notify_cancelled` 通知效果，不是卡。对外中止入口是命令 `/fire-review --cancel`（常量在 `outcome.ts`，Master 的 interrupt 用它）：与 esc 同一个 CANCEL 事件，顾问阶段也整场取消而不是只跳过咨询；已到总结相时（裁决已出）取消与超时只跳过总结、保留质量裁决，此时的取消命令另有一条“已停止等待总结、结论保留”的提示（总结相不接管编辑器，esc 归宿主中止回合）；没有进行中的审查时只提示，不留拒绝记录，配置坏掉时同样可用。
 
 `Run.release()` 中止在途工作与投递、停看门狗、放占用、还界面、通知宿主不再持有；它幂等，释放后的 dispatch 一律忽略。
 

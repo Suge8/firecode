@@ -15,7 +15,7 @@ import { registerHerdrProjection } from "./session/herdr-projection.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
-import { registerReview } from "./review/index.js";
+import { registerReview, type StartReview } from "./review/index.js";
 import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
 import { InProcessSessionPool, loadingSubsession } from "./spawn.js";
@@ -62,17 +62,19 @@ export function registerFirecode(
 		if (config.features[feature] === false || (subsession && MAIN_ONLY.has(feature))) continue;
 		register(pi);
 	}
+	// 注册顺序就是同一事件上各处理器的执行顺序，review 留在最后不动；self_review 到工具被调用时才取它的开审入口。
+	let startReview: StartReview;
 	// 子会话不带 Master 本体（只注册 checkout 守卫）：级联抑制是代码规则，不靠进程环境。
 	if (subsession) {
 		if (config.features.master !== false) registerWorkerGuard(pi);
 	} else {
-		if (config.features.master !== false) registerMaster(pi, pool);
+		if (config.features.master !== false) registerMaster(pi, pool, (focus, ctx) => startReview(focus, ctx));
 	}
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	registerReview(pi, pool, { enabled: reviewEnabled, configBroken: featuresBroken });
+	startReview = registerReview(pi, pool, { enabled: reviewEnabled, configBroken: featuresBroken });
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {

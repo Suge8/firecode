@@ -25,13 +25,19 @@ export interface ReviewOptions {
 	configBroken?: boolean;
 }
 
-/** pool：审查/顾问会话开在这个池里，进程里唯一的子会话池，由入口传入，本模块不自建。 */
-export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false }: ReviewOptions = {}): void {
+/** 在这个会话发起一场审查（先排队，歇下后开审）；被拒时返回原因，原因已按 refuse 记录并通知。 */
+export type StartReview = (focus: string, ctx: ExtensionContext) => string | undefined;
+
+/**
+ * pool：审查/顾问会话开在这个池里，进程里唯一的子会话池，由入口传入，本模块不自建。
+ * 返回值是命令之外唯一的开审入口，与命令同一条路；Master 的 self_review 工具用它。
+ */
+export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false }: ReviewOptions = {}): StartReview {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
 		if (!configBroken) pi.on("session_start", (_event, ctx) => settleDisabledCheckpoint(pi, ctx));
-		return;
+		return () => msg.command.off;
 	}
 	let current: Run | undefined;
 	const host: RunHost = {
@@ -44,7 +50,11 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 
 	pi.registerCommand("fire-review", {
 		description: msg.command.description,
-		handler: (args, ctx) => startReview(args, ctx),
+		// 取消不依赖配置能否解析：配置坏掉时也要能停掉已在跑的审查。
+		handler: async (args, ctx) => {
+			if (args.trim() === CANCEL_REVIEW_ARG) cancelReview(ctx);
+			else startReview(args, ctx);
+		},
 	});
 	pi.on("session_start", (_event, ctx) => resume(ctx));
 	// 宿主保证 resources_discover 在整次 session_start（含所有异步 handler）完成后发出。
@@ -54,9 +64,7 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 	pi.on("agent_settled", (event, ctx) => current?.agentSettled(event, ctx));
 	pi.on("session_shutdown", (event, ctx) => current?.shutdown(event.reason, ctx));
 
-	async function startReview(args: string, ctx: ExtensionContext): Promise<void> {
-		// 取消不依赖配置能否解析：配置坏掉时也要能停掉已在跑的审查。
-		if (args.trim() === CANCEL_REVIEW_ARG) return cancelReview(ctx);
+	function startReview(args: string, ctx: ExtensionContext): string | undefined {
 		// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 		// 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。
 		const loaded = loadConfig().review;
@@ -74,9 +82,10 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 	}
 
 	/** 拒绝启动：有 UI 时通知，无论有无 UI 都记录——Worker 里没有 UI，Master 靠这条记录读到原因。 */
-	function refuse(ctx: ExtensionContext, message: string, level: "info" | "error"): void {
+	function refuse(ctx: ExtensionContext, message: string, level: "info" | "error"): string {
 		recordRefusal(pi, message);
 		if (ctx.hasUI) ctx.ui.notify(message, level);
+		return message;
 	}
 
 	/**
@@ -93,6 +102,8 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 		current = new Run(host, ctx, loaded.config, checkpoint, new CheckpointWriter(pi, checkpoint));
 		current.resume();
 	}
+
+	return startReview;
 }
 
 /** 提示存档损坏并写一份空的已收口存档作废它：之后读到的是有效存档，同一会话不再重复提示。 */

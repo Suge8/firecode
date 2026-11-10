@@ -1,5 +1,5 @@
 /**
- * /fire-master 的注册入口：激活与停用、命令、两个工具与生命周期。
+ * /fire-master 的注册入口：激活与停用、命令、三个工具与生命周期。
  * 运行时事实在 runtime.ts，回合编排在 run.ts，七个动作在 actions.ts，发件箱在 outbox.ts，工具行在 list-view.ts；
  * 活动列表与全过程视图在这里挂到运行时上（运行时不认识界面）。
  */
@@ -23,14 +23,17 @@ import { Roles } from "./roles.js";
 import { MasterRuntime, type MasterSetup } from "./runtime.js";
 import { SUBAGENTS_CHANNEL, type SubagentInfo, type SubagentsPayload } from "./roster.js";
 import { openWorkerView } from "./worker-view.js";
+import type { StartReview } from "../review/index.js";
 import type { InProcessSessionPool } from "../spawn.js";
 
 const MASTER_TOOL = "subagents";
 const MASTER_LIST_TOOL = "subagents_list";
-const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL];
+const SELF_REVIEW_TOOL = "self_review";
+const MASTER_TOOLS = [MASTER_TOOL, MASTER_LIST_TOOL, SELF_REVIEW_TOOL];
 const LIST_WIDGET_KEY = "firecode-master-list";
 
-export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): void {
+/** startReview：在主会话发起审查的入口（review/index.ts），self_review 工具用它审指挥官自己写的改动。 */
+export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool, startReview: StartReview): void {
 	const all = loadConfig();
 	const loaded = all.master;
 	// 配置有问题时拒绝激活：runtime 存在就意味着配置可用。
@@ -198,6 +201,22 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool): vo
 			const active = runtime;
 			if (!active) throw new Error(msg.tool.onlyInMaster(MASTER_TOOL));
 			return ACTION_HANDLERS[params.action as Action](active, params);
+		},
+	});
+
+	pi.registerTool({
+		name: SELF_REVIEW_TOOL,
+		label: msg.tool.selfReviewLabel,
+		description: msg.tool.selfReview,
+		renderShell: "self",
+		renderCall: (args, theme, ctx) =>
+			new ToolLine({ label: msg.tool.selfReviewLabel, value: [{ text: (args as { focus?: string }).focus ?? "", color: "muted" }], clip: "end", theme, ctx }),
+		renderResult: renderSubagentsResult,
+		parameters: Type.Object({ focus: Type.Optional(Type.String({ description: msg.tool.selfReviewFocus })) }),
+		async execute(_id, params: { focus?: string }, _signal, _onUpdate, ctx) {
+			const refused = startReview(params.focus ?? "", ctx);
+			if (refused) throw new Error(refused);
+			return { content: [{ type: "text" as const, text: msg.tool.selfReviewQueued }], details: undefined };
 		},
 	});
 

@@ -17,6 +17,10 @@ export const msg = defineMessages({
 			cwd: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。",
 			review: "给这张票记下审查义务：review 之前不能 ack；true 不自动开审。",
 			onlyInMaster: (tool: string) => `${tool} 只在 Master 中可用`,
+			selfReviewLabel: "审查",
+			selfReview: "审查本会话到目前为止做完的事：与用户运行 /fire-review 相同的多模型对抗审查。本回合结束后才开审，调用后写完交付汇报就结束回合；要修的发现以 <firecode_review> 送回本会话由你修，修完自动再审。",
+			selfReviewFocus: "可选：要审查者重点看什么。",
+			selfReviewQueued: "已排队：写完交付汇报并结束本回合后开审。",
 		},
 		command: {
 			description: "翻转当前会话的指挥官模式；status 查看状态",
@@ -192,6 +196,10 @@ export const msg = defineMessages({
 			cwd: "Absolute path of the Worker's working directory; start defaults to the current directory, and send passes it to move an idle Worker to another checkout (the same session is reopened).",
 			review: "Record a review obligation on this ticket: it cannot be acked before a review; true does not start a review automatically.",
 			onlyInMaster: (tool: string) => `${tool} is only available in Master mode`,
+			selfReviewLabel: "Review",
+			selfReview: "Review what this session has delivered so far: the same multi-model adversarial review as the user running /fire-review. It starts only after this turn ends, so after calling it write your handoff report and end the turn; findings that need fixing come back to this session as <firecode_review> for you to fix, and the fix is reviewed again automatically.",
+			selfReviewFocus: "Optional: what the reviewers should look at most closely.",
+			selfReviewQueued: "Queued: the review starts once you have written your handoff report and ended this turn.",
 		},
 		command: {
 			description: "Toggle Master mode for the current session; status shows the state",
