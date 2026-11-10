@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-11
+
 ### Changed
 
 - The Master starts the review of its own high-risk work itself (persistence, concurrency, migrations, data deletion, billing, auth) instead of suggesting `/fire-review` in its report. A new Master tool, `self_review`, queues the same review that `/fire-review` runs; it starts when the turn ends, and findings come back to the same session to be fixed. Checked on real sessions: Opus 5.5 called it for both high-risk tasks it was given and not for a README edit; Sonnet 5.5 did not call it in eight runs, so with a Sonnet main session run `/fire-review` yourself.
@@ -361,7 +363,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/Suge8/firecode/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Suge8/firecode/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/Suge8/firecode/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/Suge8/firecode/compare/v1.9.0...v1.10.0
