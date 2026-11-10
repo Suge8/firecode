@@ -33,7 +33,7 @@ const shared: string[] = [];
 process.on("exit", () => {
 	for (const directory of shared) rmSync(directory, { recursive: true, force: true });
 });
-const NON_RUNTIME_ROOTS = new Set([".git", ".github", ".pi-mono", "tests", "dist", "site", "design", "evals", "scripts"]);
+const NON_RUNTIME_ROOTS = new Set([".git", ".github", ".pi-mono", "node_modules", "tests", "dist", "site", "design", "evals", "scripts"]);
 export const TEST_REVIEW_CONFIG = {
 	advisor: "test/advisor/high",
 	reviewers: ["test/reviewer/high"],
