@@ -227,7 +227,7 @@ test("扩展加载时配置缺失：主会话写入随包模板，本次会话�
 	const { CONFIG_PATH, notices, sessionStart, reload } = await seedHarness({ configJsonc: null });
 
 	expect(await readFile(CONFIG_PATH, "utf8")).toBe(await readFile(join(FIRECODE_DIR, "config.example.jsonc"), "utf8"));
-	const warning = "角色没有可用模型：engineer: claude-opus-5-5, gpt-6-astra; designer: claude-opus-5-5, gpt-6-astra; junior: claude-sonnet-5-5, gpt-6.1-terra; chores: gpt-6.1-terra, claude-haiku-5-5; researcher: gpt-6.1-terra, claude-sonnet-5-5; sentinel: gpt-6-luna, claude-haiku-5-5";
+	const warning = "角色没有可用模型：researcher: gpt-6.1-terra, claude-sonnet-5-5; junior: claude-sonnet-5-5, gpt-6.1-terra; engineer: claude-opus-5-5, gpt-6-astra";
 	await sessionStart();
 
 	expect(notices).toEqual([

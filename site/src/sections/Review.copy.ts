@@ -4,7 +4,7 @@ import type { Lang } from "../i18n";
 export const copy = {
 	en: {
 		title: "Fully automatic review and delivery.",
-		lede: "Just tell the commander what you want. On important or hard tasks it starts an adversarial review on its own and tells you how it ended.",
+		lede: "Run /fire-review after a change. Problems worth fixing go back to be fixed and are reviewed again, and you are told how it ended.",
 		beats: [
 			{ title: "Your models review in parallel", body: "Any number of them, adversarially. A single FAIL sends the whole round back." },
 			{ title: "Every problem goes back to be fixed", body: "The agent fixes each finding at its root, and the next round starts on its own." },
@@ -32,7 +32,7 @@ export const copy = {
 	},
 	zh: {
 		title: "审查交付全自动",
-		lede: "你只管告诉指挥官要做什么。遇到重要、难的任务，它会自动发起对抗审查，并告诉你审查怎么结束的。",
+		lede: "改完执行 /fire-review。值得修的问题打回修复、修完再审，并告诉你审查怎么结束的。",
 		beats: [
 			{ title: "你配置的模型并行挑问题", body: "数量不限，对抗审查。只要有一票 FAIL，整轮就打回。" },
 			{ title: "挑出的问题打回去修", body: "代理逐条从根上修，修完自动进入下一轮。" },

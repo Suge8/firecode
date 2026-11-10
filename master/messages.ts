@@ -15,7 +15,7 @@ export const msg = defineMessages({
 			role: "start 必填角色表中的角色；send 可选，传入时切换角色，省略则沿用。",
 			thinking: "可选思考档覆盖；省略时使用候选模型的默认档。",
 			cwd: "Worker 工作目录的绝对路径；start 默认当前目录，send 给空闲 Worker 换检出时带上（同一会话重开）。",
-			review: "按审查纪律为 start/send 记录义务；true 不自动开审。",
+			review: "给这张票记下审查义务：review 之前不能 ack；true 不自动开审。",
 			onlyInMaster: (tool: string) => `${tool} 只在 Master 中可用`,
 		},
 		command: {
@@ -190,7 +190,7 @@ export const msg = defineMessages({
 			role: "Required for start: a role from the roster; optional for send: switches the role when given, otherwise the current role is kept.",
 			thinking: "Optional thinking-level override; otherwise use the candidate's configured level.",
 			cwd: "Absolute path of the Worker's working directory; start defaults to the current directory, and send passes it to move an idle Worker to another checkout (the same session is reopened).",
-			review: "Record a review obligation for start/send per the review discipline; true does not start a review automatically.",
+			review: "Record a review obligation on this ticket: it cannot be acked before a review; true does not start a review automatically.",
 			onlyInMaster: (tool: string) => `${tool} is only available in Master mode`,
 		},
 		command: {
