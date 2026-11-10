@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-10
+
 ### Changed
 
 - **Breaking**: the Master no longer delegates by default. The main session reads, edits and verifies itself; it starts sub-agents only for two or more independent pieces of read-only research, or when you ask for parallel implementation. The Master prompt is about a fifth of its former length. To have work delegated, ask for it.
@@ -349,7 +351,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Suge8/firecode/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/Suge8/firecode/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/Suge8/firecode/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Suge8/firecode/compare/v1.8.0...v1.9.0
