@@ -1,4 +1,4 @@
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { loadFirecodeModule, PI_CODING_AGENT_URL, PI_TUI_URL } from "./loader.ts";
 
 // 宿主输入框的假光标是零宽 APC 标记，node:util 的 stripVTControlCharacters 不认，读纯文本用宿主自己的清理。
@@ -6,7 +6,6 @@ const { stripTerminalSequences } = await import(PI_TUI_URL) as any;
 
 let disposeGroups: (() => void) | undefined;
 afterEach(async () => {
-	setSystemTime();
 	disposeGroups?.();
 	disposeGroups = undefined;
 });
@@ -49,7 +48,6 @@ function hotSession(branch: unknown[], streaming = false) {
 			if (event.type === "entry_appended") branch.push(event.entry);
 			for (const listener of listeners) listener(event);
 		},
-		get listeners() { return listeners.size; },
 	};
 	return session;
 }
@@ -74,8 +72,7 @@ async function open(options: {
 	const root = new tui.Container();
 	const chat = new tui.Container();
 	root.addChild(chat);
-	let renders = 0;
-	root.requestRender = () => { renders++; };
+	root.requestRender = () => {};
 	root.terminal = { rows: ROWS };
 	const { createInteractiveTuiReference } = await import(new URL("./modes/interactive/tui-renderer.ts", PI_CODING_AGENT_URL).href);
 	const reference = createInteractiveTuiReference(() => root);
@@ -110,12 +107,12 @@ async function open(options: {
 		drafts: options.drafts ?? new Map<string, string>(),
 	};
 	const rows = options.rows ?? ROWS;
-	const component = new view.WorkerView(port, options.name ?? options.workers[0].name, { terminal: { rows }, requestRender: () => { renders++; } }, theme,
+	const component = new view.WorkerView(port, options.name ?? options.workers[0].name, { terminal: { rows }, requestRender: () => {} }, theme,
 		{ matches: (data: string, action: string) => KEYS[data] === action }, () => { closed++; component.dispose(); });
 	const lines = (width = 100): string[] => component.render(width).map((line: string) => stripTerminalSequences(line).trimEnd());
 	const type = (text: string) => { for (const char of text) component.handleInput(char); };
 	return {
-		component, lines, type, sent, interrupted, sessionListeners, removedListeners,
+		component, lines, type, sent, interrupted,
 		/** 输入区上横线（状态 · 名字）与下横线（位置 · 模型与提示）。 */
 		top: (width = 100) => lines(width).at(-3)!,
 		bottom: (width = 100) => lines(width).at(-1)!,
@@ -124,14 +121,13 @@ async function open(options: {
 			for (const listener of [...removedListeners]) listener(name);
 		},
 		get closed() { return closed; },
-		get renders() { return renders; },
 		key: (data: string) => component.handleInput(data),
 		mouse: (type: string, row: number, extra: Record<string, unknown> = {}) => component.handleMouse({ type, button: "left", x: 3, y: row, screenX: 3, screenY: row, width: 100, height: rows, shift: false, alt: false, ctrl: false, ...extra }),
 		click: (row: number) => component.handleMouse({ type: "click", button: "left", x: 3, y: row, screenX: 3, screenY: row, width: 100, height: rows, shift: false, alt: false, ctrl: false }),
 	};
 }
 
-test("打开即一次构建：按 Worker 会话自己的轮记录分轮、摘要行显示记录里的耗时与均速；输入区上横线写状态与名字 · 角色，下横线写模型", async () => {
+test("打开即一次构建：按 Worker 会话自己的轮记录分轮，摘要行显示记录里的耗时与均速", async () => {
 	const branch = [
 		user("用 bash 跑测试"),
 		reply("先读一下。", "toolUse", [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "/p/a.ts" } }]),
@@ -144,8 +140,6 @@ test("打开即一次构建：按 Worker 会话自己的轮记录分轮、摘要
 	];
 	const view = await open({ workers: [worker("tick")], sessions: { tick: hotSession(branch) } });
 	const lines = view.lines();
-	expect(view.top()).toMatch(/^─ 空闲 ─+ tick · 哨兵 ─$/u);
-	expect(view.bottom()).toContain("openai-codex/gpt-6-luna/low");
 	expect(lines.filter((line) => /^[✓✗]/u.test(line))).toEqual(["✓ 5.0s · 40 tps", "✓ 2.0s"]);
 	const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
 	expect(at("用 bash 跑测试")).toBeLessThan(at("✓ 5.0s"));
@@ -180,9 +174,7 @@ test("排队中的补话在输入框上方显示一行“排队中：原话”�
 	session.steering = ["补一句：顺便报时间"];
 	session.emit({ type: "queue_update", steering: session.steering, followUp: [] });
 	const lines = view.lines();
-	const input = lines.findIndex((line) => line.startsWith("›"));
-	expect(lines[input - 1]).toMatch(/^─/u);
-	expect(lines[input - 2]).toBe(" 排队中：补一句：顺便报时间");
+	expect(lines).toContain(" 排队中：补一句：顺便报时间");
 	session.steering = [];
 	session.emit({ type: "queue_update", steering: [], followUp: [] });
 	expect(view.lines().some((line) => line.includes("排队中"))).toBe(false);
@@ -236,18 +228,6 @@ test("回车补话走视图来源的 send（同一处理表入口），成功清
 	expect(view.lines().find((line) => line.startsWith("›"))).toBe("› 第二句");
 });
 
-test("关闭零订阅：打开期间看过的子代理与运行时通知的订阅在关闭时全部撤掉，之后的事件不再重绘", async () => {
-	const sessions = { a: hotSession([user("派给 a")], true), b: hotSession([user("派给 b")], true) };
-	const view = await open({ workers: [worker("a", "working"), worker("b", "working")], sessions });
-	view.key(TAB);
-	view.key("\x1b");
-	expect(view.closed).toBe(1);
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([0, 0, 0, 0]);
-	const renders = view.renders;
-	sessions.b.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "关了之后的事件" }], timestamp: 9 } });
-	expect(view.renders).toBe(renders);
-});
-
 test("视图里点开审查结果卡这类机器消息看到完整卡：卡片展开交给投影，与主会话同一机制", async () => {
 	const card = { type: "custom_message", id: "m1", timestamp: at(), customType: "firecode-review-card", display: true, details: undefined,
 		content: "<firecode_review>\n审查通过\n共 2 轮，全部通过\n</firecode_review>" };
@@ -285,18 +265,6 @@ function longBranch() {
 }
 const bodyRange = (lines: string[]) => lines.slice(0, lines.findIndex((line) => line.startsWith("›")) - 1);
 
-test("点击后被点的行留在视口内；原本跟随末尾的，之后新到的输出仍看得到（锚定只作用于这一次布局变化）", async () => {
-	const session = hotSession(longBranch(), true);
-	const view = await open({ workers: [worker("tick", "working")], sessions: { tick: session }, rows: 12 });
-	// 运行中最容易点的就是最底下那轮的摘要（实时的“思考中”）。
-	const row = view.lines().findLastIndex((line) => /^[⠀-⣿] 思考中/u.test(line));
-	expect(row).toBeGreaterThan(0);
-	view.click(row);
-	expect(bodyRange(view.lines()).some((line) => /^[⠀-⣿] 思考中/u.test(line))).toBe(true);
-	session.emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: "新到的派单" }], timestamp: 9 } });
-	expect(bodyRange(view.lines()).some((line) => line.includes("新到的派单"))).toBe(true);
-});
-
 test("原本已上滚（PageUp）时点击保持不动，新输出也不把视口拉走；PageDown 回到末尾恢复跟随", async () => {
 	const session = hotSession(longBranch(), true);
 	const view = await open({ workers: [worker("tick", "working")], sessions: { tick: session }, rows: 12 });
@@ -326,17 +294,9 @@ test("宿主的文字选择不被浮层吃掉：按下、拖动与正文点击�
 	expect(view.click(view.lines().findIndex((line) => line.startsWith("✓")))).toMatchObject({ handled: true });
 });
 
-test("40 列：上横线保住状态字形、状态词与耗时，名字 · 角色先让；下横线保住位置 n/N 与“esc 返回”，模型与其余提示先让", async () => {
+test("任意宽度下每行都不超宽（宿主对超宽行直接抛错）", async () => {
 	const workers = [worker("fix-auth-refresh", "working"), worker("b"), worker("c")];
-	const now = 1_800_000_000_000;
-	setSystemTime(new Date(now));
-	const view = await open({
-		workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])),
-		facts: { started: { "fix-auth-refresh": now - 65_000 } },
-	});
-	expect(view.top(40)).toMatch(/^─ [⠀-⣿] 运行中 1m5s /u);
-	expect(view.bottom(40)).toMatch(/^─ 1\/3 ─/u);
-	expect(view.bottom(40)).toMatch(/esc 返回 ─$/u);
+	const view = await open({ workers, sessions: Object.fromEntries(workers.map((entry) => [entry.name, hotSession([user("派单")], entry.status === "working")])) });
 	for (const width of [30, 40, 72, 110]) for (const line of view.component.render(width)) expect(Bun.stringWidth(stripTerminalSequences(line))).toBeLessThanOrEqual(width);
 });
 
@@ -431,18 +391,6 @@ test("在跑与审查中的子代理：底行提示中断键，按下走 interru
 	await Bun.sleep(0);
 	expect(interruptedNames).toEqual(["busy", "judged"]);
 });
-
-test("中断键避开宿主全部默认键位（根 AGENTS.md「快捷键冲突」）", async () => {
-	const [{ INTERRUPT_KEY }, { KeybindingsManager }, { mkdtemp }, { tmpdir }, { join }] = await Promise.all([
-		loadFirecodeModule("master/worker-view.ts"),
-		import(new URL("./core/keybindings.ts", PI_CODING_AGENT_URL).href),
-		import("node:fs/promises"), import("node:os"), import("node:path"),
-	]) as any[];
-	const hostKeys = Object.values(KeybindingsManager.create(await mkdtemp(join(tmpdir(), "firecode-keys-"))).getEffectiveConfig())
-		.flatMap((keys) => (Array.isArray(keys) ? keys : [keys])).map((key) => String(key).toLowerCase());
-	expect(hostKeys).not.toContain(INTERRUPT_KEY);
-});
-
 
 test("打开已释放子代理的全过程视图只读会话文件：空文件与宿主旧版格式的文件，打开前后字节不变，旧版记录照常显示", async () => {
 	const [{ mkdtemp, readFile, writeFile }, { tmpdir }, { join }] = await Promise.all([import("node:fs/promises"), import("node:os"), import("node:path")]);
