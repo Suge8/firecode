@@ -2067,6 +2067,17 @@ test.each([[false, false], [true, true]])("子代理按目标 cwd 的项目信�
 	expect(existsSync(marker)).toBe(loaded);
 });
 
+test("投递失败后按退避自动重试：只提示一次，最终送达且只送达一次", async () => {
+	const harness = await setup(true, { failDeliveries: 2, timing: { eventRetryMs: 50 } });
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	await harness.execute({ action: "start", worker: "retry", prompt: "只回复完成", role: "工程师", thinking: "low" });
+	await until(() => harness.messages.length === 1);
+	await Bun.sleep(200);
+	expect(harness.messages).toHaveLength(1);
+	expect(harness.notices.filter((notice) => notice.includes("投递失败"))).toHaveLength(1);
+	await harness.command("");
+});
+
 async function setup(activate = true, options: {
 	/** 缩短池的等待时限（pool.timing 是全插件唯一的时间注入点）。 */
 	timing?: Partial<Timing>;
