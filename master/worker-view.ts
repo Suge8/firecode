@@ -7,7 +7,6 @@
  * 事件增量更新；打开期间看过的子代理各留一份记录与展开状态（切回原样），关闭时全部退订丢弃。草稿按子代理留在
  * 运行时内存里，到会话结束。
  */
-import { existsSync, readFileSync } from "node:fs";
 import type { AgentSession, AgentSessionEvent, EntryRenderer, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Input, matchesKey, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { type BusyView, IDLE } from "../busy.js";
@@ -21,14 +20,13 @@ import { toolRenderers } from "../tools/index.js";
 import { roundFromEntry, ROUND_ENTRY } from "../round.js";
 import { roundMarker } from "../tools/round.js";
 import { type BorderParts, fitBorder, SEPARATOR } from "../statusbar/render.js";
-import { ACTION_HANDLERS } from "./actions.js";
-import { ANIMATING_KINDS, rowState, type ActivityFacts, type RowKind } from "./activity-list.js";
+import { commands } from "./actions.js";
+import { ANIMATING_KINDS, rowState } from "./activity-list.js";
 import { msg } from "./messages.js";
+import type { ActivityFacts } from "./phase.js";
 import type { MasterRuntime } from "./runtime.js";
 import type { WorkerRef } from "./state.js";
-
-/** 上横线状态词；卡住行用活动列表给的“N 分钟无输出”提醒代替。 */
-const STATUS_WORD: Record<Exclude<RowKind, "stuck">, string> = msg.view.status;
+import { readWorkerSession } from "./trace.js";
 /** 输入区的上横线、输入行、下横线之外是正文（排队中的补话在上横线之上占行）。 */
 const CHROME_ROWS = 3;
 /**
@@ -59,7 +57,7 @@ interface WorkerViewSource {
 	session(worker: WorkerRef): AgentSession | undefined;
 	/** 子代理会话接上订阅（冷启动、重开）时通知，在它的第一条事件之前。 */
 	onSession(listener: (name: string) => void): () => void;
-	/** 子代理被移除（kill、启动失败撤票）时按名字通知。 */
+	/** 子代理被移除（kill）时按名字通知。 */
 	onWorkerRemoved(listener: (name: string) => void): () => void;
 	/** 视图来源的 send：与指挥官 send 同一处理入口。 */
 	send(name: string, prompt: string): Promise<void>;
@@ -69,21 +67,24 @@ interface WorkerViewSource {
 	drafts: Map<string, string>;
 }
 
-/** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。 */
-export async function openWorkerView(active: MasterRuntime, name: string): Promise<void> {
-	if (active.viewOpen) return;
-	active.viewOpen = true;
+/** 全过程视图同一时刻只开一个（一个进程只有一个交互界面）。 */
+let viewOpen = false;
+
+/** 打开浮层；同一时刻只有一个。返回的 Promise 在浮层关闭时结束。drafts 由挂载方持有，活到指挥官停用。 */
+export async function openWorkerView(active: MasterRuntime, name: string, drafts: Map<string, string>): Promise<void> {
+	if (viewOpen) return;
+	viewOpen = true;
 	try {
 		await active.ctx.ui.custom<void>(
-			(tui, theme, keybindings, done) => new WorkerView(runtimeSource(active), name, tui, theme, keybindings, done),
+			(tui, theme, keybindings, done) => new WorkerView(runtimeSource(active, drafts), name, tui, theme, keybindings, done),
 			{ overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" } },
 		);
 	} finally {
-		active.viewOpen = false;
+		viewOpen = false;
 	}
 }
 
-function runtimeSource(active: MasterRuntime): WorkerViewSource {
+function runtimeSource(active: MasterRuntime, drafts: Map<string, string>): WorkerViewSource {
 	return {
 		facts: () => active.activityFacts(),
 		worker: (name) => active.store.find(name),
@@ -91,12 +92,12 @@ function runtimeSource(active: MasterRuntime): WorkerViewSource {
 		onSession: (listener) => active.onWorkerSession(listener),
 		onWorkerRemoved: (listener) => active.onWorkerRemoved(listener),
 		send: async (name, prompt) => {
-			await ACTION_HANDLERS.send(active, { worker: name, prompt }, active.ctx, "view");
+			await commands.send(active, name, { prompt }, "view");
 		},
 		interrupt: async (name) => {
-			await ACTION_HANDLERS.interrupt(active, { worker: name }, active.ctx, "master");
+			await commands.interrupt(active, name);
 		},
-		drafts: active.viewDrafts,
+		drafts,
 	};
 }
 
@@ -122,14 +123,14 @@ class WorkerRecord {
 	constructor(worker: WorkerRef, readonly session: AgentSession | undefined, tui: TUI, theme: Theme, private readonly changed: () => void) {
 		this.mirror = new ChatMirror({
 			ui: detachedTui(tui, changed),
-			cwd: worker.cwd ?? process.cwd(),
+			cwd: worker.cwd,
 			theme,
 			toolRenderers,
 			messageRenderer: (type) => session?.extensionRunner.getMessageRenderer(type),
 			// 轮记录逐条经 roundFromEntry 读出，以零行标记放进聊天树，投影按它分轮（与主会话同一份记录格式）。
 			entryRenderer: (type) => (type === ROUND_ENTRY ? roundEntryRenderer : undefined),
 		});
-		const branch = session ? session.sessionManager.getBranch() as MirrorEntry[] : fileBranch(worker.sessionPath);
+		const branch = (session?.sessionManager ?? readWorkerSession(worker))?.getBranch() as MirrorEntry[] | undefined ?? [];
 		for (const entry of branch) this.mirror.replay(entry);
 		this.sync(session?.isStreaming === true);
 		if (session) this.unsubscribe = session.subscribe((event) => this.onEvent(event));
@@ -172,28 +173,6 @@ const roundEntryRenderer: EntryRenderer = (entry) => {
 	const round = roundFromEntry(entry);
 	return round && roundMarker(round);
 };
-
-/** 已释放的冷子代理：读一次会话文件，从最后一条沿 parentId 回到根，得到当前分支。 */
-function fileBranch(path: string): MirrorEntry[] {
-	if (!existsSync(path)) return []; // 第一条回复落盘之前还没有会话文件
-	type Line = MirrorEntry & { id?: string; parentId?: string | null };
-	const entries = new Map<string, Line>();
-	let leaf: Line | undefined;
-	for (const text of readFileSync(path, "utf8").split("\n")) {
-		if (!text.trim()) continue;
-		try {
-			const entry = JSON.parse(text) as Line;
-			if (!entry.id) continue;
-			entries.set(entry.id, entry);
-			leaf = entry;
-		} catch {
-			// 正在追加的尾行可能不完整。
-		}
-	}
-	const branch: Line[] = [];
-	for (let entry = leaf; entry; entry = entry.parentId ? entries.get(entry.parentId) : undefined) branch.unshift(entry);
-	return branch;
-}
 
 export class WorkerView implements Component, Focusable {
 	private readonly input = new Input({ prompt: "› ", placeholder: msg.view.placeholder });
@@ -264,7 +243,7 @@ export class WorkerView implements Component, Focusable {
 	}
 
 	private names(): string[] {
-		return this.source.facts().workers.map((worker) => worker.name);
+		return this.source.facts().workers.map(({ worker }) => worker.name);
 	}
 
 	/** 换到某个子代理：草稿换成它的，记录与展开状态打开期间看过就原样接上。 */
@@ -333,7 +312,7 @@ export class WorkerView implements Component, Focusable {
 	render(width: number): string[] {
 		const worker = this.removed ? undefined : this.worker();
 		const facts = this.source.facts();
-		const index = worker ? facts.workers.findIndex((entry) => entry.name === worker.name) : -1;
+		const index = worker ? facts.workers.findIndex((entry) => entry.worker.name === worker.name) : -1;
 		const state = index < 0 ? undefined : rowState(facts, index, Date.now(), this.theme);
 		const queued = this.queued(width);
 		// 进展行（见 progress.ts）是视图头部的一行；没有就不占行。
@@ -388,7 +367,8 @@ export class WorkerView implements Component, Focusable {
 			return fitBorder(width, this.line, 0, [[status, name], [status, ""]]);
 		}
 		const { kind, row } = state;
-		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : STATUS_WORD[kind];
+		// 卡住用活动列表给的“N 分钟无输出”提醒代替状态词。
+		const word = kind === "stuck" ? this.theme.fg("warning", row.note?.short ?? "") : msg.phase[kind];
 		// 空闲的“·”标记紧挨状态词像个分隔符，不放。
 		const status = [kind === "idle" ? "" : row.mark, word, row.elapsed && this.theme.fg("muted", row.elapsed)].filter(Boolean).join(" ");
 		const role = this.theme.fg("muted", worker.role);
@@ -412,7 +392,7 @@ export class WorkerView implements Component, Focusable {
 		if (position >= 0) this.index = position;
 		const lead = position >= 0 ? `${position + 1}/${names.length}` : "";
 		const notice = this.notice && (this.notice.until === undefined || Date.now() < this.notice.until) ? this.notice.text : undefined;
-		const model = worker ? modelAtomText(worker) : "";
+		const model = worker?.model ? modelAtomText(worker) : "";
 		const dim = (text: string) => this.theme.fg("dim", text);
 		function* candidates(): Generator<BorderParts> {
 			if (notice) {

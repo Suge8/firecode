@@ -19,7 +19,8 @@
 - **会话进行中** / **歇下**（Session Busy）→ `busy.ts`；指挥官回合结束不等于歇下；避免：完成、空闲
 - **待命**（Ack）→ `ack` 动作；清失败/被中断行并取消续跑提醒，审查义务未履行时拒绝；避免：挂起、暂停、hold
 - **中断**（Interruption）→ 档案 `interruptedAt`；对审查中的子代理，interrupt 取消审查（`/fire-review --cancel`）并按中断落定，审查义务保留；不是执行失败；避免：执行失败、abort
-- **自动续跑**（Auto-resume）→ “待续跑”提醒；插件只提醒，续派仍由指挥官发；避免：自动重发、心跳
+- **续跑提醒**（Resume Reminder）→ 档案 `reloadInterrupted`；会话重载打断的回合满时限仍未续派时提醒指挥官，插件不代发“继续”；避免：自动重发、心跳
+- **暂停**与**自动续跑**（Pause / Auto-resume）→ 档案 `resume`；瞬时故障（限流、断网）后暂停到恢复时刻，到时在原会话自动续跑，指挥官接手即作废；不是失败；避免：重试、失败
 
 ## 对抗审查
 
@@ -43,8 +44,10 @@
 - **过程列表**（Process List）：一轮展开后的列表；避免：完整展开、第三档
 - **中间回复**（Interim Reply）→ `tools/group-view.ts` 的 `REPLY_LINES`；避免：中途正文
 - **活动列表**（Activity List）→ `master/activity-list.ts`；避免：任务面板、状态栏
+- **名册**（Subagent Roster）→ `master/roster.ts`、频道 `firecode:subagents`；给同进程其他扩展读的子代理清单，与角色表无关；避免：角色名册、池快照
 - **进展行**（Progress Line）→ `master/progress.ts`；后台模型据新输出写的一句“在做什么”，只给人看（终端与经名册的 CuePad）；避免：摘要、状态播报
-- **卡住**（Stalled）→ 活动列表的展示信号，不改子代理状态；避免：超时、挂起、失败
+- **相位**（Phase）→ `master/phase.ts`；子代理此刻的分组、在做什么与时刻，所有展示与停摆唤醒只读它；不是档案状态（working/idle/reviewing），也不是火苗动画的错位（`flame.ts` 的 `phaseOf`）；避免：行状态
+- **卡住**（Stalled）→ 相位的一种展示信号，不改子代理状态；避免：超时、挂起、失败
 - **展示标题**（Display Title）→ `statusbar/`；不等于用户设置的会话名；避免：自动重命名、会话名
 
 ## 配置
@@ -54,4 +57,4 @@
 - **后台模型**（Background Model）→ 配置 `background.model`；进展行、压缩摘要与闲置压缩共用的便宜模型链，与角色、审查独立；避免：小模型配置、辅助模型、side model
 - **闲置压缩**（Idle Compaction）→ `background/idle.ts`；闲置到缓存过期前预算摘要，过期后的下一次请求前应用；避免：保温、续期、定时压缩
 - **模型原子**（Model Atom）→ `config.ts` 的 `parseModelAtom`；避免：模型 ID、模型对、`{ model, thinking }`
-- **角色表**（Role Roster）→ `master.roles`；避免：选型表、花名册、模型清单
+- **角色表**（Role Roster）→ 配置 `master.roles`，会话开始核对出的可用部分（只定提示词里的角色表）在 `master/roles.ts`；避免：选型表、花名册、模型清单

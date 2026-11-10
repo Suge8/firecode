@@ -1,76 +1,46 @@
-/** subagents / subagents_list 的工具行与 /fire-master status 文本：纯投影，不改状态。 */
-import { statSync } from "node:fs";
+/** subagents / subagents_list 的工具行与 /fire-master status 文本：纯投影，不改状态；状态与动作都取 phase.ts 的相位。 */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "../format.js";
 import { ToolLine, makeResultRenderer } from "../tools/line.js";
 import type { Part } from "../tools/parts.js";
+import { type Action, inputOf } from "./actions.js";
 import { msg } from "./messages.js";
-import type { WorkerLive } from "./runtime.js";
-import type { WorkerRef, WorkerStatus } from "./state.js";
+import { workerPhase, type ActivityFacts, type WorkerPhase } from "./phase.js";
+import { compactWorker, type CompactWorker } from "./state.js";
 
 export const renderSubagentsResult = makeResultRenderer(false);
-const STATUS_WORD: Record<WorkerStatus, string> = msg.list.status;
-const ACTION_VERB: Record<string, string> = msg.list.verb;
+const ACTION_VERB: Record<Action | "list", string> = msg.list.verb;
 
+/** 工具行：参数与工具入口同一份解析（actions.ts 的 inputOf）。 */
 export function subagentsCallParts(args: Record<string, unknown>): Part[] {
 	const action = typeof args.action === "string" ? args.action : "?";
-	const parts: Part[] = [{ text: ACTION_VERB[action] ?? action, bold: true }];
-	const target = optionalText(args.worker);
-	if (target) parts.push({ text: ` ${target}`, color: "accent" });
-	const role = optionalText(args.role);
+	const { worker, role, prompt } = inputOf(args);
+	const parts: Part[] = [{ text: ACTION_VERB[action as Action] ?? action, bold: true }];
+	if (worker) parts.push({ text: ` ${worker}`, color: "accent" });
 	if ((action === "start" || action === "send") && role) parts.push({ text: ` · ${role}`, color: "muted" });
-	const prompt = optionalText(args.prompt)?.split("\n", 1)[0];
-	if (prompt && action === "start") parts.push({ text: ` — ${prompt}`, color: "muted" });
+	const brief = prompt?.split("\n", 1)[0];
+	if (brief && action === "start") parts.push({ text: ` — ${brief}`, color: "muted" });
 	return parts;
 }
 
-type CompactWorker = ReturnType<typeof compactWorker>;
-type WorkerAction = NonNullable<ReturnType<typeof currentWorkerAction>>;
-/** 池快照加上只给界面看的当前动作（模型正文不含）。 */
-export type ListedWorker = CompactWorker & { currentAction?: WorkerAction };
+/** 池快照加上只给界面看的相位（模型正文不含）：列出那一刻的快照，展开时按它渲染。 */
+export type ListedWorker = CompactWorker & { phase: Pick<WorkerPhase, "kind" | "action" | "startedAt" | "settledAt"> };
 
-/** 给模型的池快照：只有档案事实。 */
-export function compactWorker(worker: WorkerRef) {
-	return {
-		name: worker.name,
-		role: worker.role,
-		status: worker.status,
-		model: worker.model,
-		thinking: worker.thinking,
-		session: worker.sessionPath,
-		...(worker.interruptedAt ? { interruptedAt: worker.interruptedAt } : {}),
-		...(worker.reviewNeeded ? { reviewNeeded: true } : {}),
-		...(worker.resume ? { resume: worker.resume } : {}),
-	};
+/** 池查询的 details：每票带上此刻的相位。 */
+export function listedWorkers(facts: ActivityFacts, now: number): ListedWorker[] {
+	return facts.workers.map((entry) => {
+		const { kind, action, startedAt, settledAt } = workerPhase(entry, facts.stallMs, now);
+		return { ...compactWorker(entry.worker), phase: { kind, action, ...(startedAt === undefined ? {} : { startedAt }), ...(settledAt === undefined ? {} : { settledAt }) } };
+	});
 }
 
-/** 展开行用的当前动作：审查进度、落定时刻（reload 后退到会话文件 mtime）或最近的工具。 */
-export function currentWorkerAction(worker: CompactWorker, live: WorkerLive | undefined) {
-	if (worker.status === "reviewing") return live?.reviewProgress && { kind: "review" as const, ...live.reviewProgress };
-	if (worker.status === "idle") {
-		let since = live?.idleAt;
-		try {
-			since ??= statSync(worker.session).mtimeMs;
-		} catch {
-			// 会话文件还不存在（第一条回复落盘前）仍可 list。
-		}
-		return { kind: "idle" as const, ...(since ? { since } : {}) };
-	}
-	const current = [...(live?.currentTools.values() ?? [])].at(-1);
-	return current ? { kind: "tool" as const, ...current } : undefined;
-}
-
-function actionParts(action: WorkerAction | undefined): Part[] {
-	if (action?.kind === "tool")
-		return [{ text: ` · ${action.tool} · ${msg.list.running(formatDuration(Math.max(0, Date.now() - action.startedAt)))}`, color: "accent" }];
-	if (action?.kind === "idle")
-		return [{
-			text: action.since ? ` · ${msg.list.settledAgo(formatDuration(Date.now() - action.since))}` : ` · ${msg.list.settled}`,
-			color: "muted",
-		}];
-	if (action?.kind === "review")
-		return [{ text: ` · ${msg.list.reviewRound(action.round, action.settled, action.total)}`, color: "accent" }];
-	return [];
+/** 展开行的动作与时刻：在动的写这次运行已多久，落定的写落定多久前，暂停只有续跑时刻，空闲（含 reload 后）不写。 */
+function actionParts({ kind, action, startedAt, settledAt }: ListedWorker["phase"]): Part[] {
+	const now = Date.now();
+	if (kind === "idle") return [];
+	if (settledAt !== undefined) return [{ text: ` · ${action} · ${msg.list.settledAgo(formatDuration(Math.max(0, now - settledAt)))}`, color: "muted" }];
+	const elapsed = startedAt === undefined || kind === "paused" ? "" : ` · ${msg.list.running(formatDuration(Math.max(0, now - startedAt)))}`;
+	return [{ text: ` · ${action}${elapsed}`, color: "accent" }];
 }
 
 export function expandedWorkerList(
@@ -85,8 +55,8 @@ export function expandedWorkerList(
 				label: worker.name,
 				value: [
 					{ text: roleStatusText(worker), color: "accent" },
-					...actionParts(worker.currentAction),
-					{ text: ` · ${worker.model.split("/").pop()}/${worker.thinking}`, color: "muted" },
+					...actionParts(worker.phase),
+					...(worker.model ? [{ text: ` · ${worker.model.split("/").pop()}/${worker.thinking}`, color: "muted" as const }] : []),
 				],
 				clip: "end",
 				theme,
@@ -102,17 +72,13 @@ export function listMeta(workers: ListedWorker[]): Part[] {
 	return [{ text: ` — ${msg.list.pool(workers.length, summary)}`, color: "muted" }];
 }
 
-export function statusText(workers: readonly WorkerRef[]): string {
+export function statusText(workers: readonly ListedWorker[]): string {
 	return workers.length
-		? workers.map((worker) => `${worker.name} ${roleStatusText(worker)} ${worker.model.split("/").pop()}`).join("\n")
+		? workers.map((worker) => [worker.name, roleStatusText(worker), worker.model?.split("/").pop()].filter(Boolean).join(" ")).join("\n")
 		: msg.list.noWorkers;
 }
 
-/** 角色为主的状态投影：「工程师·工作」。 */
-function roleStatusText(worker: Pick<WorkerRef, "role" | "status">): string {
-	return `${worker.role}·${STATUS_WORD[worker.status]}`;
-}
-
-function optionalText(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+/** 角色为主的状态投影：「工程师·运行中」。 */
+function roleStatusText(worker: ListedWorker): string {
+	return `${worker.role}·${msg.phase[worker.phase.kind]}`;
 }

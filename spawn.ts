@@ -41,6 +41,12 @@ interface SpawnSessionOptions {
 	isolated?: boolean;
 	/** 子会话里的扩展出错（加载后的事件处理抛错）时通知；不给就不接线，宿主丢弃这些错误。 */
 	onExtensionError?: (error: ExtensionError) => void;
+	/**
+	 * 调用方还要不要这个会话：抛错即不要了（如它所属的票已被 kill、指挥官会话已关闭）。池在两处问：等完同一路径的打开与释放、
+	 * 真正新建之前（不要就不建，原样抛出）；建好、交出之前（不要就先释放再抛出）。都在池里问，是因为同一路径的 spawn 只在这里汇合：
+	 * 调用方在 spawn 之前核对挡不住“已在等释放时被 kill”；交出前问，下一次 spawn 等到的就是这一次的最终去向（持有或已在释放）。
+	 */
+	claim?: () => void;
 }
 
 interface SpawnedSession {
@@ -57,6 +63,8 @@ interface HeldSession {
 	timer?: NodeJS.Timeout;
 	releasing?: Promise<void>;
 	route?: Awaited<ReturnType<typeof createModelRoute>>;
+	/** 宿主发了 agent_start、还没把 agent_settled 发给订阅方的那次运行：idle 等它。 */
+	settling?: PromiseWithResolvers<void>;
 }
 
 export const CODEMODE_TOOL = "codemode";
@@ -110,6 +118,8 @@ export class InProcessSessionPool {
 	private readonly held = new Map<string, HeldSession>();
 	/** 已摘出 held、session_shutdown 还在收口的落盘会话：同一路径的 spawn 等它落定（单写者登记此时才放开）。 */
 	private readonly releasing = new Map<string, Promise<void>>();
+	/** 还在建的落盘会话：同一路径的 spawn 等它有了去向（持有、释放或失败）再判单写者。 */
+	private readonly opening = new Map<string, Promise<unknown>>();
 	private runtime?: Promise<ModelRuntime>;
 	private readonly releaseListeners = new Set<(sessionPath: string) => void>();
 	readonly timing: Timing;
@@ -118,6 +128,7 @@ export class InProcessSessionPool {
 		this.timing = { ...DEFAULT_TIMING, ...environment.timing };
 	}
 
+	/** 刷新可用模型后解析链首选（会跑供应商鉴权，没有时限，不放在动作的返回路径上）。 */
 	async resolveChain(chain: ModelChain, override?: ThinkingLevelValue): Promise<ModelAtom | undefined> {
 		const first = (await candidates(await this.modelRuntime(), chain))[0];
 		return first && { model: `${first.model.provider}/${first.model.id}`, thinking: clampThinkingLevel(first.model, override ?? first.thinking) };
@@ -152,10 +163,23 @@ export class InProcessSessionPool {
 		const sessionPath = options.persistence.type === "file" ? options.persistence.sessionPath : undefined;
 		// 空闲释放收口期间重开同一会话（send、自动续跑）是正当的接续：等那次释放落定（成败都行，登记在 finally 里放开），
 		// 而不是撞上还没放开的单写者登记报“已持有”。落定后的登记检查与占位仍在同一同步段，并发 spawn 照样只放行一个。
-		const releasing = sessionPath && this.releasing.get(sessionPath);
-		if (releasing) await releasing.then(() => undefined, () => undefined);
+		// 还在建的同一路径同理：建它的一方可能已不要它（所属的指挥官会话关闭后才建好），等它有了去向再判。
+		for (let earlier; sessionPath && (earlier = this.opening.get(sessionPath) ?? this.releasing.get(sessionPath));)
+			await earlier.then(() => undefined, () => undefined);
+		options.claim?.();
 		if (sessionPath && SESSION_WRITERS.has(sessionPath))
 			throw new Error(msg.spawn.held(sessionPath));
+		if (!sessionPath) return this.create(options, undefined);
+		const created = this.create(options, sessionPath);
+		this.opening.set(sessionPath, created);
+		const settled = () => {
+			if (this.opening.get(sessionPath) === created) this.opening.delete(sessionPath);
+		};
+		void created.then(settled, settled);
+		return created;
+	}
+
+	private async create(options: SpawnSessionOptions, sessionPath: string | undefined): Promise<SpawnedSession> {
 		if (options.persistence.type === "file" && options.persistence.resume && !existsSync(sessionPath!))
 			throw new Error(msg.spawn.missingFile(sessionPath!));
 		if (sessionPath) SESSION_WRITERS.add(sessionPath);
@@ -219,8 +243,22 @@ export class InProcessSessionPool {
 
 		const key = sessionPath ?? `memory:${crypto.randomUUID()}`;
 		const held: HeldSession = { key, session: created, sessionPath, route };
+		// 建会话即挂上、随会话 dispose 失效，所以每次运行的开始与收尾都看得到（idle 的判据）。
+		created.subscribe((event) => {
+			if (event.type === "agent_start") held.settling ??= Promise.withResolvers();
+			else if (event.type === "agent_settled") {
+				held.settling?.resolve();
+				held.settling = undefined;
+			}
+		});
 		this.held.set(key, held);
 		if (codemode) trackCodemodeSession(key, true);
+		try {
+			options.claim?.();
+		} catch (error) {
+			await this.release(held);
+			throw error;
+		}
 		return {
 			session: created,
 			prompt: (text) => created.prompt(text),
@@ -240,6 +278,21 @@ export class InProcessSessionPool {
 		return this.runtime;
 	}
 
+	/**
+	 * 等池里的子会话真正空闲，再在它上面开回合（prompt 或 triggerTurn）。宿主的 waitForIdle 在 agent_settled 处理器还在跑时就返回
+	 * （那时 isIdle 已为 true），此刻的 prompt 与 triggerTurn 被宿主推迟到处理器跑完、调用当场返回而不开回合，回合就没人跟踪了。
+	 * 宿主没有“处理器还在跑”的公开状态，只在全部处理器跑完后才把 agent_settled 发给订阅方；所以真正空闲 = waitForIdle 返回，
+	 * 且最近一个 agent_start 已等到它的 agent_settled。处理器里又开了运行就再等一轮。
+	 */
+	async idle(session: AgentSession): Promise<void> {
+		for (;;) {
+			await session.waitForIdle();
+			const settling = [...this.held.values()].find((held) => held.session === session)?.settling;
+			if (!settling) return;
+			await settling.promise;
+		}
+	}
+
 	/** 纯查询：不改变释放计时（视图、steer、interrupt 只看不占）。 */
 	getSession(sessionPath: string): AgentSession | undefined {
 		return this.held.get(sessionPath)?.session;
@@ -253,7 +306,7 @@ export class InProcessSessionPool {
 		return held.session;
 	}
 
-	/** 空闲只由调用方判定：池不订阅会话事件自判空闲；超时后释放热会话，档案与 JSONL 保留。 */
+	/** 何时可释放只由调用方判定：池不按会话事件自判释放；超时后释放热会话，档案与 JSONL 保留。 */
 	markIdle(sessionPath: string): void {
 		const held = this.held.get(sessionPath);
 		if (!held) return;

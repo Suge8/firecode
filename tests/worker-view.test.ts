@@ -89,12 +89,10 @@ async function open(options: {
 	const sent: [string, string][] = [];
 	const interrupted: string[] = [];
 	let closed = 0;
-	const byPath = <T>(record: Record<string, T> | undefined) =>
-		new Map(Object.entries(record ?? {}).map(([name, value]) => [`/s/${name}.jsonl`, value]));
 	const port = {
 		facts: () => ({
-			workers: options.workers, currentTools: new Map(), reviewProgress: new Map(), quietSince: new Map(), progress: new Map(),
-			runStartedAt: byPath(options.facts?.started), settled: byPath(options.facts?.settled), stallMs: 30 * 60_000,
+			workers: options.workers.map((worker) => ({ worker, startedAt: options.facts?.started?.[worker.name], settled: options.facts?.settled?.[worker.name] })),
+			stallMs: 30 * 60_000,
 		}),
 		worker: (name: string) => options.workers.find((entry) => entry.name === name),
 		session: (target: Worker) => options.sessions[target.name],
@@ -399,7 +397,7 @@ test("视图打开期间切走切回保留各子代理的展开状态；esc 关�
 // kitty 键盘协议里的 ctrl+shift+x。
 const INTERRUPT = "\x1b[120;6u";
 
-test("在跑与审查中的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已中断”；空闲的不提示也不响应；失败写原因", async () => {
+test("在跑与审查中的子代理：底行提示中断键，按下走 interrupt 同一入口并写“已请求中断”（结局经落定事件告知）；空闲的不提示也不响应；失败写原因", async () => {
 	const failing = { fail: false };
 	const workers = [worker("busy", "working"), worker("quiet"), worker("judged", "reviewing")];
 	const interruptedNames: string[] = [];
@@ -414,7 +412,7 @@ test("在跑与审查中的子代理：底行提示中断键，按下走 interru
 	view.key(INTERRUPT);
 	await Bun.sleep(0);
 	expect(interruptedNames).toEqual(["busy"]);
-	expect(view.bottom()).toContain("已中断");
+	expect(view.bottom()).toContain("已请求中断");
 
 	failing.fail = true;
 	view.key(INTERRUPT);
@@ -447,3 +445,27 @@ test("中断键避开宿主全部默认键位（根 AGENTS.md「快捷键冲突�
 	expect(hostKeys).not.toContain(INTERRUPT_KEY);
 });
 
+
+test("打开已释放子代理的全过程视图只读会话文件：空文件与宿主旧版格式的文件，打开前后字节不变，旧版记录照常显示", async () => {
+	const [{ mkdtemp, readFile, writeFile }, { tmpdir }, { join }] = await Promise.all([import("node:fs/promises"), import("node:os"), import("node:path")]);
+	const dir = await mkdtemp(join(tmpdir(), "firecode-cold-"));
+	const empty = { ...worker("empty"), sessionPath: join(dir, "empty.jsonl"), cwd: dir };
+	const legacy = { ...worker("legacy"), sessionPath: join(dir, "legacy.jsonl"), cwd: dir };
+	await writeFile(empty.sessionPath, "");
+	// 宿主 v1 格式：头不带 version、条目不带 id；宿主按会话文件打开时会迁移并整份重写。
+	await writeFile(legacy.sessionPath, [
+		{ type: "session", id: "legacy", timestamp: at(), cwd: dir },
+		{ type: "message", timestamp: at(), message: { role: "user", content: [{ type: "text", text: "旧版派单" }], timestamp: clock } },
+		{ type: "message", timestamp: at(), message: { role: "assistant", content: [{ type: "text", text: "旧版交付。" }], stopReason: "stop", timestamp: clock, usage: {} } },
+	].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+	const read = () => Promise.all([readFile(empty.sessionPath, "utf8"), readFile(legacy.sessionPath, "utf8")]);
+	const before = await read();
+
+	const emptyView = await open({ workers: [empty], sessions: {} });
+	emptyView.component.dispose();
+	const legacyView = await open({ workers: [legacy], sessions: {} });
+	expect(legacyView.lines().join("\n")).toContain("旧版交付。");
+	legacyView.component.dispose();
+
+	expect(await read()).toEqual(before);
+});

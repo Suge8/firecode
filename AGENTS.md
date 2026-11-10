@@ -15,7 +15,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `tools/` | 经宿主 `registerToolRenderer` 只接管 read/bash/edit/write/grep/find/ls 的渲染（不重新注册工具）；思考与工具的过程组/过程列表、轮记录的宿主适配 | [tools/AGENTS.md](tools/AGENTS.md) |
 | `session/` | 用量查询、herdr 投影（pane 唯一的 agent 状态上报者） | [session/AGENTS.md](session/AGENTS.md) |
 | `review/` | `/fire-review` 对抗性审查：多模型并行审、顾问仲裁、checkpoint、结果卡、审查进度发布 | [review/AGENTS.md](review/AGENTS.md) |
-| `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、当前动作投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
+| `master/` | `/fire-master`：进程内 Worker 池、七命令与独立查询、相位投影、steer 投递与审查义务 | [master/AGENTS.md](master/AGENTS.md) |
 | `background/` | 后台小模型：`background.model` 是进展行、压缩摘要、闲置压缩与会话命名唯一的模型来源；压缩摘要沿用 pi 的 preparation 与提示词只换模型（主会话与子会话），闲置压缩在缓存过期后的下一次请求前应用预先算好的摘要（主会话与子会话），会话命名只在主会话、用第一条用户消息一次性起名；与原生压缩的先后在 `registerOpenAINative`，约定见各文件头注释 | |
 | `provider/claude-sub.ts` | Claude 订阅适配：只在订阅凭据下注册，请求补 Claude Code 归因，令牌换发造成的 401 自愈一次 | |
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并续跑（同一轮最多一次），历史前缀不变（约束见头注释） | |
@@ -89,6 +89,8 @@ bun run typecheck
 ```
 
 生产里没有只为测试开的注入口：测试里的子会话、模型解析走真实的池，供应商用 faux（`tests/faux-host.ts` 把它写进测试 Agent 目录的真实 models.json）；需要缩短等待的唯一入口是池的 `timing`（`timing.ts`）。
+
+`typecheck` 同时跑 `scripts/deps.ts` 的依赖规则（master/ 无依赖环、状态与调度文件不 import 界面文件），违规时列出文件:行并失败。
 
 开发环境一条命令搭好：`bun run setup` 把 pi 源码按 `scripts/pi-source.ts` 的 `PI_VERSION`（pi 版本的唯一事实源，CI 与发布流程也只调这条命令）克隆到仓库之外的缓存目录并装好依赖，已就绪则跳过。`tests/loader.ts` 与 `typecheck` 共用同一个定位（`scripts/pi-source.ts`），顺序是 `PI_PACKAGES_DIR` → setup 的缓存目录（`FIRECODE_PI_DIR` 可改位置）→ `PATH` 里的开发版 `pi`。loader 把当前仓库复制到临时目录并改写宿主包导入，供需要运行时值的用例使用（机制见其头注释）；`typecheck` 的做法见 `scripts/typecheck.ts` 头注释。`pi-smoke` 用例用 bun 跑同一份 pi 源码的 CLI，按 package.json 加载 `dist/`，先 `bun run build`。
 
