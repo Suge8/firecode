@@ -55,7 +55,7 @@ test("省略供应商的模型原子能派给可用来源", async () => {
 test("新会话默认激活 subagents；autoActivate false 时不注入，仍可手动启动", async () => {
 	const harness = await setup(false);
 	await harness.emit("session_start", {});
-	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write", "subagents", "subagents_list"]);
+	expect(harness.activeTools).toEqual(["read", "bash", "edit", "write", "subagents", "subagents_list", "self_review"]);
 	const off = await setup(false, { autoActivate: false });
 	await off.emit("session_start", {});
 	expect(off.activeTools).toEqual(["read", "bash", "edit", "write"]);

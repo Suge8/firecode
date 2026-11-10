@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- The Master starts the review of its own high-risk work itself (persistence, concurrency, migrations, data deletion, billing, auth) instead of suggesting `/fire-review` in its report. A new Master tool, `self_review`, queues the same review that `/fire-review` runs; it starts when the turn ends, and findings come back to the same session to be fixed. Checked on real sessions: Opus 5.5 called it for both high-risk tasks it was given and not for a README edit; Sonnet 5.5 did not call it in eight runs, so with a Sonnet main session run `/fire-review` yourself.
 - Idle compaction runs in the main session only. A Worker session is released after 10 idle minutes, before a summary is prepared, so it almost never took effect there.
 
 ### Fixed

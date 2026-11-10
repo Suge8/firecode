@@ -1,6 +1,6 @@
 # master：进程内多 Agent 指挥官
 
-新会话按 `master.autoActivate` 注入七命令工具 `subagents` 与池快照查询 `subagents_list`；默认开启。裸 `/fire-master` 翻转当前会话（关闭时若有子代理在跑，有界面先 `ctx.ui.confirm` 确认；无界面照旧直接关），`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或角色表有误时拒绝激活，不用默认模型代替。角色可用性每次会话开始核对一次（`roles.ts`），交给那一次的运行时：解析不出模型的角色告警一次、不进提示词（系统提示是缓存前缀，会话内不变）。派发只认配置里的角色名，不拿这份核对或任何缓存的可用模型挡：凭据会在会话中途增减，模型解析与凭据核对只在开会话后第一次请求时由路由做，解析不出按失败事件告知（“模型链已用尽”）。
+新会话按 `master.autoActivate` 注入七命令工具 `subagents`、池快照查询 `subagents_list` 与自审 `self_review`；默认开启。裸 `/fire-master` 翻转当前会话（关闭时若有子代理在跑，有界面先 `ctx.ui.confirm` 确认；无界面照旧直接关），`/fire-master status` 查看状态；下一次会话仍按配置决定，命令不写回。配置或角色表有误时拒绝激活，不用默认模型代替。角色可用性每次会话开始核对一次（`roles.ts`），交给那一次的运行时：解析不出模型的角色告警一次、不进提示词（系统提示是缓存前缀，会话内不变）。派发只认配置里的角色名，不拿这份核对或任何缓存的可用模型挡：凭据会在会话中途增减，模型解析与凭据核对只在开会话后第一次请求时由路由做，解析不出按失败事件告知（“模型链已用尽”）。
 
 ## 运行时
 
@@ -32,6 +32,8 @@ Worker 档案是 v10：`working / idle / reviewing` 三态，以 `role` 记录�
 **动作不阻塞**：七个动作的返回路径上没有等宿主或扩展回调的 await。开会话（扩展加载、session_start）、宿主 prompt 的前置阶段（input 处理器、鉴权）、等子会话真正空闲（agent_settled 处理器）、释放会话（session_shutdown）、刷新可用模型（供应商鉴权）都没有时限，所以：`start` 校验后写档进 working 就返回 `{ started: true, worker }`，空闲票的 `send` 写档进 working 就返回 `{ sent: true }`（在跑票的补话返回 `{ queued: true }`），`review` 见上；开会话与开回合都在后台（`run.ts` 的 `runWorker`、`startReview`），开不成（会话打不开、鉴权或路由失败、扩展加载出错）按失败落定、经事件告知。同步段里只做必然结束的事：参数校验、角色名在配置里、本地文件系统的同步调用（cwd 的 `realpathSync`/`existsSync`、预分配会话路径、写档案）。暂停后的自动续跑是同一个形状：到点时同步写档进 working/reviewing，开会话在后台。
 
 七个动作各是一个带类型的命令（`actions.ts`），只经 `commands` 调用：入口统一拒绝已关闭的运行时（全过程视图在指挥官关掉或 reload 后可能还握着旧运行时，报“会话已替换”）。工具处理表只把参数解析成命令输入；调用方身份（指挥官的工具 / 全过程视图）是 `send` 命令的独立参数 `origin`，工具一律以指挥官身份调用，全过程视图直接调 `commands.send`/`commands.interrupt`，所以模型无法冒充视图来源。
+
+`self_review` 审指挥官自己在主会话写的改动（Worker 写的走 `review` 动作）：调根 `index.ts` 传进来的开审入口（`review/index.ts` 的 `StartReview`），与用户敲 `/fire-review` 是同一条路——只排队，本回合落定后才开审，发现以修复反馈送回主会话；被拒（审查关闭、配置有误、已有审查在跑）时工具报错并带原因。审查期间到达的子代理事件照常唤醒指挥官，那一回合开始时在途的审查者被中止、回合落定后同一轮重审（`review/run.ts` 的 `agentStarted`）。
 
 `subagents_list` 是零参数查询：模型结果只返回池快照（档案事实）；界面的展开行与 `/fire-master status` 由 `list-view.ts` 从相位投影，与活动列表同一说法。
 

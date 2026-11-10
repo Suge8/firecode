@@ -33,7 +33,7 @@
 
 ## Fully automatic review and delivery
 
-Run `/fire-review` after a change. For high-risk changes (persistence, concurrency, migrations, auth) the commander reminds you in its report, and it sends work written by a sub-agent to review itself. Up to five models you choose look for problems and score how often each one would bite and how bad it would be; the ones worth fixing go back to be fixed, the rest are listed for you, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out.
+Run `/fire-review` after a change. The commander sends high-risk changes (persistence, concurrency, migrations, auth) to review itself, without you asking. Up to five models you choose look for problems and score how often each one would bite and how bad it would be; the ones worth fixing go back to be fixed, the rest are listed for you, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 

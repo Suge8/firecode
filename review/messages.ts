@@ -90,6 +90,7 @@ export const msg = defineMessages({
 			invalidArgs: "fire-review 参数无效",
 			alreadyRunning: "已有审查在进行中。",
 			nothingToCancel: "没有进行中的审查。",
+			off: "fire-review 已关闭（features.review）。",
 			scope: "当前会话当前任务的交付质量。首条用户消息是原始需求锚点；后续用户消息可能覆盖、缩小或修正，以后者为准。",
 		},
 		notify: {
@@ -220,6 +221,7 @@ export const msg = defineMessages({
 			invalidArgs: "Invalid fire-review arguments.",
 			alreadyRunning: "A review is already running.",
 			nothingToCancel: "No review is running.",
+			off: "fire-review is turned off (features.review).",
 			scope: "Delivery quality of the current task in this conversation. The first user message is the original-request anchor; later user messages may override, narrow, or correct it.",
 		},
 		notify: {
