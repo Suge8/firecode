@@ -27,13 +27,13 @@
 
 - **Works out of the box.** The recommended config is written on first launch; swap in the models you are logged in to. The UI and the prompts follow your system language.
 - **Sub-agents under control.** Run them in parallel, give each role an ordered model chain, switch automatically on failure, step in any time.
-- **Hands-off review.** Complex work is reviewed and sent back to be fixed until it passes. You see how each review ended.
+- **Hands-off review.** One command starts a review; what is worth fixing is sent back and reviewed again until it passes. You see how each review ended.
 - **An ultra-light core.** Built the Pi way: minimal, so your context stays lean.
 - **Low visual load.** Focus on the results that matter. Everything in between folds away until you open it.
 
 ## Fully automatic review and delivery
 
-Just tell the commander what you want. On complex tasks it starts an adversarial review on its own: up to five models you choose look for problems and score how often each one would bite and how bad it would be; the ones worth fixing go back to be fixed, the rest are listed for you, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out. You can also run `/fire-review` yourself at any time.
+Run `/fire-review` after a change. For high-risk changes (persistence, concurrency, migrations, auth) the commander reminds you in its report, and it sends work written by a sub-agent to review itself. Up to five models you choose look for problems and score how often each one would bite and how bad it would be; the ones worth fixing go back to be fixed, the rest are listed for you, and the fix is reviewed again. It stops when the review passes, an advisor model calls it after repeated failures, or the rounds run out.
 
 <p align="center"><img alt="Round 1 fails, the agent fixes it, round 2 passes" src="https://raw.githubusercontent.com/Suge8/firecode/main/design/promo/review-loop.gif" width="760"></p>
 

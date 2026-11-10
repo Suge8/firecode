@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- **Breaking**: the Master no longer delegates by default. The main session reads, edits and verifies itself; it starts sub-agents only for two or more independent pieces of read-only research, or when you ask for parallel implementation. The Master prompt is about a fifth of its former length. To have work delegated, ask for it.
+- The Master no longer starts a review for its own work. For high-risk changes (persistence, concurrency, migrations, data deletion, billing, auth) it suggests `/fire-review` in its report; work written by a Worker is reviewed once after the Master has read the diff.
+- The Worker contract drops the four-step acceptance routine: a Worker runs the narrowest check that covers its change once, commits, and reports what changed and what was not verified.
+- The config template has three roles (`researcher`, `junior`, `engineer`) instead of six. Existing config files are not touched; roles whose `use` no longer matches one of the two delegation cases are only picked when you name them.
 - Master actions no longer block. `start`, `send`, `review` and `kill` return as soon as the Worker record is written; opening the session and starting the turn happen in the background, and a failure arrives as the usual "failed" event. A failed `start` leaves the Worker idle in the pool: retry with `send` or remove it with `kill`. `interrupt` records the intent and returns `{ interrupting: true }`; the turn is stopped once it is actually running, and the outcome arrives as the "interrupted" event. A follow-up `send` to a running Worker returns `{ queued: true }`.
 - Dispatch only checks that the role exists in the config. Model and credential resolution happen when the turn's first request is routed, so credentials added mid-session work right away, and a role with no usable model fails as a "failed" event.
 - In the `firecode:subagents` roster, `model` and `thinking` are absent until the Worker's model has been picked.
