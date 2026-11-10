@@ -6,15 +6,18 @@ import { join } from "node:path";
 import { fakePi } from "./fake-pi.ts";
 import { installFaux } from "./faux-host.ts";
 import { until } from "./until.ts";
-import { loadFirecodeModule, featuresOnly, PI_AI_COMPAT_URL, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { loadFirecodeModule, featuresOnly, PI_AI_COMPAT_URL, PI_AI_URL, TEST_REVIEW_CONFIG } from "./loader.ts";
 
 const { fauxAssistantMessage } = await import(PI_AI_COMPAT_URL) as any;
+const { getCurrentSystemPrompt } = await import(PI_AI_URL) as any;
 
 type RegisterReview = typeof import("../review/index.js").registerReview;
 type CheckpointModule = typeof import("../review/checkpoint.js");
 
 let registerReview: RegisterReview;
 let readCheckpoint: CheckpointModule["readCheckpoint"];
+let CheckpointWriter: CheckpointModule["CheckpointWriter"];
+let initialState: typeof import("../review/state.js").initialState;
 
 /** 迁移是同步的；让出事件循环两拍，等已完成的会话 Promise 把结果回灌进来。 */
 const flush = async () => {
@@ -45,12 +48,13 @@ afterAll(async () => {
 	await rm(agentDir, { recursive: true, force: true });
 });
 
-/** 每个会话的回答；返回 undefined 表示该会话的供应商报错（额度不足）。 */
-type Reply = string | undefined;
-function script(reply: (model: { provider: string; id: string }) => Reply) {
-	faux.setResponses(Array.from({ length: 30 }, () => (_context: unknown, _options: unknown, _state: unknown, model: any) => {
-		const text = reply(model);
-		return text === undefined ? fauxAssistantMessage([], { stopReason: "error", errorMessage: "额度不足" }) : fauxAssistantMessage(text);
+/** 每个会话的回答；undefined 表示该会话的供应商报错（额度不足），{ truncated } 是被长度截断的输出。 */
+type Reply = string | { truncated: string } | undefined;
+function script(reply: (model: { provider: string; id: string }, context: any) => Reply) {
+	faux.setResponses(Array.from({ length: 30 }, () => (context: any, _options: unknown, _state: unknown, model: any) => {
+		const text = reply(model, context);
+		if (text === undefined) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "额度不足" });
+		return typeof text === "string" ? fauxAssistantMessage(text) : fauxAssistantMessage(text.truncated, { stopReason: "length" });
 	}));
 }
 
@@ -70,7 +74,13 @@ async function loadReviewModule(path: string, options?: Parameters<typeof loadFi
 
 async function loadAll() {
 	registerReview = ((await loadReviewModule("review/index.js")) as { registerReview: RegisterReview }).registerReview;
-	readCheckpoint = ((await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule).readCheckpoint;
+	({ readCheckpoint, CheckpointWriter } = (await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule);
+	initialState = ((await loadFirecodeModule("review/state.js")) as { initialState: typeof initialState }).initialState;
+}
+
+/** 把一份状态当作上次会话留下的 checkpoint 写进会话记录。 */
+function seed(pi: { appendEntry: (type: string, data: unknown) => void }, state: ReturnType<typeof initialState>) {
+	new CheckpointWriter(pi as never).write(state);
 }
 
 function makeSessionManager() {
@@ -96,8 +106,10 @@ const checkpoints = (sessionManager: MockSessionManager) =>
 function makeCtx(sessionManager: MockSessionManager, busy = false) {
 	let idle = !busy;
 	const notices: string[] = [];
+	const editors: unknown[] = [];
 	return {
 		notices,
+		editors,
 		hasUI: true,
 		cwd: "/tmp/firecode-test",
 		sessionManager,
@@ -111,7 +123,7 @@ function makeCtx(sessionManager: MockSessionManager, busy = false) {
 			setStatus: () => {},
 			setTitle: () => {},
 			getEditorComponent: () => undefined,
-			setEditorComponent: () => {},
+			setEditorComponent: (factory?: unknown) => { editors.push(factory); },
 		},
 	};
 }
@@ -152,14 +164,17 @@ async function outcomeOf(sessionManager: MockSessionManager) {
 }
 
 /** 所有审查者都给出同一个结论。 */
-async function loadReviewWithVerdict(verdict: string) {
+async function loadReviewWithVerdict(verdict: string, { top = {}, onSystem }: { top?: Record<string, unknown>; onSystem?: (system: string) => void } = {}) {
 	const review = (await loadReviewModule("review/index.js", {
-		configJsonc: reviewConfig({ reviewers: ["p/one/low"] }),
+		configJsonc: reviewConfig({ reviewers: ["p/one/low"] }, top),
 	})) as { registerReview: (pi: unknown, options?: unknown) => void };
 	return {
 		readCheckpoint: ((await loadFirecodeModule("review/checkpoint.js")) as CheckpointModule).readCheckpoint,
 		registerReview: (pi: unknown) => {
-			script(() => verdict);
+			script((_model, context) => {
+				onSystem?.(getCurrentSystemPrompt(context.messages) ?? "");
+				return verdict;
+			});
 			review.registerReview(pi);
 		},
 	};
@@ -194,8 +209,15 @@ const FAIL_VERDICT = [
 
 const PASS_VERDICT = "PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test";
 
-const reviewConfig = (overrides: Record<string, unknown> = {}) =>
-	JSON.stringify({ review: { ...TEST_REVIEW_CONFIG, ...overrides } });
+const reviewConfig = (overrides: Record<string, unknown> = {}, top: Record<string, unknown> = {}) =>
+	JSON.stringify({ ...top, review: { ...TEST_REVIEW_CONFIG, ...overrides } });
+
+/** 修复回合：宿主开回合、执行模型答完、回合落定，审查进入下一轮。 */
+async function finishRepairTurn(registered: ReturnType<typeof makePi>["registered"], ctx: unknown) {
+	await startTurn(registered, ctx);
+	await registered.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+	await registered.fire("agent_settled", {}, ctx);
+}
 
 describe("/fire-review", () => {
 	test("a second /fire-review while one runs is refused and recorded", async () => {
@@ -226,6 +248,86 @@ describe("/fire-review", () => {
 		await registered.fire("agent_settled", { aborted: false }, ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
 		expect(await outcomeOf(sessionManager)).toMatchObject({ status: "passed", rounds: 1 });
+		expect(ctx.editors.length).toBeGreaterThan(0);
+		expect(ctx.editors.at(-1)).toBeUndefined();
+	}, 20_000);
+
+	test("language en: the reviewer prompt, the result card and the summary prompt contain no Chinese", async () => {
+		const systems: string[] = [];
+		const { registerReview } = await loadReviewWithVerdict("PASS\nVerification exited 0.\nEvidence: files=a.ts; commands=bun test", {
+			top: { language: "en" },
+			onSystem: (system) => systems.push(system),
+		});
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length > 0);
+		const texts = [...systems, ...registered.sent.map((message) => message.content), registered.delivered[0].content];
+		expect(texts.length).toBeGreaterThan(2);
+		expect(texts.join("\n")).not.toMatch(/[\u3400-\u9fff]/u);
+	}, 20_000);
+
+	test("a failed review is repaired and the re-review passes; the pass card and the summary follow", async () => {
+		let calls = 0;
+		const { registerReview, readCheckpoint } = await loadTwoReviewers(() => ++calls === 1 ? FAIL_VERDICT : PASS_VERDICT, ["p/one/low"]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		expect(registered.delivered[0].content).toContain("<firecode_review>");
+		await finishRepairTurn(registered, ctx);
+		await until(() => registered.delivered.length === 2);
+		expect(readCheckpoint({ sessionManager })).toMatchObject({ phase: "summarizing", round: 2 });
+		expect(registered.sent.some((message) => message.content.includes("审查通过"))).toBe(true);
+		await startTurn(registered, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
+		expect(await outcomeOf(sessionManager)).toMatchObject({ status: "passed", rounds: 2 });
+	}, 20_000);
+
+	test.each([
+		["continue", 3, undefined],
+		["stop", 2, "别修了"],
+	])("repeated failures end as stopped for the Master: advisor says %s", async (verdict, rounds, advice) => {
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => model === "test/advisor" ? `${verdict}\n别修了` : FAIL_VERDICT, ["p/one/low"]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		for (let delivered = 1; delivered < rounds; delivered++) {
+			await until(() => registered.delivered.length === delivered);
+			await finishRepairTurn(registered, ctx);
+		}
+		await until(() => readCheckpoint({ sessionManager })?.phase === "summarizing");
+		await startTurn(registered, ctx);
+		await registered.fire("agent_settled", { aborted: false }, ctx);
+		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
+		const result = await outcomeOf(sessionManager);
+		expect(result).toMatchObject({ status: "stopped", rounds });
+		expect((result as { advisorAdvice?: string }).advisorAdvice).toBe(advice);
+	}, 20_000);
+
+	test("an unavailable advisor is skipped and the repair carries on", async () => {
+		const { registerReview, readCheckpoint } = await loadTwoReviewers((model) => model === "test/advisor" ? undefined : FAIL_VERDICT, ["p/one/low"]);
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi);
+		const ctx = makeCtx(sessionManager);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => registered.delivered.length === 1);
+		await finishRepairTurn(registered, ctx);
+		await until(() => registered.delivered.length === 2);
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("awaiting_fix");
+		expect(registered.delivered[1].content).toContain("<firecode_review>");
 	}, 20_000);
 
 	test("/fire-review --cancel aborts the running reviewer and ends the review as cancelled", async () => {
@@ -250,6 +352,70 @@ describe("/fire-review", () => {
 		expect(checkpoint.readCheckpoint({ sessionManager })).toMatchObject({ phase: "settled", end: "cancelled" });
 		expect(sessionManager.entries).not.toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
 	}, 10_000);
+
+	test("esc cancels a queued review: the user is told, the editor is handed back and no result card is persisted", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager, true);
+		await fireReview(registered).handler("", ctx);
+		await flush();
+		const factory = ctx.editors.at(-1) as (tui: unknown, theme: unknown, keys: unknown) => { handleInput: (data: string) => void };
+		expect(factory).toBeTypeOf("function");
+		const editor = factory(
+			{ requestRender: () => {}, addInputListener: () => () => {} },
+			{ borderColor: (text: string) => text, selectList: {} },
+			{ matches: (data: string, action: string) => action === "app.interrupt" && data === "\x1b" },
+		);
+		editor.handleInput("\x1b");
+		await flush();
+		expect(ctx.notices.length).toBeGreaterThan(0);
+		expect(ctx.editors.at(-1)).toBeUndefined();
+		expect(registered.sent).toHaveLength(0);
+	});
+
+	test("a checkpoint write failure hands the editor back and a new review can start", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		const append = pi.appendEntry;
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager, true);
+		await fireReview(registered).handler("", ctx);
+		expect(ctx.editors.at(-1)).toBeTypeOf("function");
+		pi.appendEntry = () => { throw new Error("磁盘满了"); };
+		ctx.setIdle(true);
+		await registered.fire("agent_settled", {}, ctx);
+		pi.appendEntry = append;
+		expect(ctx.editors.at(-1)).toBeUndefined();
+		expect(ctx.notices.length).toBeGreaterThan(0);
+		const failedRun = readCheckpoint({ sessionManager })?.runId;
+		ctx.setIdle(false);
+		await fireReview(registered).handler("", ctx);
+		expect(sessionManager.entries).not.toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+		expect(readCheckpoint({ sessionManager })?.runId).not.toBe(failedRun);
+	});
+
+	test("an overall timeout while the executor is busy still posts the timeout card without waking the model", async () => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seed(pi, {
+			...initialState("expired-run"),
+			phase: "awaiting_fix",
+			turn: "running",
+			round: 1,
+			startedAt: Date.now() - 500 * 60_000,
+			updatedAt: Date.now() - 500 * 60_000,
+		} as never);
+		registerReview(pi as never);
+		const ctx = makeCtx(sessionManager, true);
+		await registered.fire("session_start", {}, ctx);
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
+		expect(registered.sent).toHaveLength(1);
+		expect(registered.delivered).toHaveLength(0);
+	});
 
 	test("cancelling during the repair turn is reported to the Master as cancelled, not as rounds exhausted", async () => {
 		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(FAIL_VERDICT);
@@ -311,6 +477,32 @@ describe("/fire-review", () => {
 	});
 });
 
+describe("a damaged checkpoint is reported once, not silently dropped", () => {
+	test.each([
+		["active rounds without records", { phase: "queued" }, (data: any) => { data.rounds = 2; }],
+		["settled rounds without records", { phase: "settled", end: "passed" }, (data: any) => { data.rounds = 2; }],
+		["invalid field", { phase: "queued" }, (data: any) => { data.runId = 7; }],
+	] as const)("%s: the user is told; reopening the same session stays silent", async (_name, state, damage) => {
+		await loadAll();
+		const sessionManager = makeSessionManager();
+		const { pi, registered } = makePi(sessionManager);
+		seed(pi, { ...initialState("damaged"), ...state, startedAt: 1, updatedAt: 1 } as never);
+		damage((checkpoints(sessionManager)[0] as { data: unknown }).data);
+		registerReview(pi as never);
+		const first = makeCtx(sessionManager);
+		await registered.fire("session_start", {}, first);
+		expect(first.notices).toHaveLength(1);
+		expect(first.notices[0]).toContain("/fire-review");
+
+		const { pi: pi2, registered: registered2 } = makePi(sessionManager);
+		registerReview(pi2 as never);
+		const second = makeCtx(sessionManager);
+		await registered2.fire("session_start", { type: "session_start", reason: "resume" }, second);
+		await flush();
+		expect(second.notices).toEqual([]);
+	});
+});
+
 describe("reload", () => {
 	test("reload shutdown keeps the checkpoint active; session_start restores it and the review resumes", async () => {
 		await loadAll();
@@ -359,10 +551,11 @@ describe("reload", () => {
 });
 
 describe("multi-reviewer verdicts and degraded paths", () => {
-	test("a malformed blocking finding beats another reviewer's PASS and its original text reaches the executor", async () => {
-		const { registerReview } = await loadTwoReviewers((model) =>
-			model === "p/one" ? "## 发现 1：没按模板写，但数据会丢：重启后 checkpoint 被覆盖\n- 发生条件: 每次重启\n- 频率: 10\n- 影响: 9" : PASS_VERDICT,
-		);
+	test.each([
+		["a well-formed FAIL", FAIL_VERDICT.replace("问题: x", "问题: 数据会丢：重启后 checkpoint 被覆盖")],
+		["a malformed blocking finding", "## 发现 1：没按模板写，但数据会丢：重启后 checkpoint 被覆盖\n- 发生条件: 每次重启\n- 频率: 10\n- 影响: 9"],
+	])("%s beats another reviewer's PASS and its original text reaches the executor", async (_name, failing) => {
+		const { registerReview } = await loadTwoReviewers((model) => model === "p/one" ? failing : PASS_VERDICT);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
@@ -392,6 +585,7 @@ describe("multi-reviewer verdicts and degraded paths", () => {
 
 	test.each([
 		["its output has no valid format", [["p/one/low", "p/two/low"]], (model: string) => model === "p/one" ? "结论如下\n随便写" : "核对完毕。\n证据：文件=a.ts；命令=bun test", "p/two"],
+		["its output is truncated", [["p/two/low", "p/three/low"]], (model: string) => model === "p/two" ? { truncated: PASS_VERDICT } : PASS_VERDICT, "p/three"],
 		["it runs out of quota", [["p/two/low", "p/three/low"]], (model: string) => model === "p/two" ? undefined : PASS_VERDICT, "p/three"],
 	])("a seat whose first model fails because %s is reviewed by the next model in its chain, and the pass card says so", async (_name, reviewers, answer, fallback) => {
 		const { registerReview, readCheckpoint } = await loadTwoReviewers(answer, reviewers);
