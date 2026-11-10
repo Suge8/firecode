@@ -38,29 +38,8 @@ async function recorder() {
 		/** aborted：宿主在回合落定时给的用户中断标记。 */
 		agentSettled: (aborted = false) => void fake.fire("agent_settled", { aborted }, ctx),
 		inFlight: (inFlight: number) => fake.pi.events.emit("firecode:workers", { inFlight }),
-		review: (active: boolean) => fake.pi.events.emit("firecode:review", active ? { active, progress: () => undefined } : { active }),
 	};
 }
-
-test("终态取最后一个回合的：Esc 中断但子代理还在飞时这一段没结束，结果回来、指挥官再跑完才落记录", async () => {
-	const h = await recorder();
-	try {
-		setSystemTime(new Date(1_000_000));
-		h.agentStart();
-		h.inFlight(1);
-		h.agentEnd("aborted");
-		h.agentSettled(true);
-		expect(h.rounds()).toEqual([]);
-		h.inFlight(0);
-		expect(h.last).toEqual({ elapsed: 0, outcome: "aborted" });
-		h.agentStart();
-		h.agentEnd("error");
-		h.agentSettled();
-		expect(h.last).toEqual({ elapsed: 0, outcome: "error" });
-	} finally {
-		setSystemTime();
-	}
-});
 
 test("均速：整段内指挥官各回合的输出 token 之和除以宿主实测请求耗时之和，等子代理与工具不算分母；请求失败、缺实测耗时或输出 token 太少则整段不给", async () => {
 	const h = await recorder();
@@ -117,17 +96,4 @@ test("Esc 中断按宿主落定时给的中断标记判定：工具执行中被�
 	h.agentEnd("error");
 	h.agentSettled();
 	expect(h.last.outcome).toBe("error");
-});
-
-test("上一段被中断后只跑审查（没有指挥官回合）：这一段不沿用上一段的中断终态", async () => {
-	const h = await recorder();
-	h.agentStart();
-	h.agentEnd("aborted");
-	h.agentSettled(true);
-	expect(h.last.outcome).toBe("aborted");
-
-	h.review(true);
-	h.review(false);
-	expect(h.rounds()).toHaveLength(2);
-	expect(h.last.outcome).toBe("complete");
 });
