@@ -145,6 +145,25 @@ test("名册发布在 firecode:subagents：角色、模型、状态、在做什�
 	expect(rosters().at(-1)).toEqual([]);
 });
 
+test("指挥官空闲时陆续到达的一批结果合并成一次唤醒", async () => {
+	// 窗口远大于两条结果之间的间隔：用例按条件推进，间隔只有几毫秒。
+	const harness = await setup(true, { timing: { wakeQuietMs: 300 } });
+	harness.idle = true;
+	const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+	faux.setResponses(gates.map((gate, index) => async () => { await gate.promise; return fauxAssistantMessage(`结果 ${index}`); }));
+	await harness.execute({ action: "start", worker: "batch-a", prompt: "A", role: "工程师" });
+	await harness.execute({ action: "start", worker: "batch-b", prompt: "B", role: "工程师" });
+	gates[0].resolve();
+	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-pending-event"));
+	expect(harness.messages).toEqual([]);
+	gates[1].resolve();
+	await until(() => harness.turns.length === 1);
+	expect(harness.turns[0]).toContain("结果 0");
+	expect(harness.turns[0]).toContain("结果 1");
+	await harness.command("");
+	expect(harness.turns).toHaveLength(1);
+});
+
 test("报告现场时序：最后一个子代理在指挥官空闲时返回，整段只歇下一次，且在唤醒回合落定之后", async () => {
 	const harness = await setup(true, { holdWake: true });
 	const { watchBusy } = await loadFirecodeModule("busy.ts") as any;

@@ -27,6 +27,12 @@ async function loadAll() {
 const HEAD = "核对了 checkpoint 写入。\n证据：文件=checkpoint.ts；命令=bun test";
 
 describe("review output parsing", () => {
+	test("frequency × impact ≥ 20, or frequency ≥ 1 with impact ≥ 8, blocks; everything else does not", async () => {
+		const finding = (frequency: string, impact: string) => ["## 发现 1", "- 发生条件: 每次重启", `- 频率: ${frequency}`, `- 影响: ${impact}`, "- 问题: x", "- 证据: checkpoint.ts", "- 违反的约定与期望行为: 终态必须可持久化", "- 验证命令: bun test"].join("\n");
+		for (const [frequency, impact, blocks] of [["10", "2", true], ["4", "5", true], ["3", "6", false], ["1", "8", true], ["0", "10", false], ["2", "7", false]] as const)
+			expect(`${frequency}×${impact}:${(await vote(`${HEAD}\n\n${finding(frequency, impact)}`)).status}`).toBe(`${frequency}×${impact}:${blocks ? "failed" : "passed"}`);
+	});
+
 	// 发现模板的字段全是粗体，模型会把粗体带进证据行；两种行的容忍度必须一致。
 	test("the evidence line tolerates bold and bullet decoration", async () => {
 		await loadAll();
