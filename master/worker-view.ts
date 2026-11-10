@@ -57,7 +57,7 @@ interface WorkerViewSource {
 	session(worker: WorkerRef): AgentSession | undefined;
 	/** 子代理会话接上订阅（冷启动、重开）时通知，在它的第一条事件之前。 */
 	onSession(listener: (name: string) => void): () => void;
-	/** 子代理被移除（kill、启动失败撤票）时按名字通知。 */
+	/** 子代理被移除（kill）时按名字通知。 */
 	onWorkerRemoved(listener: (name: string) => void): () => void;
 	/** 视图来源的 send：与指挥官 send 同一处理入口。 */
 	send(name: string, prompt: string): Promise<void>;

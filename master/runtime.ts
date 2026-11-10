@@ -108,7 +108,7 @@ export class MasterRuntime {
 	private readonly stopReleaseWatch: () => void;
 	/** 子代理会话被接上订阅（冷启动或重开）时通知：全过程视图据此在第一条事件之前接上自己的订阅。 */
 	private readonly sessionListeners = new Set<(name: string) => void>();
-	/** 子代理被移除（kill 或启动失败撤票）时通知：全过程视图据此显示已移除。 */
+	/** 子代理被移除（kill）时通知：全过程视图据此显示已移除。 */
 	private readonly removedListeners = new Set<(name: string) => void>();
 	/** 事实变化时通知（活动列表重绘）。 */
 	private readonly changeListeners = new Set<() => void>();
@@ -179,15 +179,12 @@ export class MasterRuntime {
 		return ++this.launchSeq;
 	}
 
-	/**
-	 * 移除子代理的唯一入口：删名下全部运行时事实与档案，档案确有这一票时通知订阅方。
-	 * 运行时事实只删属于 expected 的那一条（kill 后同名重开的新票不受影响）。
-	 */
-	remove(name: string, expected = this.live.get(name)): void {
+	/** 移除子代理的唯一入口（kill）：删名下全部运行时事实与档案，档案确有这一票时通知订阅方。 */
+	remove(name: string): void {
 		// 先删档案：写盘失败时照常抛错，运行时事实与档案都不动。
 		const removed = this.store.remove(name);
 		const live = this.live.get(name);
-		if (live && live === expected) {
+		if (live) {
 			clearTimeout(live.interruptTimer);
 			clearTimeout(live.resumeTimer);
 			clearTimeout(live.stallTimer);
