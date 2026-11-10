@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type Api, clampThinkingLevel, type Context, type Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
@@ -51,7 +52,7 @@ interface SpawnSessionOptions {
 interface SpawnedSession {
 	readonly session: AgentSession;
 	prompt(text: string): Promise<void>;
-	/** 先让会话内扩展按宿主契约收口（session_shutdown），再释放；resolve 即收口完成。 */
+	/** 先中止在跑的回合，让会话内扩展按宿主契约收口（session_shutdown），再释放；resolve 即收口完成。 */
 	dispose(): Promise<void>;
 }
 
@@ -327,13 +328,22 @@ export class InProcessSessionPool {
 		await Promise.all([...this.held.values()].filter((held) => held.sessionPath).map((held) => this.release(held)));
 	}
 
-	/** 镜像宿主替换会话的顺序：先 session_shutdown 让扩展收口，再 dispose 作废上下文。 */
+	/**
+	 * 镜像宿主替换会话的顺序：先中止在跑的回合并等它落定，再 session_shutdown 让扩展收口，最后 dispose 作废上下文。
+	 * session_shutdown 是会话给扩展的最后一个事件：少了第一步，dispose 中止的那一轮会在它之后才发 agent_settled，
+	 * 扩展在已收口、上下文已作废的会话上重新挂起计时与状态。
+	 * 落定只等 Timing.abortSettleMs：模型流卡在半开连接上时宿主的 abort 永不返回，过了照旧收口，不让一条卡死的流拖住调用方。
+	 */
 	private release(held: HeldSession): Promise<void> {
 		if (held.releasing) return held.releasing;
 		held.releasing = (async () => {
 			this.clearTimer(held);
 			if (this.held.get(held.key) === held) this.held.delete(held.key);
 			try {
+				await Promise.race([
+					Promise.all([held.session.abort(), held.settling?.promise]),
+					sleep(this.timing.abortSettleMs, undefined, { ref: false }),
+				]);
 				await held.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			} finally {
 				held.session.dispose();

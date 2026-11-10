@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Idle compaction runs in the main session only. A Worker session is released after 10 idle minutes, before a summary is prepared, so it almost never took effect there.
+
+### Fixed
+
+- Killing or releasing a Worker whose turn is still running no longer crashes pi about 45 minutes later. The pool now aborts the turn and waits up to 2 seconds for it to settle before it sends `session_shutdown`, so extensions in the Worker session no longer receive `agent_settled` after the shutdown; a turn whose model stream is stuck is closed when the wait runs out.
+- Idle compaction is now applied when the next request is a Worker result waking the master, or when the model or thinking level was changed before the next message. Entries appended after the summary was prepared no longer discard it; switching branch with `/tree` or a manual `/compact` still does.
+
 ## [1.11.0] - 2026-11-10
 
 ### Changed

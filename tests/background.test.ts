@@ -35,7 +35,7 @@ interface Request { model: string; summary: boolean; text: string }
  * 真实主会话（registerFirecode）+ 真实池 + faux 供应商。会话模型是 test/session；
  * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错；down 里的模型对会话请求报过载。
  */
-async function setup(options: { naming?: (text: string) => string | Promise<string>; background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
+async function setup(options: { child?: (pi: any) => void; naming?: (text: string) => string | Promise<string>; background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
 	directories.push(directory);
 	const cwd = join(directory, "project");
@@ -65,7 +65,7 @@ async function setup(options: { naming?: (text: string) => string | Promise<stri
 	const { registerFirecode } = await loadFirecodeModule("index.ts", moduleOptions) as any;
 	const { InProcessSessionPool } = await import(await firecodeModulePath("spawn.ts", moduleOptions)) as any;
 	const { deliver, wrapEnvelope } = await import(await firecodeModulePath("deliver.ts", moduleOptions)) as any;
-	const pool = new InProcessSessionPool({ timing: options.timing, firecode: (child: any) => registerFirecode(child, true, pool) });
+	const pool = new InProcessSessionPool({ timing: options.timing, firecode: (child: any) => { registerFirecode(child, true, pool); options.child?.(child); } });
 
 	const host: { pi?: any; ctx?: any; settledAt?: number } = {};
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
@@ -93,7 +93,11 @@ async function setup(options: { naming?: (text: string) => string | Promise<stri
 		session.dispose();
 	});
 	const compactions = () => session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction");
-	const wake = (text: string) => deliver(host.pi, host.ctx, { customType: "firecode-master-event", content: wrapEnvelope("firecode_master_event", text) });
+	// 与指挥官的投递队列同序：先把待投递事件落盘，再投递。
+	const wake = (text: string) => {
+		host.pi.appendEntry("firecode-master-pending-event", { id: "event", content: text });
+		return deliver(host.pi, host.ctx, { customType: "firecode-master-event", content: wrapEnvelope("firecode_master_event", text) });
+	};
 	return { session, pool, requests, notices, errors, host, compactions, wake, cwd };
 }
 
@@ -224,4 +228,46 @@ test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad �
 	const { host, session } = await setup({ background: { model: [LUNA] }, naming: () => "From bridge" });
 	host.pi.sendUserMessage("fix the bridge");
 	await until(() => session.sessionManager.getSessionName() === "From bridge");
+});
+
+test("关掉还在跑的子代理：会话内的扩展先收到这一轮落定，再收到会话关闭", async () => {
+	const seen: string[] = [];
+	const { pool, cwd } = await setup({ child: (pi) => {
+		for (const event of ["agent_settled", "session_shutdown"]) pi.on(event, () => { seen.push(event); });
+	} });
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([async (_context: any, options: any) => {
+		entered.resolve();
+		await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+		return fauxAssistantMessage("", { stopReason: "aborted" });
+	}]);
+	const spawned = await pool.spawn({
+		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
+		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
+	});
+	const running = spawned.prompt("long task").catch(() => undefined);
+	await entered.promise;
+	await spawned.dispose();
+	await running;
+	expect(seen).toEqual(["agent_settled", "session_shutdown"]);
+});
+
+test("模型流卡死、不理会中止时，关会话等过宽限照常收口", async () => {
+	const seen: string[] = [];
+	const { pool, cwd } = await setup({ timing: { abortSettleMs: 50 }, child: (pi) => {
+		for (const event of ["agent_settled", "session_shutdown"]) pi.on(event, () => { seen.push(event); });
+	} });
+	const entered = Promise.withResolvers<void>();
+	faux.setResponses([() => {
+		entered.resolve();
+		return new Promise(() => {});
+	}]);
+	const spawned = await pool.spawn({
+		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
+		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
+	});
+	void spawned.prompt("stuck").catch(() => undefined);
+	await entered.promise;
+	await spawned.dispose();
+	expect(seen).toEqual(["session_shutdown"]);
 });

@@ -1,31 +1,34 @@
 /**
- * 闲置压缩（主会话与子会话）：歇下后闲置到 Timing.cacheTtlMs − idleCompactionLeadMs，用后台链预先算好摘要，只放内存，
- * 绑定当时的会话末端（leaf）。下一次请求发出前——用户输入经 input 事件，插件投递经 deliver.ts 的 beforeWake——
- * 闲置已超过缓存过期线且会话末端没变，就经宿主 ctx.compact 把它作为一次压缩应用（压缩钩子交出这份摘要，持久化与事件仍是宿主的），
- * 再发请求；否则丢弃。指挥官给暂停的子代理续跑时直接投自定义消息、不经这两处，那次请求开回合时预算作废、照常发出。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
+ * 闲置压缩（只在主会话）：歇下后闲置到 Timing.cacheTtlMs − idleCompactionLeadMs，用后台链预先算好摘要，只放内存，
+ * 记下当时的会话末端（leaf）。下一次请求发出前——用户输入经 input 事件，插件投递经 deliver.ts 的 beforeWake——
+ * 闲置已超过缓存过期线且摘要仍成立，就经宿主 ctx.compact 把它作为一次压缩应用（压缩钩子交出这份摘要，持久化与事件仍是宿主的），
+ * 再发请求；否则丢弃。缓存没过期时压缩反而要重写整段前缀，所以过期线之前的请求一律原样。
  *
+ * 摘要仍成立 = 预算时的末端还在当前分支上、其后没有压缩，也没有 context_edit。摘要只覆盖切点之前，之后追加的条目都落在保留段里：
+ * 投递前先落盘的待投递事件、换模型或思考档的记录不作废它；/tree 换了分支或手动 /compact 之后，它的切点才不再成立；
+ * context_edit 改写的是更早的条目，可能落在摘要已经写进去的那一段。
+ *
+ * 子会话不做：热会话闲置 Timing.idleSessionMs 就释放，早于预算点，重开的是新实例，没有预算好的摘要；只有审查中的 Worker 不起释放计时，
+ * 为这一种情形不值得留一条路（实测 5 天里子会话闲置过期 11 次，摘要一次没用上）。
  * 宿主设置 compaction.enabled=false 的会话不碰（预算与应用都不做）：用户关掉压缩就是要保留原文。
  *
  * 不当场算：进程重启后没有预算好的摘要就照常走；请求到达时预算还在飞，作废预算。上下文不到 MIN_CONTEXT_TOKENS 不预算。
- * 原生压缩接管的会话不碰（见 openai-native 的 nativeTakesOver）。
+ * 原生压缩接管的会话不碰（见 openai-native 的 nativeTakesOver）：预算时与应用时各判一次，闲置期间可以换到归它的模型。
  *
  * 切点：pi 没有导出 prepareCompaction，这里用它导出的 findCutPoint 按 pi 的 keepRecentTokens 选（与宿主的区别只在不按 context_edit
- * 投影逐条估算大小，切点同样只落在宿主允许的位置），摘要带着这个 firstKeptEntryId 交给宿主；会话末端没变，这个切点就仍然成立。
+ * 投影逐条估算大小，切点同样只落在宿主允许的位置），摘要带着这个 firstKeptEntryId 交给宿主。
  */
 import {
 	type CompactionResult,
 	type ExtensionAPI,
 	type ExtensionContext,
 	buildSessionProjection,
-	calculateContextTokens,
 	findCutPoint,
-	getLastAssistantUsage,
 	type SessionEntry,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelChain } from "../config.js";
 import { beforeWake } from "../deliver.js";
-import { followRoute, physicalModel } from "../model-route.js";
 import { nativeCompactionEnabled } from "../provider/openai-native/index.js";
 import { nativeTakesOver } from "../provider/openai-native/src/native-compaction.js";
 import type { InProcessSessionPool } from "../spawn.js";
@@ -85,12 +88,10 @@ export class IdleCompaction {
 	private async precompute(ctx: ExtensionContext): Promise<void> {
 		this.timer = undefined;
 		const idleSince = this.idleSince;
-		const branch = ctx.sessionManager.getBranch();
-		// 子会话的模型是路由虚拟模型，宿主算不出它的上下文用量：退回分支上最后一次回复报告的用量（同一口径）。
-		const lastUsage = getLastAssistantUsage(branch);
-		const tokensBefore = ctx.getContextUsage()?.tokens ?? (lastUsage ? calculateContextTokens(lastUsage) : 0);
+		const tokensBefore = ctx.getContextUsage()?.tokens ?? 0;
 		if (idleSince === undefined || !ctx.isIdle() || tokensBefore < MIN_CONTEXT_TOKENS) return;
-		if (nativeTakesOver(branch, physicalModel(ctx.model), nativeCompactionEnabled())) return;
+		const branch = ctx.sessionManager.getBranch();
+		if (nativeTakesOver(branch, ctx.model, nativeCompactionEnabled())) return;
 		const settings = this.settings(ctx);
 		if (!settings.enabled) return;
 		const preparation = idlePreparation(branch, settings, tokensBefore);
@@ -112,7 +113,9 @@ export class IdleCompaction {
 		if (!ctx.isIdle()) return;
 		const ready = this.ready;
 		this.reset();
-		if (!ready || !this.settings(ctx).enabled || Date.now() - ready.idleSince < this.pool.timing.cacheTtlMs || ctx.sessionManager.getLeafId() !== ready.leafId) return;
+		if (!ready || !this.settings(ctx).enabled || Date.now() - ready.idleSince < this.pool.timing.cacheTtlMs) return;
+		const branch = ctx.sessionManager.getBranch();
+		if (!stillHolds(branch, ready.leafId) || nativeTakesOver(branch, ctx.model, nativeCompactionEnabled())) return;
 		this.current = ready;
 		try {
 			const result = await new Promise<CompactionResult>((resolve, reject) => ctx.compact({ onComplete: resolve, onError: reject }));
@@ -125,10 +128,16 @@ export class IdleCompaction {
 		}
 	}
 
-	/** 宿主的同一条解析规则（按模型覆写、普通设置、内置默认），子会话按路由到的物理模型查。 */
+	/** 宿主的同一条解析规则（按模型覆写、普通设置、内置默认）。 */
 	private settings(ctx: ExtensionContext): Preparation["settings"] {
-		return followRoute(SettingsManager.inMemory(this.pi.getSettings())).getCompactionSettings(ctx.model);
+		return SettingsManager.inMemory(this.pi.getSettings()).getCompactionSettings(ctx.model);
 	}
+}
+
+/** 预算时的末端还在分支上、其后没有压缩与 context_edit（理由见头注释）。 */
+function stillHolds(branch: SessionEntry[], leafId: string | null): boolean {
+	const at = branch.findIndex((entry) => entry.id === leafId);
+	return at >= 0 && branch.slice(at + 1).every((entry) => entry.type !== "compaction" && entry.type !== "context_edit");
 }
 
 function notify(ctx: ExtensionContext, text: string): void {
