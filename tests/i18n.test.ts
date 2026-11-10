@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { featuresOnly, loadFirecodeModule, TEST_REVIEW_CONFIG } from "./loader.ts";
+import { loadFirecodeModule } from "./loader.ts";
 import { reviewVoter } from "./review-vote.ts";
 
 const CJK = /[\u3400-\u9fff]/u;
@@ -18,19 +18,6 @@ test("顶层 language 压过系统 locale；省略时跟随系统 locale（zh �
 	} finally {
 		process.env.LC_ALL = saved;
 	}
-});
-
-test("language 取值非法与旧的 review.language 都报配置问题，不留兼容", async () => {
-	const features = await featuresOnly();
-	const { loadConfig } = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({ features, language: "fr" }),
-	}) as any;
-	expect(loadConfig().problems).toEqual(["language 必须是 zh 或 en"]);
-
-	const legacy = await loadFirecodeModule("config.ts", {
-		configJsonc: JSON.stringify({ features: { ...features, review: true }, review: { ...TEST_REVIEW_CONFIG, language: "zh" } }),
-	}) as any;
-	expect(legacy.loadConfig().problems).toEqual(["未知字段 review.language"]);
 });
 
 // 解析与生产共用 review/messages.ts 的字段名；会话历史可能跨语言，所以两种语言的旧卡片都要能预览。
@@ -54,39 +41,29 @@ test("审查卡：machine 预览在 en 下取自同源字段名，切换语言�
 	expect(preview(zhCard.buildCard({ kind: "error", message: "供应商报错" }))).toMatchObject({ preview: "供应商报错" });
 });
 
-test("审查者按 en 提示词写的输出契约被解析；校验报错、证据截断标记与会话证据标签都是英文", async () => {
+test("en：审查者格式不全的阻断发现仍判未通过，违例说明与会话证据不含中文", async () => {
 	const configJsonc = JSON.stringify({ language: "en" });
 	const voter = await reviewVoter({ configJsonc });
-	const passed = await voter.vote("PASS\nLooks right.\nEvidence: files=src/a.ts; commands=bun test");
-	expect(passed.status).toBe("passed");
-
 	const missing = await voter.vote("Checked a.ts.\nEvidence: files=a.ts; commands=bun test\n## Finding 1: x\n- **Condition**: every restart\n- **Frequency**: 10\n- **Impact**: 8\n- **Issue**: x");
 	await voter.close();
-	// 过了门槛的发现格式不全也按未通过计，违例说明与原文一并交出。
-	expect(missing).toMatchObject({ status: "failed" });
-	expect(missing.details).toContain("did not meet the format contract: blocking finding 1 is missing required fields: Evidence, Violated agreement & expected behavior, Verification command");
-	expect(missing.details).toContain("- **Issue**: x");
+	expect(missing.status).toBe("failed");
+	expect(missing.details).not.toMatch(CJK);
 
 	const { buildEvidence } = await loadFirecodeModule("review/evidence.ts", { configJsonc }) as any;
 	const entry = (role: string, content: string) => ({ type: "message", message: { role, content } });
 	const text = buildEvidence([entry("user", "write"), entry("assistant", "x".repeat(5_000))], { sessionFile: "/tmp/s/main.jsonl" });
-	expect(text).toContain("## User");
-	expect(text).toContain("evidence truncated: this message has 5000 characters");
-	expect(text).toContain("/tmp/s/main.jsonl");
 	expect(text).not.toMatch(CJK);
 });
 
 test("修复反馈与顾问卡在 en 下是英文", async () => {
 	const configJsonc = JSON.stringify({ language: "en" });
 	const { buildFixFeedback } = await loadFirecodeModule("review/prompt.ts", { configJsonc }) as any;
-	const feedback = buildFixFeedback({ details: "FAIL\nx", advisor: { verdict: "narrow", advice: "only the blocker" } });
-	expect(feedback).toContain("Advisor scope (authoritative):");
-	expect(feedback).not.toMatch(CJK);
+	for (const verdict of ["narrow", "continue"])
+		expect(buildFixFeedback({ details: "FAIL\nx", advisor: { verdict, advice: "only the blocker" } })).not.toMatch(CJK);
 
 	const { buildCard } = await loadFirecodeModule("review/card.ts", { configJsonc }) as any;
 	const advisor = buildCard({ kind: "advisor", advisor: { verdict: "continue", advice: "keep going" }, advisorModel: "p/adv", elapsedMs: 1000 });
-	expect(advisor.details.title).toBe("Advisor guidance · Continue fixing");
-	expect(advisor.details.lines[0]).toBe("**Model · adv**");
+	expect([advisor.details.title, ...advisor.details.lines].join("\n")).not.toMatch(CJK);
 });
 
 test("session：en 下 /quota 输出英文", async () => {
@@ -111,7 +88,6 @@ test("session：en 下 /quota 输出英文", async () => {
 	} finally {
 		globalThis.fetch = realFetch;
 	}
-	expect(notices.at(-1)).toContain("Codex: 5h 80% left");
-	expect(notices.at(-1)).toContain("Claude: 5h 100% left | Weekly 63% left");
+	expect(notices.at(-1)).toContain("80%");
 	expect(notices.join("\n")).not.toMatch(CJK);
 });

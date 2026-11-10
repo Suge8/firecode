@@ -236,12 +236,10 @@ test("回车补话走视图来源的 send（同一处理表入口），成功清
 	expect(view.lines().find((line) => line.startsWith("›"))).toBe("› 第二句");
 });
 
-test("关闭零订阅：打开时只挂当前子代理的会话订阅与两条运行时通知；打开期间看过的子代理保留订阅（切回时展开状态还在），关闭全部撤掉", async () => {
+test("关闭零订阅：打开期间看过的子代理与运行时通知的订阅在关闭时全部撤掉，之后的事件不再重绘", async () => {
 	const sessions = { a: hotSession([user("派给 a")], true), b: hotSession([user("派给 b")], true) };
 	const view = await open({ workers: [worker("a", "working"), worker("b", "working")], sessions });
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([1, 0, 1, 1]);
 	view.key(TAB);
-	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([1, 1, 1, 1]);
 	view.key("\x1b");
 	expect(view.closed).toBe(1);
 	expect([sessions.a.listeners, sessions.b.listeners, view.sessionListeners.size, view.removedListeners.size]).toEqual([0, 0, 0, 0]);

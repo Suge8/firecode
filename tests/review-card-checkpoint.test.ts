@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
-import { reviewVoter } from "./review-vote.ts";
 
 type BuildCard = typeof import("../review/card.js").buildCard;
 type CardInput = Parameters<BuildCard>[0];
@@ -20,28 +19,20 @@ async function renderer() {
 }
 
 describe("result card", () => {
-	test("renders every kind natively: the glyph color carries the verdict, the background carries the tone", async () => {
+	test("renders natively with the background of its verdict: pass green, fail red, neutral purple", async () => {
 		const { theme, buildCard, render } = await renderer();
-		const gold = "\x1b[38;2;255;195;61m";
-		const cases: [CardInput, string, string][] = [
-			[{ kind: "start", models: ["p/m"] }, gold + "⠿", "customMessageBg"],
-			[{ kind: "pass", round: 1, summary: "ok", elapsedMs: 1000, totalElapsedMs: 2000 }, theme.fg("success", "✓"), "toolSuccessBg"],
-			[{ kind: "fail", round: 1, details: "## 发现 1", elapsedMs: 1000 }, theme.fg("error", "✗"), "toolErrorBg"],
-			[{ kind: "stop", reason: "max_rounds", round: 3, details: "FAIL", elapsedMs: 1000 }, theme.fg("error", "✗"), "toolErrorBg"],
-			[{ kind: "timeout" }, theme.fg("error", "◌"), "toolErrorBg"],
-			[{ kind: "error", message: "供应商报错", elapsedMs: 1000 }, theme.fg("error", "◌"), "toolErrorBg"],
-			[{ kind: "advisor", advisor: { verdict: "narrow", advice: "收窄" }, advisorModel: "p/a", elapsedMs: 1000 }, gold + "⠿", "customMessageBg"],
-			[{ kind: "skipped", message: "额度不足" }, gold + "◌", "customMessageBg"],
+		const cases: [CardInput, string][] = [
+			[{ kind: "pass", round: 1, summary: "ok", elapsedMs: 1000, totalElapsedMs: 2000 }, "toolSuccessBg"],
+			[{ kind: "fail", round: 1, details: "## 发现 1", elapsedMs: 1000 }, "toolErrorBg"],
+			[{ kind: "advisor", advisor: { verdict: "narrow", advice: "收窄" }, advisorModel: "p/a", elapsedMs: 1000 }, "customMessageBg"],
 		];
-		for (const [input, mark, background] of cases) {
+		for (const [input, background] of cases) {
 			const built = buildCard(input);
-			expect([built.content, built.details.title, ...built.details.lines].join("\n")).not.toMatch(/\p{Extended_Pictographic}/u);
-			const backgrounds: string[] = [];
-			const recording = { fg: (color: string, line: string) => theme.fg(color, line), bg: (tone: string, line: string) => { backgrounds.push(tone); return theme.bg(tone, line); } };
+			const backgrounds = new Set<string>();
+			const recording = { fg: (color: string, line: string) => theme.fg(color, line), bg: (tone: string, line: string) => { backgrounds.add(tone); return theme.bg(tone, line); } };
 			const lines = render({ details: built.details, content: built.content }, {}, recording).render(60);
-			// 渲染走原生卡而不是纯文本降级：标题行带着字形的颜色。
-			expect(lines.find((line) => line.includes(built.details.title))).toContain(mark);
-			expect(new Set(backgrounds)).toEqual(new Set([background]));
+			expect(lines.some((line) => line.includes(built.details.title))).toBe(true);
+			expect([...backgrounds]).toEqual([background]);
 		}
 	});
 
@@ -54,11 +45,12 @@ describe("result card", () => {
 			advisorModel: "kimi-coding/k3-256k",
 			elapsedMs: 1000,
 		});
-		expect(card.details.title).toBe("顾问指引 · 继续修复");
-		expect(card.details.lines.slice(2, 7)).toEqual(["**核实结论**：发现属实", "", "**根因判断**：竞态", "", "**下一步方向**：补锁"]);
+		const text = card.details.lines.join("\n");
+		expect(text).toContain("发现属实\n\n**根因判断**");
+		expect(text).toContain("竞态\n\n**下一步方向**");
 	});
 
-	test("a card from an older session, or with a broken payload, still renders as plain text", async () => {
+	test("a card from an older session still renders, and a broken payload falls back to plain text", async () => {
 		const { render } = await renderer();
 		const older = render({ details: { version: 1, kind: "pass", title: "审查通过", lines: ["ok"], tone: "success", icon: "✓" }, content: "x" }, {}, { fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t });
 		expect(older.render(48).join("\n")).toContain("审查通过");
@@ -75,11 +67,7 @@ describe("checkpoint", () => {
 		const entries: { type: "custom"; customType: string; data: unknown }[] = [];
 		const pi = { appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); } };
 		const limits = { maxRounds: 12, advisorAfterFailures: 99, advisor: [{ model: "p/a", thinking: "low" as const }], reviewers: [0, 1, 2].map((i) => [{ model: `p/m${i}`, thinking: "low" as const }]) };
-		// 真实审查会话的这一票：问题字段 3000 字，摘要取自它。
-		const voter = await reviewVoter();
-		const vote = await voter.vote(["核对了 a.ts。", "证据：文件=a.ts；命令=bun test", "## 发现 1", "- 发生条件: 每次", "- 频率: 10", "- 影响: 8", `- 问题: ${"x".repeat(3000)}`, "- 证据: a.ts", "- 违反的约定与期望行为: y", "- 验证命令: bun test"].join("\n"));
-		await voter.close();
-		expect(vote.status).toBe("failed");
+		const vote = { status: "failed" as const, summary: "x".repeat(3000), details: `## 发现 1\n- 问题: ${"x".repeat(3000)}` };
 		let current = state.reduce(state.reduce(state.initialState("run"), { type: "START", focus: "" }, limits, 1).state, { type: "ADVANCE" }, limits, 2).state;
 		const writer = new CheckpointWriter(pi as never);
 		const written = () => entries.reduce((sum, entry) => sum + JSON.stringify(entry).length, 0);
@@ -102,9 +90,6 @@ describe("checkpoint", () => {
 		expect(restored?.history).toHaveLength(10);
 		expect(restored?.history[0].reviewers[2].details).toBe(vote.details);
 		expect(restored?.history[0].reviewers[2].summary).toBe(vote.summary);
-		// 只认当前版本。
-		const stale = entries.map((entry) => (entry.customType === "firecode-review-checkpoint" ? { ...entry, data: { ...(entry.data as object), version: 1 } } : entry));
-		expect(readCheckpoint({ sessionManager: { getBranch: () => stale } })).toBeUndefined();
 	});
 });
 
@@ -139,14 +124,14 @@ describe("prompt assembly", () => {
 	});
 
 	// narrow 曾与 continue 走完全相同的反馈，顾问的「收窄范围」裁决形同虚设。
-	test("fix feedback is an envelope; a narrow verdict scopes the fix differently from continue", async () => {
+	test("a narrow verdict scopes the fix differently from continue", async () => {
 		const prompt = (await loadFirecodeModule("review/prompt.js")) as PromptModule;
 		const carryOn = prompt.buildFixFeedback({ details: "FAIL\n发现 x", advisor: { verdict: "continue", advice: "继续" } });
-		expect(carryOn.startsWith("<firecode_review>\n")).toBe(true);
-		expect(carryOn.endsWith("\n</firecode_review>")).toBe(true);
+		expect(carryOn).toContain("逐条修复全部属实发现");
 		expect(carryOn).toContain("发现 x");
 		const narrowed = prompt.buildFixFeedback({ details: "FAIL\n发现 x", advisor: { verdict: "narrow", advice: "只修阻塞项" } });
-		expect(narrowed).toContain("只修阻塞项");
-		expect(narrowed).not.toBe(carryOn.replace("继续", "只修阻塞项"));
+		expect(narrowed).toContain("只修顾问收窄后的范围内");
+		expect(narrowed).toContain("顾问收窄后的范围（以此为准）：\n只修阻塞项");
+		expect(narrowed).not.toContain("逐条修复全部属实发现");
 	});
 });

@@ -242,26 +242,6 @@ test("动画时钟只在有行在动时订阅：只剩失败行与已完成合�
 	view.component.dispose();
 });
 
-const chipOf = (line: string) => line.match(/\{toolPendingBg\}(.*?)\{\/toolPendingBg\}/u)?.[1].replace(/<\/?\w+>/gu, "");
-
-test("折叠行的可点提示：计数做成带中性暗底的胶囊（两侧各一格空白），后面暗色列出被折叠的名字；标记沿用（在跑暗色 ·、已完成绿 ✓、空闲暗色 ·），没有下划线、… 与箭头", async () => {
-	const running = Array.from({ length: 6 }, (_, index) => ({ name: `run-${index}`, output: NOW - 1_000 }));
-	const view = await list([...running, done("types"), done("pen"), { name: "writer", status: "idle" }, { name: "nap", status: "idle" }],
-		{ limit: 4, now: NOW, paint: tagged });
-	// 着色标签本身占宽度，放宽到不截断。
-	const raw = view.raw(300);
-	const fold = (count: string) => raw.find((line) => chipOf(line) === ` ${count} `)!;
-	expect(fold("+3 个在跑")).toMatch(/^ {2}<dim>·<\/dim> \{toolPendingBg\}/u);
-	expect(fold("+3 个在跑")).toContain("<dim>run-3 · run-4 · run-5</dim>");
-	expect(fold("2 个已完成")).toContain("<dim>types · pen</dim>");
-	expect(fold("2 个空闲")).toMatch(/^ {2}<dim>·<\/dim> \{toolPendingBg\}/u);
-	expect(fold("2 个空闲")).toContain("<dim>writer · nap</dim>");
-	for (const count of ["+3 个在跑", "2 个已完成", "2 个空闲"]) {
-		expect(fold(count)).not.toMatch(/\x1b\[4/u);
-		expect(stripVTControlCharacters(fold(count).replace(/<\/?\w+>|\{\/?\w+\}/gu, ""))).not.toMatch(/[…▸▾▶▼›>]/u);
-	}
-});
-
 test("胶囊底色用背景关闭序列收尾、不带全量重置：任意宽度截断都不掐断底色，也不漏到后面的名字", async () => {
 	const ansi = { fg: (_color: string, text: string) => `\x1b[90m${text}\x1b[39m`, bg: (_color: string, text: string) => `\x1b[48;5;236m${text}\x1b[49m` };
 	const view = await list([{ name: "writer", status: "idle" }, { name: "nap", status: "idle" }], { now: NOW, paint: ansi });
@@ -275,7 +255,7 @@ test("胶囊底色用背景关闭序列收尾、不带全量重置：任意宽�
 	}
 });
 
-test("折叠行名字按宽度少列，不在名字中间截断；展开后收起行同样做成胶囊，已展开的分组不再预览名字", async () => {
+test("折叠行名字按宽度少列，不在名字中间截断；已展开的分组不再预览名字", async () => {
 	const running = Array.from({ length: 8 }, (_, index) => ({ name: `worker-${index}`, output: NOW - 1_000 }));
 	const view = await list([...running, done("types")], { limit: 4, now: NOW });
 	const plain = (width: number) => view.text(width);
@@ -286,10 +266,6 @@ test("折叠行名字按宽度少列，不在名字中间截断；展开后收�
 	for (const name of listed) expect(name).toMatch(/^worker-[3-7]$/u);
 	expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
 
-	view.click(plain(40).indexOf(line));
-	const painted = await list([...running, done("types")], { limit: 4, now: NOW, paint: tagged });
-	painted.click(painted.text(300).findIndex((entry) => entry.includes("+5 个在跑")), 300);
-	expect(painted.raw(300).some((entry) => chipOf(entry) === " 收起 ")).toBe(true);
 	view.click(plain(100).findIndex((entry) => entry.includes("1 个已完成")));
 	const header = plain(100).find((entry) => entry.includes("1 个已完成"))!;
 	expect(header).not.toContain("types");

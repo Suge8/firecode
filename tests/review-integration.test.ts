@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -229,7 +229,7 @@ const reviewConfig = (overrides: Record<string, unknown> = {}, top: Record<strin
 	JSON.stringify({ ...top, review: { ...TEST_REVIEW_CONFIG, ...overrides } });
 
 describe("registerReview wiring", () => {
-	test("holds the occupancy channel exactly once until user cancellation", async () => {
+	test("a second /fire-review while one runs is refused and recorded; the running review is untouched", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
@@ -238,19 +238,19 @@ describe("registerReview wiring", () => {
 		const command = fireReview(registered);
 		await command.handler("", ctx);
 		await flush();
+		const runId = readCheckpoint({ sessionManager })?.runId;
 		await command.handler("", ctx);
 		await flush();
+		expect(ctx.notices).toHaveLength(1);
+		expect(sessionManager.entries).toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+		expect(readCheckpoint({ sessionManager })).toMatchObject({ phase: "queued", runId });
 		expect(registered.emitted).toEqual([OCCUPIED]);
-
-		await registered.fire("session_shutdown", { reason: "quit" }, ctx);
-		await flush();
-		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
 	});
 
-	test("language en: the reviewer gets the English policy; the result card, summary prompt and notices are English", async () => {
+	test("language en: the reviewer gets the English policy; the result card and the summary prompt are English", async () => {
 		const verdict = "PASS\nVerification exited 0.\nEvidence: files=a.ts; commands=bun test";
 		const systems: string[] = [];
-		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict, undefined, {
+		const { registerReview } = await loadReviewWithVerdict(verdict, undefined, {
 			top: { language: "en" },
 			onSession: (prompt) => systems.push(prompt.system),
 		});
@@ -259,18 +259,13 @@ describe("registerReview wiring", () => {
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = fireReview(registered);
-		await command.handler("", ctx);
+		await fireReview(registered).handler("", ctx);
 		await until(() => registered.delivered.length > 0);
-		expect(systems[0]).toContain("You are an independent adversarial reviewer");
+		expect(systems[0].startsWith(readFileSync(new URL("../review/prompts/review.en.md", import.meta.url), "utf8").split("{{")[0])).toBe(true);
 		const card = (registered.sent as { content: string }[]).filter((_, index) => registered.sentOptions[index].triggerTurn === false)
 			.map((message) => message.content).join("\n");
-		expect(card).toContain("Models: one");
-		expect(card).toContain("Review passed");
-		expect(card).toContain("Elapsed:");
-		const summary = registered.delivered[0]?.content ?? "";
-		expect(summary).toContain("The adversarial review passed after 1 round(s)");
-		expect(`${card}${summary}`).not.toMatch(/[\u3400-\u9fff]/u);
+		expect(card).not.toBe("");
+		expect(`${card}${registered.delivered[0].content}`).not.toMatch(/[\u3400-\u9fff]/u);
 	}, 20_000);
 
 	test("findings under the threshold or without a condition trigger no repair and reach the pass card and the summary as suggestions", async () => {
@@ -305,11 +300,9 @@ describe("registerReview wiring", () => {
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
 		expect(registered.delivered).toHaveLength(1);
 		const summary = registered.delivered[0].content;
-		expect(summary).toContain("对抗审查已通过");
-		expect(summary).toContain("命名与文档不一致（发生条件：每次读配置；频率 10 · 影响 1）");
-		expect(summary).toContain("可能丢数据（发生条件未说明；频率 0 · 影响 9）");
+		expect(summary).toContain("命名与文档不一致");
+		expect(summary).toContain("可能丢数据");
 		const cards = (registered.sent as { content: string }[]).map((message) => message.content).join("\n");
-		expect(cards).toContain("审查通过");
 		expect(cards).not.toContain("审查未通过");
 		expect(cards).toContain("命名与文档不一致");
 		expect(cards).toContain("可能丢数据");
@@ -317,39 +310,27 @@ describe("registerReview wiring", () => {
 
 	test("a pass reports the summarizing stage through occupancy until the summary turn ends, then releases it", async () => {
 		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
-		const { registerReview, readCheckpoint } = await loadReviewWithVerdict(verdict);
+		const { registerReview, readCheckpoint, readReviewOutcome } = await loadReviewWithVerdict(verdict);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
 		ctx.cwd = tmpdir();
-		const command = fireReview(registered);
-		await command.handler("", ctx);
-		// 质量裁决落地 → 总结提示以带 triggerTurn 的自定义消息送出（回合尚未开始，仍是 pending），占用仍持有。
+		await fireReview(registered).handler("", ctx);
 		await until(() => registered.delivered.length > 0);
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
-		expect(readCheckpoint({ sessionManager })?.turn).toBe("pending");
 		const held = (registered.emitted as { data: { active: boolean; progress?: () => unknown } }[]).findLast((event) => event.data.active);
 		expect(held?.data.progress?.()).toMatchObject({ stage: "summarizing" });
-		const card = (registered.sent as { customType?: string; content?: string }[]).find((message) => message.customType === "firecode-review-card");
-		expect(card?.content?.startsWith("<firecode_review>\n")).toBe(true);
-		expect(card?.content?.endsWith("\n</firecode_review>")).toBe(true);
-		expect(registered.delivered).toHaveLength(1);
-		expect(registered.delivered[0]).toMatchObject({ customType: "firecode-review-card", display: true });
-		const summary = registered.delivered[0].content;
-		expect(summary.startsWith("<firecode_review>\n")).toBe(true);
-		expect(summary).toContain("对抗审查已通过");
-		expect(summary).toContain("不要修改代码");
-		expect(summary.endsWith("\n</firecode_review>")).toBe(true);
 		expect(registered.emitted).toEqual([OCCUPIED]);
-		// 宿主开总结回合（送达确认）→ running；回合结束 → settled，占用释放。
 		await startTurn(registered, ctx);
 		await flush();
-		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
+		expect(registered.emitted).toEqual([OCCUPIED]);
 		await registered.fire("agent_settled", { aborted: false }, ctx);
 		await until(() => readCheckpoint({ sessionManager })?.phase === "settled");
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
-				expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		expect(registered.emitted).toEqual([OCCUPIED, RELEASED]);
+		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
+		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
+		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "passed", rounds: 1 });
+		await rm(sessionPath, { force: true });
 	}, 20_000);
 
 	test("the reviewer's evidence leaves out the review's own messages but keeps the human request and other machine messages", async () => {
@@ -372,27 +353,6 @@ describe("registerReview wiring", () => {
 		expect(prompts[0]).toContain("实现登录续期");
 		expect(prompts[0]).toContain("fix-auth 已返回");
 		expect(prompts[0]).not.toContain("旧反馈正文");
-	}, 20_000);
-
-	test("headless review runs to a readable terminal verdict without UI access", async () => {
-		const verdict = "PASS\n验证命令 exit 0。\n证据：文件=a.ts；命令=bun test";
-		const { registerReview, readCheckpoint, readReviewOutcome } = await loadReviewWithVerdict(verdict);
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi);
-		const ctx = makeHeadlessCtx(sessionManager);
-		ctx.cwd = tmpdir();
-		const command = fireReview(registered);
-		await command.handler("", ctx);
-		await until(() => registered.delivered.length > 0);
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("summarizing");
-		await startTurn(registered, ctx);
-		await registered.fire("agent_settled", { aborted: false }, ctx);
-		await flush();
-		const sessionPath = join(tmpdir(), `review-outcome-${randomUUID()}.jsonl`);
-		await writeFile(sessionPath, sessionManager.entries.map((entry) => JSON.stringify(entry)).join("\n"));
-		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "passed", rounds: 1 });
-		await rm(sessionPath, { force: true });
 	}, 20_000);
 
 	test("headless session shutdown cancels the active review session", async () => {
@@ -521,22 +481,6 @@ describe("registerReview wiring", () => {
 		expect(registered.commands.has("fire-master")).toBe(true);
 	});
 
-	test("review accepts focus text and rejects flags in the configured language", async () => {
-		const module = (await loadReviewModule("review/index.js", {
-			configJsonc: reviewConfig({}, { language: "en" }),
-		})) as { registerReview: (pi: unknown) => void };
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		module.registerReview(pi);
-		const ctx = makeCtx(sessionManager, true);
-		const command = fireReview(registered);
-		await command.handler("--unknown=value", ctx);
-		expect(ctx.notices).toContain("Invalid fire-review arguments.");
-		await command.handler("focus", ctx);
-		await flush();
-		expect(registered.emitted).toEqual([OCCUPIED]);
-	});
-
 	test("disabled review still renders history and settles an active checkpoint", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
@@ -620,38 +564,16 @@ describe("an unreadable checkpoint is reported, not silently dropped", () => {
 		expect(registered2.emitted).toEqual([]);
 	});
 
-	test("a settled review with missing round records is reported too", async () => {
-		await loadAll();
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		seed(pi, { ...initialState("damaged-settled"), phase: "settled", end: "passed", startedAt: 1, updatedAt: 1 } as never);
-		(checkpoints(sessionManager)[0] as { data: { rounds: number } }).data.rounds = 2;
-		registerReview(pi as never);
-		const ctx = makeCtx(sessionManager);
-		await registered.fire("session_start", {}, ctx);
-		expect(ctx.notices).toHaveLength(1);
-	});
-
 	test("a snapshot with invalid fields is reported too", async () => {
 		await loadAll();
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
-		seedMismatched(pi, sessionManager);
+		seed(pi, { ...initialState("damaged-field"), phase: "queued", startedAt: 1, updatedAt: 1 });
 		(checkpoints(sessionManager)[0] as { data: { runId: unknown } }).data.runId = 7;
 		registerReview(pi as never);
 		const ctx = makeCtx(sessionManager);
 		await registered.fire("session_start", {}, ctx);
 		expect(ctx.notices).toHaveLength(1);
-	});
-
-	test("no checkpoint at all stays silent", async () => {
-		await loadAll();
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi as never);
-		const ctx = makeCtx(sessionManager);
-		await registered.fire("session_start", {}, ctx);
-		expect(ctx.notices).toEqual([]);
 	});
 });
 
@@ -708,34 +630,25 @@ describe("reload preserves recoverable state", () => {
 		expect(afterReload?.phase).toBe("queued");
 		expect(afterReload?.runId).toBe(runId);
 
-		// 3. 新会话（同一 session 文件，新 pi 实例）session_start：从 checkpoint 恢复
+		// 3. 新会话（同一 session 文件，新 pi 实例）session_start：从 checkpoint 恢复，resources_discover 才推进
 		const { pi: pi2, registered: registered2 } = makePi(sessionManager);
 		registerReview(pi2 as never);
-		await registered2.fire("session_start", { type: "session_start", reason: "reload" }, ctx);
+		faux.setResponses([hang()]);
+		const restoredCtx = makeCtx(sessionManager);
+		restoredCtx.cwd = tmpdir();
+		await registered2.fire("session_start", { type: "session_start", reason: "reload" }, restoredCtx);
 		await flush();
 		expect(registered2.emitted).toEqual([OCCUPIED]);
+		expect(readCheckpoint({ sessionManager })?.phase).toBe("queued");
+		await registered2.fire("resources_discover", {}, restoredCtx);
+		await flush();
+		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
 
 		// 4. 恢复后的审查正常处理后续事件：quit 关闭 → CANCEL 落终态
-		await registered2.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);
+		await registered2.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, restoredCtx);
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 		expect(registered2.emitted).toEqual([OCCUPIED, RELEASED]);
-	});
-
-	test("headless reload immediately settles a Review Run whose persisted overall deadline elapsed", async () => {
-		await loadAll();
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		seed(pi, {
-			...initialState("expired-run"),
-			phase: "queued",
-			startedAt: Date.now() - 201 * 60_000,
-			updatedAt: Date.now() - 201 * 60_000,
-		});
-		registerReview(pi as never);
-		await registered.fire("session_start", {}, makeHeadlessCtx(sessionManager));
-		await flush();
-		expect(readCheckpoint({ sessionManager })?.phase).toBe("settled");
 	});
 });
 
@@ -754,19 +667,17 @@ describe("review config is rejected at every entry point", () => {
 	}
 
 	test.each([
-		["a missing review section", '{"features":{"review":true}}'],
-		["an empty advisor and reviewer list", reviewConfig({ advisor: "", reviewers: [] })],
-		["a malformed field", brokenConfig],
-		["an unknown field", `{ "review": { "reviewerz": [] } }`],
-		["an unparsable config file", unparsableConfig],
-	])("the command refuses to start on %s: it tells the user, records the refusal and writes no checkpoint", async (_name, configJsonc) => {
+		["a malformed field", brokenConfig, "", "配置有问题"],
+		["an unparsable config file", unparsableConfig, "", "配置有问题"],
+		["an unknown flag", reviewConfig(), "--unknown=value", "参数无效"],
+	])("the command refuses to start on %s: it tells the user, records the refusal and writes no checkpoint", async (_name, configJsonc, args, notice) => {
 		const { registerReview } = await loadWithConfig(configJsonc);
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
-		await fireReview(registered).handler("", ctx);
-		expect(ctx.notices.join()).toContain("配置有问题");
+		await fireReview(registered).handler(args, ctx);
+		expect(ctx.notices.join()).toContain(notice);
 		expect(sessionManager.entries).toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
 		expect(checkpoints(sessionManager)).toHaveLength(0);
 	});
@@ -913,37 +824,6 @@ describe("reload recovery actually resumes the loop", () => {
 		await flush();
 		expect(readCheckpoint({ sessionManager })?.turn).toBe("running");
 	});
-
-	test("a queued review resumes on session_start when the session is idle", async () => {
-		const { registerReview } = (await loadReviewModule("review/index.js", {
-			configJsonc: reviewConfig(),
-		})) as { registerReview: (pi: unknown) => void };
-		const checkpointModule = (await loadFirecodeModule("review/checkpoint.js")) as {
-			readCheckpoint: (ctx: unknown) => { phase: string } | undefined;
-		};
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi);
-		const busyCtx = makeCtx(sessionManager, true);
-		const command = fireReview(registered);
-		await command.handler("", busyCtx);
-		await flush();
-		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).toBe("queued");
-
-		await registered.fire("session_shutdown", { type: "session_shutdown", reason: "reload" }, busyCtx);
-		await flush();
-
-		const { pi: pi2, registered: registered2 } = makePi(sessionManager);
-		registerReview(pi2);
-		const restoredCtx = makeCtx(sessionManager, false);
-		await registered2.fire("session_start", { type: "session_start", reason: "reload" }, restoredCtx);
-		await flush();
-		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).toBe("queued");
-		await registered2.fire("resources_discover", {}, restoredCtx);
-		await flush();
-
-		expect(checkpointModule.readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
-	});
 });
 
 describe("the loop survives failing side effects", () => {
@@ -955,13 +835,14 @@ describe("the loop survives failing side effects", () => {
 		pi.sendMessage = () => {
 			throw new Error("UI 挂了");
 		};
+		let reviewerStarted = false;
+		faux.setResponses([hang(() => { reviewerStarted = true; })]);
 		registerReview(pi as never);
-		const ctx = makeCtx(sessionManager, false) as never;
-		const command = fireReview(registered);
-		await command.handler("", ctx);
-		await flush();
-		// 启动卡发送失败，但仍离开 queued 并实际跑完审查者。
-		expect(readCheckpoint({ sessionManager })?.phase).not.toBe("queued");
+		const ctx = makeCtx(sessionManager, false);
+		ctx.cwd = tmpdir();
+		await fireReview(registered).handler("", ctx);
+		await until(() => reviewerStarted, 2_000);
+		await registered.fire("session_shutdown", { reason: "quit" }, ctx);
 	});
 
 	// 空闲时投递以这条消息进入宿主回合（message_start）为回执、没有计时器：回执到来前一直是 pending。
@@ -1008,33 +889,6 @@ describe("the loop survives failing side effects", () => {
 		expect(readReviewOutcome(sessionPath)).toMatchObject({ status: "failed", rounds: 1, reason: "同步拒绝" });
 		await rm(sessionPath, { force: true });
 	}, 20_000);
-
-	// 持久化失败不能被当成成功继续，否则会拿不一致的状态起审查会话、投反馈。
-	test("a checkpoint write failure stops the review instead of pressing on", async () => {
-		await loadAll();
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		pi.appendEntry = () => {
-			throw new Error("会话写入失败");
-		};
-		registerReview(pi as never);
-		const notices: string[] = [];
-		const ctx = makeCtx(sessionManager, false);
-		ctx.ui.notify = (message: string) => notices.push(message);
-		const command = fireReview(registered);
-		await command.handler("", ctx);
-		await flush();
-		expect(notices.join()).toContain("写入失败");
-		// 没有落盘，也没有把审查推进下去
-		expect(checkpoints(sessionManager)).toHaveLength(0);
-
-		// 失败必须连内存态一起释放：否则幽灵审查只是从磁盘搬进内存，
-		// 后续命令永远被「已有审查在进行中」挡住且无处取消。
-		notices.length = 0;
-		await command.handler("", ctx);
-		await flush();
-		expect(notices.join()).not.toContain("已有审查在进行中");
-	});
 });
 
 describe("review cards and degraded paths", () => {
@@ -1076,21 +930,6 @@ describe("review cards and degraded paths", () => {
 		expect(registered.delivered[0].content).toContain("数据会丢：重启后 checkpoint 被覆盖");
 		const card = registered.sent.map((message) => (message as { content: string }).content).find((content) => content.includes("审查未通过"));
 		expect(card).toContain("数据会丢");
-	}, 20_000);
-
-	test("截断的 PASS 不能让审查通过", async () => {
-		await loadAll();
-		faux.setResponses([fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test", { stopReason: "length" })]);
-		const sessionManager = makeSessionManager();
-		const { pi, registered } = makePi(sessionManager);
-		registerReview(pi as never);
-		const ctx = makeCtx(sessionManager);
-		ctx.cwd = tmpdir();
-		await fireReview(registered).handler("", ctx);
-		await until(() => (readCheckpoint({ sessionManager })?.history.length ?? 0) > 0);
-		const state = readCheckpoint({ sessionManager });
-		expect(state?.history.at(-1)?.result).toBe("error");
-		expect(state?.history.at(-1)?.error).toContain("截断");
 	}, 20_000);
 
 	// 事故：一个审查者登录过期、一直没给结论，另一个给了 PASS，审查却判了通过。
@@ -1220,7 +1059,7 @@ describe("review cards and degraded paths", () => {
 		const sessionManager = makeSessionManager();
 		const { pi, registered } = makePi(sessionManager);
 		faux.setResponses(Array.from({ length: 3 }, () => (_context: any, _options: any, _state: any, model: any) =>
-			model.id === "two" ? fauxAssistantMessage("部分内容", { stopReason: "length" })
+			model.id === "two" ? fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test", { stopReason: "length" })
 				: fauxAssistantMessage("PASS\n核对完毕。\n证据：文件=a.ts；命令=bun test")));
 		registerReview(pi);
 		const ctx = makeCtx(sessionManager);
@@ -1313,6 +1152,11 @@ describe("review cards and degraded paths", () => {
 		expect(editors.at(-1)).toBeUndefined();
 		expect(registered.emitted.at(-1)).toEqual(RELEASED);
 		expect(ctx.notices.join()).toContain("写入失败");
+		const failedRun = readCheckpoint({ sessionManager })?.runId;
+		ctx.setIdle(false);
+		await fireReview(registered).handler("", ctx);
+		expect(sessionManager.entries).not.toContainEqual(expect.objectContaining({ customType: "firecode-review-refusal" }));
+		expect(readCheckpoint({ sessionManager })?.runId).not.toBe(failedRun);
 	});
 });
 

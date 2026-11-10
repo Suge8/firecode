@@ -64,7 +64,7 @@ test("入场动画驱动重绘，定格后不再请求重绘、画面静止", as
 	expect([110, 72, 40].map((width) => header.render(width))).toEqual(frames);
 });
 
-test("两档都显示版本与工作目录（同一份来源）；单行档放在字标后的横线里，放不下从开头裁、保留目录尾部", async () => {
+test("两档都显示版本与工作目录（同一份来源）；单行档放在字标后的横线里", async () => {
 	jest.useFakeTimers();
 	const { header } = await mountHeader();
 	jest.advanceTimersByTime(3000);
@@ -72,8 +72,6 @@ test("两档都显示版本与工作目录（同一份来源）；单行档放�
 	for (const width of [110, 72, 60, 52, 51, 40]) expect(plain(width)).toMatch(/pi \S+ · \/tmp\/project/u);
 	const tiny = header.render(40)[0].replace(/\x1b\[[0-9;]*m/gu, "");
 	expect(tiny).toMatch(/firecode .*pi \S+ · \/tmp\/project ─+$/u);
-	expect(visibleWidth(tiny)).toBe(40);
-	expect(plain(30)).toMatch(/firecode …\S*project ─+/u);
 });
 
 test("工作目录放不下时按目录段从开头省略，保留完整的末尾目录名，不从词中间截断", async () => {

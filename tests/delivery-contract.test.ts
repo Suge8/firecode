@@ -344,27 +344,12 @@ async function expectDeliveredOnce(session: any, requests: string[][]) {
 
 const idle = (text: string) => fauxAssistantMessage(text);
 
-test("指挥官在跑工具时有投递到达，随即清队列并中止（Esc）：事件自动开回合送达，恰好一次", async () => {
-	const { session, requests, gate } = await stalledSession(gatedExtension(true), [toolCallResponse, idle("a"), idle("b"), idle("c")]);
-	try {
-		await session.bindExtensions({ mode: "print" });
-		const run = session.prompt("go");
-		await until(() => (globalThis as any).__sent);
-		session.clearQueue();
-		const aborting = session.abort();
-		gate.resolve();
-		await aborting;
-		await run.catch(() => {});
-		await expectDeliveredOnce(session, requests);
-	} finally {
-		delete (globalThis as any).__deliverNow;
-		delete (globalThis as any).__sent;
-		session.dispose();
-	}
-}, 10_000);
-
-test.each(["工具执行中", "模型流式输出中"])("回合被中止而队列没清（%s）：不等用户输入自动唤醒，恰好一次", async (phase) => {
-	const streaming = phase === "模型流式输出中";
+test.each([
+	["工具执行中，用户清队列后中止（Esc）", "tool", true],
+	["工具执行中，队列没清", "tool", false],
+	["模型流式输出中，队列没清", "stream", false],
+] as const)("投递在途时回合被中止（%s）：不等用户输入自动唤醒，恰好一次", async (_case, phase, clear) => {
+	const streaming = phase === "stream";
 	const stream = Promise.withResolvers<void>();
 	const { session, requests, gate } = await stalledSession(gatedExtension(!streaming), [
 		toolCallResponse,
@@ -381,6 +366,7 @@ test.each(["工具执行中", "模型流式输出中"])("回合被中止而队�
 		} else {
 			await until(() => (globalThis as any).__sent);
 		}
+		if (clear) session.clearQueue();
 		const aborting = session.abort();
 		gate.resolve();
 		stream.resolve();

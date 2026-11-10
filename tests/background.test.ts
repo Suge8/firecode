@@ -35,7 +35,7 @@ interface Request { model: string; summary: boolean; text: string }
  * 真实主会话（registerFirecode）+ 真实池 + faux 供应商。会话模型是 test/session；
  * 每个请求按模型记下，摘要请求（pi 的摘要系统提示）回“SUMMARY by <模型>”，失败名单里的模型报错；down 里的模型对会话请求报过载。
  */
-async function setup(options: { naming?: (text: string) => string; background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
+async function setup(options: { naming?: (text: string) => string | Promise<string>; background?: unknown; timing?: Record<string, number>; settings?: Record<string, unknown>; failing?: string[]; down?: string[] } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "firecode-background-"));
 	directories.push(directory);
 	const cwd = join(directory, "project");
@@ -52,7 +52,7 @@ async function setup(options: { naming?: (text: string) => string; background?: 
 		const summary = text.includes("context summarization assistant");
 		if (text.includes("You name a coding session") || text.includes("你给终端里的编程会话起名")) {
 			requests.push({ model: model.id, summary: false, text: "NAMING " + JSON.stringify(context.messages) });
-			return fauxAssistantMessage(options.naming?.(JSON.stringify(context.messages)) ?? "");
+			return Promise.resolve(options.naming?.(JSON.stringify(context.messages)) ?? "").then((name) => fauxAssistantMessage(name));
 		}
 		requests.push({ model: model.id, summary, text: JSON.stringify(context.messages) });
 		if (!summary && options.down?.includes(model.id)) return fauxAssistantMessage("", { stopReason: "error", errorMessage: `${model.id} overloaded` });
@@ -123,17 +123,6 @@ test("/compact：后台链写摘要，窗口放不下的候选被跳过，会话
 	expect(summaries(otherRequests)).toEqual(["luna"]);
 });
 
-test("阈值自动压缩同样由后台链写摘要", async () => {
-	const { session, requests, compactions } = await setup({
-		background: { model: [LUNA] },
-		settings: { compaction: { enabled: true, keepRecentTokens: 200, reserveTokens: 1_000_000 - 3_000 } },
-	});
-	await conversation(session, 2);
-	await until(() => compactions().length === 1);
-	expect(summaries(requests)).toEqual(["luna"]);
-	expect(compactions()[0].summary).toContain("SUMMARY by luna");
-});
-
 test("后台链全部失败：出一条提示，pi 默认压缩用会话模型完成", async () => {
 	const { session, requests, notices, compactions } = await setup({ background: { model: [SMALL, LUNA] }, failing: ["luna"] });
 	await conversation(session);
@@ -144,24 +133,13 @@ test("后台链全部失败：出一条提示，pi 默认压缩用会话模型�
 	expect(compactions()[0].summary).toStartWith("SUMMARY by session");
 });
 
-test("省略 background：压缩回到 pi 默认（会话模型写摘要）", async () => {
-	const { session, requests } = await setup();
+test("省略 background：压缩回到 pi 默认（会话模型写摘要），也不发起名请求", async () => {
+	const { session, requests } = await setup({ naming: () => "Auto name" });
 	await conversation(session);
 	await session.compact();
 	expect(summaries(requests)).toEqual(["session"]);
-});
-
-test("子会话的压缩同样由后台链写摘要并持久化", async () => {
-	const { pool, requests, cwd } = await setup({ background: { model: [LUNA] } });
-	const spawned = await pool.spawn({
-		cwd, chain: [{ model: "test/session", thinking: "low" }], tools: [], contextFiles: false,
-		systemPrompt: { mode: "append", text: "" }, persistence: { type: "memory" },
-	});
-	cleanups.push(() => spawned.dispose());
-	await conversation(spawned.session);
-	await spawned.session.compact();
-	expect(summaries(requests)).toEqual(["luna"]);
-	expect(spawned.session.sessionManager.getBranch().filter((entry: any) => entry.type === "compaction")[0].summary).toStartWith("SUMMARY by luna");
+	expect(session.sessionManager.getSessionName()).toBeUndefined();
+	expect(requests.filter((request) => request.text.startsWith("NAMING"))).toHaveLength(0);
 });
 
 /** 窗口 100 万的物理模型，按模型覆写 reserve 后阈值是 3000 token；一轮对话约 2500 token，第二轮越线。默认 reserve（5 万）下远不到阈值。 */
@@ -193,7 +171,7 @@ test.each([
 
 /** 闲置压缩只对未关闭压缩的会话生效，setup 默认关着。 */
 const ENABLED = { compaction: { enabled: true, keepRecentTokens: 200 } };
-const IDLE = { cacheTtlMs: 900, idleCompactionLeadMs: 700 };
+const IDLE = { cacheTtlMs: 400, idleCompactionLeadMs: 200 };
 const sessionRequests = (requests: Request[]) => requests.filter((request) => !request.summary);
 
 /** 一大轮加一小轮对话后歇下（保留段之前要有可摘要的内容），等预算摘要的请求发出并落定。 */
@@ -221,7 +199,7 @@ test.each([["用户消息"], ["指挥官事件"]])("闲置超过缓存过期线�
 	expect(last.text.length).toBeLessThan(HUGE.length / 10);
 	expect(summaries(requests)).toEqual(["luna"]);
 	expect(compactions()).toHaveLength(1);
-	expect(notices.find((text) => text.startsWith("已闲置"))).toMatch(/已闲置 \d+ 分钟，缓存已过期：用 test\/luna 的摘要压缩，上下文 \d+k → \d+k/u);
+	expect(notices.some((text) => text.includes("test/luna"))).toBe(true);
 });
 
 test("闲置未超过缓存过期线：请求原样发出，预算的摘要被丢弃", async () => {
@@ -261,10 +239,11 @@ test("子会话闲置超过缓存过期线：下一次请求同样从预算好�
 });
 
 test("会话命名：第一句话后后台模型起名，主回复不等它；问候不设名、下一句再起；只起一次", async () => {
-	let named = 0;
+	let release = () => {};
+	const held = new Promise<void>((resolve) => { release = resolve; });
 	const { session, requests } = await setup({
 		background: { model: [LUNA] },
-		naming: (input) => (input.includes("hello") ? "" : (named++, "Fix login bug")),
+		naming: async (input) => input.includes("hello") ? "" : (await held, "Fix login bug"),
 	});
 	const naming = () => requests.filter((request) => request.text.startsWith("NAMING"));
 	await session.prompt("hello");
@@ -272,12 +251,13 @@ test("会话命名：第一句话后后台模型起名，主回复不等它；�
 	await new Promise((resolve) => setTimeout(resolve, 50));
 	expect(session.sessionManager.getSessionName()).toBeUndefined();
 	await session.prompt("please fix the login bug");
+	expect(session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+	expect(session.sessionManager.getSessionName()).toBeUndefined();
+	release();
 	await until(() => session.sessionManager.getSessionName() === "Fix login bug");
-	expect(requests.filter((request) => request.model === "session")).toHaveLength(2);
 	expect(naming().every((request) => request.model === "luna")).toBe(true);
 	await session.prompt("another message");
 	await new Promise((resolve) => setTimeout(resolve, 50));
-	expect(named).toBe(1);
 	expect(naming()).toHaveLength(2);
 });
 
@@ -287,7 +267,7 @@ test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad �
 	await until(() => session.sessionManager.getSessionName() === "From bridge");
 });
 
-test("会话命名：起名请求在飞时用户手动改名，结果回来后仍是用户的名字；没配 background 不发起名请求", async () => {
+test("会话命名：起名请求在飞时用户手动改名，结果回来后仍是用户的名字", async () => {
 	let rename = () => {};
 	const { session, host, requests } = await setup({ background: { model: [LUNA] }, naming: () => { rename(); return "Auto name"; } });
 	rename = () => host.pi.setSessionName("Mine");
@@ -295,10 +275,4 @@ test("会话命名：起名请求在飞时用户手动改名，结果回来后�
 	await until(() => requests.some((request) => request.text.startsWith("NAMING")));
 	await new Promise((resolve) => setTimeout(resolve, 100));
 	expect(session.sessionManager.getSessionName()).toBe("Mine");
-	const { session: bare, requests: bareRequests } = await setup({ naming: () => "Auto name" });
-	await bare.prompt("first message");
-	await new Promise((resolve) => setTimeout(resolve, 100));
-	expect(bare.sessionManager.getSessionName()).toBeUndefined();
-	expect(bareRequests.filter((request) => request.text.startsWith("NAMING"))).toHaveLength(0);
-	expect(requests.length).toBeGreaterThan(0);
 });

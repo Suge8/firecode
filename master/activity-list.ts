@@ -171,7 +171,7 @@ export class ActivityList {
 		private readonly theme: Theme,
 		private readonly facts: () => ActivityFacts,
 		private readonly limit: () => number,
-		private readonly open: (name: string) => void = () => {},
+		private readonly open: (name: string) => void,
 	) {}
 
 	/** 事实变化后调用：对齐时钟订阅并重绘一次。 */

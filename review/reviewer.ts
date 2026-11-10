@@ -72,7 +72,7 @@ async function chainAfter(pool: InProcessSessionPool, chain: RunReviewerOptions[
  */
 export const BLOCKING = { score: 20, impact: 8 } as const;
 
-export function blocks(frequency: number, impact: number): boolean {
+function blocks(frequency: number, impact: number): boolean {
 	return frequency * impact >= BLOCKING.score || (frequency >= 1 && impact >= BLOCKING.impact);
 }
 
@@ -117,10 +117,6 @@ function processFailure(result: Exclude<ReviewSessionResult, { kind: "output" }>
 /** 输出契约违例：该票作废记为缺席。 */
 function contractViolation(issue: string): ParseOutcome {
 	return { status: "error", summary: "", details: msg.reviewer.formatInvalid(issue) };
-}
-
-function tail(text: string) {
-	return text.length > 500 ? `${text.slice(0, 500)}…` : text;
 }
 
 // ---- 契约解析（纯函数）----

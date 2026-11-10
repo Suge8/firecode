@@ -66,10 +66,9 @@ function labelOf(view: BusyView): string | undefined {
 	return !view.agentRunning && view.inFlight > 0 ? msg.herdr.workers : undefined;
 }
 
-/** 返回 settled：等当前发送循环排空，只供测试。 */
-export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
+export function registerHerdrProjection(pi: ExtensionAPI): void {
 	const env = herdrPaneEnv();
-	if (!env) return () => Promise.resolve();
+	if (!env) return;
 	const paneId = env.paneId;
 
 	let enabled = false;
@@ -163,11 +162,6 @@ export function registerHerdrProjection(pi: ExtensionAPI): () => Promise<void> {
 		}
 		if (!enabled) return;
 		update({ title: "", agent: "", label: undefined, released: true });
-		return settled();
+		return (async () => { while (running) await running; })();
 	});
-
-	const settled = async () => {
-		while (running) await running;
-	};
-	return settled;
 }
