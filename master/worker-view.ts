@@ -33,7 +33,7 @@ const CHROME_ROWS = 3;
  * 中断当前子代理的键。宿主默认键位里没有 ctrl+shift 组合（单个 ctrl+字母已被占满，根 AGENTS.md「快捷键冲突」），
  * 浮层里宿主的全局键本就不生效，这里仍避开它们，免得用户在视图内外的肌肉记忆互相踩。
  */
-export const INTERRUPT_KEY = "ctrl+shift+x";
+const INTERRUPT_KEY = "ctrl+shift+x";
 /** 名字被迫截短时至少留的宽度；再窄就不写名字。 */
 const MIN_NAME = 6;
 /** 下横线右侧：按显示顺序；宽度不够时 drop 小的先让，“esc 返回”永远保留。text 缺省的一项是模型原子的位置。 */

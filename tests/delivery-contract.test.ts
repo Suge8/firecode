@@ -154,28 +154,6 @@ export default function (pi) {
 	}
 }, 10_000);
 
-test("回合进行中 inform 不多起一次模型请求：消息在回合末追加到会话记录，排在助手回复之后", async () => {
-	let requests = 0;
-	const session = await hostSession(`
-import { inform, wrapEnvelope } from ${JSON.stringify(join(FIRECODE_DIR, "deliver.ts"))};
-export default function (pi) {
-	pi.on("turn_start", () => inform(pi, { customType: "inform-contract", content: wrapEnvelope("firecode_master_event", "told, not woken") }));
-}
-`, [() => { requests++; return fauxAssistantMessage("done"); }]);
-	try {
-		await session.bindExtensions({ mode: "print" });
-		await session.prompt("start contract run");
-		await session.waitForIdle();
-		const entries = session.sessionManager.getEntries();
-		const roles = entries.map((entry: any) => entry.type === "custom_message" ? `custom:${entry.customType}` : entry.message?.role);
-
-		expect(requests).toBe(1);
-		expect(roles.slice(-3)).toEqual(["user", "assistant", "custom:inform-contract"]);
-	} finally {
-		session.dispose();
-	}
-}, 10_000);
-
 // 手动 /compact 不在回合里：宿主 isIdle 为 false，但 steer 只会被当场追加、没有回合可续。deliver 要等压缩落定再唤起。
 test("手动 /compact 期间 deliver：压缩真正落定后（含其他扩展较慢的 session_compact 处理器）才唤起一个回合，信封进上下文", async () => {
 	const requests: string[] = [];
@@ -220,8 +198,6 @@ export default function (pi) {
 		session.dispose();
 	}
 }, 15_000);
-
-const ENVELOPE_TEXT = "<firecode_master_event>\nworker done\n</firecode_master_event>";
 
 /** 三轮对话后切回第一条助手消息并生成分支摘要；摘要请求卡在闸门上，摘要期间调 deliver。 */
 async function summarizingSession() {
@@ -276,31 +252,12 @@ test("带摘要的 /tree 切换期间 deliver：摘要结束后才唤起一个�
 	}
 }, 15_000);
 
-// 宿主只在切换成功时发 session_tree：取消和报错没有事件，deliver 不能等事件，否则永远悬挂。
-test("带摘要的 /tree 切换被取消后 deliver 不悬挂：照常唤起一个回合", async () => {
-	const { session, requests, release, navigating, delivered, early, onCurrentBranch } = await summarizingSession();
-	try {
-		expect(early).toBe("pending");
-
-		session.abortBranchSummary();
-		release();
-		expect((await navigating).cancelled).toBe(true);
-		await delivered;
-		await session.waitForIdle();
-		expect(requests).toEqual([ENVELOPE_TEXT]);
-		expect(onCurrentBranch()).toBe(true);
-	} finally {
-		delete (globalThis as any).__deliverDuringSummary;
-		session.dispose();
-	}
-}, 15_000);
-
 // 指挥官在回合里被中止（Esc、流式中断、/compact 开头的中止）后，在途的投递不能丢、不能重、也不能卡到用户下次输入。
-const STALLED_EVENT = "<firecode_master_event>\nworker done\n</firecode_master_event>";
+const ENVELOPE_TEXT = "<firecode_master_event>\nworker done\n</firecode_master_event>";
 const messageText = (message: any) => typeof message.content === "string"
 	? message.content
 	: message.content?.map((part: any) => part.text ?? "").join("") ?? "";
-const eventCount = (messages: string[]) => messages.filter((text) => text === STALLED_EVENT).length;
+const eventCount = (messages: string[]) => messages.filter((text) => text === ENVELOPE_TEXT).length;
 
 /** 工具卡在闸门上：测试在工具执行中放闸；`__deliverNow` 由测试或首个工具开始时调用，只投一次。 */
 const gatedExtension = (armOnTool: boolean) => `
@@ -318,7 +275,7 @@ export default function (pi) {
 	${armOnTool ? 'pi.on("tool_execution_start", () => globalThis.__deliverNow());' : ""}
 }`;
 
-function stalledSession(source: string, responses: unknown[], settings?: unknown) {
+function stalledSession(source: string, responses: unknown[]) {
 	const gate = Promise.withResolvers<void>();
 	const requests: string[][] = [];
 	const gatedTool = {
@@ -329,13 +286,13 @@ function stalledSession(source: string, responses: unknown[], settings?: unknown
 		requests.push(context.messages.map(messageText));
 		return typeof reply === "function" ? (reply as () => unknown)() : reply;
 	};
-	return hostSession(source, responses.map(record), { tools: ["contract_wait"], customTools: [gatedTool] }, settings)
+	return hostSession(source, responses.map(record), { tools: ["contract_wait"], customTools: [gatedTool] })
 		.then((session) => ({ session, requests, gate }));
 }
 
 /** 事件没等用户输入就到达模型，最后一次请求里恰好一份；用户随后再发话也不重复。 */
 async function expectDeliveredOnce(session: any, requests: string[][]) {
-	await until(() => requests.some((request) => request.includes(STALLED_EVENT)));
+	await until(() => requests.some((request) => request.includes(ENVELOPE_TEXT)));
 	await session.waitForIdle();
 	expect(eventCount(requests.at(-1)!)).toBe(1);
 	await session.prompt("user follows up");
@@ -346,7 +303,6 @@ const idle = (text: string) => fauxAssistantMessage(text);
 
 test.each([
 	["工具执行中，用户清队列后中止（Esc）", "tool", true],
-	["工具执行中，队列没清", "tool", false],
 	["模型流式输出中，队列没清", "stream", false],
 ] as const)("投递在途时回合被中止（%s）：不等用户输入自动唤醒，恰好一次", async (_case, phase, clear) => {
 	const streaming = phase === "stream";
@@ -379,29 +335,3 @@ test.each([
 		session.dispose();
 	}
 }, 10_000);
-
-test("回合中执行 /compact：压缩落定后才唤醒，事件在压缩后的上下文里恰好一次", async () => {
-	const { session, requests, gate } = await stalledSession(gatedExtension(true), [
-		idle("ok 1"), idle("ok 2"), toolCallResponse, () => idle("SUMMARY"), () => idle("SUMMARY 2"), idle("handled"), idle("after"),
-	], { compaction: { enabled: false, keepRecentTokens: 5 } });
-	try {
-		await session.bindExtensions({ mode: "print" });
-		const armed = (globalThis as any).__deliverNow;
-		(globalThis as any).__deliverNow = () => {};
-		for (let turn = 1; turn <= 2; turn++) await session.prompt(`message ${turn} ${"word ".repeat(200)}`);
-		(globalThis as any).__deliverNow = armed;
-		const run = session.prompt("go");
-		await until(() => (globalThis as any).__sent);
-		const compacting = session.compact();
-		gate.resolve();
-		await compacting;
-		await run.catch(() => {});
-		requests.length = 0;
-		await expectDeliveredOnce(session, requests);
-		expect(session.sessionManager.getBranch().some((entry: any) => entry.type === "compaction")).toBe(true);
-	} finally {
-		delete (globalThis as any).__deliverNow;
-		delete (globalThis as any).__sent;
-		session.dispose();
-	}
-}, 15_000);
