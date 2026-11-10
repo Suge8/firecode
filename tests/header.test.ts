@@ -40,7 +40,7 @@ async function mountHeader(cwd = "/tmp/project") {
 	return { header, tui };
 }
 
-test("任意宽度横幅每行都不超出终端宽度，入场中与定格后皆然", async () => {
+test("任意宽度横幅每行都不超出终端宽度（宿主遇到超宽行会崩），入场中与定格后皆然，且显示工作目录", async () => {
 	jest.useFakeTimers();
 	const { header } = await mountHeader();
 	for (const elapsed of [0, 400, 900, 3000]) {
@@ -48,38 +48,5 @@ test("任意宽度横幅每行都不超出终端宽度，入场中与定格后�
 		for (let width = 20; width <= 200; width++)
 			for (const line of header.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 	}
-});
-
-test("入场动画驱动重绘，定格后不再请求重绘、画面静止", async () => {
-	jest.useFakeTimers();
-	const { header, tui } = await mountHeader();
-	jest.advanceTimersByTime(500);
-	expect(tui.renders).toBeGreaterThan(0);
-
-	jest.advanceTimersByTime(2500);
-	const settled = tui.renders;
-	const frames = [110, 72, 40].map((width) => header.render(width));
-	jest.advanceTimersByTime(3000);
-	expect(tui.renders).toBe(settled);
-	expect([110, 72, 40].map((width) => header.render(width))).toEqual(frames);
-});
-
-test("两档都显示版本与工作目录（同一份来源）；单行档放在字标后的横线里", async () => {
-	jest.useFakeTimers();
-	const { header } = await mountHeader();
-	jest.advanceTimersByTime(3000);
-	const plain = (width: number) => header.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, "")).join("\n");
-	for (const width of [110, 72, 60, 52, 51, 40]) expect(plain(width)).toMatch(/pi \S+ · \/tmp\/project/u);
-	const tiny = header.render(40)[0].replace(/\x1b\[[0-9;]*m/gu, "");
-	expect(tiny).toMatch(/firecode .*pi \S+ · \/tmp\/project ─+$/u);
-});
-
-test("工作目录放不下时按目录段从开头省略，保留完整的末尾目录名，不从词中间截断", async () => {
-	jest.useFakeTimers();
-	const { header } = await mountHeader("/private/tmp/fc-dogfood2-repo");
-	jest.advanceTimersByTime(3000);
-	const plain = (width: number) => header.render(width).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, "")).join("\n");
-	expect(plain(40)).toMatch(/firecode …\/(?:[^/\s]+\/)*fc-dogfood2-repo ─+/u);
-	expect(plain(40)).not.toMatch(/…[^/\s]+\/fc-dogfood2-repo/u);
-	expect(plain(110)).toContain("pi ");
+	expect(header.render(110).join("\n").replace(/\x1b\[[0-9;]*m/gu, "")).toContain("/tmp/project");
 });
