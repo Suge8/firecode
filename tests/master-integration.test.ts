@@ -269,6 +269,36 @@ test("Claude 订阅 5 小时额度用尽（报错写明当地重置时刻）：�
 const eventTitles = (harness: { messages: any[] }) => harness.messages.flatMap((entry: any) =>
 	[...String(entry.message.content).matchAll(/<firecode_master_event>\n(.*)/gu)].map((match) => match[1]));
 
+test("角色解析不出模型（没有凭据）：派发以失败事件告知指挥官", async () => {
+	const harness = await setup(false, { confirmAnswer: true, roles: { 工程师: TEST_ROLES.工程师, 不可用: { model: "nokey/model/medium", use: "其他工作" } } });
+	await harness.emit("session_start", {});
+	faux.setResponses([fauxAssistantMessage("完成")]);
+	expect((await harness.execute({ action: "start", worker: "missing", prompt: "执行", role: "不可用" })).details).toMatchObject({ started: true });
+	await until(() => eventTitles(harness).includes("missing 失败"));
+	expect(harness.messages.at(-1).message.content).toContain("nokey/model");
+	expect(faux.getPendingResponseCount()).toBe(1);
+});
+
+test("等待续跑期间 reload：恢复后按档案里的时刻只续跑一次", async () => {
+	const harness = await setup(true, { roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
+	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+	let calls = 0;
+	faux.setResponses(Array.from({ length: 4 }, () => () => (calls++ === 0
+		? fauxAssistantMessage("", { stopReason: "error", errorMessage: `429 rate limit {"resets_in_seconds": 0.5}` })
+		: fauxAssistantMessage("重载后续跑完成"))));
+	const noticed = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "reload", prompt: "执行", role: "工程师" });
+	await noticed;
+	await until(() => harness.appended.some(([type]: [string]) => type === "firecode-master-event-ack"));
+	await harness.emit("session_start", {});
+	await harness.emit("session_start", {});
+	await until(() => eventTitles(harness).includes("reload 已返回"));
+	await Bun.sleep(300);
+	expect(eventTitles(harness)).toEqual(["reload 已暂停", "reload 已返回"]);
+	expect(calls).toBe(2);
+	await harness.command("");
+}, 20_000);
+
 test("Worker 回合断网失败：暂停后到时自动续跑，网络恢复后完成，指挥官只收到一次最终落定；断网期间不在同一回合里死循环重试", async () => {
 	const harness = await setup(true, { timing: { cooldownMs: [40, 80] }, roles: { 工程师: { model: "test/worker/medium", use: "实现" } } });
 	await writeFile(join(harness.agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } }));
