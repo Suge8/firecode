@@ -929,6 +929,76 @@ test("reviewing 中的 Worker 回合早已落定也不会被 idle 超时释放",
 	expect((await harness.list().then((listed) => listed.details as any)).workers[0].status).toBe("reviewing");
 });
 
+/** 子会话每建一次（session_start）就在 log 里记一行它的会话路径；shutdownGate 为真时 session_shutdown 卡在 globalThis.__shutdownGate 上。 */
+async function sessionProbe(agentDir: string, log: string, shutdownGate = false): Promise<() => Promise<string[]>> {
+	await writeFile(join(agentDir, "extensions", "session-probe.ts"), `import { appendFileSync } from "node:fs";
+	export default function(pi) {
+		pi.on("session_start", (_event, ctx) => appendFileSync(${JSON.stringify(log)}, (ctx.sessionManager.getSessionFile() ?? "") + "\\n"));
+		${shutdownGate ? `pi.on("session_shutdown", async () => { globalThis.__shutdownGate?.entered(); await globalThis.__shutdownGate?.open; });` : ""}
+	}`);
+	return async () => existsSync(log) ? (await readFile(log, "utf8")).split("\n").filter(Boolean) : [];
+}
+
+test("send 换检出、后台还在释放旧会话时 kill：之后才轮到的开会话不再新建", async () => {
+	const harness = await setup();
+	const created = await sessionProbe(harness.agentDir, join(directory!, "created.log"), true);
+	const other = join(harness.cwd, "other");
+	await mkdir(other);
+	faux.setResponses([fauxAssistantMessage("初始完成")]);
+	const delivered = new Promise<void>((resolve) => { harness.onMessage = () => resolve(); });
+	await harness.execute({ action: "start", worker: "moved", prompt: "初始", role: "工程师" });
+	await delivered;
+	const path = (await harness.list()).details.workers[0].session;
+	const before = (await created()).filter((line) => line === path).length;
+	const entered = Promise.withResolvers<void>();
+	const open = Promise.withResolvers<void>();
+	(globalThis as any).__shutdownGate = { entered: entered.resolve, open: open.promise };
+	try {
+		faux.setResponses([fauxAssistantMessage("不应执行")]);
+		// 换检出的 send 在后台先释放旧会话（session_shutdown 卡住），释放完才开新会话；kill 落在这中间。
+		expect((await harness.execute({ action: "send", worker: "moved", prompt: "换检出", cwd: other })).details).toEqual({ sent: true });
+		await entered.promise;
+		await harness.execute({ action: "kill", worker: "moved" });
+		open.resolve();
+		await Bun.sleep(300);
+		expect((await created()).filter((line) => line === path).length - before).toBe(0);
+		expect(harness.pool.getSession(path)).toBeUndefined();
+		expect(faux.getPendingResponseCount()).toBe(1);
+		expect((await harness.list()).details.workers).toEqual([]);
+	} finally {
+		open.resolve();
+		delete (globalThis as any).__shutdownGate;
+	}
+});
+
+test("send 已在等同一路径的空闲释放收口时 kill：收口完也不再新建会话", async () => {
+	const harness = await setup(true, { timing: { idleSessionMs: 20 } });
+	const created = await sessionProbe(harness.agentDir, join(directory!, "created.log"), true);
+	const entered = Promise.withResolvers<void>();
+	const open = Promise.withResolvers<void>();
+	(globalThis as any).__shutdownGate = { entered: entered.resolve, open: open.promise };
+	try {
+		faux.setResponses([fauxAssistantMessage("初始完成")]);
+		await harness.execute({ action: "start", worker: "parked", prompt: "初始", role: "工程师" });
+		const path = (await harness.list()).details.workers[0].session;
+		// 空闲到期释放，session_shutdown 卡住：send 的 spawn 在等这次释放。
+		await entered.promise;
+		const before = (await created()).filter((line) => line === path).length;
+		faux.setResponses([fauxAssistantMessage("不应执行")]);
+		expect((await harness.execute({ action: "send", worker: "parked", prompt: "接着做" })).details).toEqual({ sent: true });
+		await harness.execute({ action: "kill", worker: "parked" });
+		open.resolve();
+		await Bun.sleep(300);
+		expect((await created()).filter((line) => line === path).length - before).toBe(0);
+		expect(harness.pool.getSession(path)).toBeUndefined();
+		expect(faux.getPendingResponseCount()).toBe(1);
+		expect((await harness.list()).details.workers).toEqual([]);
+	} finally {
+		open.resolve();
+		delete (globalThis as any).__shutdownGate;
+	}
+});
+
 test("kill 不等 Worker 的 session_shutdown（处理器没有时限）：立即返回，收口随后照常完成", async () => {
 	const harness = await setup(true, { shutdownProbe: true });
 	faux.setResponses([fauxAssistantMessage("完成")]);

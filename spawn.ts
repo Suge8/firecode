@@ -42,10 +42,11 @@ interface SpawnSessionOptions {
 	/** 子会话里的扩展出错（加载后的事件处理抛错）时通知；不给就不接线，宿主丢弃这些错误。 */
 	onExtensionError?: (error: ExtensionError) => void;
 	/**
-	 * 会话建好、交出之前调用：抛错即调用方已不要它（如所属的指挥官会话已关闭），池先释放它再原样抛出。在池里做而不是交出后再释放，
-	 * 同一路径的下一次 spawn 等到的就是这一次的最终去向（持有或已在释放），不会撞上一个马上就要被释放的登记。
+	 * 调用方还要不要这个会话：抛错即不要了（如它所属的票已被 kill、指挥官会话已关闭）。池在两处问：等完同一路径的打开与释放、
+	 * 真正新建之前（不要就不建，原样抛出）；建好、交出之前（不要就先释放再抛出）。都在池里问，是因为同一路径的 spawn 只在这里汇合：
+	 * 调用方在 spawn 之前核对挡不住“已在等释放时被 kill”；交出前问，下一次 spawn 等到的就是这一次的最终去向（持有或已在释放）。
 	 */
-	accept?: () => void;
+	claim?: () => void;
 }
 
 interface SpawnedSession {
@@ -165,6 +166,7 @@ export class InProcessSessionPool {
 		// 还在建的同一路径同理：建它的一方可能已不要它（所属的指挥官会话关闭后才建好），等它有了去向再判。
 		for (let earlier; sessionPath && (earlier = this.opening.get(sessionPath) ?? this.releasing.get(sessionPath));)
 			await earlier.then(() => undefined, () => undefined);
+		options.claim?.();
 		if (sessionPath && SESSION_WRITERS.has(sessionPath))
 			throw new Error(msg.spawn.held(sessionPath));
 		if (!sessionPath) return this.create(options, undefined);
@@ -252,7 +254,7 @@ export class InProcessSessionPool {
 		this.held.set(key, held);
 		if (codemode) trackCodemodeSession(key, true);
 		try {
-			options.accept?.();
+			options.claim?.();
 		} catch (error) {
 			await this.release(held);
 			throw error;

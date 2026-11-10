@@ -219,12 +219,17 @@ export class MasterRuntime {
 	 * await 之后的写回只经这里：基于重读的最新档案做函数式更新，不拿 await 前的快照覆盖；档案已被 kill（或同名换票）就报错放弃。
 	 */
 	commit(identity: Pick<WorkerRef, "name" | "sessionPath">, update: (current: WorkerRef) => WorkerRef): WorkerRef {
+		const next = update(this.owned(identity));
+		this.store.upsert(next);
+		return next;
+	}
+
+	/** 会话未关闭且档案仍是这一票时返回，否则报错（已被 kill 或同名换票）：后台续延据此放弃。 */
+	owned(identity: Pick<WorkerRef, "name" | "sessionPath">): WorkerRef {
 		this.assertOpen();
 		const current = this.find(identity);
 		if (!current) throw new Error(msg.runtime.killed(identity.name));
-		const next = update(current);
-		this.store.upsert(next);
-		return next;
+		return current;
 	}
 
 	/** 同步读：会话未关闭且档案仍是这一票时返回，否则 undefined（落定回调用，不抛）。 */

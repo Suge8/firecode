@@ -68,7 +68,8 @@ export async function spawnWorker(active: MasterRuntime, worker: WorkerRef, resu
 		contextFiles: true,
 		persistence: { type: "file", sessionPath: worker.sessionPath, ...(resume && existsSync(worker.sessionPath) ? { resume: true } : {}) },
 		onExtensionError: (error) => reportExtensionError(active, worker, error),
-		accept: () => active.assertOpen(),
+		// 票身份：会话路径是档案身份的唯一事实源（每次 start 预分配一条），kill 后同名重开的新票路径不同。
+		claim: () => void active.owned(worker),
 	});
 	return spawned.session;
 }
@@ -83,14 +84,6 @@ export async function reopen(active: MasterRuntime, worker: WorkerRef): Promise<
 	await active.setup.pool.idle(session);
 	active.assertOpen();
 	return session;
-}
-
-/** 后台开会话：开好时票已被 kill（或同名换票）就释放这个没人要的会话，返回 undefined；开不成照常抛出。 */
-async function openFor(active: MasterRuntime, worker: WorkerRef, open: () => Promise<AgentSession>): Promise<AgentSession | undefined> {
-	const session = await open();
-	if (active.find(worker)) return session;
-	if (!active.closed) active.detached(worker.name, () => active.setup.pool.dispose(worker.sessionPath).then(() => undefined));
-	return undefined;
 }
 
 /** 子代理会话里的扩展出错：同一处错误只告知指挥官一次（事件处理器每次触发都会再抛）。 */
@@ -169,7 +162,7 @@ export function runWorker(active: MasterRuntime, worker: WorkerRef, open: () => 
 	const mine = () => !active.closed && active.live.get(worker.name) === live && live.turn === turn;
 	active.detached(worker.name, async () => {
 		try {
-			await turnOn(await openFor(active, worker, open));
+			await turnOn(await open());
 		} catch (error) {
 			if (!mine()) return;
 			if (turn.interrupted) return settleInterrupted(active, worker);
@@ -179,8 +172,8 @@ export function runWorker(active: MasterRuntime, worker: WorkerRef, open: () => 
 		}
 	});
 
-	async function turnOn(session: AgentSession | undefined): Promise<void> {
-		if (!session || !mine()) return;
+	async function turnOn(session: AgentSession): Promise<void> {
+		if (!mine()) return;
 		observeWorker(active, worker, session);
 		// 静默从本回合开始算：自动续跑沿用暂停前的运行起点，暂停期不是无输出。
 		live.quietSince = Date.now();
@@ -364,8 +357,8 @@ export function startReview(active: MasterRuntime, target: WorkerRef, resumed = 
 	const mine = () => !active.closed && active.live.get(target.name) === live && live.turn === turn;
 	active.detached(target.name, async () => {
 		try {
-			const session = await openFor(active, reviewing, () => reopen(active, reviewing));
-			if (!session || !mine()) return;
+			const session = await reopen(active, reviewing);
+			if (!mine()) return;
 			if (turn.interrupted) return settleInterrupted(active, target, true);
 			const previousRunId = reviewRunId(readReviewOutcome(target.sessionPath));
 			observeWorker(active, target, session);
