@@ -1,7 +1,7 @@
 /**
  * Master 事件正文的唯一产文处：第一行是给人看的标题“<名字> <结果词>”（名字是第一个空格前的词），
  * 给模型的指令放在后续正文。分节标记独占一行“<标记>：”；失败只由“错误：”分节表示——
- * 红色、失败计数与活动列表失败组都从这一个事实来（失败、审查停止、审查未完成；被中断不是失败）。
+ * 红色与失败计数都从这一个事实来（失败、审查未完成）；审查未通过用“结论：”分节，画黄色、不算失败；被中断不是失败。
  * 折叠界面（tools/machine.ts）按标题、错误分节与“耗时：本次运行 …”行投影，改格式两侧都要同步。
  */
 import { clip, clockText, formatDuration, oneLine } from "../format.js";
@@ -19,7 +19,7 @@ const STALL_ACTION_WIDTH = 160;
 const FAILURE_WIDTH = 300;
 
 /**
- * 产出的事件：正文与是否落定类。落定类（已返回、失败、被中断、审查通过/停止/未完成）才带“本次运行”耗时，
+ * 产出的事件：正文与是否落定类。落定类（已返回、失败、被中断、审查通过/未通过/未完成）才带“本次运行”耗时，
  * 界面据此触发到达高亮；其余事件（待续跑、已切换模型、补充说明未送达）只带当前任务耗时。
  */
 export interface MasterEvent {
@@ -51,17 +51,17 @@ export const masterEvent = {
 		settled(`${name} ${msg.event.reviewInterrupted}`, msg.event.reviewInterruptedKept(obligation)),
 	reviewIncomplete: (name: string, reason: string, reply?: string) =>
 		settled(`${name} ${msg.event.reviewIncomplete}`, SECTIONS.error, reason, ...(reply === undefined ? [] : [SECTIONS.finalReply, reply || msg.event.noReply])),
-	/** 审查终态；reply 是 Worker 最后一条回复。停止与未完成是失败：原因进“错误：”分节，顾问意见在其后。 */
+	/** 审查终态；reply 是 Worker 最后一条回复。未通过的原因进“结论：”分节、顾问意见在其后；未完成是失败，原因进“错误：”分节。 */
 	review(name: string, outcome: ReviewOutcome, reply: string): MasterEvent {
 		const final = [SECTIONS.finalReply, reply || msg.event.noReply];
 		const fallback = "fallback" in outcome && outcome.fallback ? msg.event.reviewFallback(outcome.fallback.join(", ")) : undefined;
 		if (outcome.status === "passed") return settled(`${name} ${msg.event.reviewPassed(outcome.rounds)}`, fallback, ...final);
 		if (outcome.status === "stopped")
 			return settled(
-				`${name} ${msg.event.reviewStopped(outcome.rounds)}`,
+				`${name} ${msg.event.reviewRejected}`,
 				fallback,
-				SECTIONS.error,
-				outcome.advisorAdvice ? msg.event.stoppedByAdvisor(outcome.rounds) : msg.event.roundsExhausted(outcome.rounds),
+				SECTIONS.verdict,
+				msg.event.rejectedWhy(outcome.rounds, Boolean(outcome.advisorAdvice)),
 				...(outcome.advisorAdvice ? [SECTIONS.advice, outcome.advisorAdvice] : []),
 				...final,
 			);

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- A Worker whose review found issues and stopped (rounds used up, or the advisor called a stop) is no longer shown as failed. It now has its own state, "Not passed": a yellow `✗` in the activity list, a yellow `↳` line in the Master chat, and it no longer counts toward "N sub-agents failed". The row says why, for example "1 review round; issues remain", instead of "review stopped". The sub-agent roster that other extensions read (such as CuePad) reports it as `rejected`. Real failures (errors, timeouts, a review that never finished) stay red.
+
 ## [1.13.0] - 2026-11-11
 
 ### Changed

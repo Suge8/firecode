@@ -24,7 +24,7 @@ export interface ActivityRow {
 	role: string;
 	/** 当前动作；为空时只显示角色（如空闲行）。 */
 	action: string;
-	/** 当前动作的语气：审查金色，失败红色，被中断黄色。 */
+	/** 当前动作的语气：审查金色，失败红色，未通过与被中断黄色。 */
 	tone?: "review" | "failed" | "warning";
 	/** 动作后追加的黄色提醒（卡住行的“无输出”）：比动作重要，宽度不够先换短写法，动作没信息就整段不显示。 */
 	note?: { full: string; short: string };

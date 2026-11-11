@@ -13,6 +13,8 @@ export interface MachineEntry {
 	preview: string;
 	/** 画失败色：只认生产端声明的事实——Master 事件带“错误：”分节，审查卡的 details.tone 为 warning/error。 */
 	alarm: boolean;
+	/** 画提醒色：Master 事件带“结论：”分节（审查未通过），要指挥官处理但不是失败。 */
+	caution?: boolean;
 	/** Master 事件才有：标题第一个空格前的子代理名。 */
 	worker?: string;
 	/** Master 事件正文带独占一行的“错误：”分节：子代理失败。 */
@@ -24,6 +26,7 @@ export interface MachineEntry {
 /** 正文分节标记独占一行（如“回复：”“错误：”，词汇见 messages.ts 的 envelope，生产端同源）；失败时预览取错误分节之后的正文，否则取首个分节之后的。 */
 const SECTIONS: ReadonlySet<string> = new Set(Object.values(msg.envelope.sections));
 const ERROR_SECTION = msg.envelope.sections.error;
+const VERDICT_SECTION = msg.envelope.sections.verdict;
 const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const RUN_TIME = new RegExp(`^${escape(msg.envelope.elapsed + msg.envelope.thisRun)} (\\S+)`, "mu");
 /** 审查卡生产端（review/card.ts）在 details.tone 里声明的失败色。 */
@@ -63,6 +66,7 @@ function entryOf(tag: EnvelopeTag, body: string, details: unknown): MachineEntry
 		title: heading,
 		preview: firstSentence(content),
 		alarm: failed,
+		...(rest.some((line) => line.trim() === VERDICT_SECTION) ? { caution: true } : {}),
 		worker: heading.split(" ", 1)[0],
 		failed,
 		...(duration ? { duration } : {}),
@@ -79,7 +83,8 @@ function reviewPreview(lines: string[]): string {
 
 /** “↳ 标题 · 时长 首句”；不铺背景，可直接用 clip 截断。宿主在聊天区右缘画滚动条，留一列给它，截断才由 clip 加省略号。 */
 export function machineLine(entry: MachineEntry, theme: Theme, width: number): string {
-	const head = `${theme.fg(entry.alarm ? "error" : "success", "↳")} ${theme.fg(entry.alarm ? "error" : "text", entry.title)}`;
+	const tone = entry.alarm ? "error" : entry.caution ? "warning" : undefined;
+	const head = `${theme.fg(tone ?? "success", "↳")} ${theme.fg(tone ?? "text", entry.title)}`;
 	const duration = entry.duration ? `${theme.fg("dim", " · ")}${theme.fg("muted", entry.duration)}` : "";
 	const preview = entry.preview ? ` ${theme.fg("muted", entry.preview)}` : "";
 	return clip(`${head}${duration}${preview}`, Math.max(1, width - CHAT_GUTTER));
