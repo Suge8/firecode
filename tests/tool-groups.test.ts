@@ -476,7 +476,7 @@ test("审查卡的 ↳ 行：成败色由卡片 details 决定，预览取首条
 	expect(["第 2 轮审查通过"].filter(toneOf)).toEqual([]);
 });
 
-test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：红色 = 失败 = 计数只由“错误：”决定，被中断不算失败，只有落定类事件高亮", async () => {
+test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与子代理失败计数：红色 = 失败 = 计数只由“错误：”决定，审查未通过画黄色，被中断与未通过不算失败，回复原文里的分节字样不改结局，只有落定类事件高亮", async () => {
 	const { masterEvent, withElapsed } = await loadFirecodeModule("master/event-format.ts");
 	const { wrapEnvelope } = await loadFirecodeModule("deliver.ts");
 	const event = (produced: unknown) => wrapEnvelope("firecode_master_event", withElapsed(produced, { run: 8 * 60_000, task: 19 * 60_000 }));
@@ -484,8 +484,9 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 		{ body: masterEvent.returned("fix-auth", "刷新改为单飞。更多细节"), row: "↳ fix-auth 已返回 · 8m 刷新改为单飞。", red: false },
 		{ body: masterEvent.failed("perf", "429 Too Many Requests"), row: "↳ perf 失败 · 8m 429 Too Many Requests", red: true },
 		{ body: masterEvent.interrupted("lint", false), row: "↳ lint 被中断 · 8m", red: false },
+		{ body: masterEvent.returned("notes", "收尾完成。\n错误：\n无\n结论：\n可以合并"), row: "↳ notes 已返回 · 8m 收尾完成。", red: false },
 		{ body: masterEvent.review("docs", { status: "passed", runId: "r", rounds: 2 }, "## 交付\n- 修好了。"), row: "↳ docs 审查通过（2 轮） · 8m 修好了。", red: false },
-		{ body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查停止（3 轮） · 8m 审查 3 轮未通过，顾问叫停", red: true },
+		{ body: masterEvent.review("ui", { status: "stopped", runId: "r", rounds: 3, advisorAdvice: "收敛不了，交还用户。" }, "已停。"), row: "↳ ui 审查未通过 · 8m 审查 3 轮，顾问叫停", red: false, yellow: true },
 		{ body: masterEvent.review("api", { status: "failed", runId: "r", rounds: 1, reason: "审查会话超时。" }, "实现完成。"), row: "↳ api 审查未完成 · 8m 审查会话超时。", red: true },
 		{ body: masterEvent.modelSwitched("bench", "a/x/high", "b/y/high", "429"), row: "↳ bench 已切换模型", red: false },
 	];
@@ -496,12 +497,13 @@ test("Master 真实产出的事件经信封投影到 ↳ 行、到达高亮与�
 	assistant(s, [{ type: "text", text: "收口" }]);
 	s.settle(3_000, "complete", 0);
 	s.setNow(60_000);
-	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 3 个子代理失败");
+	expect(s.lines().find((line: string) => line.startsWith("✓"))!.trimEnd()).toBe("✓ 3.0s · 2 个子代理失败");
 	s.ui.setToolsExpanded(true);
 	const raw = s.chat.render(120);
 	const rows = raw.filter((line: string) => stripVTControlCharacters(line).trim().startsWith("↳"));
 	expect(rows.map((line: string) => stripVTControlCharacters(line).trim())).toEqual(cases.map((entry) => entry.row));
 	expect(rows.map((line: string) => line.includes(s.ui.theme.fg("error", "↳")))).toEqual(cases.map((entry) => entry.red));
+	expect(rows.map((line: string) => line.includes(s.ui.theme.fg("warning", "↳")))).toEqual(cases.map((entry) => "yellow" in entry));
 });
 
 test("补话不切轮：与上一条人类消息之间没有轮记录的人类消息折进当前轮，折叠态与展开态都显示全文；歇下之后的人类消息才开新一轮", async () => {

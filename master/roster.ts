@@ -9,7 +9,7 @@ export const SUBAGENTS_CHANNEL = "firecode:subagents";
 
 /**
  * 活动列表的分组减去“卡住”（卡住仍是在跑，要靠计时才判得出，名册不发时间驱动的变化）：
- * running、review、paused（瞬时故障后暂停，到时自动续跑）、done、failed、interrupted、idle。
+ * running、review、paused（瞬时故障后暂停，到时自动续跑）、done、failed、rejected（审查挑出问题后停下，不是故障）、interrupted、idle。
  */
 type SubagentState = Exclude<PhaseKind, "stuck">;
 
@@ -25,7 +25,7 @@ export interface SubagentInfo {
 	action: string;
 	/** 本次运行开始（Date.now 毫秒）；空闲且没有运行过时没有。 */
 	startedAt?: number;
-	/** 落定时刻；只有 done、failed、interrupted 有。 */
+	/** 落定时刻；只有 done、failed、rejected、interrupted 有。 */
 	settledAt?: number;
 }
 

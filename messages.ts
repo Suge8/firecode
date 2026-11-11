@@ -59,7 +59,7 @@ export const msg = defineMessages({
 		},
 		today: (date: string) => `今天是 ${date}。`,
 		envelope: {
-			sections: { reply: "回复：", error: "错误：", finalReply: "最终回复：", advice: "顾问意见：" },
+			sections: { reply: "回复：", error: "错误：", verdict: "结论：", finalReply: "最终回复：", advice: "顾问意见：" },
 			elapsed: "耗时：",
 			thisRun: "本次运行",
 			currentTask: "当前任务",
@@ -122,7 +122,7 @@ export const msg = defineMessages({
 		},
 		today: (date: string) => `Today is ${date}.`,
 		envelope: {
-			sections: { reply: "Reply:", error: "Error:", finalReply: "Final reply:", advice: "Advisor advice:" },
+			sections: { reply: "Reply:", error: "Error:", verdict: "Verdict:", finalReply: "Final reply:", advice: "Advisor advice:" },
 			elapsed: "Elapsed: ",
 			thisRun: "This run",
 			currentTask: "Current task",

@@ -456,10 +456,11 @@ function monitorReview(session: AgentSession, sessionPath: string, previousRunId
 	});
 }
 
-/** 审查落定在活动列表上的结局：只有通过算完成，停止与未完成都是要指挥官看的失败行。 */
+/** 审查落定在活动列表上的结局：通过算完成；挑出问题停下是未通过（质量裁决，不是故障）；审查本身没跑完才是失败。 */
 function reviewOutcomeRow(outcome: ReviewOutcome): WorkerLive["outcome"] {
 	if (outcome.status === "passed") return { kind: "done", note: msg.run.reviewPassed };
-	return { kind: "failed", note: outcome.status === "stopped" ? msg.run.reviewStopped : msg.run.reviewIncomplete };
+	if (outcome.status === "stopped") return { kind: "rejected", note: msg.event.rejectedWhy(outcome.rounds, Boolean(outcome.advisorAdvice)) };
+	return { kind: "failed", note: msg.run.reviewIncomplete };
 }
 
 function captureWorkerTerminal(

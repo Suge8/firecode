@@ -13,17 +13,20 @@ export interface MachineEntry {
 	preview: string;
 	/** 画失败色：只认生产端声明的事实——Master 事件带“错误：”分节，审查卡的 details.tone 为 warning/error。 */
 	alarm: boolean;
+	/** 画提醒色：Master 事件的首个分节是“结论：”（审查未通过），要指挥官处理但不是失败。 */
+	caution?: boolean;
 	/** Master 事件才有：标题第一个空格前的子代理名。 */
 	worker?: string;
-	/** Master 事件正文带独占一行的“错误：”分节：子代理失败。 */
+	/** Master 事件的首个分节是“错误：”：子代理失败。 */
 	failed?: boolean;
 	/** 落定类 Master 事件的子代理本次运行时长；有它即触发摘要行的到达高亮。 */
 	duration?: string;
 }
 
-/** 正文分节标记独占一行（如“回复：”“错误：”，词汇见 messages.ts 的 envelope，生产端同源）；失败时预览取错误分节之后的正文，否则取首个分节之后的。 */
+/** 正文分节标记独占一行（如“回复：”“错误：”，词汇见 messages.ts 的 envelope，生产端同源）；预览取首个分节之后的正文。 */
 const SECTIONS: ReadonlySet<string> = new Set(Object.values(msg.envelope.sections));
 const ERROR_SECTION = msg.envelope.sections.error;
+const VERDICT_SECTION = msg.envelope.sections.verdict;
 const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const RUN_TIME = new RegExp(`^${escape(msg.envelope.elapsed + msg.envelope.thisRun)} (\\S+)`, "mu");
 /** 审查卡生产端（review/card.ts）在 details.tone 里声明的失败色。 */
@@ -52,17 +55,18 @@ function entryOf(tag: EnvelopeTag, body: string, details: unknown): MachineEntry
 	const [heading = "", ...rest] = body.split("\n");
 	if (tag === "firecode_review")
 		return { title: heading, preview: reviewPreview(rest), alarm: ALARM_TONES.has((details as { tone?: string } | undefined)?.tone ?? "") };
-	// 失败只看是否有独占一行的“错误：”，不论它是第几个分节；失败时预览从错误分节取。
+	// 结局只看首个分节（event-format.ts 把定结局的分节放在最前）：后面的回复是子代理原话，里面独占一行的“错误：”“结论：”不算。
 	// 预览只取分节里给人看的正文：没有分节的事件（通知、被中断）正文是写给模型的指令，↳ 只显示标题。
-	const errorAt = rest.findIndex((line) => line.trim() === ERROR_SECTION);
-	const failed = errorAt >= 0;
-	const marker = failed ? errorAt : rest.findIndex((line) => SECTIONS.has(line.trim()));
+	const marker = rest.findIndex((line) => SECTIONS.has(line.trim()));
+	const section = marker < 0 ? undefined : rest[marker].trim();
+	const failed = section === ERROR_SECTION;
 	const content = marker < 0 ? "" : rest.slice(marker + 1).filter((line) => !RUN_TIME.test(line)).join("\n");
 	const duration = RUN_TIME.exec(body)?.[1];
 	return {
 		title: heading,
 		preview: firstSentence(content),
 		alarm: failed,
+		...(section === VERDICT_SECTION ? { caution: true } : {}),
 		worker: heading.split(" ", 1)[0],
 		failed,
 		...(duration ? { duration } : {}),
@@ -79,7 +83,8 @@ function reviewPreview(lines: string[]): string {
 
 /** “↳ 标题 · 时长 首句”；不铺背景，可直接用 clip 截断。宿主在聊天区右缘画滚动条，留一列给它，截断才由 clip 加省略号。 */
 export function machineLine(entry: MachineEntry, theme: Theme, width: number): string {
-	const head = `${theme.fg(entry.alarm ? "error" : "success", "↳")} ${theme.fg(entry.alarm ? "error" : "text", entry.title)}`;
+	const tone = entry.alarm ? "error" : entry.caution ? "warning" : undefined;
+	const head = `${theme.fg(tone ?? "success", "↳")} ${theme.fg(tone ?? "text", entry.title)}`;
 	const duration = entry.duration ? `${theme.fg("dim", " · ")}${theme.fg("muted", entry.duration)}` : "";
 	const preview = entry.preview ? ` ${theme.fg("muted", entry.preview)}` : "";
 	return clip(`${head}${duration}${preview}`, Math.max(1, width - CHAT_GUTTER));

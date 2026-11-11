@@ -1,5 +1,5 @@
 /**
- * 输入框上方的子代理活动列表：需要处理的（失败、被中断、卡住）置顶，然后在跑、审查与暂停（到时自动续跑），再合计已完成与空闲。
+ * 输入框上方的子代理活动列表：需要处理的（失败、未通过、被中断、卡住）置顶，然后在跑、审查与暂停（到时自动续跑），再合计已完成与空闲。
  * 分组与行上的文字读 phase.ts 的相位，行布局在 activity.ts；这里只决定谁上榜、怎么排、哪些折叠、整表是否留角色，以及何时需要动画时钟。
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -19,6 +19,7 @@ type Target = { toggle: Toggle } | { open: string };
 const STUCK_GLYPH = "◌";
 const INTERRUPTED_GLYPH = "‖";
 const PAUSED_GLYPH = "‥";
+const REJECTED_GLYPH = "✗";
 /** 可见行数下限；终端每 6 行再容纳一条在跑的行。 */
 const MIN_ROWS = 4;
 const ROWS_PER_ACTIVITY = 6;
@@ -43,6 +44,7 @@ export function visibleRows(terminalRows: number | undefined): number {
 
 interface Groups {
 	failed: Row[];
+	rejected: Row[];
 	interrupted: Row[];
 	stuck: Row[];
 	running: Row[];
@@ -75,13 +77,14 @@ export function rowState(facts: ActivityFacts, index: number, now: number, theme
 			const settled = { ...base, elapsed: startedAt === undefined ? "" : duration(settledAt! - startedAt), settled: true };
 			if (kind === "done") return { kind, row: { ...settled, mark: DONE_MARK } };
 			if (kind === "interrupted") return { kind, row: { ...settled, mark: theme.fg("warning", INTERRUPTED_GLYPH), tone: "warning" } };
+			if (kind === "rejected") return { kind, row: { ...settled, mark: theme.fg("warning", REJECTED_GLYPH), tone: "warning" } };
 			return { kind, row: { ...settled, mark: FAILED_MARK, tone: "failed" } };
 		}
 	}
 }
 
 function group(facts: ActivityFacts, now: number, theme: Theme): Groups {
-	const groups: Groups = { failed: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
+	const groups: Groups = { failed: [], rejected: [], interrupted: [], stuck: [], running: [], done: [], idle: [], animating: false };
 	for (let index = 0; index < facts.workers.length; index++) {
 		const { kind, row } = rowState(facts, index, now, theme);
 		groups.animating ||= ANIMATING_KINDS.has(kind);
@@ -98,8 +101,8 @@ interface Folding {
 }
 
 /** 需要处理的永远可见、不计入上限；上限只约束在跑的行，超出折成可点击的“+N 个在跑”。 */
-function layout({ failed, interrupted, stuck, running, done, idle }: Groups, folding: Folding, theme: Theme): Line[] {
-	const lines: Line[] = [...failed, ...interrupted, ...stuck].map((row) => ({ row }));
+function layout({ failed, rejected, interrupted, stuck, running, done, idle }: Groups, folding: Folding, theme: Theme): Line[] {
+	const lines: Line[] = [...failed, ...rejected, ...interrupted, ...stuck].map((row) => ({ row }));
 	const idleMark = theme.fg("dim", IDLE_GLYPH);
 	const names = (rows: readonly Row[], open: boolean) => (open ? [] : rows.map((row) => row.name));
 	const overflow = running.length > folding.limit;

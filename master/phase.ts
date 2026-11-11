@@ -10,11 +10,11 @@ import { msg as toolsMsg } from "../tools/messages.js";
 import { msg } from "./messages.js";
 import type { WorkerRef } from "./state.js";
 
-/** 本次运行的落定事实：落定时刻、结局与行上的说明。失败与被中断留到 ack 或 kill，完成留到 kill。 */
+/** 本次运行的落定事实：落定时刻、结局与行上的说明。失败、未通过与被中断留到 ack 或 kill，完成留到 kill。 */
 export interface SettledFact {
 	at: number;
-	/** 被中断不是失败：会话与义务都在，等指挥官续派或收口。 */
-	kind: "done" | "failed" | "interrupted";
+	/** 未通过（审查挑出问题后停下）与被中断都不是失败：东西没坏，等指挥官续派或收口。 */
+	kind: "done" | "failed" | "rejected" | "interrupted";
 	note?: string;
 }
 
@@ -40,13 +40,13 @@ export interface ActivityFacts {
 }
 
 /** 一个子代理的分组（活动列表里审查与暂停都与在跑同组展示）。 */
-export type PhaseKind = "failed" | "interrupted" | "stuck" | "running" | "review" | "paused" | "done" | "idle";
+export type PhaseKind = "failed" | "rejected" | "interrupted" | "stuck" | "running" | "review" | "paused" | "done" | "idle";
 
 export interface WorkerPhase {
 	kind: PhaseKind;
 	action: string;
 	startedAt?: number;
-	/** 落定时刻：只有 done、failed、interrupted 有。 */
+	/** 落定时刻：只有 done、failed、rejected、interrupted 有。 */
 	settledAt?: number;
 	/** working 时这段无输出已持续多久。 */
 	quietMs?: number;
@@ -77,5 +77,6 @@ export function workerPhase({ worker, tool, review, startedAt, quietSince, progr
 	const times = { startedAt, settledAt: settled.at };
 	if (settled.kind === "done") return { kind: "done", action: settled.note ?? msg.activity.returned, ...times };
 	if (settled.kind === "interrupted") return { kind: "interrupted", action: msg.activity.interrupted, ...times };
+	if (settled.kind === "rejected") return { kind: "rejected", action: settled.note!, ...times };
 	return { kind: "failed", action: settled.note ?? msg.activity.failed, ...times };
 }
