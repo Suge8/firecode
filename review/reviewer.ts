@@ -77,7 +77,7 @@ function blocks(frequency: number, impact: number): boolean {
 }
 
 /**
- * 解析审查者文本输出：摘要行 + 证据锚点行，之后是发现、需用户裁决与建议区。
+ * 解析审查者文本输出：摘要行 + 证据锚点行，之后是发现、需裁决与建议区。
  * 过门槛的发现是阻断意见：格式不全也按未通过计（违例说明作前注），丢掉会让另一票的 PASS 翻盘；
  * 门槛以下的发现收成建议区的一行。没有过门槛的发现时，缺摘要或证据锚点的票作废为缺席。
  */
@@ -146,7 +146,7 @@ const FIELD_START = new RegExp(
 
 interface Report { head: string[]; findings: string[][]; decisions: string[]; suggestions: string[] }
 
-/** 按二级标题切开：发现小节、需用户裁决与建议区（顺序不限），其余标题算所在小节的正文。 */
+/** 按二级标题切开：发现小节、需裁决与建议区（顺序不限），其余标题算所在小节的正文。 */
 function splitReport(lines: string[]): Report {
 	const report: Report = { head: [], findings: [], decisions: [], suggestions: [] };
 	let current = report.head;
