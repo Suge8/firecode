@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - Review items that are not code defects but a request in conflict with a convention, or a premise the reviewer disproved, are no longer handed straight to the user. The section is now "Needs a decision": the session under review settles the items the evidence settles without overriding the request, and leaves the rest to whoever made the request (you in the main session, the Master in a Worker). A Worker no longer passes these up as questions for the user, and the wrap-up gives each open item its options and a recommendation instead of copying the reviewer's text.
+- In a repair round, small suggestions that sit in the change under review are fixed along with the blocking findings instead of being left alone; hardening the request did not ask for, style and unrelated items are still only listed in the wrap-up. After a review passes, the wrap-up still changes no code, since those edits would go unreviewed.
 
 ### Fixed
 
