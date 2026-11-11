@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-11-11
+
 ### Changed
 
 - A Worker whose review found issues and stopped (rounds used up, or the advisor called a stop) is no longer shown as failed. It now has its own state, "Not passed": a yellow `✗` in the activity list, a yellow `↳` line in the Master chat, and it no longer counts toward "N sub-agents failed". The row says why, for example "1 review round; issues remain", instead of "review stopped". The sub-agent roster that other extensions read (such as CuePad) reports it as `rejected`. Real failures (errors, timeouts, a review that never finished) stay red.
@@ -378,7 +380,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/Suge8/firecode/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Suge8/firecode/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Suge8/firecode/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Suge8/firecode/compare/v1.10.1...v1.11.0
