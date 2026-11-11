@@ -43,7 +43,7 @@ export interface ReviewerResult extends ModelAtom {
 	status: "passed" | "failed" | "error";
 	/** 短摘要：通过时一行收敛摘要 / 未通过时首条阻塞发现的一句话。 */
 	summary: string;
-	/** 全文：摘要+证据锚点、阻塞发现、需用户裁决与建议区（门槛以下的发现收在其中）/ error 的故障说明（模型链中各候选的原因）。 */
+	/** 全文：摘要+证据锚点、阻塞发现、需裁决与建议区（门槛以下的发现收在其中）/ error 的故障说明（模型链中各候选的原因）。 */
 	details: string;
 	/** 席位首选不可用、由链里的备用模型审出的票：备用模型漏检率高得多，它的结论在卡片与 Master 事件里都要标明。 */
 	fallback?: boolean;
@@ -484,7 +484,7 @@ function passSummary(passed: ReviewerResult[]) {
 	return [...lines, ...extra].join("\n");
 }
 
-/** 某个二级标题小节（建议区、需用户裁决）的条目，到下一个二级标题为止。 */
+/** 某个二级标题小节（建议区、需裁决）的条目，到下一个二级标题为止。 */
 function splitSection(details: string, heading: RegExp): string[] {
 	const lines = details.split(/\r?\n/u);
 	const index = lines.findIndex((line) => heading.test(line.trim()));

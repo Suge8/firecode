@@ -41,7 +41,7 @@ export interface RoundJudgement {
 	findings: Finding[];
 	/** 只写在建议区（不阻塞）里的真值。 */
 	suggested: string[];
-	/** 审查者在“需用户裁决”或建议区里正确交给用户裁决的陷阱。 */
+	/** 审查者在“需裁决”或建议区里正确交出裁决的陷阱。 */
 	decided: string[];
 }
 
@@ -49,7 +49,7 @@ const DIFF_LIMIT = 60_000;
 const FIX_LIMIT = 12_000;
 const HEADING = /^#{1,6}\s*(?:发现|Finding)\s*\d*.*$/gimu;
 const SUGGESTIONS = /^##\s+(?:建议（非阻塞）|Suggestions \(non-blocking\))\s*$/imu;
-const DECISIONS = /^##\s+(?:需用户裁决|Needs user decision)\s*$/imu;
+const DECISIONS = /^##\s+(?:需(?:用户)?裁决|Needs (?:a|user) decision)\s*$/imu;
 /** review/messages.ts 的 reviewer.demoted 产出的那一行。 */
 const DEMOTED = /(?:频率|Frequency)\s*(\d+(?:\.\d+)?)\s*·\s*(?:影响|Impact)\s*(\d+(?:\.\d+)?)[）)]\s*$/u;
 const score = (text: string, name: string) => {
@@ -79,7 +79,7 @@ export function splitFindings(details: string, failed: boolean): { findings: Can
 				return { title: line.replace(/^[-*+]\s*/u, ""), text: line, blocking: false, frequency: Number(frequency), impact: Number(impact) };
 			}),
 		],
-		suggestions: [decisions.trim() && `需用户裁决：\n${decisions.trim()}`, lines.filter((line) => !DEMOTED.test(line)).join("\n")].filter(Boolean).join("\n\n"),
+		suggestions: [decisions.trim() && `需裁决：\n${decisions.trim()}`, lines.filter((line) => !DEMOTED.test(line)).join("\n")].filter(Boolean).join("\n\n"),
 	};
 }
 

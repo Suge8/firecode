@@ -11,7 +11,7 @@ const zhTerms = {
 	failed: "审查未通过",
 	finding: "发现",
 	suggestions: "建议（非阻塞）",
-	decisions: "需用户裁决",
+	decisions: "需裁决",
 	field: { condition: "发生条件", frequency: "频率", impact: "影响", issue: "问题", evidence: "证据", contract: "违反的约定与期望行为", commands: "验证命令" },
 	anchor: { files: "文件", commands: "命令" },
 	model: "模型",
@@ -26,7 +26,7 @@ const enTerms: typeof zhTerms = {
 	failed: "Review failed",
 	finding: "Finding",
 	suggestions: "Suggestions (non-blocking)",
-	decisions: "Needs user decision",
+	decisions: "Needs a decision",
 	field: {
 		condition: "Condition",
 		frequency: "Frequency",
@@ -65,7 +65,7 @@ export function fieldLine(pick: (terms: Terms) => string, { value = "", bullet =
 	return new RegExp(String.raw`^${lead}${BOLD}${termPattern(pick)}${BOLD}\s*[:：]\s*${BOLD}\s*${value}`, "iu");
 }
 
-/** 审查输出里“## 建议（非阻塞）”与“## 需用户裁决”标题行（整行，两种语言都认）：审查者解析与状态机拆这两区共用。 */
+/** 审查输出里“## 建议（非阻塞）”与“## 需裁决”标题行（整行，两种语言都认）：审查者解析与状态机拆这两区共用。 */
 export const SUGGESTIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.suggestions)}\\s*$`, "iu");
 export const DECISIONS_HEADING = new RegExp(`^##\\s+${termPattern((terms) => terms.decisions)}\\s*$`, "iu");
 
@@ -81,6 +81,11 @@ const zhReviewerBroken =
 	"审查器失效，不是代码问题：有审查者没给出结论（输出格式无效、登录或额度失效、超时），本轮不算通过。建议换一个可用的模型重审（调整该席位的模型链或补备用模型），或由指挥官亲自审查这次改动。";
 const enReviewerBroken =
 	"Reviewer failure, not a code problem: a reviewer gave no verdict (invalid output format, expired login or quota, or timeout), so this round does not pass. Suggested: re-review with a working model (adjust that seat's model chain or add a fallback), or have the Master review the change itself.";
+
+const zhWrapUp = (lead: string, first: string) =>
+	`${lead}用人话收尾，不分编号小节，裁决项之外不超过 6 行：先${first}；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后逐条列出仍要需求方拍板的「需裁决」事项，每条写两种做法各自的后果与你的推荐，已由你定下的一行说定了什么、凭什么。没有的部分省略。只做总结：不改代码、不运行工具，直接以最终回复结束本回合。`;
+const enWrapUp = (lead: string, first: string) =>
+	`${lead}Wrap up in plain language, without numbered sections, in at most 6 lines besides the decision items: first ${first}; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs a decision" item the requester still has to settle, with the consequences of each option and your recommendation, and give one line to each item you settled yourself: what you chose and why. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`;
 
 export const msg = defineMessages({
 	zh: {
@@ -162,20 +167,19 @@ export const msg = defineMessages({
 			priorHistory: "往轮 FAIL 历史：",
 			advisorReminder: "现在按 system prompt 的规则完成仲裁，并严格遵守其输出契约。",
 			fixInstruction:
-				"本轮审查未通过，请修复以下发现。将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。「建议（非阻塞）」与「需用户裁决」里的条目不要改：建议留到总结里列出，裁决项交给用户。",
+				"本轮审查未通过，请修复以下发现。将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。「建议（非阻塞）」里的条目不要改，留到总结里列出。「需裁决」里的条目不算本轮要修的发现：证据足以定、又不推翻需求方原话的，你自己定并照做；要推翻原话或其前提被证伪的，不改，留到总结交需求方定。",
 			narrowInstruction:
-				"本轮审查未通过，但顾问判定发现清单范围过宽。下方是完整发现，仅供参考：只修顾问收窄后的范围内、真正阻塞当前需求的那部分，其余发现不要处理。先根据当前文件与命令输出核实再修，修根因不压表象，修复验证后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。若认为收窄范围内的发现也不成立，说明依据并停下。「建议（非阻塞）」与「需用户裁决」里的条目不要改。",
+				"本轮审查未通过，但顾问判定发现清单范围过宽。下方是完整发现，仅供参考：只修顾问收窄后的范围内、真正阻塞当前需求的那部分，其余发现不要处理。先根据当前文件与命令输出核实再修，修根因不压表象，修复验证后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。若认为收窄范围内的发现也不成立，说明依据并停下。「建议（非阻塞）」与「需裁决」里的条目不要改。",
 			advisorScope: "顾问收窄后的范围（以此为准）：",
 			advisorAdvice: "顾问建议：",
 			materialTruncated: (omitted: number) => `[材料截断：省略 ${omitted} 字]`,
 			materialLabel: { passed: "末轮审查结论：", max_rounds: "末轮未通过的发现：", advisor_stop: "顾问裁决：" },
 			summaryInstruction: {
-				passed: (rounds: number) =>
-					`对抗审查已通过（共 ${rounds} 轮）。用人话给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用一两句说修了什么、凭什么通过；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要修改代码、不要运行工具，直接以最终回复结束本回合。`,
+				passed: (rounds: number) => zhWrapUp(`对抗审查已通过（共 ${rounds} 轮）。`, "用一两句说修了什么、凭什么通过"),
 				max_rounds: (rounds: number) =>
-					`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。用人话如实给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用两三句说卡在哪些发现上、你判断的根因、代码的真实状态与建议的下一步；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要再继续修改代码或运行工具，直接以最终回复结束本回合。`,
+					zhWrapUp(`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。`, "用两三句说卡在哪些发现上、你判断的根因、代码的真实状态与建议的下一步"),
 				advisor_stop: (rounds: number) =>
-					`对抗审查被顾问裁定终止（第 ${rounds} 轮）。结合下方顾问裁决，用人话给用户收尾，不分编号小节，裁决项之外不超过 6 行：先用两三句说修了什么、顾问为什么叫停、当前状态与建议的下一步；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后把「需用户裁决」事项原样逐条列出，交用户决定。没有的部分省略。只做总结：不要再修改代码或运行工具，直接以最终回复结束本回合。`,
+					zhWrapUp(`对抗审查被顾问裁定终止（第 ${rounds} 轮）。结合下方顾问裁决，`, "用两三句说修了什么、顾问为什么叫停、当前状态与建议的下一步"),
 			},
 
 		},
@@ -293,20 +297,25 @@ export const msg = defineMessages({
 			priorHistory: "Prior FAIL history:",
 			advisorReminder: "Now arbitrate under the system prompt and strictly follow its output contract.",
 			fixInstruction:
-				"This round's review failed. Fix the findings below. Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved then finish directly (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints). Leave the items under “Suggestions (non-blocking)” and “Needs user decision” alone: suggestions are listed in the wrap-up, decisions go to the user.",
+				"This round's review failed. Fix the findings below. Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved then finish directly (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints). Leave the items under “Suggestions (non-blocking)” alone; they are listed in the wrap-up. Items under “Needs a decision” are not findings to fix this round: settle and act on the ones the evidence settles without overriding the requester's own words; leave the ones that would override them, or whose premise was disproved, for the requester in the wrap-up.",
 			narrowInstruction:
-				"This round's review failed, but the advisor judged the finding list too broad. The full findings below are context only: fix only the part inside the advisor's narrowed scope that actually blocks the current requirement, and leave the rest alone. Verify against current files and command output before fixing, fix root causes not symptoms, and finish directly after verification (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. If even the narrowed findings do not hold, explain why and stop. Leave the items under “Suggestions (non-blocking)” and “Needs user decision” alone.",
+				"This round's review failed, but the advisor judged the finding list too broad. The full findings below are context only: fix only the part inside the advisor's narrowed scope that actually blocks the current requirement, and leave the rest alone. Verify against current files and command output before fixing, fix root causes not symptoms, and finish directly after verification (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. If even the narrowed findings do not hold, explain why and stop. Leave the items under “Suggestions (non-blocking)” and “Needs a decision” alone.",
 			advisorScope: "Advisor scope (authoritative):",
 			advisorAdvice: "Advisor note:",
 			materialTruncated: (omitted: number) => `[material truncated: ${omitted} characters omitted]`,
 			materialLabel: { passed: "Final review verdict:", max_rounds: "Final round findings:", advisor_stop: "Advisor ruling:" },
 			summaryInstruction: {
-				passed: (rounds: number) =>
-					`The adversarial review passed after ${rounds} round(s). Wrap up for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first one or two sentences on what you fixed and why it passed; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`,
+				passed: (rounds: number) => enWrapUp(`The adversarial review passed after ${rounds} round(s). `, "one or two sentences on what you fixed and why it passed"),
 				max_rounds: (rounds: number) =>
-					`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. Wrap up honestly for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first two or three sentences on which findings it got stuck on, your root-cause read, the real state of the code and the next step you recommend; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not keep changing code or run tools; end this turn with the final reply.`,
+					enWrapUp(
+						`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. `,
+						"two or three sentences on which findings it got stuck on, your root-cause read, the real state of the code and the next step you recommend",
+					),
 				advisor_stop: (rounds: number) =>
-					`The adversarial review was stopped by the advisor (round ${rounds}). Using the advisor ruling below, wrap up for the user in plain language, without numbered sections, in at most 6 lines besides the decision items: first two or three sentences on what was fixed, why the advisor called it off, the current state and the next step you recommend; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs user decision" item as raised, for the user to decide. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`,
+					enWrapUp(
+						`The adversarial review was stopped by the advisor (round ${rounds}); use the advisor ruling below. `,
+						"two or three sentences on what was fixed, why the advisor called it off, the current state and the next step you recommend",
+					),
 			},
 
 		},
