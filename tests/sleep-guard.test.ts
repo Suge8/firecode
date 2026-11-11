@@ -69,8 +69,27 @@ test("bash 里超过 30 秒的 sleep 被拦且模型拿到改法，条件循环�
 		]);
 		expect(direct).toContain("已拦下：命令里有超过 30 秒");
 		expect(direct).toContain("until <条件>; do sleep 10; done");
+		expect(direct).not.toContain("timeout <秒>");
 		expect(loop).toContain("loop-ran");
 		expect(script).toContain("已拦下：命令里有超过 30 秒");
 		expect(script).not.toContain("slept");
 	}
+}, 30_000);
+
+// timeout 另开进程组，回合中止时漏下：timeout 3600 go test 在中止后又跑了 50 分钟。长的拦下并给改法，短的与引号里的放行。
+test("bash 里超过 120 秒或算不出时长的 timeout 被拦且模型拿到改法，短的 timeout 与引号里提到的放行", async () => {
+	const [long, withOptions, unknown, short, quoted] = await run(false, [
+		["bash", { command: "timeout 3600 go test ./... && echo long-ran" }],
+		["bash", { command: "timeout -k 5 --foreground 1h make; echo options-ran" }],
+		["bash", { command: "timeout $LIMIT make; echo unknown-ran" }],
+		["bash", { command: "timeout 5 echo short-ran" }],
+		["bash", { command: 'echo "timeout 3600" quoted-ran' }],
+	]);
+	for (const blocked of [long, withOptions, unknown]) {
+		expect(blocked).toContain("已拦下：命令里有超过 120 秒");
+		expect(blocked).toContain("bash 工具的 timeout 参数");
+		expect(blocked).not.toContain("-ran");
+	}
+	expect(short).toContain("short-ran");
+	expect(quoted).toContain("quoted-ran");
 }, 30_000);
