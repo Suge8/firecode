@@ -21,7 +21,7 @@ pi 扩展：启动横幅、输入框外壳（状态嵌进边框）、工具行�
 | `provider/claude-files.ts` | Claude 请求里的内嵌图片换成上传一次的 file_id，映射按组织记在会话里、文件失效时作废并续跑（同一轮最多一次），历史前缀不变（约束见头注释） | |
 | `provider/openai-native/` | 请求层：OpenAI verbosity、OpenAI/xAI Fast（service_tier=priority）、可选原生压缩（走宿主公开流，见「硬约束」） | |
 | `round.ts` | 轮记录：测量、格式、合成规则与写记录的记录器（宿主渲染适配在 `tools/round.ts`） | |
-| `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环加整体超时 | |
+| `sleep-guard.ts` | 拦截 bash（含 codemode 嵌套调用）里超过 30 秒或算不出时长的 sleep，提示改用短步长条件循环、整体超时给 bash 工具参数；同样拦超过 120 秒的 timeout（另开进程组，中止时漏下） | |
 | `evals/delegation/` | 委派条款评测开发工具，花真钱、不进 `bun test`；改指挥官委派条款时用 | [README](evals/delegation/README.md) |
 | `site/` | 官网 firecode.si：独立的 Astro 静态站（自带依赖），推送 main 由 Vercel 部署，只在 `site/`、`design/`、两份 README、`config.example.jsonc`、`jsonc.ts` 变化时构建（判定在 `site/vercel.json`）；品牌素材引用根下 `design/`；改 README 的标语或两张表前先读 | [site/AGENTS.md](site/AGENTS.md) |
 | `spawn.ts` | 全插件唯一的进程内子会话入口：进程里只有一个池，根 `index.ts` 建一次，Master、Review 共用；非隔离子会话注册主会话已加载的这份 FireCode，宿主从磁盘另读的那份不注册，同一进程里只跑一个版本 | |

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- A `timeout` over 120 seconds (or of unknown length) in a bash command is blocked, with the fix in the message: put the overall timeout in the bash tool's `timeout` parameter, and start a job that runs longer than one call with `nohup … &`. `timeout` starts its own process group, so when the command is aborted the host's kill misses it and the command under it runs on to its limit: a `timeout 3600 go test` kept running 50 minutes after its turn was aborted. A short `timeout` and one only mentioned in quotes still run. The long-sleep message no longer suggests `timeout <seconds> bash -c '…'`.
+
 ## [1.12.0] - 2026-11-11
 
 ### Changed
