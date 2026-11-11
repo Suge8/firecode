@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-11-11
+
 ### Changed
 
 - Review items that are not code defects but a request in conflict with a convention, or a premise the reviewer disproved, are no longer handed straight to the user. The section is now "Needs a decision": the session under review settles the items the evidence settles without overriding the request, and leaves the rest to whoever made the request (you in the main session, the Master in a Worker). A Worker no longer passes these up as questions for the user, and the wrap-up gives each open item its options and a recommendation instead of copying the reviewer's text.
@@ -372,7 +374,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/Suge8/firecode/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Suge8/firecode/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Suge8/firecode/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/Suge8/firecode/compare/v1.10.0...v1.10.1
