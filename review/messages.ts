@@ -83,10 +83,16 @@ const zhReviewerBroken =
 const enReviewerBroken =
 	"Reviewer failure, not a code problem: a reviewer gave no verdict (invalid output format, expired login or quota, or timeout), so this round does not pass. Suggested: re-review with a working model (adjust that seat's model chain or add a fallback), or have the Master review the change itself.";
 
-const zhWrapUp = (lead: string, first: string) =>
-	`${lead}用人话收尾，不分编号小节，裁决项之外不超过 6 行：先${first}；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后逐条列出仍要需求方拍板的「需裁决」事项，每条写两种做法各自的后果与你的推荐，已由你定下的一行说定了什么、凭什么。没有的部分省略。只做总结：不改代码、不运行工具，直接以最终回复结束本回合。`;
-const enWrapUp = (lead: string, first: string) =>
-	`${lead}Wrap up in plain language, without numbered sections, in at most 6 lines besides the decision items: first ${first}; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs a decision" item the requester still has to settle, with the consequences of each option and your recommendation, and give one line to each item you settled yourself: what you chose and why. Omit any part that is empty. Summary only: do not change code or run tools; end this turn with the final reply.`;
+/** 核实并修复审查发现的规则：修复回合与轮数用完的收尾回合共用；after 接在“验证已解决”之后，说这一回合怎么结束。 */
+const zhRepair = (after: string) =>
+	`将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决${after}；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。「建议（非阻塞）」里的条目由你判断：出在本次改动里、改起来小的顺手修掉；需求外的加固、风格和与本任务无关的不改，留到总结里列出。「需裁决」里的条目不算本轮要修的发现：证据足以定、又不推翻需求方原话的，你自己定并照做；要推翻原话或其前提被证伪的，不改，留到总结交需求方定。`;
+const enRepair = (after: string) =>
+	`Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved${after}; avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints). Judge the items under “Suggestions (non-blocking)” yourself: fix the small ones that sit in this change; leave hardening the request did not ask for, style, and anything unrelated to this task for the wrap-up. Items under “Needs a decision” are not findings to fix this round: settle and act on the ones the evidence settles without overriding the requester's own words; leave the ones that would override them, or whose premise was disproved, for the requester in the wrap-up.`;
+
+const zhWrapUp = (lead: string, first: string, close = "只做总结：不改代码、不运行工具，直接以最终回复结束本回合。") =>
+	`${lead}用人话收尾，不分编号小节，裁决项之外不超过 6 行：先${first}；再列出你认为值得处理的建议（至多 3 条，每条一行附理由；能用 lint 规则、类型约束或脚本检查挡住再犯的模式算在内，写明做成哪种检查），其余不提；最后逐条列出仍要需求方拍板的「需裁决」事项，每条写两种做法各自的后果与你的推荐，已由你定下的一行说定了什么、凭什么。没有的部分省略。${close}`;
+const enWrapUp = (lead: string, first: string, close = "Summary only: do not change code or run tools; end this turn with the final reply.") =>
+	`${lead}Wrap up in plain language, without numbered sections, in at most 6 lines besides the decision items: first ${first}; then list the suggestions you recommend addressing (at most 3, one line each with the reason; a pattern a lint rule, a type constraint or a scripted check could stop from recurring counts — say which kind of check), and leave the rest out; finally list each "Needs a decision" item the requester still has to settle, with the consequences of each option and your recommendation, and give one line to each item you settled yourself: what you chose and why. Omit any part that is empty. ${close}`;
 
 export const msg = defineMessages({
 	zh: {
@@ -168,7 +174,7 @@ export const msg = defineMessages({
 			priorHistory: "往轮 FAIL 历史：",
 			advisorReminder: "现在按 system prompt 的规则完成仲裁，并严格遵守其输出契约。",
 			fixInstruction:
-				"本轮审查未通过，请修复以下发现。将审查反馈视为待核实假设，而非事实：先基于当前文件、测试/检查输出和会话约束核实。反馈属实时，逐条修复全部属实发现，修根因而非表象，同一根因的其他出现点一并修复，修完端到端验证问题已彻底解决后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。反馈不成立时，不应用该反馈，并说明依据（文件、命令输出或约束）。「建议（非阻塞）」里的条目由你判断：出在本次改动里、改起来小的顺手修掉；需求外的加固、风格和与本任务无关的不改，留到总结里列出。「需裁决」里的条目不算本轮要修的发现：证据足以定、又不推翻需求方原话的，你自己定并照做；要推翻原话或其前提被证伪的，不改，留到总结交需求方定。",
+				`本轮审查未通过，请修复以下发现。${zhRepair("后直接结束（本回合结束后会自动进入下一轮复审）")}`,
 			narrowInstruction:
 				"本轮审查未通过，但顾问判定发现清单范围过宽。下方是完整发现，仅供参考：只修顾问收窄后的范围内、真正阻塞当前需求的那部分，其余发现不要处理。先根据当前文件与命令输出核实再修，修根因不压表象，修复验证后直接结束（本回合结束后会自动进入下一轮复审）；避免无关重构、抽象、依赖或风格改动。若认为收窄范围内的发现也不成立，说明依据并停下。「建议（非阻塞）」与「需裁决」里的条目不要改。",
 			advisorScope: "顾问收窄后的范围（以此为准）：",
@@ -178,7 +184,11 @@ export const msg = defineMessages({
 			summaryInstruction: {
 				passed: (rounds: number) => zhWrapUp(`对抗审查已通过（共 ${rounds} 轮）。`, "用一两句说修了什么、凭什么通过"),
 				max_rounds: (rounds: number) =>
-					zhWrapUp(`对抗审查在 ${rounds} 轮内未能通过，已按上限终止。`, "用两三句说卡在哪些发现上、你判断的根因、代码的真实状态与建议的下一步"),
+					zhWrapUp(
+						`对抗审查在 ${rounds} 轮内未能通过，轮数已用完：这是最后一次修复，修完不再复审。${zhRepair("")}修完后`,
+						"用两三句说修了哪些发现（写明未经复审）、哪些没改及依据、代码的真实状态",
+						"写完总结直接结束本回合。",
+					),
 				advisor_stop: (rounds: number) =>
 					zhWrapUp(`对抗审查被顾问裁定终止（第 ${rounds} 轮）。结合下方顾问裁决，`, "用两三句说修了什么、顾问为什么叫停、当前状态与建议的下一步"),
 			},
@@ -298,7 +308,7 @@ export const msg = defineMessages({
 			priorHistory: "Prior FAIL history:",
 			advisorReminder: "Now arbitrate under the system prompt and strictly follow its output contract.",
 			fixInstruction:
-				"This round's review failed. Fix the findings below. Treat the review feedback as hypotheses to verify, not facts: verify against current files, test/check output and session constraints. When feedback is valid, fix every valid finding, fixing root causes not symptoms and other occurrences of the same root cause, and verify end-to-end that issues are truly resolved then finish directly (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. When feedback is not valid, do not apply it and explain why (files, command output, or constraints). Judge the items under “Suggestions (non-blocking)” yourself: fix the small ones that sit in this change; leave hardening the request did not ask for, style, and anything unrelated to this task for the wrap-up. Items under “Needs a decision” are not findings to fix this round: settle and act on the ones the evidence settles without overriding the requester's own words; leave the ones that would override them, or whose premise was disproved, for the requester in the wrap-up.",
+				`This round's review failed. Fix the findings below. ${enRepair(" then finish directly (the next review round will start automatically)")}`,
 			narrowInstruction:
 				"This round's review failed, but the advisor judged the finding list too broad. The full findings below are context only: fix only the part inside the advisor's narrowed scope that actually blocks the current requirement, and leave the rest alone. Verify against current files and command output before fixing, fix root causes not symptoms, and finish directly after verification (the next review round will start automatically); avoid unrelated refactors, abstractions, dependency or style changes. If even the narrowed findings do not hold, explain why and stop. Leave the items under “Suggestions (non-blocking)” and “Needs a decision” alone.",
 			advisorScope: "Advisor scope (authoritative):",
@@ -309,8 +319,9 @@ export const msg = defineMessages({
 				passed: (rounds: number) => enWrapUp(`The adversarial review passed after ${rounds} round(s). `, "one or two sentences on what you fixed and why it passed"),
 				max_rounds: (rounds: number) =>
 					enWrapUp(
-						`The adversarial review did not pass within ${rounds} round(s) and stopped at the limit. `,
-						"two or three sentences on which findings it got stuck on, your root-cause read, the real state of the code and the next step you recommend",
+						`The adversarial review did not pass within ${rounds} round(s) and the rounds are used up: this is the last repair, and it will not be reviewed again. ${enRepair("")} After the repair: `,
+						"two or three sentences on which findings you fixed (say they were not re-reviewed), which you left alone and why, and the real state of the code",
+						"End this turn once the wrap-up is written.",
 					),
 				advisor_stop: (rounds: number) =>
 					enWrapUp(

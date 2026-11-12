@@ -25,7 +25,7 @@ export function modelAtomText(atom: ModelAtom): string {
 export interface ReviewConfig {
 	advisor: ModelChain;
 	reviewers: ModelChain[];
-	/** 审查轮数硬上限。 */
+	/** 审查轮数硬上限；每轮没过都跟一次修复，最后一轮的修复不再复审。 */
 	maxRounds: number;
 	/** 连续几轮失败触发顾问仲裁。 */
 	advisorAfterFailures: number;

@@ -58,7 +58,7 @@ export const msg = defineMessages({
 			reviewPassed: (rounds: number) => `审查通过（${rounds} 轮）`,
 			reviewFallback: (names: string) => `末轮由备用模型审查：${names}；席位首选不可用，备用模型漏检明显更多，结论按此掂量。`,
 			reviewRejected: "审查未通过",
-			rejectedWhy: (rounds: number, advised: boolean) => (advised ? `审查 ${rounds} 轮，顾问叫停` : `审查 ${rounds} 轮仍有问题`),
+			rejectedWhy: (rounds: number, advised: boolean) => (advised ? `审查 ${rounds} 轮，顾问叫停` : `审查 ${rounds} 轮未通过，末轮发现已交它修、未复审`),
 			reviewReadFailed: (message: string) => `审查读取失败：${message}`,
 			reviewNoFinal: (status: string) => `审查结束时没有终态：${status}`,
 			pendingResume: "待续跑",
@@ -229,7 +229,7 @@ export const msg = defineMessages({
 			reviewFallback: (names: string) => `The final round was reviewed by a fallback model: ${names}. The seat's first choice was unavailable, and fallback models miss noticeably more defects; weigh the verdict accordingly.`,
 			reviewRejected: "review not passed",
 			rejectedWhy: (rounds: number, advised: boolean) =>
-				`${rounds} review ${plural(rounds, "round", "rounds")}; ${advised ? "the advisor called a stop" : "issues remain"}`,
+				`${rounds} review ${plural(rounds, "round", "rounds")}; ${advised ? "the advisor called a stop" : "not passed; it was given the last round's findings to fix, and that repair was not re-reviewed"}`,
 			reviewReadFailed: (message: string) => `Failed to read the review result: ${message}`,
 			reviewNoFinal: (status: string) => `The review ended without a final state: ${status}`,
 			pendingResume: "awaiting resume",

@@ -7,6 +7,8 @@
  * 相：idle → queued → reviewing → needs_fix → awaiting_fix → reviewing，终态 settled；
  * 质量裁决终态（通过 / 顾问叫停 / maxRounds 用尽）先经 summarizing：投递一个总结回合
  * 让执行模型用人话收尾（修了什么/为何过不了），回合结束才落 settled；
+ * maxRounds 用尽时这个回合先修末轮发现再收尾，修完不复审：轮数数的是审查次数，每次没过的审查都跟一次修复；
+ * 它在改代码，所以事故按修复回合处理（见 isRepairTurn），不按“跳过总结、保留裁决”；
  * 事故终态（取消 / 超时 / 基础设施错误）直接 settled，不烧总结回合；事故发生在 summarizing 时只跳过总结，保留质量裁决
  *（checkpoint 封存同一规则，见 sealed）。
  * ReviewState 按 phase 判别：每个相只带自己的数据，不存在“reviewing 却没有审查者”之类的状态。
@@ -210,7 +212,7 @@ export function reduce(state: ReviewState, event: ReviewEvent, limits: ReviewLim
 		case "TURN_ENDED":
 			return onTurnEnded(state, event.aborted, now);
 		case "CANCEL":
-			if (state.phase === "summarizing") return skipSummary(state, now, event.reason === "user" ? [{ kind: "notify_summary_skipped" }] : []);
+			if (state.phase === "summarizing" && !isRepairTurn(state)) return skipSummary(state, now, event.reason === "user" ? [{ kind: "notify_summary_skipped" }] : []);
 			return interrupt(state, now, "cancelled", event.reason, event.reason === "user" ? [{ kind: "notify_cancelled" }] : []);
 		case "TIMEOUT":
 			return interrupt(state, now, "timed_out", "timeout", [{ kind: "send_card", card: { kind: "timeout" } }]);
@@ -244,12 +246,12 @@ function beginRound(state: ReviewState, round: number, limits: ReviewLimits, now
 	return go(state, now, { phase: "reviewing", slots }, { round, roundStartedAt: now });
 }
 
-/** 总结回合不改变质量裁决；修复回合中断按用户取消收尾。 */
+/** 只做总结的回合不改变质量裁决；改代码的回合中断按用户取消收尾。 */
 function onTurnEnded(state: ReviewState, aborted: boolean, now: number): ReduceResult {
 	if (state.phase !== "awaiting_fix" && state.phase !== "summarizing") return NOTHING(state);
 	if (state.turn !== "running") return NOTHING(state);
+	if (aborted && isRepairTurn(state)) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
 	if (state.phase === "summarizing") return { state: go(state, now, { phase: "settled", end: summaryEnd(state) }), effects: [] };
-	if (aborted) return interrupt(state, now, "cancelled", "user", [{ kind: "notify_cancelled" }]);
 	return { state: go(state, now, { phase: "awaiting_fix", turn: "done" }), effects: [] };
 }
 
@@ -364,7 +366,7 @@ function toRepair(
 }
 
 function onInfrastructureError(state: ReviewState, details: string, retry: ChainPause | undefined, now: number): ReduceResult {
-	if (state.phase === "awaiting_fix") return {
+	if (isRepairTurn(state)) return {
 		state: go(state, now, { phase: "settled", end: "error", error: details, ...(retry ? { retry } : {}) }),
 		effects: [{ kind: "send_card", card: { kind: "error", message: details } }],
 	};
@@ -386,10 +388,10 @@ function interrupt(
 	return abort(state, now, result, round, effects);
 }
 
-/** 事故终态的统一出口：总结相已有质量裁决，跳过总结静默收尾；其余相追加在途轮记录后直接 settled。 */
+/** 事故终态的统一出口：只做总结的回合已有质量裁决，跳过总结静默收尾；其余相追加在途轮记录后直接 settled。 */
 function abort(state: ReviewState, now: number, end: "error" | "cancelled" | "timed_out", round: ReviewRound | undefined, effects: ReviewEffect[]): ReduceResult {
 	if (state.phase === "idle" || state.phase === "settled") return NOTHING(state);
-	if (state.phase === "summarizing") return skipSummary(state, now, []);
+	if (state.phase === "summarizing" && !isRepairTurn(state)) return skipSummary(state, now, []);
 	return { state: go(state, now, { phase: "settled", end }, round ? { history: [...state.history, round] } : {}), effects };
 }
 
@@ -409,7 +411,7 @@ export function sealed(state: ReviewState, persisted: number, now: number): Revi
 		const { end, error, retry } = state;
 		return go(state, now, { phase: "settled", end, ...(error === undefined ? {} : { error }), ...(retry ? { retry } : {}) });
 	}
-	return go(state, now, { phase: "settled", end: state.phase === "summarizing" ? summaryEnd(state) : "cancelled" });
+	return go(state, now, { phase: "settled", end: state.phase === "summarizing" && !isRepairTurn(state) ? summaryEnd(state) : "cancelled" });
 }
 
 function elapsedSince(state: ReviewState, now: number): number {
@@ -458,6 +460,11 @@ export function findingsOf(reviewers: ReviewerResult[]): string {
 /** 审查生命周期内：总结回合也算——占用标签持有到总结完成，Master 才不会在结果卡与总结之间的窗口提前结算、漏掉总结回复。 */
 export function isActive(state: ReviewState): boolean {
 	return state.phase !== "idle" && state.phase !== "settled";
+}
+
+/** 执行模型在改代码的回合：修复回合，与轮数用尽后先修末轮发现的收尾回合。它们没跑完就是没修完，取消、超时、故障照实收尾。 */
+export function isRepairTurn(state: ReviewState): boolean {
+	return state.phase === "awaiting_fix" || (state.phase === "summarizing" && summaryKindOf(state.history.at(-1)) === "max_rounds");
 }
 
 /** 总结回合收尾时的结局：由质量裁决那一轮决定。 */
