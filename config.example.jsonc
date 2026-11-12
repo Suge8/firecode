@@ -71,7 +71,7 @@
 	"review": {
 		"advisor": ["claude-opus-5-5/high", "gpt-6-astra/high"],
 		"reviewers": [["gpt-6.1-terra/low", "claude-opus-5-5/low"]],
-		"maxRounds": 3, // two repair rounds get most of the gain; later rounds mostly add noise
+		"maxRounds": 3, // every failed round is followed by a repair, and the last repair is not reviewed again; rounds past the third mostly add noise
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
 		"tools": ["read", "grep", "find", "ls", "bash"]

@@ -87,7 +87,7 @@ export function buildFixFeedback(input: FixFeedbackInput): string {
 	return wrapEnvelope("firecode_review", parts.join("\n"));
 }
 
-/** 总结提示携带的终态材料上限：模型已经历过修复轮，材料只补它没见过的终态结论。 */
+/** 总结提示携带的终态材料上限：末轮结论的全文已随结果卡进了上下文，这里只是指给模型看。 */
 const SUMMARY_MATERIAL_LIMIT = 4_000;
 
 interface SummaryPromptInput {
@@ -97,7 +97,7 @@ interface SummaryPromptInput {
 	material: string;
 }
 
-/** 质量裁决终态后投给执行模型的总结回合提示：人话收尾，带反循环禁令。 */
+/** 质量裁决终态后投给执行模型的总结回合提示：人话收尾；通过与顾问叫停只许总结，轮数用尽先修末轮发现（不复审）。 */
 export function buildSummaryPrompt(input: SummaryPromptInput): string {
 	const omitted = input.material.length - SUMMARY_MATERIAL_LIMIT;
 	const material = omitted > 0

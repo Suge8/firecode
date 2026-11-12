@@ -33,6 +33,7 @@ import {
 	reduce,
 	resultsOf,
 	roundText,
+	isRepairTurn,
 	summaryKindOf,
 } from "./state.js";
 import { ReviewUi } from "./ui.js";
@@ -217,11 +218,9 @@ export class Run {
 	/** 自动重试和续跑结束后，依据当前分支上的最终回复判定结局。 */
 	agentSettled(event: AgentSettledEvent, ctx: ExtensionContext): void {
 		const { state } = this;
-		if (state.phase === "summarizing" && state.turn === "running") {
-			this.dispatch({ type: "TURN_ENDED", aborted: event.aborted });
-		} else if (state.phase === "awaiting_fix" && state.turn === "running") {
+		if ((state.phase === "summarizing" || state.phase === "awaiting_fix") && state.turn === "running") {
 			const assistant = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-			if (event.aborted) this.dispatch({ type: "TURN_ENDED", aborted: true });
+			if (event.aborted || !isRepairTurn(state)) this.dispatch({ type: "TURN_ENDED", aborted: event.aborted });
 			else if (assistant?.type === "message" && assistant.message.role === "assistant" && assistant.message.stopReason === "error")
 				// 执行模型链暂时整条不可用（瞬时故障）时带上恢复时刻：Master 到时续审，而不是报审查未完成。
 				this.dispatch({ type: "INFRASTRUCTURE_ERROR", details: assistant.message.errorMessage || msg.outcome.error, retry: routePause(ctx.model) });
@@ -339,7 +338,7 @@ export class Run {
 	/**
 	 * 修复反馈与总结提示经统一投递入口（deliver.ts），回合照常经过 before_agent_start；
 	 * deliver resolve 即消息已进入回合，pending → running 由它推进，没有计时器；reload 从 pending 重投。delivering 防止等待期间重复投递。
-	 * 总结是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；修复反馈投递抛错按故障收尾。
+	 * 只做总结的回合是尽力而非必须：投递抛错就静默收尾（裁决与结果卡已落地）；改代码的回合投递抛错按故障收尾。
 	 */
 	private async deliverTurn(content: string): Promise<void> {
 		if (this.delivering) return;
@@ -376,7 +375,8 @@ export class Run {
 	/** 审查进度只读 reducer 的当前状态；只有审查相的票数可数。 */
 	private progress(): ReviewProgress | undefined {
 		const { state } = this;
-		const stage = STAGE[state.phase];
+		// 轮数用完的收尾回合先修末轮发现再总结，界面上按修复算。
+		const stage = isRepairTurn(state) ? "fixing" : STAGE[state.phase];
 		if (!stage) return undefined;
 		const results = state.phase === "reviewing" ? resultsOf(state.slots) : [];
 		const count = (status: string) => results.filter((result) => result.status === status).length;
