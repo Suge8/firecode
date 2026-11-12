@@ -22,6 +22,7 @@ import { roundOf } from "./round.js";
 import type { BusyView } from "../busy.js";
 import { ARRIVAL_FLASH_MS, Line, TurnSummary, type SummaryView } from "./turn-summary.js";
 
+/** 按能力识别工具行，不比类：扩展被多次加载时 ToolLine 有多份，类身份不相等。 */
 function actionLine(component: Component | undefined): ActionLine | undefined {
 	return component && "actionWord" in component && typeof component.actionWord === "string"
 		? component as ActionLine : undefined;
@@ -52,7 +53,7 @@ function isModelProcess(component: Component): boolean {
 		|| component instanceof CustomMessageComponent;
 }
 
-/** 有实质的过程（工具或思考）或轮记录才有摘要行；提示只折入有摘要行的段。 */
+/** 有实质的过程（工具或思考）或轮记录才有摘要行；提示只折入有摘要行的段，为一条提示另造摘要行会把回复顶下去。 */
 function hasSubstance(component: Component): boolean {
 	return component instanceof ToolExecutionComponent
 		|| (component instanceof AssistantMessageComponent && hasThinking(component))

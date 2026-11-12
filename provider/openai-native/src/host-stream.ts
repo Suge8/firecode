@@ -6,6 +6,8 @@ import { isRecord } from "../../../jsonc.js";
 /**
  * Pi 会话消息 → Responses 请求体，一律交给宿主的模型注册表（`ctx.modelRegistry.streamSimple`，公开接口）做：
  * 序列化、鉴权（含 baseUrl 与 env）、重试都是宿主的事，这里只在宿主把请求体交给 onPayload 时截下或改写，并在 fetch 上记下最终响应。
+ * 升级 pi 时核对：显式传入的 onPayload 优先，且注册表调用不触发 before_provider_request（上游 pi#9773）——
+ * 一旦触发，本扩展自己的钩子会在压缩请求里被再次调用，须保证它不对这类请求重放或改写。
  * 自己再写一份序列化会与宿主分叉（带语法约束的工具调用、外来 call_id 的规整、中途系统消息都曾因此出错）。
  */
 export type ResponsesPayload = { model: string; input: Record<string, unknown>[]; instructions?: string; [key: string]: unknown };
