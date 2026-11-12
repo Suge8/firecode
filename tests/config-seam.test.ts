@@ -42,9 +42,9 @@ test("Master 角色表按有序模型链解析", async () => {
 	]);
 	// 后台模型省略即关闭（每次都是真实调用）；写成模型链才开启，闲置压缩默认开。
 	expect(loaded.config.background).toBeUndefined();
-	const withBackground = await loadFrom(JSON.stringify({ features, master: { roles: { 哨兵: { model: "test/shared/low", use: "盯守" } } }, background: { model: ["test/a/low", "test/b/low"] } }));
+	const withBackground = await loadFrom(JSON.stringify({ features, master: { roles: { 哨兵: { model: "test/shared/low", use: "盯守" } } }, background: { lineModel: ["test/a/low", "test/b/low"], compactionModel: "test/b/medium" } }));
 	expect(withBackground.problems).toEqual([]);
-	expect(withBackground.config.background).toEqual({ model: [{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }], idleCompaction: true, sessionNames: true });
+	expect(withBackground.config.background).toEqual({ lineModel: [{ model: "test/a", thinking: "low" }, { model: "test/b", thinking: "low" }], compactionModel: [{ model: "test/b", thinking: "medium" }], idleCompaction: true, sessionNames: true });
 });
 
 // 手误与缺失字段一律报出并拒绝启动对应功能，不静默回退成默认值（回退会拿用户没选的模型真实发起调用）。
@@ -54,8 +54,8 @@ test("手误与缺失字段都被报出，对应功能拒绝启动", async () =>
 		["master 角色里的未知字段", { master: { roles: { 工程师: { model: "p/m/high", thinking: "medium", use: "x" } } } }, "master.roles.工程师.thinking"],
 		["master 无效思考档", { master: { roles: { 调研员: { model: "test/model", use: "x" } } } }, "master.roles.调研员.model"],
 		["master 空角色表", { master: { roles: {} } }, "master.roles"],
-		["background 缺模型链", { background: { idleCompaction: true } }, "background.model"],
-		["background.idleCompaction 不是布尔", { background: { model: "p/m/low", idleCompaction: "yes" } }, "background.idleCompaction"],
+		["background 缺模型链", { background: { lineModel: "p/m/low", idleCompaction: true } }, "background.compactionModel"],
+		["background.idleCompaction 不是布尔", { background: { lineModel: "p/m/low", compactionModel: "p/m/low", idleCompaction: "yes" } }, "background.idleCompaction"],
 		["review 旧的 { model, thinking } 对象", { review: { advisor: { model: "p/m", thinking: "max" } } }, "review.advisor"],
 		["review 不是对象", { review: "typo" }, "review"],
 		["review 缺失的显式字段", { review: { maxRounds: 3 } }, "review.timeoutMinutes"],
@@ -69,7 +69,7 @@ test("手误与缺失字段都被报出，对应功能拒绝启动", async () =>
 		expect(`${name}: ${loaded.problems.some((problem: string) => problem.includes(path))}`).toBe(`${name}: true`);
 	}
 	// 有问题的 background 整节不生效：后台活都是真实调用，不替用户补模型。
-	expect((await loadFrom(JSON.stringify({ features, background: { model: "bad" } }))).config.background).toBeUndefined();
+	expect((await loadFrom(JSON.stringify({ features, background: { lineModel: "bad", compactionModel: "bad" } }))).config.background).toBeUndefined();
 	const broken = await loadFrom(JSON.stringify({ features, master: { roles: { 工程师: { model: "bad", use: "x" } } } }));
 	expect(broken.master.error).toBeTruthy();
 });
@@ -125,7 +125,8 @@ test("公共配置模板可解析并启用完整推荐工作流", async () => {
 	for (const feature of ["claudeSub", "claudeFiles", "openaiNative", "review", "master"])
 		expect(loaded.config.features[feature]).toBeTrue();
 	expect(loaded.master.config.autoActivate).toBeTrue();
-	expect(loaded.config.background.model.length).toBeGreaterThan(0);
+	expect(loaded.config.background.lineModel.length).toBeGreaterThan(0);
+	expect(loaded.config.background.compactionModel.length).toBeGreaterThan(0);
 	expect(loaded.config.background.idleCompaction).toBeTrue();
 });
 

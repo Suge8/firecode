@@ -142,14 +142,6 @@ export const msg = defineMessages({
 			pool: (count: number, summary: string) => `池 ${count}：${summary}`,
 			noWorkers: "没有子代理",
 		},
-		progress: {
-			brief: (text: string) => `工作说明：${text}`,
-			previous: (text: string) => `上一句：${text}`,
-			notes: (text: string) => `新动态：\n${text}`,
-			said: (text: string) => `说：${text}`,
-			empty: "模型没有给出进展",
-			failing: (count: number, reason: string) => `子代理进展行连续 ${count} 次生成失败，先显示工具动作：${reason}`,
-		},
 		/** 相位的状态词（phase.ts 的 PhaseKind）：活动列表之外的所有展示（全过程视图上横线、池查询、status）只用这一张表。 */
 		phase: { running: "运行中", stuck: "卡住", review: "审查中", paused: "暂停", done: "完成", failed: "失败", rejected: "未通过", interrupted: "被中断", idle: "空闲" },
 		activity: {
@@ -321,14 +313,6 @@ export const msg = defineMessages({
 			poolEmpty: "Pool 0",
 			pool: (count: number, summary: string) => `Pool ${count}: ${summary}`,
 			noWorkers: "No Workers",
-		},
-		progress: {
-			brief: (text: string) => `Brief: ${text}`,
-			previous: (text: string) => `Previous: ${text}`,
-			notes: (text: string) => `New activity:\n${text}`,
-			said: (text: string) => `Said: ${text}`,
-			empty: "The model gave no progress line",
-			failing: (count: number, reason: string) => `Sub-agent progress lines failed ${count} times in a row; showing tool actions instead: ${reason}`,
 		},
 		phase: { running: "Running", stuck: "Stuck", review: "Reviewing", paused: "Paused", done: "Done", failed: "Failed", rejected: "Not passed", interrupted: "Interrupted", idle: "Idle" },
 		activity: {

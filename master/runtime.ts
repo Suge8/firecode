@@ -12,7 +12,7 @@ import { withElapsed, type MasterEvent } from "./event-format.js";
 import { msg } from "./messages.js";
 import { Outbox } from "./outbox.js";
 import type { ActivityFacts, SettledFact, WorkerFacts } from "./phase.js";
-import { ProgressLines } from "./progress.js";
+import { ProgressLines } from "../background/progress.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { STATUS_KEYS } from "../status-keys.js";
 import type { Roles } from "./roles.js";
@@ -33,7 +33,7 @@ export interface Landing {
 export interface MasterSetup {
 	pi: ExtensionAPI;
 	pool: InProcessSessionPool;
-	/** 在跑子代理进展行的模型链（配置 background.model）；false 不生成。 */
+	/** 在跑子代理进展行的模型链（配置 background.lineModel）；false 不生成。 */
 	progress: ModelChain | false;
 	exclusions: string[];
 	/** fire-review 不可用的原因；可用时为 undefined。 */

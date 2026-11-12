@@ -48,6 +48,8 @@ export interface TopParts {
 	/** 火苗或落定标记；空表示没有回合。 */
 	mark: string;
 	word: string;
+	/** 主会话的进展行（已着色）；有就替换 word，放不下逐列裁到 LINE_MIN 再退回 word。 */
+	line: string;
 	elapsed: string;
 	/** 审查进度由长到短的退让档（已着色）；空数组表示没有审查。 */
 	review: readonly string[];
@@ -56,21 +58,26 @@ export interface TopParts {
 	glow: number;
 }
 
-/** 退让顺序：审查进度逐档缩短 → “处理中” → 审查进度最短档 → 指挥官。 */
+/** 进展行裁到这么窄就退回“处理中”：再短读不出在做什么。 */
+const LINE_MIN = 16;
+
+/** 退让顺序：进展行逐列裁到 LINE_MIN → 审查进度逐档缩短 → “处理中” → 审查进度最短档 → 指挥官。 */
 export function topBorder(width: number, parts: TopParts, line: Line): string {
-	const left = (word: boolean, review: string) => {
-		const head = [parts.mark, word ? parts.word : "", parts.elapsed].filter(Boolean).join(" ");
+	const left = (word: string, review: string) => {
+		const head = [parts.mark, word, parts.elapsed].filter(Boolean).join(" ");
 		return [head, review].filter(Boolean).join(SEPARATOR);
 	};
 	const right = (...items: string[]) => items.filter(Boolean).join(" ");
-	const at = (word: boolean, review: string, ...items: string[]): BorderParts => [left(word, review), right(...items)];
+	const at = (word: string, review: string, ...items: string[]): BorderParts => [left(word, review), right(...items)];
 	const [full = "", ...shorter] = parts.review;
-	return fitBorder(width, line, parts.glow, [
-		...[full, ...shorter].map((review) => at(true, review, parts.master)),
-		at(false, parts.review.at(-1) ?? "", parts.master),
-		at(false, "", parts.master),
-		at(false, ""),
-	]);
+	function* candidates() {
+		for (let n = visibleWidth(parts.line); n >= LINE_MIN; n--) yield at(clip(parts.line, n), full, parts.master);
+		for (const review of [full, ...shorter]) yield at(parts.word, review, parts.master);
+		yield at("", parts.review.at(-1) ?? "", parts.master);
+		yield at("", "", parts.master);
+		yield at("", "");
+	}
+	return fitBorder(width, line, parts.glow, candidates());
 }
 
 export interface BottomParts {

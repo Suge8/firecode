@@ -82,13 +82,16 @@ class Shell {
 		const { busy, settled } = this;
 		const status = (key: string) => this.statuses().get(key) ?? "";
 		const parts: TopParts = {
-			mark: "", word: "", elapsed: "", review: [], glow: 0,
+			mark: "", word: "", line: "", elapsed: "", review: [], glow: 0,
 			master: status(STATUS_KEYS.master),
 		};
 		if (busy.since !== undefined) {
 			parts.mark = flame(3, phaseOf(0));
 			const word = activityWord(busy);
 			parts.word = word && this.fg("text", word);
+			// 进展行只说指挥官自己的回合：等子代理与审查期间各有自己的说明。
+			const line = busy.agentRunning && !busy.review ? status(STATUS_KEYS.progress) : "";
+			parts.line = line && this.fg("text", line);
 			parts.elapsed = this.fg("muted", formatDuration(Date.now() - busy.since));
 			parts.glow = 1;
 		} else if (settled) {

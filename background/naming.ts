@@ -2,7 +2,7 @@
  * 会话自动命名（只在主会话的交互与 RPC 模式；print/json 是一次性运行，子会话是 Worker）。
  *
  * 触发：会话没有名字时，用户的一条消息到达（input 事件）就在后台起名，不挡回合；同一会话同时只有一个请求在飞。
- * 输入只有这条消息的文字（约 1000 字节，不带图片）。模型只走 background.model 链、单次失败不重试也不退回主模型，
+ * 输入只有这条消息的文字（约 1000 字节，不带图片）。模型只走 background.lineModel 链、单次失败不重试也不退回主模型，
  * 标题照旧显示首句，下一条用户消息再试；模型认为没有可命名的任务（问候、闲聊）时返回空，同样不设名、下一条再试。
  *
  * 写回前复查：会话仍没有名字、且仍是发起时的会话才 setSessionName。会话拆除（切换、/new、/resume、退出）时 session_shutdown 中止在飞请求，
@@ -19,8 +19,8 @@ import { cleanName } from "../statusbar/title.js";
 const PROMPT = readPrompt(new URL("./prompts/", import.meta.url), "naming");
 
 const INPUT_BYTES = 1_000;
-/** 名字的字符上限：提示词要求中文约 20 字，这里只挡模型不听话。 */
-const NAME_CHARS = 40;
+/** 名字的字符上限：提示词要求中文 10 字、英文 2 到 4 个词，这里只挡模型不听话。 */
+const NAME_CHARS = 30;
 /** 低思考档的推理也计入输出额度，留够免得一句话被截断。 */
 const MAX_TOKENS = 1_024;
 const WRAPPING = /^["'`“”‘’「」]+|["'`“”‘’「」]+$/gu;
