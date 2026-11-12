@@ -21,8 +21,8 @@ import { msg } from "./messages.js";
 
 const PROMPT = readPrompt(new URL("./prompts/", import.meta.url), "progress");
 
-/** 一行的显示宽度：中文 40 字与英文 80 字符都是 80 列。 */
-const LINE_WIDTH = 80;
+/** 一行的显示宽度上限：提示词要求中文 10 字（20 列）、英文 30 字符，这里只挡模型不听话。 */
+const LINE_WIDTH = 30;
 /** 输入各段上限：合计（含标签）约 3k 字符。 */
 const BRIEF_CHARS = 600;
 const SAID_CHARS = 300;

@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - **Breaking:** `background.model` is split into `background.lineModel` (progress lines, session names) and `background.compactionModel` (compaction summaries, idle compaction), so summaries can run at a higher thinking level than one-line jobs. The old field is reported as unknown and the section stays off until both are set.
-- Progress lines refresh at most once a minute instead of every two minutes.
+- Progress lines refresh at most once a minute instead of every two minutes, and say only what is being done, in at most 10 Chinese characters or 5 English words.
+- Automatic session names are shorter: at most 10 Chinese characters or 2 to 4 English words.
 
 ## [1.14.0] - 2026-11-11
 

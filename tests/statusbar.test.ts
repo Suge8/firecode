@@ -88,7 +88,7 @@ test("任意宽度下输入框每一行都不超出终端宽度（宿主遇到�
 	const { fake, ctx, editor: getEditor, start } = await mount({
 		model: { id: "gpt-5.5", reasoning: true, contextWindow: 1_000_000 },
 		name: () => "修复登录态偶发失效",
-		statuses: new Map([["master", "指挥官"], ["firecode-progress", "正在核对配置解析对旧字段的报错，为了确认整节不生效"]]),
+		statuses: new Map([["master", "指挥官"], ["firecode-progress", "正在核对配置解析对旧字段的报错"]]),
 		pi: { getThinkingLevel: () => "high" },
 	});
 	start();
@@ -99,7 +99,7 @@ test("任意宽度下输入框每一行都不超出终端宽度（宿主遇到�
 			for (const line of editor.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 	};
 	// 进展行替换“处理中”，窄了裁短、再窄退回“处理中”。
-	expect(stripVTControlCharacters(editor.render(120)[0])).toContain("正在核对配置解析对旧字段的报错，为了确认整节不生效");
+	expect(stripVTControlCharacters(editor.render(120)[0])).toContain("正在核对配置解析对旧字段的报错");
 	expect(stripVTControlCharacters(editor.render(40)[0])).toContain("正在核对");
 	expect(stripVTControlCharacters(editor.render(32)[0])).toContain("处理中");
 	fits();

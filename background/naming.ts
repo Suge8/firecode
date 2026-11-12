@@ -19,8 +19,8 @@ import { cleanName } from "../statusbar/title.js";
 const PROMPT = readPrompt(new URL("./prompts/", import.meta.url), "naming");
 
 const INPUT_BYTES = 1_000;
-/** 名字的字符上限：提示词要求中文约 20 字，这里只挡模型不听话。 */
-const NAME_CHARS = 40;
+/** 名字的字符上限：提示词要求中文 10 字、英文 2 到 4 个词，这里只挡模型不听话。 */
+const NAME_CHARS = 30;
 /** 低思考档的推理也计入输出额度，留够免得一句话被截断。 */
 const MAX_TOKENS = 1_024;
 const WRAPPING = /^["'`“”‘’「」]+|["'`“”‘’「」]+$/gu;
