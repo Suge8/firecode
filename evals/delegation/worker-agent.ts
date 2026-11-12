@@ -20,7 +20,7 @@ export function setupAgent(form: string | undefined): void {
 	mkdirSync(join(agent, "extensions/firecode"), { recursive: true });
 	for (const file of ["auth.json", ...(form ? [] : ["settings.json"]), "models.json", "models-store.json", "SYSTEM.md", "bin"])
 		if (existsSync(join(USER_AGENT_DIR, file))) symlinkSync(join(USER_AGENT_DIR, file), join(agent, file));
-	const off = Object.fromEntries(["header", "statusbar", "tools", "rename", "stats", "openaiNative", "review", "master"].map((k) => [k, false]));
+	const off = Object.fromEntries(["header", "statusbar", "tools", "stats", "claudeFiles", "openaiNative", "review", "master"].map((k) => [k, false]));
 	writeFileSync(join(agent, "extensions/firecode/config.jsonc"), JSON.stringify({ features: { ...off, claudeSub: true } }));
 	writeFileSync(join(agent, "extensions/firecode/index.ts"), 'export { default } from "./source/index.ts";\n');
 	symlinkSync(source, join(agent, "extensions/firecode/source"));

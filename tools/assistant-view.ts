@@ -50,6 +50,7 @@ export function assistantView(source: AssistantMessageComponent, expanded: boole
 			// 独立的渲染接收者保留原生 OSC133/鼠标布局逻辑；原消息、原树和思考展开状态不改写。
 			const projection: AssistantMessageComponent = Object.create(source);
 			projection.children = source.children.map((child) => child === data.contentContainer ? content : child);
+			// 子节点与原消息共用，由宿主经原消息失效更新；投影再调原生 invalidate 会重建它们。
 			projection.invalidate = () => {};
 			body = projection;
 		}

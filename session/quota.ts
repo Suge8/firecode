@@ -1,4 +1,7 @@
-/** /quota：按需查询 Pi OAuth 订阅额度，只投界面通知，不参与会话或模型调用。 */
+/** /quota：按需查询 Pi OAuth 订阅额度，只投界面通知，不参与会话或模型调用。
+ * 两家的用量接口都是非公开契约，改解析前先拿真实响应核实。Claude 的 Fable 周额度与总周额度共享约束，不是额外额度；
+ * `is_active` 为 false 的窗口仍可能有有效额度，不据此过滤。
+ */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { msg } from "./messages.js";
 

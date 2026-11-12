@@ -221,7 +221,8 @@ export class InProcessSessionPool {
 			const sessionManager = makeSessionManager(options.persistence, options.cwd);
 			const result = await createAgentSession({
 				cwd: options.cwd,
-				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。
+				// 与模型解析同一份：不传时宿主会为每个子会话重读一次 auth.json 与 models.json。共用的后果：某个子会话里
+				// 扩展注册的 provider 对同池其他子会话也可见（宿主把它写进这份运行时，升级 pi 时重核）。
 				modelRuntime: runtime,
 				model: route.model,
 				tools: options.tools,

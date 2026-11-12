@@ -31,7 +31,7 @@ export interface ReviewConfig {
 	advisorAfterFailures: number;
 	/** 单个审查者 / 顾问会话超时（分钟）。 */
 	timeoutMinutes: number;
-	/** 审查者只读工具白名单。 */
+	/** 审查者的工具白名单。 */
 	tools: string[];
 }
 
@@ -279,7 +279,10 @@ function parseModelAtom(value: unknown, field: string, problems: string[]): Mode
 // ---- review 节 ----
 
 const REVIEW_KEYS = ["advisor", "reviewers", "maxRounds", "advisorAfterFailures", "timeoutMinutes", "tools"] as const;
-/** 审查者只读：写入类工具直接拒绝配置，不留到会话里过滤。 */
+/**
+ * 审查者只读：写入类工具直接拒绝配置，不留到会话里过滤。这是契约不是隔离：保留的 bash 仍能执行任意命令，
+ * 留着它是为了让审查者跑测试取证；物理隔离要容器或只读挂载。
+ */
 const REVIEW_WRITE_TOOLS = ["write", "edit"];
 
 /** 严格拒绝未知字段（含嵌套），缺失与类型错误一律记录；有问题的节整节拒绝启动，所以不存在回退默认值。 */

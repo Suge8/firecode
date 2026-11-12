@@ -206,7 +206,7 @@ export class Run {
 	// ---- 宿主事件 ----
 
 	/** 其他扩展可在我们排队后异步触发执行模型。agent_start 是宿主提供的硬边界：宿主会 await 本 handler，
-	 * 所以先 abort 并等所有审查会话真正退出，再允许模型 turn_start。 */
+	 * 所以先 abort 并等所有审查会话真正退出（dispose 时审查者的 bash 子进程随中止被杀），再允许模型 turn_start。 */
 	async agentStarted(): Promise<void> {
 		const action = this.action;
 		if (!action) return;

@@ -50,6 +50,7 @@ function checkShape(child: Component): void {
 	if (child instanceof AssistantMessageComponent) assistantFacts(child);
 }
 
+/** 升级 pi 时核对这里补丁的宿主方法：两个 setExpanded、Container.addChild、聊天容器的 render 与 handleMouse。 */
 function attach(tui: TUI, ui: ExtensionUIContext, options: GroupOptions): () => void {
 	const originalExpand = ToolExecutionComponent.prototype.setExpanded;
 	const originalMessageExpand = CustomMessageComponent.prototype.setExpanded;
