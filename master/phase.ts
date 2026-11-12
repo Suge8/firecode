@@ -28,7 +28,7 @@ export interface WorkerFacts {
 	startedAt?: number;
 	/** 无输出计时的起点（本回合开始或最近一次输出）；卡住按它与本次运行起点中较晚者计算。 */
 	quietSince?: number;
-	/** 在跑子代理的进展行（见 progress.ts）：一句现在时的“在做什么”，有就替代在跑行的工具动作。 */
+	/** 在跑子代理的进展行（见 background/progress.ts）：一句现在时的“在做什么”，有就替代在跑行的工具动作。 */
 	progress?: string;
 	settled?: SettledFact;
 }

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- The main session gets a progress line too: while its own turn runs, the top border of the input box shows one sentence saying what it is doing, in place of "Working". It is written by the background model from the same short notes as the sub-agent lines.
+
+### Changed
+
+- **Breaking:** `background.model` is split into `background.lineModel` (progress lines, session names) and `background.compactionModel` (compaction summaries, idle compaction), so summaries can run at a higher thinking level than one-line jobs. The old field is reported as unknown and the section stays off until both are set.
+- Progress lines refresh at most once a minute instead of every two minutes.
+
 ## [1.14.0] - 2026-11-11
 
 ### Changed

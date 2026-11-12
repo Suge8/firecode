@@ -30,19 +30,23 @@
 		}
 	},
 
-	// One cheap model chain for background work, separate from roles and review. It is the only model used for:
-	// - the one line saying what each running sub-agent is doing (activity list and sub-agent view, never sent to the Master):
-	//   first after 30 seconds of running, then at most every 2 minutes and only with new output; about 4k tokens in, 30 out;
+	// Two cheap model chains for background work, separate from roles and review.
+	// lineModel writes single lines, so a low thinking level is enough:
+	// - the one line saying what a running turn is doing, for each sub-agent (activity list and sub-agent view, never sent to the Master)
+	//   and for the main session (top border of the input box, in place of "Working"): first after 30 seconds of running,
+	//   then once a minute while there is new output; about 4k tokens in, 30 out;
+	// - sessionNames: an unnamed session is named from your first message, in the background (about 1k bytes in, one short line out).
+	//   Greetings get no name and the next message tries again; a name you set yourself (/name, rename key) always wins.
+	// compactionModel writes summaries the session keeps working from, so it gets a higher thinking level:
 	// - every compaction summary, automatic or /compact, in the main session and in sub-agents (instead of the session model).
 	//   A candidate whose context window cannot hold the conversation is skipped; if the whole chain fails, Pi's default compaction runs;
 	// - idleCompaction: when a session sits idle past the 1-hour prompt cache, the next request starts from a summary prepared in advance
-	//   instead of re-sending 150k+ tokens uncached;
-	// - sessionNames: an unnamed session is named from your first message, in the background (about 1k bytes in, one short line out).
-	//   Greetings get no name and the next message tries again; a name you set yourself (/name, rename key) always wins.
+	//   instead of re-sending 150k+ tokens uncached.
 	// Haiku comes first: in replays of real sessions its summaries kept more of the details used later (46% vs 33% for Luna).
-	// GPT-only: ["gpt-6-luna/low"]. Claude-only: ["claude-haiku-5-5/low"]. Remove the whole section to turn all four off.
+	// GPT-only: use gpt-6-luna in both. Claude-only: use claude-haiku-5-5 in both. Remove the whole section to turn all four off.
 	"background": {
-		"model": ["claude-haiku-5-5/low", "gpt-6-luna/low"],
+		"lineModel": ["claude-haiku-5-5/low", "gpt-6-luna/low"],
+		"compactionModel": ["claude-haiku-5-5/medium", "gpt-6-luna/medium"],
 		"idleCompaction": true,
 		"sessionNames": true
 	},

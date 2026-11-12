@@ -108,7 +108,7 @@ const conversation = async (session: any, turns = 3) => {
 };
 
 test("/compact：后台链写摘要，窗口放不下的候选被跳过，会话模型不写摘要，摘要经 pi 的压缩条目持久化", async () => {
-	const { session, requests, compactions } = await setup({ background: { model: [SMALL, LUNA] } });
+	const { session, requests, compactions } = await setup({ background: { lineModel: [SMALL, LUNA], compactionModel: [SMALL, LUNA] } });
 	await conversation(session);
 	const result = await session.compact();
 	expect(summaries(requests)).toEqual(["luna"]);
@@ -118,7 +118,7 @@ test("/compact：后台链写摘要，窗口放不下的候选被跳过，会话
 });
 
 test("后台链全部失败：出一条提示，pi 默认压缩用会话模型完成", async () => {
-	const { session, requests, notices, compactions } = await setup({ background: { model: [SMALL, LUNA] }, failing: ["luna"] });
+	const { session, requests, notices, compactions } = await setup({ background: { lineModel: [SMALL, LUNA], compactionModel: [SMALL, LUNA] }, failing: ["luna"] });
 	await conversation(session);
 	await session.compact();
 	expect(summaries(requests)).toEqual(["luna", "session"]);
@@ -143,7 +143,7 @@ test.each([
 	["链换到另一个物理模型后用那个模型的阈值", { "test/luna": OVERRIDE }, ["session"], ["test/session", "test/luna"]],
 ] as const)("%s，摘要由后台链写", async (_name, modelOverrides, down, chain) => {
 	const { pool, requests, cwd } = await setup({
-		background: { model: [MEDIUM] },
+		background: { lineModel: [MEDIUM], compactionModel: [MEDIUM] },
 		settings: { compaction: { enabled: true, keepRecentTokens: 200, modelOverrides } },
 		down: [...down],
 	});
@@ -169,7 +169,7 @@ const sessionRequests = (requests: Request[]) => requests.filter((request) => !r
 
 /** 一大轮加一小轮对话后歇下（保留段之前要有可摘要的内容），等预算摘要的请求发出并落定。 */
 async function idleSession(timing = IDLE) {
-	const harness = await setup({ background: { model: [LUNA] }, timing, settings: ENABLED });
+	const harness = await setup({ background: { lineModel: [LUNA], compactionModel: [LUNA] }, timing, settings: ENABLED });
 	await harness.session.prompt(`big ${HUGE}`);
 	await harness.session.prompt(`follow-up ${"word ".repeat(400)}`);
 	await until(() => summaries(harness.requests).length === 1);
@@ -205,7 +205,7 @@ test("会话命名：第一句话后后台模型起名，主回复不等它；�
 	let release = () => {};
 	const held = new Promise<void>((resolve) => { release = resolve; });
 	const { session, requests } = await setup({
-		background: { model: [LUNA] },
+		background: { lineModel: [LUNA], compactionModel: [LUNA] },
 		naming: async (input) => input.includes("hello") ? "" : (await held, "Fix login bug"),
 	});
 	const naming = () => requests.filter((request) => request.text.startsWith("NAMING"));
@@ -225,7 +225,7 @@ test("会话命名：第一句话后后台模型起名，主回复不等它；�
 });
 
 test("会话命名：经 pi.sendUserMessage 送进来的第一句话（CuePad 桥接路径）同样起名", async () => {
-	const { host, session } = await setup({ background: { model: [LUNA] }, naming: () => "From bridge" });
+	const { host, session } = await setup({ background: { lineModel: [LUNA], compactionModel: [LUNA] }, naming: () => "From bridge" });
 	host.pi.sendUserMessage("fix the bridge");
 	await until(() => session.sessionManager.getSessionName() === "From bridge");
 });

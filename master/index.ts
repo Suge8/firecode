@@ -67,7 +67,7 @@ export function registerMaster(pi: ExtensionAPI, pool: InProcessSessionPool, sta
 	const setup: MasterSetup = {
 		pi,
 		pool,
-		progress: all.config.background?.model ?? false,
+		progress: all.config.background?.lineModel ?? false,
 		exclusions: "error" in loaded ? [] : loaded.config.workerExcludeExtensions,
 		reviewGate: all.config.features.review === false ? msg.command.reviewOff : "error" in all.review ? all.review.error : undefined,
 		publishInFlight,

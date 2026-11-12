@@ -315,7 +315,7 @@ export class WorkerView implements Component, Focusable {
 		const index = worker ? facts.workers.findIndex((entry) => entry.worker.name === worker.name) : -1;
 		const state = index < 0 ? undefined : rowState(facts, index, Date.now(), this.theme);
 		const queued = this.queued(width);
-		// 进展行（见 progress.ts）是视图头部的一行；没有就不占行。
+		// 进展行（见 background/progress.ts）是视图头部的一行；没有就不占行。
 		const header = state?.summary ? [clip(this.theme.fg("muted", ` ${state.summary}`), width)] : [];
 		this.bodyRows = Math.max(1, this.tui.terminal.rows - CHROME_ROWS - queued.length - header.length);
 		const { lines: body, animating } = this.body(width);

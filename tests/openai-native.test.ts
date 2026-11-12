@@ -81,7 +81,7 @@ async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, optio
 		configJsonc: JSON.stringify({
 			features: await featuresOnly(...(options.enabled === false ? [] : ["openaiNative"])),
 			openai: { nativeCompaction: options.native !== false, providers: { [f.provider]: { textVerbosity: "low", priority: true } } },
-			...(options.background ? { background: { model: options.background, idleCompaction: false } } : {}),
+			...(options.background ? { background: { lineModel: options.background, compactionModel: options.background, idleCompaction: false } } : {}),
 		}),
 	}) as any;
 	const settingsManager = SettingsManager.create(f.directory, f.agentDir, { projectTrusted: false });

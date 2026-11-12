@@ -37,11 +37,11 @@ export interface Timing {
 	 */
 	cooldownMs: readonly number[];
 	/**
-	 * 在跑子代理的进展行：运行满这么久才出第一句。更短的运行看工具行就够了，不值得为它花一次调用。
+	 * 进展行（子代理与主会话）：运行满这么久才出第一句。更短的运行看工具行就够了，不值得为它花一次调用。
 	 * 取 30 秒与 Claude Code 后台子代理的状态行同一节奏。
 	 */
 	progressFirstMs: number;
-	/** 进展行两次生成之间至少隔这么久（只在有新输出时才生成）：每个子代理每小时最多 30 次小模型调用。 */
+	/** 进展行两次生成之间至少隔这么久（只在有新输出时才生成）：每个在跑的会话每小时最多 60 次小模型调用。 */
 	progressEveryMs: number;
 	/**
 	 * 闲置压缩的缓存过期线：会话闲置超过它，下一次请求按缓存已失效处理，改从预先算好的摘要开始。
@@ -65,7 +65,7 @@ export const DEFAULT_TIMING: Timing = {
 	stallMs: 30 * 60_000,
 	cooldownMs: [1, 5, 15].map((minutes) => minutes * 60_000),
 	progressFirstMs: 30_000,
-	progressEveryMs: 2 * 60_000,
+	progressEveryMs: 60_000,
 	cacheTtlMs: 55 * 60_000,
 	idleCompactionLeadMs: 10 * 60_000,
 };

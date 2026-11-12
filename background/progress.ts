@@ -1,17 +1,21 @@
 /**
- * 在跑子代理的进展行：一句“它现在在做什么”，显示在活动列表的在跑行、全过程视图头部，并随名册交给同进程的其他扩展（如 CuePad 桥）；
- * 只给人看，不进指挥官上下文、不发指挥官事件。
+ * 进展行：一句“它现在在做什么”，只给人看，不进任何模型的上下文。两处使用同一个生成器（ProgressLines）：
+ * - 在跑子代理：显示在活动列表的在跑行、全过程视图头部，并随名册交给同进程的其他扩展（如 CuePad 桥），不发指挥官事件；接线在 master/。
+ * - 主会话自己的回合：经宿主扩展状态交给输入框外壳，替换上边框的“处理中”（registerSessionProgress）；外壳关闭时不生成。
  *
- * 触发：子代理回合进行中，且自上次生成后有新输出（助手正文或工具调用）才生成；运行满 Timing.progressFirstMs 出第一句，
+ * 触发：回合进行中，且自上次生成后有新输出（助手正文或工具调用）才生成；运行满 Timing.progressFirstMs 出第一句，
  * 之后最多每 Timing.progressEveryMs 一次。没有新输出就不调用：计时器只在输出到达时挂，不轮询。落定、被移除与会话关闭都停。
  * 输入只给有界增量（工作说明首段、上一句、这段时间的正文片段与工具调用，不含工具结果与思考），总量约 3k 字符。
  * 单次失败不重试，那一行回到现在的阶段文字；连续失败只在界面提示一次，成功后重新计数。
  */
 import type { Context } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { ModelChain } from "../config.js";
-import { clip, oneLine } from "../format.js";
+import { clip, oneLine, textOf } from "../format.js";
 import { readPrompt } from "../i18n.js";
 import type { ChainCompletion } from "../model-route.js";
+import type { InProcessSessionPool } from "../spawn.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { toolTargetText } from "../tools/actions.js";
 import { msg } from "./messages.js";
 
@@ -32,7 +36,7 @@ const WRAPPING = /^["'`“”‘’「」]+|["'`“”‘’「」]+$/gu;
 export interface ProgressHost {
 	complete(chain: ModelChain, context: Context, options: { maxTokens: number; signal: AbortSignal }): Promise<ChainCompletion>;
 	timing: { progressFirstMs: number; progressEveryMs: number };
-	/** 某个子代理的那一句变了：重绘。 */
+	/** 某一句变了：重绘。 */
 	changed(): void;
 	warn(text: string): void;
 }
@@ -177,4 +181,43 @@ export class ProgressLines {
 function lineOf(text: string): string {
 	const first = text.split("\n").map((line) => oneLine(line).replace(WRAPPING, "").trim()).find(Boolean) ?? "";
 	return clip(first, LINE_WIDTH);
+}
+
+/** 主会话只有一个回合在跑，生成器里就这一个名字。 */
+const SESSION = "session";
+
+/**
+ * 主会话的进展行。工作说明取最近一条人类输入：结果唤醒的回合仍在做用户上一次要的事。
+ * 发布只经宿主扩展状态（STATUS_KEYS.progress），外壳按键读取；回合落定与拆会话时清掉。
+ */
+export function registerSessionProgress(pi: ExtensionAPI, pool: InProcessSessionPool, chain: ModelChain): void {
+	let brief = "";
+	let ui: ExtensionUIContext | undefined;
+	const publish = () => ui?.setStatus(STATUS_KEYS.progress, lines.text(SESSION));
+	const lines = new ProgressLines(chain, {
+		complete: (candidates, context, options) => pool.complete(candidates, context, options),
+		timing: pool.timing,
+		changed: publish,
+		warn: (text) => ui?.notify(text, "warning"),
+	});
+	pi.on("input", (event) => {
+		if (event.text.trim()) brief = event.text;
+		return { action: "continue" };
+	});
+	pi.on("agent_start", (_event, ctx) => {
+		if (!ctx.hasUI) return;
+		ui = ctx.ui;
+		lines.begin(SESSION, brief);
+	});
+	pi.on("tool_execution_start", (event, ctx) => lines.toolCall(SESSION, event.toolName, event.args, ctx.cwd));
+	// 只记带工具调用的正文（边说边做）；以 stop 收尾的最终回复意味着回合马上落定，为它再调一次模型是白花。
+	pi.on("message_end", (event) => {
+		if (event.message.role === "assistant" && event.message.stopReason === "toolUse") lines.said(SESSION, textOf(event.message.content));
+	});
+	const end = () => {
+		lines.remove(SESSION);
+		publish();
+	};
+	pi.on("agent_settled", end);
+	pi.on("session_shutdown", end);
 }
