@@ -89,21 +89,23 @@ export interface BottomParts {
 	percent: string;
 	/** 含前导斜杠，如 `/1M`。 */
 	capacity: string;
+	/** 闲置压缩的预告；没有时为空。 */
+	idle: string;
 }
 
 /** 标题裁到这么窄就先去裁模型名：再窄的标题认不出会话。 */
 const TITLE_MIN = 8;
 
-/** 退让顺序：容量 → 标题裁到 TITLE_MIN → 模型名逐列裁 → 丢标题；Fast 与百分比始终保留。 */
+/** 退让顺序：容量 → 闲置压缩预告 → 标题裁到 TITLE_MIN → 模型名逐列裁 → 丢标题；Fast 与百分比始终保留。 */
 export function bottomBorder(width: number, parts: BottomParts, line: Line): string {
-	const right = (model: string, capacity: string) => {
+	const right = (model: string, capacity: string, idle: string) => {
 		const name = [model + (model ? parts.think : ""), parts.fast].filter(Boolean).join(" ");
-		return [name, `${parts.percent}${capacity}`].filter(Boolean).join(SEPARATOR);
+		return [name, `${parts.percent}${capacity}`, idle].filter(Boolean).join(SEPARATOR);
 	};
-	const at = (title: string, model: string, capacity: string): BorderParts => [title, right(model, capacity)];
+	const at = (title: string, model: string, capacity: string, idle = ""): BorderParts => [title, right(model, capacity, idle)];
 	function* candidates() {
-		yield at(parts.title, parts.model, parts.capacity);
-		yield at(parts.title, parts.model, "");
+		yield at(parts.title, parts.model, parts.capacity, parts.idle);
+		yield at(parts.title, parts.model, "", parts.idle);
 		const titleWidth = visibleWidth(parts.title);
 		for (let n = titleWidth; n >= Math.min(titleWidth, TITLE_MIN); n--) yield at(clip(parts.title, n), parts.model, "");
 		const short = clip(parts.title, TITLE_MIN);

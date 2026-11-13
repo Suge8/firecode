@@ -12,6 +12,8 @@
  * 为这一种情形不值得留一条路（实测 5 天里子会话闲置过期 11 次，摘要一次没用上）。
  * 宿主设置 compaction.enabled=false 的会话不碰（预算与应用都不做）：用户关掉压缩就是要保留原文。
  *
+ * 底栏只说下一条消息会怎样：预算在飞时“准备中”，摘要已备好且缓存已过期时“下条消息先压缩”；缓存没过期时摘要不会用上，不显示。
+ *
  * 不当场算：进程重启后没有预算好的摘要就照常走；请求到达时预算还在飞，作废预算。上下文不到 MIN_CONTEXT_TOKENS 不预算。
  * 原生压缩接管的会话不碰（见 openai-native 的 nativeTakesOver）：预算时与应用时各判一次，闲置期间可以换到归它的模型。
  *
@@ -22,6 +24,7 @@ import {
 	type CompactionResult,
 	type ExtensionAPI,
 	type ExtensionContext,
+	type ExtensionUIContext,
 	buildSessionProjection,
 	findCutPoint,
 	type SessionEntry,
@@ -32,8 +35,9 @@ import { beforeWake } from "../deliver.js";
 import { nativeCompactionEnabled } from "../provider/openai-native/index.js";
 import { nativeTakesOver } from "../provider/openai-native/src/native-compaction.js";
 import type { InProcessSessionPool } from "../spawn.js";
+import { STATUS_KEYS } from "../status-keys.js";
 import { msg } from "./messages.js";
-import { type Preparation, type Summary, summarize } from "./summarize.js";
+import { type Preparation, summarize } from "./summarize.js";
 
 /** 上下文到这么大才值得闲置压缩：更小的上下文缓存失效后重写也便宜，不值得丢掉原文。 */
 const MIN_CONTEXT_TOKENS = 150_000;
@@ -42,7 +46,7 @@ interface Ready {
 	leafId: string | null;
 	idleSince: number;
 	tokensBefore: number;
-	summary: Summary;
+	summary: CompactionResult;
 }
 
 export class IdleCompaction {
@@ -51,6 +55,7 @@ export class IdleCompaction {
 	private computing?: AbortController;
 	private ready?: Ready;
 	private current?: Ready;
+	private ui?: ExtensionUIContext;
 
 	constructor(private readonly pi: ExtensionAPI, private readonly pool: InProcessSessionPool, private readonly chain: ModelChain) {
 		pi.on("agent_settled", (_event, ctx) => this.settled(ctx));
@@ -65,11 +70,12 @@ export class IdleCompaction {
 
 	/** 正在应用的那份摘要：只在 beforeRequest 发起的压缩期间有值，压缩钩子原样交给宿主。 */
 	applying(): CompactionResult | undefined {
-		return this.current?.summary.result;
+		return this.current?.summary;
 	}
 
 	private settled(ctx: ExtensionContext): void {
 		this.reset();
+		this.ui = ctx.hasUI ? ctx.ui : undefined;
 		this.idleSince = Date.now();
 		const { cacheTtlMs, idleCompactionLeadMs } = this.pool.timing;
 		this.timer = setTimeout(() => void this.precompute(ctx), Math.max(0, cacheTtlMs - idleCompactionLeadMs));
@@ -83,6 +89,11 @@ export class IdleCompaction {
 		this.computing = undefined;
 		this.ready = undefined;
 		this.idleSince = undefined;
+		this.status(undefined);
+	}
+
+	private status(text: string | undefined): void {
+		this.ui?.setStatus(STATUS_KEYS.idleCompaction, text);
 	}
 
 	private async precompute(ctx: ExtensionContext): Promise<void> {
@@ -98,11 +109,18 @@ export class IdleCompaction {
 		if (!preparation) return;
 		const leafId = ctx.sessionManager.getLeafId();
 		const controller = this.computing = new AbortController();
+		this.status(msg.idlePreparing);
 		try {
 			const summary = await summarize(this.pool, this.chain, preparation, undefined, controller.signal);
-			if (this.computing === controller) this.ready = { leafId, idleSince, tokensBefore, summary };
+			if (this.computing !== controller) return;
+			this.ready = { leafId, idleSince, tokensBefore, summary };
+			this.status(undefined);
+			this.timer = setTimeout(() => this.status(msg.idleArmed), Math.max(0, idleSince + this.pool.timing.cacheTtlMs - Date.now()));
+			this.timer.unref?.();
 		} catch (error) {
-			if (!controller.signal.aborted) notify(ctx, msg.idleFailed(error instanceof Error ? error.message : String(error)));
+			if (controller.signal.aborted) return;
+			this.status(undefined);
+			notify(ctx, msg.idleFailed(error instanceof Error ? error.message : String(error)));
 		} finally {
 			if (this.computing === controller) this.computing = undefined;
 		}
@@ -120,7 +138,7 @@ export class IdleCompaction {
 		try {
 			const result = await new Promise<CompactionResult>((resolve, reject) => ctx.compact({ onComplete: resolve, onError: reject }));
 			const minutes = Math.round((Date.now() - ready.idleSince) / 60_000);
-			if (ctx.hasUI) ctx.ui.notify(msg.idleApplied(minutes, ready.summary.model, ready.tokensBefore, result.estimatedTokensAfter), "info");
+			if (ctx.hasUI) ctx.ui.notify(msg.idleApplied(minutes, ready.tokensBefore, result.estimatedTokensAfter), "info");
 		} catch (error) {
 			notify(ctx, msg.idleApplyFailed(error instanceof Error ? error.message : String(error)));
 		} finally {
