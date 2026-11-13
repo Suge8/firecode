@@ -3,5 +3,7 @@ export const STATUS_KEYS = {
 	master: "master",
 	/** 主会话的进展行（background/progress.ts）：回合进行时替换上边框的“处理中”。 */
 	progress: "firecode-progress",
+	/** 闲置压缩的预告（background/idle.ts）：接在下边框上下文占用之后。 */
+	idleCompaction: "firecode-idle-compaction",
 	fast: "pi-openai-native-fast",
 } as const;

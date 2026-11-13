@@ -1,6 +1,6 @@
 /**
  * 输入框外壳：状态画进编辑器的上下边框，不再有独立底栏。
- * 上边框：回合火苗与计时、主会话审查进度 | 指挥官；下边框：会话标题 | 模型、上下文。
+ * 上边框：回合火苗与计时、主会话审查进度 | 指挥官；下边框：会话标题 | 模型、上下文、闲置压缩预告。
  */
 import {
 	CustomEditor,
@@ -118,6 +118,7 @@ class Shell {
 		const usage = ctx.getContextUsage();
 		const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
 		const percent = usage?.percent;
+		const idle = this.statuses().get(STATUS_KEYS.idleCompaction);
 		return {
 			title: fg("muted", this.title),
 			model: fg("text", formatModelName(model?.id)),
@@ -125,6 +126,7 @@ class Shell {
 			fast: this.statuses().has(STATUS_KEYS.fast) ? fg("warning", "Fast") : "",
 			percent: fg(contextColor(percent), percent == null ? "?" : `${percent.toFixed(1)}%`),
 			capacity: fg("dim", `/${formatTokens(window)}`),
+			idle: idle ? fg("muted", idle) : "",
 		};
 	}
 }

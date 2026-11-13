@@ -28,21 +28,15 @@ function inputTokens(preparation: Preparation, customInstructions: string | unde
 	return Math.ceil((Math.max(history, chars(preparation.turnPrefixMessages)) + extra) / CHARS_PER_TOKEN) + PROMPT_TOKENS;
 }
 
-export interface Summary {
-	result: CompactionResult;
-	/** 实际写摘要的物理模型 provider/id。 */
-	model: string;
-}
-
 export async function summarize(
 	pool: InProcessSessionPool,
 	chain: ModelChain,
 	preparation: Preparation,
 	customInstructions: string | undefined,
 	signal: AbortSignal,
-): Promise<Summary> {
+): Promise<CompactionResult> {
 	const need = inputTokens(preparation, customInstructions) + OUTPUT_TOKENS;
-	const { value, model } = await pool.tryOnChain(
+	const { value } = await pool.tryOnChain(
 		chain,
 		signal,
 		(candidate) => candidate.contextWindow > 0 && need > candidate.contextWindow ? msg.windowTooSmall(need, candidate.contextWindow) : undefined,
@@ -61,5 +55,5 @@ export async function summarize(
 			}
 		},
 	);
-	return { result: value, model };
+	return value;
 }

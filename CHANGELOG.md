@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - The main session gets a progress line too: while its own turn runs, the top border of the input box shows one sentence saying what it is doing, in place of "Working". It is written by the background model from the same short notes as the sub-agent lines.
+- Idle compaction now says what it is doing: the bottom border of the input box shows "preparing compaction" while the summary is being written, and "cache expired, compacts before send" once your next message will compact first. Its notices are shorter, and the one after compacting no longer names the summary model.
 
 ### Changed
 

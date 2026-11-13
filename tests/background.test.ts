@@ -86,7 +86,7 @@ async function setup(options: { child?: (pi: any) => void; naming?: (text: strin
 	});
 	const notices: string[] = [];
 	const errors: string[] = [];
-	const ui = new Proxy({ notify: (text: string) => notices.push(text) }, { get: (target: any, key) => target[key] ?? (() => undefined) });
+	const ui = new Proxy({ notify: (text: string) => notices.push(text), setStatus: () => {} }, { get: (target: any, key) => target[key] ?? (() => undefined) });
 	await session.bindExtensions({ mode: "rpc", uiContext: ui, onError: (error: any) => errors.push(error.error) });
 	cleanups.push(async () => {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });

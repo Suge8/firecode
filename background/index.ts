@@ -29,7 +29,7 @@ export function registerBackground(pi: ExtensionAPI, pool: InProcessSessionPool,
 		const ready = idle?.applying();
 		if (ready) return { compaction: ready };
 		try {
-			const { result } = await summarize(pool, background.compactionModel, event.preparation, event.customInstructions, event.signal);
+			const result = await summarize(pool, background.compactionModel, event.preparation, event.customInstructions, event.signal);
 			return { compaction: result };
 		} catch (error) {
 			if (event.signal.aborted) return { cancel: true };
