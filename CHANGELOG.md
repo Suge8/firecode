@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - `/fast` and `Ctrl+Shift+S` no longer replace a symlinked `config.jsonc` with a regular file: the choice is written to the file the link points to, so edits made there keep taking effect.
+- `/fast` and `Ctrl+Shift+S` keep the permissions of `config.jsonc`: before, the process umask could strip bits from it, for example turning a group-writable 0664 file into 0644.
 
 ## [1.15.0] - 2026-11-18
 

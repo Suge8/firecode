@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { featuresOnly, loadFirecodeModule, PI_CODING_AGENT_URL } from "./loader.ts";
+import { until } from "./until.ts";
 
 const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import(PI_CODING_AGENT_URL) as any;
 const savedFetch = globalThis.fetch;
@@ -75,7 +76,7 @@ async function fixture(provider = "openai", model = "gpt-6.1-terra") {
 	return { directory, agentDir, provider, model };
 }
 
-async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, options: { native?: boolean; enabled?: boolean; background?: string[] } = {}) {
+async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, options: { native?: boolean; enabled?: boolean; background?: string[]; mode?: string } = {}) {
 	process.env.PI_CODING_AGENT_DIR = f.agentDir;
 	const { registerFirecode } = await loadFirecodeModule("index.ts", {
 		configJsonc: JSON.stringify({
@@ -98,7 +99,7 @@ async function open(f: Awaited<ReturnType<typeof fixture>>, path?: string, optio
 	const sessionManager = path ? SessionManager.open(path, f.directory, f.directory) : SessionManager.create(f.directory, f.directory);
 	const { session } = await createAgentSession({ cwd: f.directory, agentDir: f.agentDir, resourceLoader, settingsManager, sessionManager, modelRuntime, model, tools: [] });
 	sessions.add(session);
-	await session.bindExtensions({ mode: "print", onError: (error: any) => { throw new Error(error.error); } });
+	await session.bindExtensions({ mode: options.mode ?? "print", onError: (error: any) => { throw new Error(error.error); } });
 	return { session };
 }
 
@@ -209,6 +210,17 @@ test("background configured: native compaction keeps its sessions, and its first
 	const native = await fresh.compact();
 	expect(native.details.compactedWindow.map((item: any) => item.type)).toEqual(["compaction"]);
 	expect(requests.some((request) => request.model === "gpt-5-mini")).toBe(false);
+}, 20_000);
+
+// 后台请求不开会话，没有会话的请求钩子：原子里的加速档要随请求选项发出，起名（单请求）与摘要（流式）两条路径都带。
+test("a fast tier on a background atom is sent with that model's requests, the session name and the compaction summary alike", async () => {
+	const { session } = await open(await fixture(), undefined, { enabled: false, background: ["openai/gpt-5-mini/low/fast"], mode: "rpc" });
+	await session.prompt("Name this session.");
+	await until(() => requests.some((request) => request.model === "gpt-5-mini"));
+	seed(session);
+	await session.compact();
+	expect(requests.filter((request) => request.model === "gpt-5-mini").map((request) => request.service_tier)).toEqual(["priority", "priority"]);
+	expect(requests.filter((request) => request.model !== "gpt-5-mini").map((request) => request.service_tier)).toEqual([undefined]);
 }, 20_000);
 
 test.each(["model", "native", "feature"])("%s cannot silently replace a native window with placeholder history", async (mode) => {
