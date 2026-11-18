@@ -1,5 +1,5 @@
 /** 加速档开关写回配置：只改 `openai` 节，文件其余部分含注释原样保留。读取与校验在根 config.ts。 */
-import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import type { OpenAISettings, ServiceTier } from "../../../config.js";
 import { CONFIG_PATH } from "../../../config-file.js";
 import { isRecord, parseJsonc } from "../../../jsonc.js";
@@ -93,10 +93,12 @@ export function saveServiceTier(provider: string, tier: ServiceTier | undefined)
 	const { priority: _legacy, serviceTier: _previous, ...rest } = isRecord(providers[provider]) ? providers[provider] : {};
 	const next = { ...section, providers: { ...providers, [provider]: tier ? { ...rest, serviceTier: tier } : rest } };
 
-	const temporaryPath = `${CONFIG_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	// 配置是软链时改名要落在它指向的文件上：盖在链接上会把链接换成普通文件，用户在真身上的修改从此不再生效。
+	const target = realpathSync(CONFIG_PATH);
+	const temporaryPath = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
-		writeFileSync(temporaryPath, replaceOpenAISection(text, next), { encoding: "utf8", mode: statSync(CONFIG_PATH).mode & 0o777 });
-		renameSync(temporaryPath, CONFIG_PATH);
+		writeFileSync(temporaryPath, replaceOpenAISection(text, next), { encoding: "utf8", mode: statSync(target).mode & 0o777 });
+		renameSync(temporaryPath, target);
 	} finally {
 		rmSync(temporaryPath, { force: true });
 	}
