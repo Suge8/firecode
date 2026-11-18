@@ -12,13 +12,13 @@ export const SERVICE_TIERS = ["fast", "ultrafast"] as const;
 export type ServiceTier = (typeof SERVICE_TIERS)[number];
 
 /**
- * 模型原子：配置里写作 "<模型>/thinking"，模型可以带供应商前缀；审查与角色的模型可再接加速档 "<模型>/thinking/ultrafast"。
+ * 模型原子：配置里写作 "<模型>/thinking"，模型可以带供应商前缀；可再接加速档 "<模型>/thinking/ultrafast"。
  * 全仓库指定模型、思考档与加速档的唯一形状。
  */
 export interface ModelAtom {
 	model: string;
 	thinking: ThinkingLevelValue;
-	/** 由模型链路由在发请求前写入，模型不提供时按 tiers.ts 的规则降档。 */
+	/** 发请求前写进请求体（会话经模型链路由的钩子，不开会话的后台请求经请求选项），模型不提供时按 tiers.ts 的规则降档。 */
 	tier?: ServiceTier;
 }
 
@@ -263,37 +263,30 @@ export function loadConfig(): LoadedConfig {
 const FALLBACK_THINKING: ThinkingLevelValue = "medium";
 
 /**
- * 解析 "<模型>/thinking"：按最后一个斜杠切出思考档。
+ * 解析 "<模型>/thinking" 或 "<模型>/thinking/<加速档>"：末段是加速档就先切下它（只切一次），再按最后一个斜杠切出思考档。
  * 任何位置的模型配置都走这里，解析失败只记录问题并留空模型，让上层拒绝启动。
  * 每个字段只报一条问题，且必带目标形状。
  * 旧的分字段写法一律拒绝。
  */
-function parseModelAtom(value: unknown, field: string, problems: string[], tiers: boolean): ModelAtom {
+function parseModelAtom(value: unknown, field: string, problems: string[]): ModelAtom {
 	const shape = msg.config.modelAtomShape(field);
 	if (typeof value !== "string" || !value) {
 		problems.push(shape);
 		return { model: "", thinking: FALLBACK_THINKING };
 	}
-	// 档位名与思考档不重名，末段是档位就先切下它。
-	const tierSlash = value.lastIndexOf("/");
-	const tier = SERVICE_TIERS.find((candidate) => candidate === value.slice(tierSlash + 1));
-	if (tier) {
-		if (!tiers) {
-			problems.push(msg.config.tierNotAllowed(field));
-			return { model: "", thinking: FALLBACK_THINKING };
-		}
-		return { ...parseModelAtom(value.slice(0, tierSlash), field, problems, false), tier };
-	}
-	const slash = value.lastIndexOf("/");
-	const model = slash > 0 ? value.slice(0, slash) : "";
-	const thinking = slash > 0 ? value.slice(slash + 1) : value;
+	// 档位名与思考档不重名；写了两个档位时，前一个落进思考档报错。
+	const tier = SERVICE_TIERS.find((candidate) => value.endsWith(`/${candidate}`));
+	const text = tier ? value.slice(0, -tier.length - 1) : value;
+	const slash = text.lastIndexOf("/");
+	const model = slash > 0 ? text.slice(0, slash) : "";
+	const thinking = slash > 0 ? text.slice(slash + 1) : text;
 	const valid = (THINKING_LEVELS as readonly string[]).includes(thinking);
 	const faults: string[] = [];
 	if (!model || model.split("/").some((segment) => !segment))
 		faults.push(msg.config.modelSegment(model || value));
 	if (!valid) faults.push(msg.config.thinkingLevel(thinking));
 	if (faults.length) problems.push(msg.config.modelAtomFaults(shape, faults));
-	return { model, thinking: valid ? (thinking as ThinkingLevelValue) : FALLBACK_THINKING };
+	return { model, thinking: valid ? (thinking as ThinkingLevelValue) : FALLBACK_THINKING, ...(tier ? { tier } : {}) };
 }
 
 // ---- review 节 ----
@@ -324,14 +317,13 @@ function parseReviewConfig(raw: Record<string, unknown>, problems: string[]): Re
 	};
 }
 
-/** tiers：链是否经会话的模型链路由发请求；后台小模型不经，写了档位就报错，不静默忽略。 */
-function parseModelChain(value: unknown, field: string, problems: string[], tiers = true): ModelChain {
-	if (!Array.isArray(value)) return [parseModelAtom(value, field, problems, tiers)];
+function parseModelChain(value: unknown, field: string, problems: string[]): ModelChain {
+	if (!Array.isArray(value)) return [parseModelAtom(value, field, problems)];
 	if (!value.length) {
 		problems.push(msg.config.mustBeStringArray(field));
 		return [];
 	}
-	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems, tiers));
+	return value.map((item, index) => parseModelAtom(item, `${field}[${index}]`, problems));
 }
 
 function reviewModels(value: unknown, problems: string[]): ModelChain[] {
@@ -396,8 +388,8 @@ function parseBackground(value: unknown, problems: string[]): BackgroundConfig |
 	}
 	const own: string[] = [];
 	rejectUnknownKeys(value, BACKGROUND_KEYS, "background", own);
-	const lineModel = parseModelChain(value.lineModel, "background.lineModel", own, false);
-	const compactionModel = parseModelChain(value.compactionModel, "background.compactionModel", own, false);
+	const lineModel = parseModelChain(value.lineModel, "background.lineModel", own);
+	const compactionModel = parseModelChain(value.compactionModel, "background.compactionModel", own);
 	const idleCompaction = booleanValue(value.idleCompaction, "background.idleCompaction", true, own);
 	const sessionNames = booleanValue(value.sessionNames, "background.sessionNames", true, own);
 	problems.push(...own);

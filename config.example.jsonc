@@ -1,7 +1,7 @@
 {
 	// Recommended config: every feature on. It is written here on first launch; swap in the models you are logged in to, then restart Pi.
 	// Everywhere a model is named, use a model atom "model/thinking"; the provider is optional. An ordered array chooses alternatives.
-	// Review and role models may add a fast tier, "model/thinking/fast" or "model/thinking/ultrafast"; it applies only to that model and drops to what the model offers.
+	// Any atom may add a fast tier, "model/thinking/fast" or "model/thinking/ultrafast"; it applies only to that model and drops to what the model offers.
 	// Language of the UI and of the text shown to models: follows the system locale by default (zh* → Chinese, otherwise English); uncomment the next line to pin it, "zh" | "en".
 	// "language": "en",
 	"features": {

@@ -7,7 +7,7 @@ import { msg } from "../messages.js";
 import { saveServiceTier, withServiceTier } from "./src/config.js";
 import { type CompactionHookResult, compactWithOpenAINative, notify, replayOpenAINative } from "./src/native-compaction.js";
 import { applyOpenAIOptions } from "./src/options.js";
-import { effectiveTier, offeredTiers } from "./src/tiers.js";
+import { effectiveTier, offeredTiers, sessionAuth } from "./src/tiers.js";
 
 const VERBOSITY_FLAG = "verbosity";
 
@@ -35,7 +35,7 @@ export function registerOpenAINative(pi: ExtensionAPI, enabled = true, fallback?
 	/** 这次请求实际用的档：没选档时不去问列表。 */
 	async function currentTier(ctx: ExtensionContext): Promise<ServiceTier | undefined> {
 		const chosen = ctx.model && settings.providers[ctx.model.provider]?.serviceTier;
-		return chosen && effectiveTier(chosen, await offeredTiers(ctx.model!, ctx));
+		return chosen && effectiveTier(chosen, await offeredTiers(ctx.model!, sessionAuth(ctx)));
 	}
 
 	async function updateFastStatus(ctx: ExtensionContext): Promise<void> {
@@ -77,7 +77,7 @@ export function registerOpenAINative(pi: ExtensionAPI, enabled = true, fallback?
 		if (!model) return;
 		let offered: readonly ServiceTier[];
 		try {
-			offered = await offeredTiers(model, ctx);
+			offered = await offeredTiers(model, sessionAuth(ctx));
 		} catch (error) {
 			ctx.ui.notify(msg.tiersUnavailable(reasonOf(error)), "error");
 			return;

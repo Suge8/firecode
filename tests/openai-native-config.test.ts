@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { fakePi } from "./fake-pi.ts";
 import { loadFirecodeModule } from "./loader.ts";
 import { parseJsonc } from "../jsonc.ts";
@@ -61,6 +61,25 @@ test("/fast cycles the provider's tier off → Fast → Ultrafast → off and le
 	expect((parseJsonc(read(fast.path)) as any).openai.providers["openai-codex"]).toEqual({ textVerbosity: "low", serviceTier: "ultrafast" });
 	await fast.toggle("openai-codex");
 	expect((parseJsonc(read(fast.path)) as any).openai.providers["openai-codex"]).toEqual({ textVerbosity: "low" });
+});
+
+// 把配置放进 dotfiles 仓库再软链过来的用法：写回要落在真身上，链接与真身的权限都不变。
+test("a symlinked config stays a symlink: the tier is written to the file it points to, with that file's permissions", async () => {
+	const fast = await fastCommand(`{
+	// lives in a dotfiles repo
+	"language": "en"
+}
+`);
+	const real = `${fast.path}.real`;
+	renameSync(fast.path, real);
+	chmodSync(real, 0o664);
+	symlinkSync(real, fast.path);
+
+	await fast.toggle("xai");
+
+	expect(lstatSync(fast.path).isSymbolicLink()).toBe(true);
+	expect(parseJsonc(read(real))).toEqual({ language: "en", openai: { providers: { xai: { serviceTier: "fast" } } } });
+	expect(statSync(real).mode & 0o777).toBe(0o664);
 });
 
 test("without an openai section one is added at the end and the comments stay", async () => {

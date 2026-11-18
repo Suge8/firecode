@@ -7,7 +7,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { compact, convertToLlm, serializeConversation, type CompactionResult, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelChain } from "../config.js";
-import { ModelFailure } from "../model-route.js";
+import { ModelFailure, tierOption } from "../model-route.js";
 import type { InProcessSessionPool } from "../spawn.js";
 import { msg } from "./messages.js";
 
@@ -40,11 +40,12 @@ export async function summarize(
 		chain,
 		signal,
 		(candidate) => candidate.contextWindow > 0 && need > candidate.contextWindow ? msg.windowTooSmall(need, candidate.contextWindow) : undefined,
-		async ({ model: candidate, thinking }, runtime) => {
+		async (selected, runtime) => {
+			const { model: candidate, thinking } = selected;
 			// compact() 只抛文字：留下最后一次回复，按它的 stopReason 区分模型报错（记冷却）与输出截断（不记）。
 			let last: AssistantMessage | undefined;
 			const stream: StreamFn = (target, context, options) => {
-				const events = runtime.streamSimple(target, context, options);
+				const events = runtime.streamSimple(target, context, { ...options, ...tierOption(runtime, selected) });
 				void events.result().then((message) => { last = message; });
 				return events;
 			};
