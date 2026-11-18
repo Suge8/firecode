@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-11-18
+
 ### Changed
 
 - Background models can take a fast tier in their atom too, such as `"gpt-6.1-terra/high/fast"` in `background.compactionModel` or `background.lineModel`, with the same rules as review and role models. Before, a tier there was a config error that turned the whole `background` section off.
@@ -408,7 +410,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/Suge8/firecode/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Suge8/firecode/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Suge8/firecode/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Suge8/firecode/compare/v1.12.0...v1.13.0
