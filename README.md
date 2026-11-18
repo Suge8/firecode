@@ -74,7 +74,7 @@ Built the Pi way: sub-agents add just two small tools, and review adds none. Her
 
 ## Also in the box
 
-`/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` cycles OpenAI Fast / Ultrafast · Compaction summaries by a cheap background model, plus idle compaction before the prompt cache expires · Sessions named in the background from your first message · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
+`/goal <objective>` keeps the session working turn after turn until it is done, with the reviewers checking the result before it counts; Esc pauses · `/quota` and `/tokens` usage at a glance · `Ctrl+R` rename the session · `Ctrl+Shift+S` cycles OpenAI Fast / Ultrafast · Compaction summaries by a cheap background model, plus idle compaction before the prompt cache expires · Sessions named in the background from your first message · OpenAI native compaction · Works with Claude subscription login · Claude screenshots upload once instead of every turn
 
 ## Install
 
