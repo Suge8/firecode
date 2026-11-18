@@ -5,7 +5,7 @@ import { defineMessages } from "../i18n.js";
  * 审查输出契约与结果卡里的字段名。生产端（卡片、汇总、提示拼装）取 msg.terms 的当前语言；
  * 解析端（审查者输出、会话里的历史卡片）经 termPattern 两种语言都认：会话历史可能跨语言，
  * 模型也可能不照提示词的语言写字段名，只认当前语言会让整票作废或卡片预览失效。
- * 契约改字时同步这里与 prompts/review.{zh,en}.md，不留旧措辞别名：已落盘的旧措辞发现按格式无效处理。
+ * 契约改字时同步这里与 prompts/contract.{zh,en}.md，不留旧措辞别名：已落盘的旧措辞发现按格式无效处理。
  */
 const zhTerms = {
 	passed: "审查通过",
@@ -169,6 +169,7 @@ export const msg = defineMessages({
 			priorRound: (round: number) => `## 第 ${round} 轮 · 未通过`,
 			advisorRuling: "顾问裁决",
 			advisorFocus: "审查关注点：",
+			goal: "目标（执行模型声称已全部完成）：",
 			requirementRecord: "原始需求与最近的会话记录（节选；完整记录在会话文件里）：",
 			thisRoundFindings: "本轮 FAIL 发现：",
 			priorHistory: "往轮 FAIL 历史：",
@@ -303,6 +304,7 @@ export const msg = defineMessages({
 			priorRound: (round: number) => `## Round ${round} · failed`,
 			advisorRuling: "Advisor ruling",
 			advisorFocus: "Review focus:",
+			goal: "Goal (the executing model claims it is fully complete):",
 			requirementRecord: "Original request and recent session record (excerpt; the full record is in the session file):",
 			thisRoundFindings: "This round FAIL findings:",
 			priorHistory: "Prior FAIL history:",

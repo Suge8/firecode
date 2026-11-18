@@ -132,7 +132,7 @@ const FINDING_TITLE = new RegExp(String.raw`^#{1,6}\s*${termPattern((terms) => t
 const NON_EMPTY = String.raw`(\S.*)$`;
 const FINDING_ISSUE = fieldLine((terms) => terms.field.issue, { value: "(.*)$" });
 
-/** 发现必填字段，事实源是 `prompts/review.{zh,en}.md` 的输出契约；打分三项缺了不报格式错，按频率 0 处理。 */
+/** 发现必填字段，事实源是 `prompts/contract.{zh,en}.md` 的输出契约；打分三项缺了不报格式错，按频率 0 处理。 */
 const FINDING_FIELDS = (["issue", "evidence", "contract", "commands"] as const).map((key) => ({
 	key,
 	pick: (terms: Terms) => terms.field[key],

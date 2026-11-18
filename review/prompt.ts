@@ -9,6 +9,8 @@ import { roundText, type AdvisorResult, type ReviewState, type SummaryKind } fro
 interface ReviewPromptInput {
 	scope: string;
 	focus: string;
+	/** 目标验收：focus 是目标原文，取代审查对象与关注点两段。 */
+	acceptance?: boolean;
 	evidence: string;
 	history: ReviewState["history"];
 	round: number;
@@ -22,8 +24,8 @@ export interface PromptLayers {
 /** 审查政策走 system 层；需求与历史留在 user 层，不能反向改写审查契约。 */
 export function buildReviewPrompt(template: string, input: ReviewPromptInput): PromptLayers {
 	const evidence = input.evidence.replaceAll("</session_evidence>", "&lt;/session_evidence&gt;");
-	const parts = [`${msg.prompt.target}\n${input.scope}`];
-	if (input.focus) parts.push(`${msg.prompt.focus}\n${input.focus}`);
+	const parts = input.acceptance ? [goalSection(input.focus)] : [`${msg.prompt.target}\n${input.scope}`];
+	if (input.focus && !input.acceptance) parts.push(`${msg.prompt.focus}\n${input.focus}`);
 	const prior = priorRoundsSection(input.history, input.round);
 	if (prior) parts.push(prior);
 	parts.push(
@@ -32,6 +34,10 @@ export function buildReviewPrompt(template: string, input: ReviewPromptInput): P
 	);
 	const system = template.replaceAll("{{score}}", String(BLOCKING.score)).replaceAll("{{impact}}", String(BLOCKING.impact));
 	return { system, user: parts.filter((part) => part !== "").join("\n\n") };
+}
+
+function goalSection(objective: string): string {
+	return `${msg.prompt.goal}\n<goal>\n${objective.replaceAll("</goal>", "&lt;/goal&gt;")}\n</goal>`;
 }
 
 /** 往轮 FAIL 发现清单（两相收敛的闭环输入）：第 2 轮起注入。 */
@@ -52,6 +58,7 @@ function priorRoundsSection(history: ReviewState["history"], round: number): str
 
 interface AdvisorPromptInput {
 	focus: string;
+	acceptance?: boolean;
 	/** 原始需求锚点加最近会话的节选（与审查证据同一套组装）：仲裁要对照的是需求，不只是发现本身。 */
 	requirement: string;
 	details: string;
@@ -61,7 +68,8 @@ interface AdvisorPromptInput {
 
 export function buildAdvisorPrompt(template: string, input: AdvisorPromptInput): PromptLayers {
 	const parts: string[] = [];
-	if (input.focus) parts.push(`${msg.prompt.advisorFocus}\n${input.focus}`);
+	if (input.acceptance) parts.push(goalSection(input.focus));
+	else if (input.focus) parts.push(`${msg.prompt.advisorFocus}\n${input.focus}`);
 	const requirement = input.requirement.replaceAll("</session_evidence>", "&lt;/session_evidence&gt;");
 	parts.push(`${msg.prompt.requirementRecord}\n<session_evidence>\n${requirement}\n</session_evidence>`);
 	parts.push(`${msg.prompt.thisRoundFindings}\n${input.details}`);

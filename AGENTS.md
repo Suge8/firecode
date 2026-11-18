@@ -11,7 +11,7 @@ pi 扩展。入口 `index.ts` 按 `config.features` 逐个调 `registerX(pi)`；
 
 ## 约束
 
-- 主会话里发给模型的消息只经 `deliver.ts`；纯展示记录用宿主 CustomEntry。
+- 主会话里发给模型的消息只经 `deliver.ts`（开回合、句缝上车、只告知、回合结束前原地续跑各有一个入口）；纯展示记录用宿主 CustomEntry。
 - 系统提示注入写进 `before_agent_start` 的 `systemPromptOptions.sections`，不返回 `systemPrompt`：返回值会让宿主整段替换系统提示，任何一段变化都重写整个已缓存前缀。
 - 进程内事件频道各只有一个定义处和一个发布者（`busy.ts`、`round.ts`、`master/roster.ts`），读者用它们导出的读法，不自己订阅。
 - 读宿主私有字段只在 `tools/host.ts`。

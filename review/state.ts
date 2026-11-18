@@ -82,6 +82,8 @@ interface Base {
 	/** 当前轮号（1 起）；queued 时 0。 */
 	round: number;
 	focus: string;
+	/** 目标验收：focus 是目标原文，审查者按验收立场（prompts/accept）逐条核对；普通审查不带这个字段。 */
+	acceptance?: true;
 	/** 已收口轮，只追加。 */
 	history: ReviewRound[];
 	/** 连续未通过轮数（顾问仲裁阈值）。 */
@@ -113,7 +115,7 @@ export type ReviewState = Base &
 export type ReviewLimits = Pick<ReviewConfig, "maxRounds" | "advisorAfterFailures" | "advisor" | "reviewers">;
 
 export type ReviewEvent =
-	| { type: "START"; focus: string }
+	| { type: "START"; focus: string; acceptance?: boolean }
 	| { type: "RECOVER" }
 	| { type: "REVIEWER_SETTLED"; index: number; result: ReviewerResult }
 	| { type: "ADVISOR_SETTLED"; result: AdvisorResult }
@@ -168,7 +170,7 @@ export function initialState(runId: string): ReviewState {
 /** 相无关的公共字段。 */
 function baseOf(state: ReviewState): Base {
 	const { runId, round, focus, history, consecutiveFailures, startedAt, roundStartedAt } = state;
-	return { runId, round, focus, history, consecutiveFailures, startedAt, roundStartedAt, updatedAt: state.updatedAt };
+	return { runId, round, focus, ...(state.acceptance ? { acceptance: true as const } : {}), history, consecutiveFailures, startedAt, roundStartedAt, updatedAt: state.updatedAt };
 }
 
 type PhaseData =
@@ -190,7 +192,7 @@ export function reduce(state: ReviewState, event: ReviewEvent, limits: ReviewLim
 		case "START":
 			// 一律先排队：开审统一经执行器的 idle 门（ADVANCE），排队相不发卡——输入框边框已有排队提示。
 			return {
-				state: go(initialState(state.runId), now, { phase: "queued" }, { focus: event.focus.trim(), startedAt: now }),
+				state: go(initialState(state.runId), now, { phase: "queued" }, { focus: event.focus.trim(), ...(event.acceptance ? { acceptance: true as const } : {}), startedAt: now }),
 				effects: [{ kind: "advance" }],
 			};
 		case "RECOVER":

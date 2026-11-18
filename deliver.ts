@@ -1,17 +1,17 @@
 /**
- * 统一投递入口（Master 事件与 review 的修复反馈/总结提示共用）：一律以自定义消息 + triggerTurn 交给宿主，
+ * 统一投递入口（Master 事件、review 的修复反馈/总结提示与 /goal 的续跑共用）：一律以自定义消息 + triggerTurn 交给宿主，
  * 回合进行中在句缝送达，歇透时由宿主开一个回合，回合照常经过 before_agent_start（pi 1.2.0 起），扩展注入的系统提示段
  * 不被撤下。送达只认这条消息进入回合（它的 message_start），入队不算：入队的消息可能被清掉或滞留。
  * 手动 /compact、带摘要的 /tree 等不在回合里的忙先等它落定；自动压缩在回合内部，不受影响。规则见 deliver 与 DeliveryLine。
- * 只告知不唤醒的结果走 inform。
+ * 只告知不唤醒的结果走 inform；回合彻底结束前要宿主原地再跑一次请求的走 boundaryMessage。
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { CustomMessageEntryDraft, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
  * 机器消息的信封是唯一事实源：模型上下文里的来源标记、卡片与折叠界面的识别都从这里来。
  * 一条消息可含多个信封（并发落定的事件各占一个）；整条文本恰好由信封构成才算机器消息。
  */
-const ENVELOPE_TAGS = ["firecode_master_event", "firecode_review"] as const;
+const ENVELOPE_TAGS = ["firecode_master_event", "firecode_review", "firecode_goal"] as const;
 export type EnvelopeTag = (typeof ENVELOPE_TAGS)[number];
 
 interface ParsedEnvelope {
@@ -185,4 +185,12 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
  */
 export function inform(pi: ExtensionAPI, envelope: Delivery): void {
 	pi.sendMessage({ customType: envelope.customType, content: envelope.content, display: true }, { triggerTurn: false });
+}
+
+/**
+ * 回合彻底结束前（agent_before_settle）交给宿主的消息：处理器把它放进返回的 entries，宿主落盘后按处理器的 continue
+ * 原地再跑一次请求或就此落定。不新开回合、不经 steer 队列，所以没有回执要等，也不会被清掉或滞留。
+ */
+export function boundaryMessage(envelope: Delivery): CustomMessageEntryDraft {
+	return { type: "custom_message", customType: envelope.customType, content: envelope.content, display: true };
 }

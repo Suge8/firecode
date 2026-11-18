@@ -23,16 +23,21 @@ export interface ReviewOptions {
 	enabled?: boolean;
 	/** features 配置坏掉不是关闭：保留 checkpoint，修好配置重启后继续恢复。 */
 	configBroken?: boolean;
+	/** 开审时接在关注点后面的话（验收不接）：会话里别的功能要审查者知道的现状，没有就给 undefined。 */
+	focusNote?: (ctx: ExtensionContext) => string | undefined;
 }
 
-/** 在这个会话发起一场审查（先排队，歇下后开审）；被拒时返回原因，原因已按 refuse 记录并通知。 */
-export type StartReview = (focus: string, ctx: ExtensionContext) => string | undefined;
+/**
+ * 在这个会话发起一场审查（先排队，歇下后开审）；被拒时返回原因，原因已按 refuse 记录并通知。
+ * acceptance：目标验收，focus 是目标原文，审查者换成验收立场，其余（轮次、顾问、修复反馈、结局）与审查相同。
+ */
+export type StartReview = (focus: string, ctx: ExtensionContext, acceptance?: boolean) => string | undefined;
 
 /**
  * pool：审查/顾问会话开在这个池里，进程里唯一的子会话池，由入口传入，本模块不自建。
  * 返回值是命令之外唯一的开审入口，与命令同一条路；Master 的 self_review 工具用它。
  */
-export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false }: ReviewOptions = {}): StartReview {
+export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { enabled = true, configBroken = false, focusNote }: ReviewOptions = {}): StartReview {
 	// 渲染器与开关解耦：关闭 review 后历史卡 reload 仍使用原生结果卡样式。
 	registerCardRenderer(pi);
 	if (!enabled) {
@@ -64,16 +69,17 @@ export function registerReview(pi: ExtensionAPI, pool: InProcessSessionPool, { e
 	pi.on("agent_settled", (event, ctx) => current?.agentSettled(event, ctx));
 	pi.on("session_shutdown", (event, ctx) => current?.shutdown(event.reason, ctx));
 
-	function startReview(args: string, ctx: ExtensionContext): string | undefined {
+	function startReview(args: string, ctx: ExtensionContext, acceptance = false): string | undefined {
 		// 配置解析失败不能让命令无声失败：pi 会捕获 handler 异常，用户只会看到什么都没发生。
 		// 命令与恢复两个入口共用同一判定：任何一个静默回退默认模型都会花真钱跑错模型。
 		const loaded = loadConfig().review;
 		if ("error" in loaded) return refuse(ctx, loaded.error, "error");
 		if (current) return refuse(ctx, msg.command.alreadyRunning, "info");
 		const input = args.trim();
-		if (input.startsWith("--")) return refuse(ctx, msg.command.invalidArgs, "error");
+		if (!acceptance && input.startsWith("--")) return refuse(ctx, msg.command.invalidArgs, "error");
+		const focus = acceptance ? input : [input, focusNote?.(ctx)].filter(Boolean).join("\n\n");
 		current = new Run(host, ctx, loaded.config, initialState(randomUUID()), new CheckpointWriter(pi));
-		current.start(input);
+		current.start(focus, acceptance);
 	}
 
 	function cancelReview(ctx: ExtensionContext): void {

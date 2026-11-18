@@ -64,6 +64,12 @@ export function outcomeOfEntry(entry: unknown): ReviewOutcome | undefined {
 	return refusal && { status: "refused", runId: refusal.id, message: refusal.message };
 }
 
+/** 这条记录若是一场目标验收的存档，给出它验收的目标原文；普通审查与别的记录给 undefined。 */
+export function acceptedObjective(entry: unknown): string | undefined {
+	const state = checkpointOf(entry);
+	return state?.acceptance ? state.focus : undefined;
+}
+
 /** 审查进行中的轮次与审查者进度；不是审查相的 checkpoint 或不是 checkpoint 都给 undefined。 */
 export interface ReviewRoundProgress {
 	round: number;

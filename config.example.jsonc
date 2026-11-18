@@ -13,7 +13,8 @@
 		"claudeFiles": true,
 		"openaiNative": true,
 		"review": true,
-		"master": true
+		"master": true,
+		"goal": true
 	},
 
 	"keys": {
@@ -76,5 +77,16 @@
 		"advisorAfterFailures": 2,
 		"timeoutMinutes": 40,
 		"tools": ["read", "grep", "find", "ls", "bash"]
+	},
+
+	// /goal <objective> keeps the session working turn after turn until the objective is done.
+	// It pauses on its own after 3 turns in a row with no tool call, when a turn ends in an error, or when you press Esc; there is no turn cap.
+	// review: when the model declares the goal complete, the reviewers above check every requirement of the objective in the workspace
+	// and send back whatever is not proven; the goal is complete only when that passes. With review off the model's own declaration ends the goal.
+	// tokenBudget: pause once the main session has processed this many new tokens (uncached input + output) working toward the goal; null means no limit.
+	// It bounds the work up to the completion claim: acceptance and its repair turns are bounded by review.maxRounds instead.
+	"goal": {
+		"review": true,
+		"tokenBudget": null
 	}
 }

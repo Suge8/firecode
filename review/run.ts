@@ -42,7 +42,10 @@ import { ReviewUi } from "./ui.js";
 const ADVISOR_EVIDENCE_TOKENS = 6_000;
 
 const PROMPTS = new URL("./prompts/", import.meta.url);
-const REVIEW_PROMPT = readPrompt(PROMPTS, "review");
+/** 审查者的提示词 = 立场（审查找缺陷 / 验收证明完成）+ 共用的证据规则、多轮收敛与输出契约：契约只有一份，解析它的代码在 reviewer.ts。 */
+const CONTRACT_PROMPT = readPrompt(PROMPTS, "contract");
+const REVIEW_PROMPT = readPrompt(PROMPTS, "review") + CONTRACT_PROMPT;
+const ACCEPT_PROMPT = readPrompt(PROMPTS, "accept") + CONTRACT_PROMPT;
 const ADVISOR_PROMPT = readPrompt(PROMPTS, "advisor");
 
 /** 总体超时：maxRounds 轮 × 每轮 2 倍单进程超时，最低 30 分钟。 */
@@ -105,9 +108,9 @@ export class Run {
 	}
 
 	/** 命令入口：只提出排队请求；真正开审统一经 advance 的 idle 门。 */
-	start(focus: string): void {
+	start(focus: string, acceptance: boolean): void {
 		this.armWatchdog();
-		this.dispatch({ type: "START", focus });
+		this.dispatch({ type: "START", focus, acceptance });
 	}
 
 	/** 会话恢复：只更新持久状态并提出推进请求，绝不在 session_start handler 内起任何工作。 */
@@ -288,9 +291,10 @@ export class Run {
 		const { state } = this;
 		if (state.phase !== "reviewing") return;
 		const evidence = buildEvidence(this.sessionEntries(), { sessionFile: this.ctx.sessionManager.getSessionFile() });
-		const prompt = buildReviewPrompt(REVIEW_PROMPT, {
+		const prompt = buildReviewPrompt(state.acceptance ? ACCEPT_PROMPT : REVIEW_PROMPT, {
 			scope: msg.command.scope,
 			focus: state.focus,
+			acceptance: state.acceptance,
 			evidence,
 			history: state.history,
 			round: state.round,
@@ -313,6 +317,7 @@ export class Run {
 		try {
 			const prompt = buildAdvisorPrompt(ADVISOR_PROMPT, {
 				focus: state.focus,
+				acceptance: state.acceptance,
 				requirement: buildEvidence(this.sessionEntries(), { budgetTokens: ADVISOR_EVIDENCE_TOKENS, sessionFile: this.ctx.sessionManager.getSessionFile() }),
 				details: findingsOf(state.voters),
 				history: state.history,
