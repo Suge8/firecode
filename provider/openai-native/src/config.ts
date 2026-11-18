@@ -4,8 +4,8 @@ import type { OpenAISettings, ServiceTier } from "../../../config.js";
 import { CONFIG_PATH } from "../../../config-file.js";
 import { isRecord, parseJsonc } from "../../../jsonc.js";
 
-function openaiSection(): Record<string, unknown> {
-	const root = parseJsonc(readFileSync(CONFIG_PATH, "utf8"));
+function openaiSection(text: string): Record<string, unknown> {
+	const root = parseJsonc(text);
 	if (!isRecord(root)) throw new Error("expected a JSON object");
 	return isRecord(root.openai) ? root.openai : {};
 }
@@ -87,14 +87,15 @@ function replaceOpenAISection(text: string, section: Record<string, unknown>): s
  * 不值得为此维护锁文件（崩溃后的陈旧锁会让切换永久报错）。
  */
 export function saveServiceTier(provider: string, tier: ServiceTier | undefined): void {
-	const text = readFileSync(CONFIG_PATH, "utf8");
-	const section = openaiSection();
+	// 配置是软链时读和写都落在它指向的那一个文件上：改名盖在链接上会把链接换成普通文件，用户在真身上的修改从此不再生效；
+	// 先定下真身再读，链接中途被改指时也不会把这一份的内容写进另一份。
+	const target = realpathSync(CONFIG_PATH);
+	const text = readFileSync(target, "utf8");
+	const section = openaiSection(text);
 	const providers = isRecord(section.providers) ? section.providers : {};
 	const { priority: _legacy, serviceTier: _previous, ...rest } = isRecord(providers[provider]) ? providers[provider] : {};
 	const next = { ...section, providers: { ...providers, [provider]: tier ? { ...rest, serviceTier: tier } : rest } };
 
-	// 配置是软链时改名要落在它指向的文件上：盖在链接上会把链接换成普通文件，用户在真身上的修改从此不再生效。
-	const target = realpathSync(CONFIG_PATH);
 	const temporaryPath = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
 		writeFileSync(temporaryPath, replaceOpenAISection(text, next), { encoding: "utf8", mode: statSync(target).mode & 0o777 });
