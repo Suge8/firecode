@@ -3,8 +3,8 @@
  * 网关（如 magpie）的模型列表按账号逐模型给出 service_tiers，向它要；
  * OpenAI 与 xAI 自己的列表不带档位（ChatGPT 订阅的那份目录在不公开保证的私有路由上），按供应商给定，由用户自己选。
  */
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model, ModelAuth } from "@earendil-works/pi-ai";
+import type { ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { SERVICE_TIERS, type ServiceTier } from "../../../config.js";
 import { isRecord } from "../../../jsonc.js";
 import { isOpenAIResponsesApi } from "./native-details.js";
@@ -39,13 +39,21 @@ async function fetchCatalog(url: string, headers: Record<string, string>): Promi
 	return tiers;
 }
 
+/** 某个模型发请求用的地址与凭据从哪取：会话里问它的模型注册表，不开会话的后台请求问模型运行时。 */
+export type RequestAuth = (model: Model<Api>) => Promise<ModelAuth>;
+export const sessionAuth = (ctx: ExtensionContext): RequestAuth => async (model) => {
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (!auth.ok) throw new Error(auth.error);
+	return auth;
+};
+export const runtimeAuth = (runtime: ModelRuntime): RequestAuth => async (model) => (await runtime.getAuth(model))?.auth ?? {};
+
 /** 从慢到快排；不是 OpenAI 线格式（Responses / Chat Completions）的模型没有档位。列表读不到时抛错，由调用处告诉用户。 */
-export async function offeredTiers(model: Model<Api>, ctx: ExtensionContext): Promise<readonly ServiceTier[]> {
+export async function offeredTiers(model: Model<Api>, requestAuth: RequestAuth): Promise<readonly ServiceTier[]> {
 	if (!isOpenAIResponsesApi(model.api) && model.api !== "openai-completions") return [];
 	const vendor = VENDOR_TIERS[model.provider];
 	if (vendor) return vendor;
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	if (!auth.ok) throw new Error(auth.error);
+	const auth = await requestAuth(model);
 	const url = `${(auth.baseUrl ?? model.baseUrl).replace(/\/+$/, "")}/models`;
 	// null 是宿主的「删掉这个头」。
 	const merged = { ...model.headers, ...auth.headers, ...(auth.apiKey ? { Authorization: `Bearer ${auth.apiKey}` } : {}) };

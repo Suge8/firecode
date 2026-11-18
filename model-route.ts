@@ -1,11 +1,11 @@
-import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Context, type Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ServiceTier, type ThinkingLevelValue } from "./config.js";
 import { isRecord } from "./jsonc.js";
 import { matchModels } from "./model-match.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
-import { effectiveTier, offeredTiers, WIRE_TIER } from "./provider/openai-native/src/tiers.js";
+import { effectiveTier, offeredTiers, type RequestAuth, runtimeAuth, sessionAuth, WIRE_TIER } from "./provider/openai-native/src/tiers.js";
 
 /** transient：失败会自己过去（网络、过载、限流、写明重置时刻的额度窗口）；否则是鉴权、参数、模型不存在这类要人处理的。 */
 interface Cooldown { failures: number; until: number; reason: string; transient: boolean }
@@ -156,6 +156,21 @@ function exhausted(chain: ModelChain, list: Candidate[], attempted: ReadonlyMap<
 	return new Error(msg.spawn.chainExhausted([reasons.join("; "), earliest].filter(Boolean).join("; ")));
 }
 
+/**
+ * 原子里的加速档：请求体已按物理模型建好，这里只补 service_tier，返回 undefined 即不改。列表读不到时按标准档发——
+ * 子会话与后台请求都没有界面可提示，宿主又吞掉钩子的 throw，抛出只会让这次请求同样按标准档发出。
+ */
+async function withTier(payload: unknown, candidate: Candidate, auth: RequestAuth): Promise<unknown> {
+	if (!candidate.tier || !isRecord(payload)) return undefined;
+	const tier = effectiveTier(candidate.tier, await offeredTiers(candidate.model, auth).catch(() => []));
+	return tier && payload.service_tier !== WIRE_TIER[tier] ? { ...payload, service_tier: WIRE_TIER[tier] } : undefined;
+}
+
+/** 不开会话的请求没有 before_provider_request 钩子：加速档经请求选项补，展开进 completeSimple / streamSimple 的选项。 */
+export function tierOption(runtime: ModelRuntime, candidate: Candidate): Pick<SimpleStreamOptions, "onPayload"> {
+	return candidate.tier ? { onPayload: (payload) => withTier(payload, candidate, runtimeAuth(runtime)) } : {};
+}
+
 export interface ChainCompletion {
 	message: AssistantMessage;
 	/** 实际用的物理模型 provider/id。 */
@@ -181,6 +196,7 @@ export async function completeOnChain(
 		maxTokens: options.maxTokens,
 		signal: options.signal,
 		...(thinking === "off" ? {} : { reasoning: thinking }),
+		...tierOption(runtime, selected),
 	});
 	if (message.stopReason === "aborted") throw new DOMException("aborted", "AbortError");
 	// 输出被截断是这次请求的预算问题，不是模型故障：不冷却，免得连累同一模型上的 Worker。
@@ -230,7 +246,7 @@ export async function tryOnChain<T>(
 			continue;
 		}
 		try {
-			const value = await attempt({ model: candidate.model, thinking: clampThinkingLevel(candidate.model, candidate.thinking) });
+			const value = await attempt({ ...candidate, thinking: clampThinkingLevel(candidate.model, candidate.thinking) });
 			cooldowns.delete(name);
 			return { value, model: name };
 		} catch (error) {
@@ -309,14 +325,7 @@ export async function createModelRoute(
 			state.failures = undefined;
 		});
 		pi.on("agent_settled", () => { task = { phase: "idle" }; });
-		// 原子里的加速档：请求体已按路由到的物理模型建好，这里只补 service_tier。列表读不到时按标准档发——子会话没有界面可提示，
-		// 宿主又吞掉钩子的 throw，抛出只会让这次请求同样按标准档发出。
-		pi.on("before_provider_request", async (event, ctx) => {
-			const current = state.current;
-			if (!current?.tier || !isRecord(event.payload)) return;
-			const tier = effectiveTier(current.tier, await offeredTiers(current.model, ctx).catch(() => []));
-			return tier && event.payload.service_tier !== WIRE_TIER[tier] ? { ...event.payload, service_tier: WIRE_TIER[tier] } : undefined;
-		});
+		pi.on("before_provider_request", (event, ctx) => state.current && withTier(event.payload, state.current, sessionAuth(ctx)));
 		pi.on("message_end", (event) => {
 			const message = event.message;
 			if (message.role === "assistant" && state.current && message.api !== "pi-virtual"

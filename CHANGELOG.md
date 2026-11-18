@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Background models can take a fast tier in their atom too, such as `"gpt-6.1-terra/high/fast"` in `background.compactionModel` or `background.lineModel`, with the same rules as review and role models. Before, a tier there was a config error that turned the whole `background` section off.
+
+### Fixed
+
+- `/fast` and `Ctrl+Shift+S` no longer replace a symlinked `config.jsonc` with a regular file: the choice is written to the file the link points to, so edits made there keep taking effect.
+
 ## [1.15.0] - 2026-11-18
 
 ### Added
