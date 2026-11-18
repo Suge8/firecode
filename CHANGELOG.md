@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-11-18
+
 ### Added
 
 - `/goal <objective>` keeps the session working until the objective is done: each time a turn ends, the next one starts on its own. When the model declares the goal complete, the reviewers from `review` check every requirement of the objective in the workspace and send back whatever is not proven; the goal is complete only when that passes (`goal.review`, on by default; with review off the model's declaration ends the goal). A goal pauses after 3 turns in a row with no tool call, when a turn ends in an error, when you press Esc, or at an optional `goal.tokenBudget` (it bounds the work up to the completion claim); there is no turn cap. `/goal` shows the status, `/goal resume` continues a paused goal and `/goal clear` removes it.
@@ -397,7 +399,8 @@ First stable release. npm is the only public distribution channel.
 - Watcher: one failed delivery drops that message only instead of disabling the watcher.
 - Fixed the OSC 133 marker landing mid-line after the user-message bar, and click-anchor drift when content fit on one screen.
 
-[Unreleased]: https://github.com/Suge8/firecode/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/Suge8/firecode/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/Suge8/firecode/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Suge8/firecode/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Suge8/firecode/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Suge8/firecode/compare/v1.11.0...v1.12.0
