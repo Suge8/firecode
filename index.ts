@@ -1,6 +1,6 @@
 /**
  * FireCode：个人 pi 定制层——启动横幅、状态栏、工具行渲染、预设、会话命名，
- * Claude 订阅适配、OpenAI 请求层、对抗审查与按需 Master。各功能可在 config.jsonc 的 features 里单独关闭。
+ * Claude 订阅适配、OpenAI 请求层、对抗审查、按需 Master 与 /goal。各功能可在 config.jsonc 的 features 里单独关闭。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CONFIG_PATH, seedConfig } from "./config-file.js";
@@ -15,6 +15,7 @@ import { registerHerdrProjection } from "./session/herdr-projection.js";
 import { registerStats } from "./session/stats.js";
 import { registerStatusBar } from "./statusbar/index.js";
 import { registerToolRendering } from "./tools/index.js";
+import { registerGoal } from "./goal/index.js";
 import { registerReview, type StartReview } from "./review/index.js";
 import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
@@ -24,7 +25,7 @@ import { registerSleepGuard } from "./sleep-guard.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
 
-type SimpleFeature = Exclude<Feature, "review" | "master" | "openaiNative">;
+type SimpleFeature = Exclude<Feature, "review" | "master" | "openaiNative" | "goal">;
 
 const REGISTRARS: Record<SimpleFeature, (pi: ExtensionAPI) => void> = {
 	header: registerHeader,
@@ -70,11 +71,15 @@ export function registerFirecode(
 	} else {
 		if (config.features.master !== false) registerMaster(pi, pool, (focus, ctx) => startReview(focus, ctx));
 	}
+	// /goal 只属于交互主会话；验收走 review 的同一个开审入口，review 关着时目标由模型自己声明完成。goal 节有问题时不注册（问题已进启动警告）。
+	const goal = !subsession && config.features.goal !== false && config.goal
+		? registerGoal(pi, reviewEnabled ? (objective, ctx) => startReview(objective, ctx, true) : undefined)
+		: undefined;
 	// herdr 投影没有开关：herdr 之外自我禁用；与输入框外壳一样只属于交互主会话。
 	if (!subsession) registerHerdrProjection(pi);
 	// 历史卡渲染与 checkpoint 收口不受 feature 开关控制；开关只控制命令和执行循环。
 	// features 整节类型错误会被安全回退成全关，但那是配置坏而非用户关闭：不封存 checkpoint。
-	startReview = registerReview(pi, pool, { enabled: reviewEnabled, configBroken: featuresBroken });
+	startReview = registerReview(pi, pool, { enabled: reviewEnabled, configBroken: featuresBroken, focusNote: goal?.focusNote });
 
 	if (problems.length === 0 && !seeding) return;
 	pi.on("session_start", (_event, ctx) => {

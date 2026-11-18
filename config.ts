@@ -97,11 +97,12 @@ export const FEATURES = [
 	"openaiNative",
 	"review",
 	"master",
+	"goal",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
 
-const SECTIONS = ["language", "features", "keys", "openai", "background", "review", "master"];
+const SECTIONS = ["language", "features", "keys", "openai", "background", "review", "master", "goal"];
 
 /**
  * 扩展注册的快捷键与宿主任一键位撞键，宿主都会在启动时报冲突；默认键须避开宿主全部默认键位
@@ -119,6 +120,8 @@ type LoadedConfig = {
 		openai: OpenAISettings;
 		/** 节有问题时为 undefined（问题已进 problems）：后台活都是真实调用，不替用户补模型。 */
 		background?: BackgroundConfig;
+		/** 节有问题时为 undefined（问题已进 problems）：/goal 不注册。省略整节用默认值。 */
+		goal?: GoalConfig;
 	};
 	/** 需要在 session_start 全局警告的问题；关闭的功能那一节的问题不在其中。 */
 	problems: string[];
@@ -221,6 +224,7 @@ export function loadConfig(): LoadedConfig {
 	const openai = parseOpenAI(raw.openai, features.openaiNative !== false ? problems : []);
 	if (raw.language !== undefined && !parseLanguage(raw.language)) problems.push(msg.config.language);
 	const background = parseBackground(raw.background, problems);
+	const goal = parseGoal(raw.goal, features.goal !== false ? problems : []);
 
 	// review / master 有问题时对应功能拒绝启动：静默补齐会拿用户没选的模型真实发起调用。
 	// 节内问题只在功能开启时进全局警告；文件读不出来时节是空的，节内问题全是读不出来的派生，只留文件级那一条。
@@ -245,7 +249,7 @@ export function loadConfig(): LoadedConfig {
 		config.roles.length ? undefined : msg.config.masterIncomplete);
 
 	cached = {
-		config: { features, keys, openai, ...(background ? { background } : {}) },
+		config: { features, keys, openai, ...(background ? { background } : {}), ...(goal ? { goal } : {}) },
 		problems,
 		review,
 		master,
@@ -398,6 +402,33 @@ function parseBackground(value: unknown, problems: string[]): BackgroundConfig |
 	const sessionNames = booleanValue(value.sessionNames, "background.sessionNames", true, own);
 	problems.push(...own);
 	return own.length ? undefined : { lineModel, compactionModel, idleCompaction, sessionNames };
+}
+
+// ---- goal 节 ----
+
+/** /goal：验收闸门与预算。执行模型就是会话模型，验收模型沿用 review 节，这里不配模型。 */
+export interface GoalConfig {
+	/** 模型声称完成后先过一场验收（review 的审查者按验收立场核对），通过才算完成；review 功能关着时不生效。 */
+	review: boolean;
+	/** 主会话为这个目标新处理的 token（未命中缓存的输入 + 输出）到这个数就暂停；不设即不限。只管声称完成之前的工作：验收与它的修复回合由 review.maxRounds 封顶。 */
+	tokenBudget?: number;
+}
+
+const GOAL_KEYS = ["review", "tokenBudget"] as const;
+
+function parseGoal(value: unknown, problems: string[]): GoalConfig | undefined {
+	if (value === undefined) return { review: true };
+	if (!isRecord(value)) {
+		problems.push(msg.config.mustBeObject("goal"));
+		return undefined;
+	}
+	const own: string[] = [];
+	rejectUnknownKeys(value, GOAL_KEYS, "goal", own);
+	const review = booleanValue(value.review, "goal.review", true, own);
+	const budget = value.tokenBudget ?? undefined;
+	if (budget !== undefined && !(typeof budget === "number" && Number.isSafeInteger(budget) && budget > 0)) own.push(msg.config.goalTokenBudget);
+	problems.push(...own);
+	return own.length ? undefined : { review, ...(typeof budget === "number" ? { tokenBudget: budget } : {}) };
 }
 
 // ---- openai 节 ----

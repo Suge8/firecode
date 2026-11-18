@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- `/goal <objective>` keeps the session working until the objective is done: each time a turn ends, the next one starts on its own. When the model declares the goal complete, the reviewers from `review` check every requirement of the objective in the workspace and send back whatever is not proven; the goal is complete only when that passes (`goal.review`, on by default; with review off the model's declaration ends the goal). A goal pauses after 3 turns in a row with no tool call, when a turn ends in an error, when you press Esc, or at an optional `goal.tokenBudget` (it bounds the work up to the completion claim); there is no turn cap. `/goal` shows the status, `/goal resume` continues a paused goal and `/goal clear` removes it.
 - The main session gets a progress line too: while its own turn runs, the top border of the input box shows one sentence saying what it is doing, in place of "Working". It is written by the background model from the same short notes as the sub-agent lines.
 - Idle compaction now says what it is doing: the bottom border of the input box shows "preparing compaction" while the summary is being written, and "cache expired, compacts before send" once your next message will compact first. Its notices are shorter, and the one after compacting no longer names the summary model.
 

@@ -53,6 +53,7 @@ export function machineEntries(text: string, details?: unknown): MachineEntry[] 
 
 function entryOf(tag: EnvelopeTag, body: string, details: unknown): MachineEntry {
 	const [heading = "", ...rest] = body.split("\n");
+	if (tag === "firecode_goal") return { title: heading, preview: firstSentence(rest.join("\n")), alarm: false };
 	if (tag === "firecode_review")
 		return { title: heading, preview: reviewPreview(rest), alarm: ALARM_TONES.has((details as { tone?: string } | undefined)?.tone ?? "") };
 	// 结局只看首个分节（event-format.ts 把定结局的分节放在最前）：后面的回复是子代理原话，里面独占一行的“错误：”“结论：”不算。
