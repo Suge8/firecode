@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Fast mode no longer relies on a built-in model list. Through a gateway such as magpie, FireCode reads each model's tiers from the gateway's model list, so new models and your plan's Ultrafast show up without a FireCode release. OpenAI and xAI providers offer their tiers as before. `/fast` and `Ctrl+Shift+S` now cycle off → Fast → Ultrafast, stopping only at tiers the current model offers, and the status bar shows which one is on. The setting is `openai.providers.<provider>.serviceTier` (`"fast"` or `"ultrafast"`); an existing `"priority": true` still reads as Fast and is replaced the next time you switch.
+- Review and role models can take a fast tier in their atom, such as `"gpt-6.2-sol/low/ultrafast"`: only that model in the chain is sent at it, Ultrafast drops to Fast where the model offers only Fast, and `/fast` in the main session no longer matters for them. Background models reject a tier as a config error.
+- Requests are sent at a fast tier only when the current model offers it: before, `priority: true` sent Fast even on models the toggle called unsupported, and overwrote a request's own `ultrafast`.
 - **Breaking:** `background.model` is split into `background.lineModel` (progress lines, session names) and `background.compactionModel` (compaction summaries, idle compaction), so summaries can run at a higher thinking level than one-line jobs. The old field is reported as unknown and the section stays off until both are set.
 - Progress lines refresh at most once a minute instead of every two minutes, and say only what is being done, in at most 10 Chinese characters or 5 English words.
 - Automatic session names are shorter: at most 10 Chinese characters or 2 to 4 English words.

@@ -1,6 +1,6 @@
 /** 加速档开关写回配置：只改 `openai` 节，文件其余部分含注释原样保留。读取与校验在根 config.ts。 */
 import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import type { OpenAISettings } from "../../../config.js";
+import type { OpenAISettings, ServiceTier } from "../../../config.js";
 import { CONFIG_PATH } from "../../../config-file.js";
 import { isRecord, parseJsonc } from "../../../jsonc.js";
 
@@ -83,16 +83,15 @@ function replaceOpenAISection(text: string, section: Record<string, unknown>): s
 }
 
 /**
- * 翻转某供应商的 priority 并写回配置，返回翻转后的开关。读-改-写之间不加锁：两个 Pi 进程同一瞬间切换才会丢一次更新，
+ * 把某供应商的加速档写回配置，undefined 即关；旧版的 priority 开关一并去掉。读-改-写之间不加锁：两个 Pi 进程同一瞬间切换才会丢一次更新，
  * 不值得为此维护锁文件（崩溃后的陈旧锁会让切换永久报错）。
  */
-export function togglePriority(provider: string): boolean {
+export function saveServiceTier(provider: string, tier: ServiceTier | undefined): void {
 	const text = readFileSync(CONFIG_PATH, "utf8");
 	const section = openaiSection();
 	const providers = isRecord(section.providers) ? section.providers : {};
-	const current = isRecord(providers[provider]) ? providers[provider] : {};
-	const enabled = current.priority !== true;
-	const next = { ...section, providers: { ...providers, [provider]: { ...current, priority: enabled } } };
+	const { priority: _legacy, serviceTier: _previous, ...rest } = isRecord(providers[provider]) ? providers[provider] : {};
+	const next = { ...section, providers: { ...providers, [provider]: tier ? { ...rest, serviceTier: tier } : rest } };
 
 	const temporaryPath = `${CONFIG_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
@@ -101,11 +100,10 @@ export function togglePriority(provider: string): boolean {
 	} finally {
 		rmSync(temporaryPath, { force: true });
 	}
-	return enabled;
 }
 
-/** 内存里的设置同步翻转结果，免得为读回刚写的文件再解析一遍。 */
-export function withPriority(settings: OpenAISettings, provider: string, enabled: boolean): OpenAISettings {
-	const { priority: _previous, ...rest } = settings.providers[provider] ?? {};
-	return { ...settings, providers: { ...settings.providers, [provider]: enabled ? { ...rest, priority: true } : rest } };
+/** 内存里的设置同步写回结果，免得为读回刚写的文件再解析一遍。 */
+export function withServiceTier(settings: OpenAISettings, provider: string, tier: ServiceTier | undefined): OpenAISettings {
+	const { serviceTier: _previous, ...rest } = settings.providers[provider] ?? {};
+	return { ...settings, providers: { ...settings.providers, [provider]: tier ? { ...rest, serviceTier: tier } : rest } };
 }

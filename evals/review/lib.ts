@@ -45,7 +45,9 @@ export function fixtureHost(repo: string): { version: string; env: Record<string
 export const USER_MODELS = JSON.parse(readFileSync(join(USER_AGENT_DIR, "models.json"), "utf8")) as { providers: Record<string, any> };
 
 /** 原子 → models.json 里的物理模型；省略供应商时按段边界匹配（与 FireCode 的原子解析同一规则，取第一个）。 */
-export function physical(atom: string): { provider: string; model: string; thinking: string } {
+export function physical(atom: string): { provider: string; model: string; thinking: string; tier?: string } {
+	const tier = /\/(fast|ultrafast)$/u.exec(atom)?.[1];
+	if (tier) return { ...physical(atom.slice(0, -tier.length - 1)), tier };
 	const cut = atom.lastIndexOf("/");
 	const name = atom.slice(0, cut);
 	for (const [provider, entry] of Object.entries(USER_MODELS.providers))

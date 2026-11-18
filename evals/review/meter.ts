@@ -17,6 +17,8 @@ export interface Request {
 	start: number;
 	end: number;
 	status: number;
+	/** 请求体里的 service_tier（加速档）；没写为空。 */
+	tier?: string;
 	usage?: Usage;
 	cost?: number;
 }
@@ -73,8 +75,11 @@ export function startMeter(providers: Record<string, Provider>): { port: number;
 			if (!run || !provider) return new Response("unknown route", { status: 404 });
 			const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
 			let model = "";
+			let tier: string | undefined;
 			try {
-				model = body ? JSON.parse(new TextDecoder().decode(body)).model ?? "" : "";
+				const parsed = body ? JSON.parse(new TextDecoder().decode(body)) : {};
+				model = parsed.model ?? "";
+				tier = parsed.service_tier;
 			} catch {}
 			const headers = new Headers(request.headers);
 			headers.delete("host");
@@ -93,9 +98,10 @@ export function startMeter(providers: Record<string, Provider>): { port: number;
 			}
 			const record = (usage: Usage | undefined) => {
 				const sink = sinks.get(run);
-				if (!sink) return;
+				// GET 是加速档查模型列表，不是模型调用，不计量。
+				if (!sink || request.method === "GET") return;
 				const rates = provider.models?.find((entry) => entry.id === model)?.cost;
-				const entry: Request = { run, provider: name!, model, start: started, end: Date.now(), status: upstream.status, ...(usage ? { usage, cost: costOf(rates, usage) } : {}) };
+				const entry: Request = { run, provider: name!, model, start: started, end: Date.now(), status: upstream.status, ...(tier ? { tier } : {}), ...(usage ? { usage, cost: costOf(rates, usage) } : {}) };
 				appendFileSync(sink, JSON.stringify(entry) + "\n");
 				controllers.get(run)?.delete(controller);
 			};

@@ -64,15 +64,19 @@ const baseReview = (parseJsonc(readFileSync(join(USER_AGENT_DIR, "extensions/fir
 const modelSignature = Object.fromEntries(Object.entries(userModels.providers).map(([name, entry]) => [name, { api: entry.api, baseUrl: entry.baseUrl, models: entry.models }]));
 const meter = startMeter(userModels.providers);
 
-/** 被测代码：按提交归档一份，变体之间共用。 */
+/** 被测代码：按提交归档一份，变体之间共用。被测会话的沙箱要放开它，所以去掉 evals/（真值在里面）。 */
 function codeDir(): string {
 	const dir = join(WORK, "code", code);
-	if (existsSync(join(dir, "index.ts"))) return dir;
+	if (existsSync(join(dir, "index.ts"))) {
+		rmSync(join(dir, "evals"), { recursive: true, force: true });
+		return dir;
+	}
 	mkdirSync(dir, { recursive: true });
 	const archived = Bun.spawnSync(["git", "-C", REPO, "archive", code]);
 	if (archived.exitCode !== 0) throw new Error(archived.stderr.toString());
 	const extracted = Bun.spawnSync(["tar", "-x", "-C", dir], { stdin: archived.stdout });
 	if (extracted.exitCode !== 0) throw new Error(extracted.stderr.toString());
+	rmSync(join(dir, "evals"), { recursive: true, force: true });
 	return dir;
 }
 
@@ -103,7 +107,7 @@ function writeAgent(agent: string, run: string, reviewer: string): Record<string
 	const config = {
 		language: "zh",
 		features: Object.fromEntries(["header", "statusbar", "tools", "stats", "claudeSub", "claudeFiles", "openaiNative", "master"].map((key) => [key, false]).concat([["review", true]])),
-		review: { ...baseReview, reviewers: [[`${target.provider}/${target.model}/${target.thinking}`]], advisor: [values.advisor], maxRounds: mode === "loop" ? 5 : 1, timeoutMinutes: 30 },
+		review: { ...baseReview, reviewers: [[`${target.provider}/${target.model}/${target.thinking}${target.tier ? `/${target.tier}` : ""}`]], advisor: [values.advisor], maxRounds: mode === "loop" ? 5 : 1, timeoutMinutes: 30 },
 	};
 	writeFileSync(join(agent, "extensions/firecode/config.jsonc"), JSON.stringify(config, null, 1));
 	writeFileSync(join(agent, "extensions/firecode/index.ts"), 'export { default } from "./source/index.ts";\n');
@@ -170,7 +174,7 @@ async function runOne(item: Case, reviewer: string, n: number): Promise<void> {
 
 	const host = item.source === "firecode" ? fixtureHost(repo) : undefined;
 	const child = startPi(["--mode", "rpc", "--no-skills", "--no-prompt-templates", "--session", sessionFile], {
-		agentDir: agent, cwd: repo, tmp, stdin: "pipe", env: { ...credentials, ...host?.env },
+		agentDir: agent, cwd: repo, tmp, stdin: "pipe", env: { ...credentials, ...host?.env }, allow: [codeDir()],
 	});
 	active.add(child);
 	child.once("exit", () => active.delete(child));

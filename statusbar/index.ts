@@ -123,7 +123,7 @@ class Shell {
 			title: fg("muted", this.title),
 			model: fg("text", formatModelName(model?.id)),
 			think: model?.reasoning ? fg(THINKING_COLORS[thinking], `/${thinking}`) : "",
-			fast: this.statuses().has(STATUS_KEYS.fast) ? fg("warning", "Fast") : "",
+			fast: this.statuses().get(STATUS_KEYS.fast) ?? "",
 			percent: fg(contextColor(percent), percent == null ? "?" : `${percent.toFixed(1)}%`),
 			capacity: fg("dim", `/${formatTokens(window)}`),
 			idle: idle ? fg("muted", idle) : "",

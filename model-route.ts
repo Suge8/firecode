@@ -1,13 +1,15 @@
 import { clampThinkingLevel, isRetryableAssistantError, type Api, type AssistantMessage, type Context, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ThinkingLevelValue } from "./config.js";
+import { THINKING_LEVELS, type ModelAtom, type ModelChain, type ServiceTier, type ThinkingLevelValue } from "./config.js";
+import { isRecord } from "./jsonc.js";
 import { matchModels } from "./model-match.js";
 import { msg } from "./messages.js";
 import { processShared } from "./process-shared.js";
+import { effectiveTier, offeredTiers, WIRE_TIER } from "./provider/openai-native/src/tiers.js";
 
 /** transient：失败会自己过去（网络、过载、限流、写明重置时刻的额度窗口）；否则是鉴权、参数、模型不存在这类要人处理的。 */
 interface Cooldown { failures: number; until: number; reason: string; transient: boolean }
-export interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue }
+export interface Candidate { model: Model<Api>; thinking: ThinkingLevelValue; tier?: ServiceTier }
 /**
  * candidates 是最近一次选模型时的候选表：链暂停判定按它查冷却表，不再异步取可用模型。
  * failures 是最近一个任务里各模型最终失败的原文：新任务开始时清空，落定后留给读取方判断这次失败本身是否瞬时。
@@ -129,7 +131,7 @@ export async function candidates(runtime: ModelRuntime, chain: ModelChain): Prom
 		const name = key(model);
 		if (seen.has(name)) return [];
 		seen.add(name);
-		return [{ model, thinking: atom.thinking }];
+		return [{ model, thinking: atom.thinking, ...(atom.tier ? { tier: atom.tier } : {}) }];
 	}));
 }
 
@@ -279,7 +281,7 @@ export async function createModelRoute(
 		if (!selected) throw exhausted(chain, list, attempted);
 		const previous = state.current && { model: key(state.current.model), thinking: state.current.thinking };
 		const atom = { model: key(selected.model), thinking: clampThinkingLevel(selected.model, override ?? selected.thinking) };
-		state.current = { model: selected.model, thinking: atom.thinking };
+		state.current = { model: selected.model, thinking: atom.thinking, ...(selected.tier ? { tier: selected.tier } : {}) };
 		if (task.phase !== "idle") task = { phase: "running", attempted };
 		if (!previous || previous.model !== atom.model || previous.thinking !== atom.thinking) onChange?.(atom, previous, failure);
 		return { model: selected.model, thinkingLevel: atom.thinking };
@@ -307,6 +309,14 @@ export async function createModelRoute(
 			state.failures = undefined;
 		});
 		pi.on("agent_settled", () => { task = { phase: "idle" }; });
+		// 原子里的加速档：请求体已按路由到的物理模型建好，这里只补 service_tier。列表读不到时按标准档发——子会话没有界面可提示，
+		// 宿主又吞掉钩子的 throw，抛出只会让这次请求同样按标准档发出。
+		pi.on("before_provider_request", async (event, ctx) => {
+			const current = state.current;
+			if (!current?.tier || !isRecord(event.payload)) return;
+			const tier = effectiveTier(current.tier, await offeredTiers(current.model, ctx).catch(() => []));
+			return tier && event.payload.service_tier !== WIRE_TIER[tier] ? { ...event.payload, service_tier: WIRE_TIER[tier] } : undefined;
+		});
 		pi.on("message_end", (event) => {
 			const message = event.message;
 			if (message.role === "assistant" && state.current && message.api !== "pi-virtual"
