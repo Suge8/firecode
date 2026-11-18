@@ -113,7 +113,7 @@ test("openai 节：字段拼错、类型不对都报问题，写错的字段按�
 		},
 	}));
 	expect(loaded.problems).toHaveLength(6);
-	expect(loaded.config.openai).toEqual({ nativeCompaction: false, providers: { xai: { priority: true } } });
+	expect(loaded.config.openai).toEqual({ nativeCompaction: false, providers: { xai: { serviceTier: "fast" } } });
 });
 
 test("公共配置模板可解析并启用完整推荐工作流", async () => {

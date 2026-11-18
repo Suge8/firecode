@@ -9,12 +9,14 @@ export const msg = defineMessages({
 		tokenReissued: "Claude 令牌刚换发，已自动重试",
 		imageUploadFailed: (reason: string) => `图片上传 Claude Files 失败，没传上的本轮原样内嵌，下一轮重试：${reason}`,
 		imageFileGone: "Claude Files 里的图片文件已失效，重新上传后重试本轮",
-		fastUnsupported: "当前模型不支持加速档",
-		fastToggled: (enabled: boolean) => `加速档：${enabled ? "开" : "关"}`,
+		fastUnsupported: "当前模型不提供加速档",
+		fastSwitched: (tier: string | undefined) => `加速档：${tier ?? "关"}`,
 		fastSaveFailed: (reason: string) => `加速档保存失败：${reason}`,
+		tiersUnavailable: (reason: string) => `读不到当前模型提供的加速档：${reason}`,
+		tiersUnavailableOnSend: (reason: string) => `读不到当前模型提供的加速档，这次请求按标准档发送：${reason}`,
 		verbosityFlag: "覆盖 OpenAI 回答详略：low、medium、high",
-		fastCommand: "开关当前 OpenAI 系供应商的加速档",
-		fastShortcut: "开关加速档",
+		fastCommand: "切换加速档：关 → Fast → Ultrafast，只经过当前模型提供的档",
+		fastShortcut: "切换加速档",
 		compaction: {
 			guidance: (text: string) => `本次手动 /compact 的补充要求：\n${text}`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {
@@ -51,12 +53,15 @@ export const msg = defineMessages({
 		imageUploadFailed: (reason: string) =>
 			`Image upload to Claude Files failed; images not uploaded are sent inline this turn and retried next turn: ${reason}`,
 		imageFileGone: "An image file in Claude Files is gone; re-uploading it and retrying this turn",
-		fastUnsupported: "The current model does not support fast mode",
-		fastToggled: (enabled: boolean) => `Fast mode: ${enabled ? "on" : "off"}`,
+		fastUnsupported: "The current model offers no fast mode",
+		fastSwitched: (tier: string | undefined) => `Fast mode: ${tier ?? "off"}`,
 		fastSaveFailed: (reason: string) => `Could not save fast mode: ${reason}`,
+		tiersUnavailable: (reason: string) => `Could not read the fast modes the current model offers: ${reason}`,
+		tiersUnavailableOnSend: (reason: string) =>
+			`Could not read the fast modes the current model offers; this request goes at the standard tier: ${reason}`,
 		verbosityFlag: "Override OpenAI response verbosity: low, medium, high",
-		fastCommand: "Toggle fast mode for the current OpenAI-family provider",
-		fastShortcut: "Toggle fast mode",
+		fastCommand: "Cycle fast mode: off → Fast → Ultrafast, through the tiers the current model offers",
+		fastShortcut: "Cycle fast mode",
 		compaction: {
 			guidance: (text: string) => `Additional user guidance for this manual /compact request:\n${text}`,
 			failed: (reason: NativeCompactionFailureReason, status?: number, detail?: string) => {

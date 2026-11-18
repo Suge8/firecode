@@ -1,35 +1,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { isTextVerbosity, type OpenAISettings, type TextVerbosity } from "../../../config.js";
+import { isTextVerbosity, type OpenAISettings, type ServiceTier, type TextVerbosity } from "../../../config.js";
 import { isRecord } from "../../../jsonc.js";
 import { isOpenAIResponsesApi } from "./native-details.js";
-
-const PRIORITY_MODEL_IDS = new Set([
-	"gpt-5.5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-6-astra",
-	"gpt-6-sol",
-	"gpt-6.1-sol",
-	"gpt-6-luna",
-]);
-
-function isOpenAIResponsesModel(model: Model<Api> | undefined): boolean {
-	return model !== undefined && isOpenAIResponsesApi(model.api);
-}
-
-export function supportsFastMode(model: Model<Api> | undefined): boolean {
-	if (!model) return false;
-	if (model.provider === "xai") return true;
-	return isOpenAIResponsesModel(model) && PRIORITY_MODEL_IDS.has(model.id);
-}
-
-export function fastModeEnabled(model: Model<Api> | undefined, settings: OpenAISettings): boolean {
-	if (!model || !supportsFastMode(model)) {
-		return false;
-	}
-	return settings.providers[model.provider]?.priority === true;
-}
+import { WIRE_TIER } from "./tiers.js";
 
 function resolveTextVerbosity(
 	model: Model<Api>,
@@ -42,17 +15,18 @@ function resolveTextVerbosity(
 	return settings.providers[model.provider]?.textVerbosity;
 }
 
+/** tier 由 tiers.ts 按当前模型提供的档位定好；undefined 时不动请求里原有的 service_tier。 */
 export function applyOpenAIOptions(
 	payload: Record<string, unknown>,
 	model: Model<Api> | undefined,
 	settings: OpenAISettings,
 	verbosityOverride: unknown,
+	tier: ServiceTier | undefined,
 ): Record<string, unknown> {
-	const configuredProvider = model ? settings.providers[model.provider] : undefined;
 	let nextPayload = payload;
 
 	// verbosity 只属于 OpenAI Responses；xAI Completions 没有这个字段。
-	if (model && isOpenAIResponsesModel(model)) {
+	if (model && isOpenAIResponsesApi(model.api)) {
 		const textVerbosity = resolveTextVerbosity(model, settings, verbosityOverride);
 		if (textVerbosity && (!isRecord(payload.text) || payload.text.verbosity !== textVerbosity)) {
 			nextPayload = {
@@ -65,13 +39,9 @@ export function applyOpenAIOptions(
 		}
 	}
 
-	if (
-		(isOpenAIResponsesModel(model) || model?.provider === "xai") &&
-		configuredProvider?.priority &&
-		payload.service_tier !== "priority"
-	) {
+	if (tier && payload.service_tier !== WIRE_TIER[tier]) {
 		nextPayload = nextPayload === payload ? { ...nextPayload } : nextPayload;
-		nextPayload.service_tier = "priority";
+		nextPayload.service_tier = WIRE_TIER[tier];
 	}
 
 	return nextPayload;

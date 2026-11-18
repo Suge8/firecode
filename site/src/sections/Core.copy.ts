@@ -22,7 +22,7 @@ export const copy = {
 		also: {
 			usage: "Usage at a glance",
 			rename: "Rename the session",
-			fast: "Toggle OpenAI Fast mode",
+			fast: "Cycle OpenAI Fast / Ultrafast",
 			login: "Works with Claude subscription login",
 		},
 	},
@@ -36,7 +36,7 @@ export const copy = {
 		also: {
 			usage: "随时看用量",
 			rename: "改会话名",
-			fast: "开关 OpenAI 加速档",
+			fast: "切换 OpenAI 加速档（Fast / Ultrafast）",
 			login: "适配 Claude 订阅登录",
 		},
 	},

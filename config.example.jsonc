@@ -1,6 +1,7 @@
 {
 	// Recommended config: every feature on. It is written here on first launch; swap in the models you are logged in to, then restart Pi.
 	// Everywhere a model is named, use a model atom "model/thinking"; the provider is optional. An ordered array chooses alternatives.
+	// Review and role models may add a fast tier, "model/thinking/fast" or "model/thinking/ultrafast"; it applies only to that model and drops to what the model offers.
 	// Language of the UI and of the text shown to models: follows the system locale by default (zh* → Chinese, otherwise English); uncomment the next line to pin it, "zh" | "en".
 	// "language": "en",
 	"features": {
@@ -22,11 +23,11 @@
 	// nativeCompaction uses OpenAI's native context compaction. The result can only be continued by the same model and base URL:
 	// unavailable windows stop requests and compaction without dropping history. Re-enable this option and switch back to resume.
 	// Failures fall back to normal summaries only before the first native checkpoint. Set false for new sessions to use normal summaries.
-	// priority pays more for faster output and is off by default.
+	// serviceTier pays more for faster output and is off by default: "fast" or "ultrafast". /fast and keys.fast cycle it through the tiers the current model offers.
 	"openai": {
 		"nativeCompaction": true,
 		"providers": {
-			"openai-codex": { "textVerbosity": "low", "priority": false }
+			"openai-codex": { "textVerbosity": "low" }
 		}
 	},
 
