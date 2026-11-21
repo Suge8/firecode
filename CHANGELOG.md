@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The commander leaves merging until `self_review` settles. Before, it could merge first and receive the findings afterwards, when only a follow-up change could fix them.
+- The `subagents` tool description states the Worker name format (starts with a lowercase letter; lowercase letters, digits, `-` and `_` only), so a `start` with another kind of name, such as one in Chinese, no longer fails on the first try.
+
 ## [1.16.0] - 2026-11-18
 
 ### Changed
