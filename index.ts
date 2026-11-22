@@ -21,6 +21,7 @@ import { registerWorkerGuard } from "./master/guard.js";
 import { registerMaster } from "./master/index.js";
 import { InProcessSessionPool, loadingSubsession } from "./spawn.js";
 import { registerRoundRecorder } from "./round.js";
+import { registerSiblingRead } from "./sibling-read.js";
 import { registerSleepGuard } from "./sleep-guard.js";
 import { registerTruncatedWriteGuard } from "./truncated-write.js";
 import { registerToday } from "./today.js";
@@ -56,6 +57,7 @@ export function registerFirecode(
 	registerRoundRecorder(pi);
 	registerTruncatedWriteGuard(pi);
 	registerSleepGuard(pi);
+	registerSiblingRead(pi);
 	registerToday(pi);
 	// 关闭请求选项也不能让已有原生检查点静默丢失历史。压缩钩子只有一个：原生先决定，不接时交给后台模型链。
 	registerOpenAINative(pi, config.features.openaiNative !== false, registerBackground(pi, pool, subsession));
